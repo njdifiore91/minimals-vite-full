@@ -1,0 +1,266 @@
+# ===============================
+# DATA SERVICE CONFIGURATION
+# ===============================
+# Main configuration file for the MCA Data Service microservice
+# This file contains the base configuration that is extended by environment-specific files
+
+spring:
+  application:
+    name: mca-data-service
+  
+  # Database Configuration
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/mca_db}
+    username: ${SPRING_DATASOURCE_USERNAME:postgres}
+    password: ${SPRING_DATASOURCE_PASSWORD:postgres}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      # Connection pooling settings
+      maximum-pool-size: 10
+      minimum-idle: 5
+      idle-timeout: 30000
+      connection-timeout: 30000
+      max-lifetime: 2000000
+      auto-commit: false
+      pool-name: MCAHikariCP
+      # Read replica configuration
+      read-only-replicas: ${SPRING_DATASOURCE_READ_REPLICAS:false}
+      replica-urls: ${SPRING_DATASOURCE_REPLICA_URLS:}
+  
+  # JPA Configuration
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: true
+        jdbc.batch_size: 50
+        order_inserts: true
+        order_updates: true
+    show-sql: false
+  
+  # Flyway Migration Configuration
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    locations: classpath:db/migrations
+    table: flyway_schema_history
+    validate-on-migrate: true
+    out-of-order: false
+    
+  # RabbitMQ Configuration
+  rabbitmq:
+    host: ${SPRING_RABBITMQ_HOST:localhost}
+    port: ${SPRING_RABBITMQ_PORT:5672}
+    username: ${SPRING_RABBITMQ_USERNAME:guest}
+    password: ${SPRING_RABBITMQ_PASSWORD:guest}
+    virtual-host: ${SPRING_RABBITMQ_VIRTUAL_HOST:/}
+    ssl:
+      enabled: ${SPRING_RABBITMQ_SSL_ENABLED:false}
+      algorithm: TLSv1.3
+      validate-server-certificate: true
+      verify-hostname: true
+    connection-timeout: 5000
+    requested-heartbeat: 30
+    template:
+      retry:
+        enabled: true
+        initial-interval: 1000
+        max-attempts: 3
+        max-interval: 10000
+        multiplier: 2.0
+    listener:
+      simple:
+        concurrency: 5
+        max-concurrency: 10
+        prefetch: 1
+        default-requeue-rejected: false
+        retry:
+          enabled: true
+          initial-interval: 1000
+          max-attempts: 3
+          max-interval: 10000
+          multiplier: 2.0
+  
+  # Redis Configuration
+  redis:
+    host: ${SPRING_REDIS_HOST:localhost}
+    port: ${SPRING_REDIS_PORT:6379}
+    password: ${SPRING_REDIS_PASSWORD:}
+    ssl: ${SPRING_REDIS_SSL_ENABLED:false}
+    timeout: 2000
+    cluster:
+      enabled: ${SPRING_REDIS_CLUSTER_ENABLED:false}
+      nodes: ${SPRING_REDIS_CLUSTER_NODES:}
+    lettuce:
+      pool:
+        max-active: 8
+        max-idle: 8
+        min-idle: 2
+        max-wait: -1ms
+
+# Server Configuration
+server:
+  port: ${SERVER_PORT:8080}
+  servlet:
+    context-path: /api/v1
+  compression:
+    enabled: true
+    mime-types: application/json,application/xml,text/html,text/xml,text/plain
+  http2:
+    enabled: true
+  ssl:
+    enabled: ${SERVER_SSL_ENABLED:false}
+    key-store: ${SERVER_SSL_KEY_STORE:}
+    key-store-password: ${SERVER_SSL_KEY_STORE_PASSWORD:}
+    key-store-type: ${SERVER_SSL_KEY_STORE_TYPE:PKCS12}
+
+# Application-specific Configuration
+application:
+  # Security Configuration
+  security:
+    jwt:
+      algorithm: RS256
+      public-key-path: ${JWT_PUBLIC_KEY_PATH:classpath:jwt/public.pem}
+      token-expiry-minutes: 60
+      refresh-token-expiry-days: 7
+    encryption:
+      # Field-level encryption for PII
+      enabled: true
+      algorithm: AES/GCM/NoPadding
+      secret-key: ${ENCRYPTION_SECRET_KEY:}
+      pii-fields:
+        - legalName
+        - dbaName
+        - ein
+        - address
+        - contactName
+        - contactEmail
+        - contactPhone
+        - bankAccountNumber
+        - routingNumber
+        - ssn
+  
+  # S3 Storage Configuration
+  storage:
+    s3:
+      endpoint: ${S3_ENDPOINT:}
+      region: ${S3_REGION:us-east-1}
+      access-key: ${S3_ACCESS_KEY:}
+      secret-key: ${S3_SECRET_KEY:}
+      bucket-name: ${S3_BUCKET_NAME:mca-documents-${spring.profiles.active}}
+      encryption:
+        enabled: true
+        type: AES256
+      expiration:
+        presigned-url-seconds: 300
+  
+  # Cache Configuration
+  cache:
+    redis:
+      enabled: true
+      ttl:
+        application-data: 900  # 15 minutes in seconds
+        user-sessions: 86400  # 24 hours in seconds
+  
+  # RabbitMQ Exchange and Queue Configuration
+  messaging:
+    exchanges:
+      documents:
+        name: mca.documents
+        type: fanout
+        durable: true
+    queues:
+      document-processing:
+        name: document-processing
+        durable: true
+      data-extraction:
+        name: data-extraction
+        durable: true
+      notification:
+        name: notification
+        durable: true
+    bindings:
+      - exchange: mca.documents
+        queue: document-processing
+        routing-key: ''
+      - exchange: mca.documents
+        queue: data-extraction
+        routing-key: ''
+      - exchange: mca.documents
+        queue: notification
+        routing-key: ''
+
+# Logging Configuration
+logging:
+  level:
+    root: ${LOG_LEVEL_ROOT:INFO}
+    com.dollarfunding.mca: ${LOG_LEVEL_APP:INFO}
+    org.springframework: ${LOG_LEVEL_SPRING:WARN}
+    org.hibernate: ${LOG_LEVEL_HIBERNATE:WARN}
+  pattern:
+    console: '%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n'
+    file: '%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n'
+  file:
+    name: ${LOG_FILE_PATH:/var/log/mca-data-service.log}
+
+# Management and Monitoring
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: when_authorized
+      probes:
+        enabled: true
+  health:
+    livenessState:
+      enabled: true
+    readinessState:
+      enabled: true
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+
+# Environment-specific profiles
+---
+spring:
+  config:
+    activate:
+      on-profile: development
+  jpa:
+    show-sql: true
+logging:
+  level:
+    root: INFO
+    com.dollarfunding.mca: DEBUG
+    org.springframework: INFO
+    org.hibernate: INFO
+
+---
+spring:
+  config:
+    activate:
+      on-profile: staging
+logging:
+  level:
+    root: INFO
+    com.dollarfunding.mca: INFO
+    org.springframework: WARN
+    org.hibernate: WARN
+
+---
+spring:
+  config:
+    activate:
+      on-profile: production
+logging:
+  level:
+    root: WARN
+    com.dollarfunding.mca: ERROR
+    org.springframework: ERROR
+    org.hibernate: ERROR
