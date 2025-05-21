@@ -1,0 +1,555 @@
+{
+  "manifest_version": "1.0.0",
+  "description": "Manifest of high-quality typed documents for OCR testing",
+  "last_updated": "2025-05-21",
+  "document_categories": [
+    "application_forms",
+    "financial_documents",
+    "business_documents",
+    "invoices",
+    "identity_documents"
+  ],
+  "quality_level": "high",
+  "documents": [
+    {
+      "id": "app_form_high_001",
+      "filename": "mca_application_high_quality.pdf",
+      "category": "application_forms",
+      "document_type": "loan_application",
+      "quality": "high",
+      "orientation": "portrait",
+      "page_count": 3,
+      "characteristics": {
+        "resolution": "300dpi",
+        "has_tables": true,
+        "has_checkboxes": true,
+        "has_signatures": true,
+        "complexity": "high",
+        "contrast": "high",
+        "clarity": "excellent",
+        "noise_level": "minimal"
+      },
+      "expected_extraction": {
+        "fields": [
+          {
+            "name": "business_name",
+            "expected_value": "Dollar Funding Partners LLC",
+            "position": {"page": 1, "top": 150, "left": 200, "bottom": 175, "right": 450},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "dba_name",
+            "expected_value": "Dollar Funding",
+            "position": {"page": 1, "top": 180, "left": 200, "bottom": 205, "right": 400},
+            "expected_confidence": 0.98
+          },
+          {
+            "name": "ein",
+            "expected_value": "47-1234567",
+            "position": {"page": 1, "top": 210, "left": 200, "bottom": 235, "right": 300},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "business_address",
+            "expected_value": "1000 Financial Plaza, Suite 500, New York, NY 10004",
+            "position": {"page": 1, "top": 240, "left": 200, "bottom": 265, "right": 600},
+            "expected_confidence": 0.97
+          },
+          {
+            "name": "business_phone",
+            "expected_value": "(212) 555-7890",
+            "position": {"page": 1, "top": 270, "left": 200, "bottom": 295, "right": 350},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "business_email",
+            "expected_value": "applications@dollarfunding.com",
+            "position": {"page": 1, "top": 300, "left": 200, "bottom": 325, "right": 450},
+            "expected_confidence": 0.98
+          },
+          {
+            "name": "funding_amount_requested",
+            "expected_value": "$350,000.00",
+            "position": {"page": 1, "top": 350, "left": 200, "bottom": 375, "right": 350},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "business_start_date",
+            "expected_value": "03/15/2018",
+            "position": {"page": 1, "top": 400, "left": 200, "bottom": 425, "right": 300},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "owner_name",
+            "expected_value": "Michael R. Johnson",
+            "position": {"page": 2, "top": 150, "left": 200, "bottom": 175, "right": 400},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "owner_ssn",
+            "expected_value": "XXX-XX-6789",
+            "position": {"page": 2, "top": 180, "left": 200, "bottom": 205, "right": 300},
+            "expected_confidence": 0.98
+          },
+          {
+            "name": "owner_address",
+            "expected_value": "123 Park Avenue, Apt 15B, New York, NY 10022",
+            "position": {"page": 2, "top": 210, "left": 200, "bottom": 235, "right": 550},
+            "expected_confidence": 0.97
+          },
+          {
+            "name": "owner_phone",
+            "expected_value": "(917) 555-1234",
+            "position": {"page": 2, "top": 240, "left": 200, "bottom": 265, "right": 350},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "owner_email",
+            "expected_value": "michael.johnson@dollarfunding.com",
+            "position": {"page": 2, "top": 270, "left": 200, "bottom": 295, "right": 500},
+            "expected_confidence": 0.98
+          },
+          {
+            "name": "business_type",
+            "expected_value": "Limited Liability Company",
+            "position": {"page": 2, "top": 300, "left": 200, "bottom": 325, "right": 450},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "industry",
+            "expected_value": "Financial Services",
+            "position": {"page": 2, "top": 330, "left": 200, "bottom": 355, "right": 400},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "annual_revenue",
+            "expected_value": "$2,750,000.00",
+            "position": {"page": 2, "top": 360, "left": 200, "bottom": 385, "right": 350},
+            "expected_confidence": 0.98
+          },
+          {
+            "name": "signature",
+            "expected_value": "Michael Johnson",
+            "position": {"page": 3, "top": 500, "left": 200, "bottom": 550, "right": 400},
+            "expected_confidence": 0.92
+          },
+          {
+            "name": "date_signed",
+            "expected_value": "05/15/2025",
+            "position": {"page": 3, "top": 500, "left": 450, "bottom": 525, "right": 550},
+            "expected_confidence": 0.99
+          }
+        ],
+        "tables": [
+          {
+            "name": "bank_accounts",
+            "position": {"page": 2, "top": 400, "left": 100, "bottom": 550, "right": 700},
+            "expected_confidence": 0.97,
+            "rows": 3,
+            "columns": 4,
+            "headers": ["Account Type", "Bank Name", "Account Number", "Current Balance"],
+            "data": [
+              ["Checking", "Chase Bank", "XXXX5678", "$125,450.75"],
+              ["Savings", "Chase Bank", "XXXX9012", "$350,780.25"]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "fin_doc_high_001",
+      "filename": "bank_statement_high_quality.pdf",
+      "category": "financial_documents",
+      "document_type": "bank_statement",
+      "quality": "high",
+      "orientation": "portrait",
+      "page_count": 2,
+      "characteristics": {
+        "resolution": "300dpi",
+        "has_tables": true,
+        "has_checkboxes": false,
+        "has_signatures": false,
+        "complexity": "medium",
+        "contrast": "high",
+        "clarity": "excellent",
+        "noise_level": "minimal"
+      },
+      "expected_extraction": {
+        "fields": [
+          {
+            "name": "account_holder",
+            "expected_value": "Dollar Funding Partners LLC",
+            "position": {"page": 1, "top": 150, "left": 100, "bottom": 175, "right": 350},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "account_number",
+            "expected_value": "XXXX5678",
+            "position": {"page": 1, "top": 180, "left": 100, "bottom": 205, "right": 250},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "statement_period",
+            "expected_value": "04/01/2025 - 04/30/2025",
+            "position": {"page": 1, "top": 210, "left": 100, "bottom": 235, "right": 350},
+            "expected_confidence": 0.98
+          },
+          {
+            "name": "opening_balance",
+            "expected_value": "$115,780.45",
+            "position": {"page": 1, "top": 240, "left": 100, "bottom": 265, "right": 250},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "closing_balance",
+            "expected_value": "$125,450.75",
+            "position": {"page": 1, "top": 270, "left": 100, "bottom": 295, "right": 250},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "total_deposits",
+            "expected_value": "$45,750.00",
+            "position": {"page": 1, "top": 300, "left": 100, "bottom": 325, "right": 250},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "total_withdrawals",
+            "expected_value": "$36,079.70",
+            "position": {"page": 1, "top": 330, "left": 100, "bottom": 355, "right": 250},
+            "expected_confidence": 0.99
+          }
+        ],
+        "tables": [
+          {
+            "name": "transactions",
+            "position": {"page": 1, "top": 400, "left": 50, "bottom": 700, "right": 750},
+            "expected_confidence": 0.97,
+            "rows": 11,
+            "columns": 4,
+            "headers": ["Date", "Description", "Withdrawals", "Deposits"],
+            "data": [
+              ["04/01/2025", "Beginning Balance", "", "$115,780.45"],
+              ["04/03/2025", "Customer Payment - Global Enterprises", "", "$15,250.00"],
+              ["04/05/2025", "Vendor Payment - Office Supplies Inc", "$3,245.80", ""],
+              ["04/10/2025", "Customer Payment - Metro Finance", "", "$12,500.00"],
+              ["04/12/2025", "Payroll", "$18,750.45", ""],
+              ["04/15/2025", "Customer Payment - Eastcoast Funding", "", "$10,000.00"],
+              ["04/18/2025", "Rent Payment", "$5,500.00", ""],
+              ["04/20/2025", "Utility Payment", "$1,083.45", ""],
+              ["04/25/2025", "Customer Payment - Westside Capital", "", "$8,000.00"],
+              ["04/28/2025", "Insurance Payment", "$7,500.00", ""],
+              ["04/30/2025", "Ending Balance", "", "$125,450.75"]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "bus_doc_high_001",
+      "filename": "business_license_high_quality.pdf",
+      "category": "business_documents",
+      "document_type": "license",
+      "quality": "high",
+      "orientation": "landscape",
+      "page_count": 1,
+      "characteristics": {
+        "resolution": "300dpi",
+        "has_tables": false,
+        "has_checkboxes": false,
+        "has_signatures": true,
+        "complexity": "low",
+        "contrast": "high",
+        "clarity": "excellent",
+        "noise_level": "minimal"
+      },
+      "expected_extraction": {
+        "fields": [
+          {
+            "name": "license_number",
+            "expected_value": "BL-78901-2025",
+            "position": {"page": 1, "top": 150, "left": 400, "bottom": 175, "right": 550},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "business_name",
+            "expected_value": "Dollar Funding Partners LLC",
+            "position": {"page": 1, "top": 200, "left": 200, "bottom": 225, "right": 500},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "business_address",
+            "expected_value": "1000 Financial Plaza, Suite 500, New York, NY 10004",
+            "position": {"page": 1, "top": 250, "left": 200, "bottom": 275, "right": 600},
+            "expected_confidence": 0.98
+          },
+          {
+            "name": "business_type",
+            "expected_value": "Limited Liability Company",
+            "position": {"page": 1, "top": 300, "left": 200, "bottom": 325, "right": 450},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "issue_date",
+            "expected_value": "01/01/2025",
+            "position": {"page": 1, "top": 350, "left": 200, "bottom": 375, "right": 300},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "expiration_date",
+            "expected_value": "12/31/2025",
+            "position": {"page": 1, "top": 350, "left": 500, "bottom": 375, "right": 600},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "issuing_authority",
+            "expected_value": "City of New York",
+            "position": {"page": 1, "top": 400, "left": 200, "bottom": 425, "right": 400},
+            "expected_confidence": 0.98
+          },
+          {
+            "name": "authorized_signature",
+            "expected_value": "Sarah Williams",
+            "position": {"page": 1, "top": 450, "left": 500, "bottom": 500, "right": 650},
+            "expected_confidence": 0.92
+          }
+        ],
+        "tables": []
+      }
+    },
+    {
+      "id": "inv_doc_high_001",
+      "filename": "vendor_invoice_high_quality.pdf",
+      "category": "invoices",
+      "document_type": "invoice",
+      "quality": "high",
+      "orientation": "portrait",
+      "page_count": 1,
+      "characteristics": {
+        "resolution": "300dpi",
+        "has_tables": true,
+        "has_checkboxes": false,
+        "has_signatures": false,
+        "complexity": "medium",
+        "contrast": "high",
+        "clarity": "excellent",
+        "noise_level": "minimal"
+      },
+      "expected_extraction": {
+        "fields": [
+          {
+            "name": "invoice_number",
+            "expected_value": "INV-9876",
+            "position": {"page": 1, "top": 100, "left": 500, "bottom": 125, "right": 600},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "invoice_date",
+            "expected_value": "05/01/2025",
+            "position": {"page": 1, "top": 130, "left": 500, "bottom": 155, "right": 600},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "due_date",
+            "expected_value": "05/31/2025",
+            "position": {"page": 1, "top": 160, "left": 500, "bottom": 185, "right": 600},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "vendor_name",
+            "expected_value": "Office Supplies Inc.",
+            "position": {"page": 1, "top": 100, "left": 100, "bottom": 125, "right": 350},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "vendor_address",
+            "expected_value": "500 Commerce Street, Brooklyn, NY 11201",
+            "position": {"page": 1, "top": 130, "left": 100, "bottom": 180, "right": 400},
+            "expected_confidence": 0.97
+          },
+          {
+            "name": "customer_name",
+            "expected_value": "Dollar Funding Partners LLC",
+            "position": {"page": 1, "top": 200, "left": 100, "bottom": 225, "right": 400},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "customer_address",
+            "expected_value": "1000 Financial Plaza, Suite 500, New York, NY 10004",
+            "position": {"page": 1, "top": 230, "left": 100, "bottom": 280, "right": 450},
+            "expected_confidence": 0.97
+          },
+          {
+            "name": "subtotal",
+            "expected_value": "$3,000.00",
+            "position": {"page": 1, "top": 500, "left": 600, "bottom": 525, "right": 700},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "tax",
+            "expected_value": "$245.80",
+            "position": {"page": 1, "top": 530, "left": 600, "bottom": 555, "right": 700},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "total",
+            "expected_value": "$3,245.80",
+            "position": {"page": 1, "top": 560, "left": 600, "bottom": 585, "right": 700},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "payment_terms",
+            "expected_value": "Net 30",
+            "position": {"page": 1, "top": 600, "left": 100, "bottom": 625, "right": 200},
+            "expected_confidence": 0.98
+          }
+        ],
+        "tables": [
+          {
+            "name": "line_items",
+            "position": {"page": 1, "top": 300, "left": 100, "bottom": 480, "right": 700},
+            "expected_confidence": 0.98,
+            "rows": 6,
+            "columns": 5,
+            "headers": ["Item #", "Description", "Quantity", "Unit Price", "Amount"],
+            "data": [
+              ["OS-101", "Premium Paper (Case)", "5", "$45.00", "$225.00"],
+              ["OS-202", "Toner Cartridges", "3", "$125.00", "$375.00"],
+              ["OS-303", "Office Chair (Executive)", "2", "$750.00", "$1,500.00"],
+              ["OS-404", "Filing Cabinets", "2", "$350.00", "$700.00"],
+              ["OS-505", "Desk Organizers", "10", "$20.00", "$200.00"]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "id_doc_high_001",
+      "filename": "drivers_license_high_quality.pdf",
+      "category": "identity_documents",
+      "document_type": "drivers_license",
+      "quality": "high",
+      "orientation": "landscape",
+      "page_count": 1,
+      "characteristics": {
+        "resolution": "300dpi",
+        "has_tables": false,
+        "has_checkboxes": false,
+        "has_signatures": true,
+        "complexity": "medium",
+        "contrast": "high",
+        "clarity": "excellent",
+        "noise_level": "minimal"
+      },
+      "expected_extraction": {
+        "fields": [
+          {
+            "name": "license_number",
+            "expected_value": "987654321",
+            "position": {"page": 1, "top": 150, "left": 400, "bottom": 175, "right": 550},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "full_name",
+            "expected_value": "Michael Robert Johnson",
+            "position": {"page": 1, "top": 200, "left": 200, "bottom": 225, "right": 450},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "address",
+            "expected_value": "123 Park Avenue, Apt 15B, New York, NY 10022",
+            "position": {"page": 1, "top": 250, "left": 200, "bottom": 275, "right": 550},
+            "expected_confidence": 0.97
+          },
+          {
+            "name": "date_of_birth",
+            "expected_value": "05/12/1980",
+            "position": {"page": 1, "top": 300, "left": 200, "bottom": 325, "right": 300},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "issue_date",
+            "expected_value": "03/15/2023",
+            "position": {"page": 1, "top": 350, "left": 200, "bottom": 375, "right": 300},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "expiration_date",
+            "expected_value": "05/12/2027",
+            "position": {"page": 1, "top": 350, "left": 400, "bottom": 375, "right": 500},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "class",
+            "expected_value": "D",
+            "position": {"page": 1, "top": 400, "left": 200, "bottom": 425, "right": 250},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "restrictions",
+            "expected_value": "B",
+            "position": {"page": 1, "top": 400, "left": 300, "bottom": 425, "right": 350},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "sex",
+            "expected_value": "M",
+            "position": {"page": 1, "top": 400, "left": 400, "bottom": 425, "right": 450},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "height",
+            "expected_value": "6'0\"",
+            "position": {"page": 1, "top": 400, "left": 500, "bottom": 425, "right": 550},
+            "expected_confidence": 0.98
+          },
+          {
+            "name": "eyes",
+            "expected_value": "BRN",
+            "position": {"page": 1, "top": 400, "left": 600, "bottom": 425, "right": 650},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "signature",
+            "expected_value": "Michael Johnson",
+            "position": {"page": 1, "top": 450, "left": 200, "bottom": 500, "right": 400},
+            "expected_confidence": 0.92
+          }
+        ],
+        "tables": []
+      }
+    }
+  ],
+  "test_parameters": {
+    "confidence_thresholds": {
+      "high_quality": 0.95,
+      "medium_quality": 0.85,
+      "low_quality": 0.75
+    },
+    "accuracy_metrics": {
+      "field_extraction": {
+        "exact_match": "Value must match exactly, including capitalization and punctuation",
+        "fuzzy_match": "Value must have Levenshtein distance <= 2 for short fields, <= 5 for long fields",
+        "numeric_match": "Numeric values must be within 0.1% of expected value"
+      },
+      "position_tolerance": {
+        "high_quality": {"x": 10, "y": 5},
+        "medium_quality": {"x": 15, "y": 10},
+        "low_quality": {"x": 25, "y": 15}
+      }
+    },
+    "performance_requirements": {
+      "processing_time": {
+        "per_page": "< 2 seconds",
+        "per_document": "< 10 seconds"
+      },
+      "memory_usage": "< 1GB per document",
+      "gpu_acceleration": "Required for production environment"
+    }
+  },
+  "related_manifests": [
+    "financial_documents/financial_documents_manifest.json",
+    "invoices/invoices_manifest.json",
+    "quality_variations/low_quality_manifest.json",
+    "quality_variations/medium_quality_manifest.json"
+  ]
+}
