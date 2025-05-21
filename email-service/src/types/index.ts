@@ -1,35 +1,30 @@
 /**
+ * Email Service Type Definitions
+ * 
+ * This barrel file exports all type definitions used throughout the Email Service.
+ * It provides a single entry point for importing types, simplifying imports and
+ * preventing circular dependencies.
+ * 
  * @module types
- * @description Central barrel file for Email Service type definitions
- * 
- * This file re-exports all type modules to provide a unified API surface.
- * It simplifies importing types throughout the application by allowing
- * consumers to import from a single path rather than individual type files.
- * 
- * Example usage:
- * ```typescript
- * import { IEmailMessage, IServiceError, IAppConfig } from '../types';
- * ```
- * 
- * Note: When adding new type modules, ensure they are exported here to maintain
- * a consistent import pattern across the application.
  */
 
-// Common types
+// Common types used throughout the application
 export * from './common';
 
-// Error handling types
-export * from './error';
-
-// Configuration types
+// Configuration types for service settings and environment variables
 export * from './config';
 
-// Email and message types
+// Email message types for processing incoming emails
 export * from './email';
+
+// Error handling and logging types
+export * from './error';
+
+// IMAP connection and mailbox operation types
 export * from './imap';
 
-// Storage types
-export * from './storage';
-
-// Message queue types
+// Message queue types for RabbitMQ integration
 export * from './message-queue';
+
+// Storage types for S3-compatible document storage
+export * from './storage';
