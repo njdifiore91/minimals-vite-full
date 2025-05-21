@@ -1,207 +1,220 @@
 package com.dollarfunding.mca.cache;
 
-import org.springframework.stereotype.Component;
+import org.springframework.util.Assert;
+import org.springframework.util.StringUtils;
+
+import java.util.Arrays;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 /**
  * Utility class for generating consistent cache keys in the MCA application.
+ * <p>
  * This class provides methods for creating standardized cache keys based on entity type and ID,
  * ensuring consistency across the application. It supports generating keys for collections,
  * single entities, and custom operations, with proper handling of multi-part keys and delimiters.
+ * </p>
+ * <p>
+ * The generated keys follow the format: prefix:entityType:id or prefix:entityType:operation:id
+ * where prefix is a namespace for the application, entityType is the type of entity being cached,
+ * operation is an optional operation name, and id is the entity identifier.
+ * </p>
+ * <p>
+ * For collection keys, the format is: prefix:entityType:collection
+ * </p>
+ *
+ * @author MCA Development Team
  */
-@Component
-public class CacheKeyGenerator {
+public final class CacheKeyGenerator {
 
     /**
-     * Generates a cache key for an application entity.
-     *
-     * @param applicationId The application ID
-     * @return The cache key
+     * The default namespace prefix for all cache keys
      */
-    public String generateApplicationKey(String applicationId) {
-        validateId(applicationId);
-        return CacheConstants.KEY_PREFIX_APPLICATION + applicationId;
+    private static final String DEFAULT_PREFIX = "mca";
+    
+    /**
+     * The delimiter used to separate parts of the cache key
+     */
+    private static final String DELIMITER = ":";
+    
+    /**
+     * Pattern for validating cache key components
+     * Allows alphanumeric characters, underscores, hyphens, and periods
+     */
+    private static final Pattern VALID_KEY_PATTERN = Pattern.compile("^[\\w\\-\\.]+$");
+
+    /**
+     * Private constructor to prevent instantiation
+     */
+    private CacheKeyGenerator() {
+        // Utility class should not be instantiated
     }
 
     /**
-     * Generates a cache key for a document entity.
+     * Generates a cache key for a specific entity instance
      *
-     * @param documentId The document ID
-     * @return The cache key
+     * @param entityType the type of entity (e.g., "application", "document")
+     * @param id the entity identifier
+     * @return the generated cache key
+     * @throws IllegalArgumentException if entityType or id is null or empty
      */
-    public String generateDocumentKey(String documentId) {
-        validateId(documentId);
-        return CacheConstants.KEY_PREFIX_DOCUMENT + documentId;
-    }
-
-    /**
-     * Generates a cache key for a merchant entity.
-     *
-     * @param merchantId The merchant ID
-     * @return The cache key
-     */
-    public String generateMerchantKey(String merchantId) {
-        validateId(merchantId);
-        return CacheConstants.KEY_PREFIX_MERCHANT + merchantId;
-    }
-
-    /**
-     * Generates a cache key for a session.
-     *
-     * @param sessionId The session ID
-     * @return The cache key
-     */
-    public String generateSessionKey(String sessionId) {
-        validateId(sessionId);
-        return CacheConstants.KEY_PREFIX_SESSION + sessionId;
-    }
-
-    /**
-     * Generates a cache key for a collection of entities.
-     *
-     * @param entityType The entity type (e.g., "applications", "documents")
-     * @param qualifier  An optional qualifier for the collection (e.g., "pending", "approved")
-     * @return The cache key
-     */
-    public String generateCollectionKey(String entityType, String qualifier) {
-        validateEntityType(entityType);
+    public static String generateKey(String entityType, String id) {
+        validateKeyComponent(entityType, "Entity type");
+        validateKeyComponent(id, "ID");
         
-        if (qualifier == null || qualifier.isEmpty()) {
-            return CacheConstants.KEY_PREFIX_COLLECTION + entityType;
-        } else {
-            validateQualifier(qualifier);
-            return CacheConstants.KEY_PREFIX_COLLECTION + entityType + CacheConstants.KEY_DELIMITER + qualifier;
-        }
+        return joinKeyParts(DEFAULT_PREFIX, entityType, id);
     }
 
     /**
-     * Generates a cache key for a counter.
+     * Generates a cache key for a specific entity instance with a custom prefix
      *
-     * @param counterName The counter name
-     * @return The cache key
+     * @param prefix the custom prefix to use instead of the default
+     * @param entityType the type of entity (e.g., "application", "document")
+     * @param id the entity identifier
+     * @return the generated cache key
+     * @throws IllegalArgumentException if any parameter is null or empty
      */
-    public String generateCounterKey(String counterName) {
-        validateName(counterName);
-        return CacheConstants.KEY_PREFIX_COUNTER + counterName;
-    }
-
-    /**
-     * Generates a cache key for a distributed lock.
-     *
-     * @param lockName The lock name
-     * @return The cache key
-     */
-    public String generateLockKey(String lockName) {
-        validateName(lockName);
-        return CacheConstants.KEY_PREFIX_LOCK + lockName;
-    }
-
-    /**
-     * Generates a custom cache key with multiple parts.
-     *
-     * @param prefix The key prefix
-     * @param parts  The key parts
-     * @return The cache key
-     */
-    public String generateCustomKey(String prefix, String... parts) {
-        validatePrefix(prefix);
+    public static String generateKey(String prefix, String entityType, String id) {
+        validateKeyComponent(prefix, "Prefix");
+        validateKeyComponent(entityType, "Entity type");
+        validateKeyComponent(id, "ID");
         
-        if (parts == null || parts.length == 0) {
-            return prefix;
-        }
-        
-        StringBuilder keyBuilder = new StringBuilder(prefix);
-        
-        for (String part : parts) {
-            if (part != null && !part.isEmpty()) {
-                validateKeyPart(part);
-                keyBuilder.append(CacheConstants.KEY_DELIMITER).append(part);
-            }
-        }
-        
-        return keyBuilder.toString();
+        return joinKeyParts(prefix, entityType, id);
     }
 
     /**
-     * Validates an entity ID.
+     * Generates a cache key for a specific entity instance with a numeric ID
      *
-     * @param id The entity ID to validate
-     * @throws IllegalArgumentException if the ID is invalid
+     * @param entityType the type of entity (e.g., "application", "document")
+     * @param id the numeric entity identifier
+     * @return the generated cache key
+     * @throws IllegalArgumentException if entityType is null or empty
      */
-    private void validateId(String id) {
-        if (id == null || id.isEmpty()) {
-            throw new IllegalArgumentException("Entity ID cannot be null or empty");
-        }
+    public static String generateKey(String entityType, Long id) {
+        validateKeyComponent(entityType, "Entity type");
+        Assert.notNull(id, "ID must not be null");
         
-        if (id.contains(CacheConstants.KEY_DELIMITER)) {
-            throw new IllegalArgumentException("Entity ID cannot contain the delimiter: " + CacheConstants.KEY_DELIMITER);
-        }
+        return joinKeyParts(DEFAULT_PREFIX, entityType, id.toString());
     }
 
     /**
-     * Validates an entity type.
+     * Generates a cache key for a collection of entities
      *
-     * @param entityType The entity type to validate
-     * @throws IllegalArgumentException if the entity type is invalid
+     * @param entityType the type of entity collection (e.g., "applications", "documents")
+     * @return the generated cache key
+     * @throws IllegalArgumentException if entityType is null or empty
      */
-    private void validateEntityType(String entityType) {
-        if (entityType == null || entityType.isEmpty()) {
-            throw new IllegalArgumentException("Entity type cannot be null or empty");
-        }
+    public static String generateCollectionKey(String entityType) {
+        validateKeyComponent(entityType, "Entity type");
         
-        if (entityType.contains(CacheConstants.KEY_DELIMITER)) {
-            throw new IllegalArgumentException("Entity type cannot contain the delimiter: " + CacheConstants.KEY_DELIMITER);
-        }
+        return joinKeyParts(DEFAULT_PREFIX, entityType, "collection");
     }
 
     /**
-     * Validates a qualifier.
+     * Generates a cache key for a collection of entities with a custom prefix
      *
-     * @param qualifier The qualifier to validate
-     * @throws IllegalArgumentException if the qualifier is invalid
+     * @param prefix the custom prefix to use instead of the default
+     * @param entityType the type of entity collection (e.g., "applications", "documents")
+     * @return the generated cache key
+     * @throws IllegalArgumentException if any parameter is null or empty
      */
-    private void validateQualifier(String qualifier) {
-        if (qualifier.contains(CacheConstants.KEY_DELIMITER)) {
-            throw new IllegalArgumentException("Qualifier cannot contain the delimiter: " + CacheConstants.KEY_DELIMITER);
-        }
+    public static String generateCollectionKey(String prefix, String entityType) {
+        validateKeyComponent(prefix, "Prefix");
+        validateKeyComponent(entityType, "Entity type");
+        
+        return joinKeyParts(prefix, entityType, "collection");
     }
 
     /**
-     * Validates a name.
+     * Generates a cache key for a custom operation on an entity
      *
-     * @param name The name to validate
-     * @throws IllegalArgumentException if the name is invalid
+     * @param entityType the type of entity (e.g., "application", "document")
+     * @param operation the operation name (e.g., "count", "summary")
+     * @param id the entity identifier
+     * @return the generated cache key
+     * @throws IllegalArgumentException if any parameter is null or empty
      */
-    private void validateName(String name) {
-        if (name == null || name.isEmpty()) {
-            throw new IllegalArgumentException("Name cannot be null or empty");
+    public static String generateOperationKey(String entityType, String operation, String id) {
+        validateKeyComponent(entityType, "Entity type");
+        validateKeyComponent(operation, "Operation");
+        validateKeyComponent(id, "ID");
+        
+        return joinKeyParts(DEFAULT_PREFIX, entityType, operation, id);
+    }
+
+    /**
+     * Generates a cache key for a custom operation on an entity with a numeric ID
+     *
+     * @param entityType the type of entity (e.g., "application", "document")
+     * @param operation the operation name (e.g., "count", "summary")
+     * @param id the numeric entity identifier
+     * @return the generated cache key
+     * @throws IllegalArgumentException if entityType or operation is null or empty
+     */
+    public static String generateOperationKey(String entityType, String operation, Long id) {
+        validateKeyComponent(entityType, "Entity type");
+        validateKeyComponent(operation, "Operation");
+        Assert.notNull(id, "ID must not be null");
+        
+        return joinKeyParts(DEFAULT_PREFIX, entityType, operation, id.toString());
+    }
+
+    /**
+     * Generates a cache key for a custom operation on a collection of entities
+     *
+     * @param entityType the type of entity collection (e.g., "applications", "documents")
+     * @param operation the operation name (e.g., "count", "summary")
+     * @return the generated cache key
+     * @throws IllegalArgumentException if any parameter is null or empty
+     */
+    public static String generateCollectionOperationKey(String entityType, String operation) {
+        validateKeyComponent(entityType, "Entity type");
+        validateKeyComponent(operation, "Operation");
+        
+        return joinKeyParts(DEFAULT_PREFIX, entityType, operation, "collection");
+    }
+
+    /**
+     * Generates a multi-part cache key with custom components
+     *
+     * @param components the key components to join
+     * @return the generated cache key
+     * @throws IllegalArgumentException if components is null or empty
+     */
+    public static String generateCustomKey(String... components) {
+        Assert.notEmpty(components, "Components must not be null or empty");
+        
+        for (int i = 0; i < components.length; i++) {
+            validateKeyComponent(components[i], "Component at index " + i);
         }
         
-        if (name.contains(CacheConstants.KEY_DELIMITER)) {
-            throw new IllegalArgumentException("Name cannot contain the delimiter: " + CacheConstants.KEY_DELIMITER);
-        }
+        return joinKeyParts(components);
     }
 
     /**
-     * Validates a key prefix.
+     * Joins key parts with the delimiter
      *
-     * @param prefix The prefix to validate
-     * @throws IllegalArgumentException if the prefix is invalid
+     * @param parts the parts to join
+     * @return the joined key
      */
-    private void validatePrefix(String prefix) {
-        if (prefix == null || prefix.isEmpty()) {
-            throw new IllegalArgumentException("Prefix cannot be null or empty");
-        }
+    private static String joinKeyParts(String... parts) {
+        return Arrays.stream(parts)
+                .collect(Collectors.joining(DELIMITER));
     }
 
     /**
-     * Validates a key part.
+     * Validates a key component
      *
-     * @param part The key part to validate
-     * @throws IllegalArgumentException if the key part is invalid
+     * @param component the component to validate
+     * @param componentName the name of the component for error messages
+     * @throws IllegalArgumentException if the component is invalid
      */
-    private void validateKeyPart(String part) {
-        if (part.contains(CacheConstants.KEY_DELIMITER)) {
-            throw new IllegalArgumentException("Key part cannot contain the delimiter: " + CacheConstants.KEY_DELIMITER);
+    private static void validateKeyComponent(String component, String componentName) {
+        Assert.hasText(component, componentName + " must not be null or empty");
+        
+        if (!VALID_KEY_PATTERN.matcher(component).matches()) {
+            throw new IllegalArgumentException(componentName + 
+                    " contains invalid characters. Only alphanumeric characters, underscores, hyphens, and periods are allowed.");
         }
     }
 }
