@@ -1,20 +1,15 @@
 package com.dollarfunding.mca.service;
 
+import com.dollarfunding.mca.dto.ApplicationFilterDTO;
 import com.dollarfunding.mca.dto.ApplicationRequestDTO;
 import com.dollarfunding.mca.dto.ApplicationResponseDTO;
-import com.dollarfunding.mca.entity.Application;
+import com.dollarfunding.mca.dto.DocumentResponseDTO;
+import com.dollarfunding.mca.dto.MerchantDetailsResponseDTO;
+import com.dollarfunding.mca.dto.PageResponseDTO;
 import com.dollarfunding.mca.entity.ApplicationStatus;
-import com.dollarfunding.mca.entity.Document;
-import com.dollarfunding.mca.entity.DocumentType;
 import com.dollarfunding.mca.entity.ReviewStatus;
-import com.dollarfunding.mca.service.ValidationService.ValidationResult;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.Pageable;
 
-import java.time.LocalDateTime;
 import java.util.List;
-import java.util.Map;
-import java.util.UUID;
 
 /**
  * Service interface that defines the contract for managing Merchant Cash Advance (MCA) applications.
@@ -27,269 +22,146 @@ import java.util.UUID;
 public interface ApplicationService {
     
     /**
-     * Creates a new application with the provided data.
-     * 
-     * @param applicationDTO The application data to create
-     * @return The created application
+     * Creates a new MCA application with the provided data.
+     *
+     * @param applicationRequestDTO The DTO containing application data
+     * @return The created application as a response DTO
      */
-    Application createApplication(ApplicationRequestDTO applicationDTO);
+    ApplicationResponseDTO createApplication(ApplicationRequestDTO applicationRequestDTO);
     
     /**
      * Retrieves an application by its ID.
-     * 
+     *
      * @param id The application ID
-     * @return The application
+     * @return The application as a response DTO
      */
-    Application getApplicationById(UUID id);
-    
-    /**
-     * Retrieves all applications with pagination.
-     * 
-     * @param pageable The pagination information
-     * @return Page of applications
-     */
-    Page<Application> getAllApplications(Pageable pageable);
-    
-    /**
-     * Retrieves applications by status with pagination.
-     * 
-     * @param status The application status to filter by
-     * @param pageable The pagination information
-     * @return Page of applications with the specified status
-     */
-    Page<Application> getApplicationsByStatus(ApplicationStatus status, Pageable pageable);
-    
-    /**
-     * Retrieves applications by review status with pagination.
-     * 
-     * @param reviewStatus The review status to filter by
-     * @param pageable The pagination information
-     * @return Page of applications with the specified review status
-     */
-    Page<Application> getApplicationsByReviewStatus(ReviewStatus reviewStatus, Pageable pageable);
-    
-    /**
-     * Retrieves applications created within a date range with pagination.
-     * 
-     * @param startDate The start date of the range (inclusive)
-     * @param endDate The end date of the range (inclusive)
-     * @param pageable The pagination information
-     * @return Page of applications created within the specified date range
-     */
-    Page<Application> getApplicationsByCreationDateRange(LocalDateTime startDate, 
-                                                       LocalDateTime endDate, 
-                                                       Pageable pageable);
+    ApplicationResponseDTO getApplicationById(Long id);
     
     /**
      * Updates an existing application with the provided data.
-     * 
+     *
      * @param id The application ID
-     * @param applicationDTO The updated application data
-     * @return The updated application
+     * @param applicationRequestDTO The DTO containing updated application data
+     * @return The updated application as a response DTO
      */
-    Application updateApplication(UUID id, ApplicationRequestDTO applicationDTO);
-    
-    /**
-     * Updates the status of an application.
-     * 
-     * @param id The application ID
-     * @param newStatus The new status to set
-     * @return The updated application
-     */
-    Application updateApplicationStatus(UUID id, ApplicationStatus newStatus);
-    
-    /**
-     * Updates the review status of an application.
-     * 
-     * @param id The application ID
-     * @param newReviewStatus The new review status to set
-     * @return The updated application
-     */
-    Application updateApplicationReviewStatus(UUID id, ReviewStatus newReviewStatus);
+    ApplicationResponseDTO updateApplication(Long id, ApplicationRequestDTO applicationRequestDTO);
     
     /**
      * Deletes an application by its ID.
-     * 
+     *
      * @param id The application ID
+     * @return true if the application was successfully deleted, false otherwise
      */
-    void deleteApplication(UUID id);
+    boolean deleteApplication(Long id);
     
     /**
-     * Adds a document to an application.
-     * 
-     * @param applicationId The application ID
-     * @param document The document to add
-     * @return The updated application
+     * Retrieves a paginated list of applications based on filter criteria.
+     *
+     * @param filterDTO The DTO containing filter criteria
+     * @return A paginated response containing applications that match the filter criteria
      */
-    Application addDocumentToApplication(UUID applicationId, Document document);
+    PageResponseDTO<ApplicationResponseDTO> getApplications(ApplicationFilterDTO filterDTO);
+    
+    /**
+     * Updates the status of an application.
+     *
+     * @param id The application ID
+     * @param status The new application status
+     * @return The updated application as a response DTO
+     */
+    ApplicationResponseDTO updateApplicationStatus(Long id, ApplicationStatus status);
+    
+    /**
+     * Updates the review status of an application.
+     *
+     * @param id The application ID
+     * @param reviewStatus The new review status
+     * @return The updated application as a response DTO
+     */
+    ApplicationResponseDTO updateReviewStatus(Long id, ReviewStatus reviewStatus);
+    
+    /**
+     * Processes an application with extracted document data.
+     * This method applies business rules, validates data, and updates the application status.
+     *
+     * @param id The application ID
+     * @param documentId The ID of the document containing extracted data
+     * @return The processed application as a response DTO
+     */
+    ApplicationResponseDTO processApplication(Long id, Long documentId);
+    
+    /**
+     * Evaluates the completeness of an application based on required documents and data.
+     *
+     * @param id The application ID
+     * @return true if the application is complete, false otherwise
+     */
+    boolean isApplicationComplete(Long id);
+    
+    /**
+     * Associates a document with an application.
+     *
+     * @param applicationId The application ID
+     * @param documentId The document ID
+     * @return The updated application as a response DTO
+     */
+    ApplicationResponseDTO associateDocument(Long applicationId, Long documentId);
     
     /**
      * Retrieves all documents associated with an application.
-     * 
+     *
      * @param applicationId The application ID
-     * @return List of documents associated with the application
+     * @return A list of document response DTOs
      */
-    List<Document> getApplicationDocuments(UUID applicationId);
+    List<DocumentResponseDTO> getApplicationDocuments(Long applicationId);
     
     /**
-     * Retrieves documents of a specific type associated with an application.
-     * 
+     * Retrieves merchant details associated with an application.
+     *
      * @param applicationId The application ID
-     * @param documentType The document type to filter by
-     * @return List of documents of the specified type associated with the application
+     * @return The merchant details as a response DTO
      */
-    List<Document> getApplicationDocumentsByType(UUID applicationId, DocumentType documentType);
+    MerchantDetailsResponseDTO getMerchantDetails(Long applicationId);
     
     /**
-     * Processes a document for an application.
-     * 
-     * @param applicationId The application ID
-     * @param documentId The document ID
-     * @param extractedData The data extracted from the document
-     * @param confidenceScores The confidence scores for the extracted data
-     * @return The updated application
+     * Validates an application against business rules and data requirements.
+     * This method checks if the application data meets all validation criteria.
+     *
+     * @param id The application ID
+     * @return true if the application is valid, false otherwise
      */
-    Application processDocument(UUID applicationId, UUID documentId, 
-                              Map<String, Object> extractedData,
-                              Map<String, Double> confidenceScores);
+    boolean validateApplication(Long id);
     
     /**
-     * Evaluates the status of an application based on its documents and validation rules.
-     * 
-     * @param applicationId The application ID
-     * @return The updated application
+     * Counts applications by status.
+     * This method is useful for dashboard statistics and reporting.
+     *
+     * @return A map of application status to count
      */
-    Application evaluateApplicationStatus(UUID applicationId);
+    java.util.Map<ApplicationStatus, Long> countApplicationsByStatus();
     
     /**
-     * Validates an application against business rules.
-     * 
-     * @param applicationId The application ID
-     * @return The validation result
+     * Counts applications by review status.
+     * This method is useful for dashboard statistics and reporting.
+     *
+     * @return A map of review status to count
      */
-    ValidationResult validateApplication(UUID applicationId);
+    java.util.Map<ReviewStatus, Long> countApplicationsByReviewStatus();
     
     /**
-     * Checks if an application has all required documents.
-     * 
-     * @param applicationId The application ID
-     * @return true if the application has all required documents, false otherwise
+     * Retrieves applications that require attention based on business rules.
+     * This includes applications with exceptions, missing documents, or other issues.
+     *
+     * @return A list of applications that require attention
      */
-    boolean hasAllRequiredDocuments(UUID applicationId);
+    List<ApplicationResponseDTO> getApplicationsRequiringAttention();
     
     /**
-     * Calculates the processing time of an application in minutes.
-     * 
-     * @param applicationId The application ID
-     * @return The processing time in minutes, or -1 if the application is not completed
+     * Processes a batch of applications in bulk.
+     * This method is useful for background processing and batch operations.
+     *
+     * @param applicationIds A list of application IDs to process
+     * @return The number of successfully processed applications
      */
-    long getApplicationProcessingTime(UUID applicationId);
-    
-    /**
-     * Checks if an application was processed within the target time (5 minutes).
-     * 
-     * @param applicationId The application ID
-     * @return true if the application was processed within the target time, false otherwise
-     */
-    boolean isApplicationProcessedWithinTargetTime(UUID applicationId);
-    
-    /**
-     * Counts the number of applications with a specific status.
-     * 
-     * @param status The application status to count
-     * @return The number of applications with the specified status
-     */
-    long countApplicationsByStatus(ApplicationStatus status);
-    
-    /**
-     * Counts the number of applications with a specific review status.
-     * 
-     * @param reviewStatus The review status to count
-     * @return The number of applications with the specified review status
-     */
-    long countApplicationsByReviewStatus(ReviewStatus reviewStatus);
-    
-    /**
-     * Calculates the average processing time (in minutes) for completed applications.
-     * 
-     * @return The average processing time in minutes
-     */
-    double calculateAverageProcessingTime();
-    
-    /**
-     * Calculates the average processing time (in minutes) for completed applications within a date range.
-     * 
-     * @param startDate The start date of the range (inclusive)
-     * @param endDate The end date of the range (inclusive)
-     * @return The average processing time in minutes
-     */
-    double calculateAverageProcessingTime(LocalDateTime startDate, LocalDateTime endDate);
-    
-    /**
-     * Retrieves applications that require review with pagination.
-     * 
-     * @param pageable The pagination information
-     * @return Page of applications that require review
-     */
-    Page<Application> getApplicationsRequiringReview(Pageable pageable);
-    
-    /**
-     * Retrieves active applications with pagination.
-     * 
-     * @param pageable The pagination information
-     * @return Page of active applications
-     */
-    Page<Application> getActiveApplications(Pageable pageable);
-    
-    /**
-     * Retrieves applications that have been decided upon with pagination.
-     * 
-     * @param pageable The pagination information
-     * @return Page of decided applications
-     */
-    Page<Application> getDecidedApplications(Pageable pageable);
-    
-    /**
-     * Retrieves applications that were processed within the target time (5 minutes) with pagination.
-     * 
-     * @param pageable The pagination information
-     * @return Page of applications processed within the target time
-     */
-    Page<Application> getApplicationsProcessedWithinTargetTime(Pageable pageable);
-    
-    /**
-     * Retrieves applications that exceeded the target processing time (5 minutes) with pagination.
-     * 
-     * @param pageable The pagination information
-     * @return Page of applications that exceeded the target processing time
-     */
-    Page<Application> getApplicationsExceedingTargetTime(Pageable pageable);
-    
-    /**
-     * Retrieves applications with merchant details in a specific industry with pagination.
-     * 
-     * @param industry The industry to filter by
-     * @param pageable The pagination information
-     * @return Page of applications with merchant details in the specified industry
-     */
-    Page<Application> getApplicationsByMerchantIndustry(String industry, Pageable pageable);
-    
-    /**
-     * Retrieves applications with merchant details in a specific state with pagination.
-     * 
-     * @param state The state to filter by (2-letter code)
-     * @param pageable The pagination information
-     * @return Page of applications with merchant details in the specified state
-     */
-    Page<Application> getApplicationsByMerchantState(String state, Pageable pageable);
-    
-    /**
-     * Retrieves applications with metadata containing a specific key-value pair with pagination.
-     * 
-     * @param key The metadata key
-     * @param value The metadata value
-     * @param pageable The pagination information
-     * @return Page of applications with metadata containing the specified key-value pair
-     */
-    Page<Application> getApplicationsByMetadata(String key, Object value, Pageable pageable);
+    int processBatchApplications(List<Long> applicationIds);
 }
