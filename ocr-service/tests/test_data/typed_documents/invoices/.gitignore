@@ -1,0 +1,63 @@
+# OCR Service - Invoice Test Data .gitignore
+
+# Exclude binary invoice document files from version control to prevent repository bloat
+# These files should be obtained separately and placed in this directory for testing
+# This approach keeps the repository size manageable while ensuring test data consistency
+
+# Document formats - All common invoice file formats
+*.pdf
+*.PDF
+*.tiff
+*.TIFF
+*.tif
+*.TIF
+*.png
+*.PNG
+*.jpg
+*.JPG
+*.jpeg
+*.JPEG
+*.bmp
+*.BMP
+*.webp
+*.WEBP
+
+# Exclude generated OCR output files
+# These are generated during testing and should not be committed
+# Each developer should generate their own output files for comparison
+output/*.txt
+output/*.json
+output/*.csv
+output/*.xml
+
+# However, we DO want to track the expected output files for validation
+!expected/*.txt
+!expected/*.json
+!expected/*.csv
+!expected/*.xml
+
+# Exceptions - Track these specific files
+!README.md
+!config.json
+!metadata.json
+!sample_list.txt
+!directory_structure.md
+!expected_results.json
+!test_manifest.json
+!.gitkeep
+
+# Temporary files that might be created during testing
+*~
+*.tmp
+*.temp
+*.log
+
+# Instructions for obtaining test documents:
+# 1. Download the invoice test dataset from the shared storage location:
+#    s3://mca-documents-staging/test-data/invoices/
+# 2. Place the files in this directory
+# 3. Run the verification script to ensure all required test files are present:
+#    python ../../verify_test_data.py --type invoices
+#
+# Note: The test_manifest.json file contains checksums and metadata for all required
+# test documents. The verification script will use this to validate your test data.
