@@ -7,3 +7,21 @@ end_of_line = lf
 indent_style = space
 insert_final_newline = true
 trim_trailing_whitespace = true
+
+# Python files
+[*.py]
+indent_size = 4
+max_line_length = 88
+
+# Java files
+[*.java]
+indent_size = 4
+max_line_length = 120
+
+# JavaScript/TypeScript files (maintaining existing rules)
+[*.{js,jsx,ts,tsx}]
+indent_size = 2
+
+# Node.js specific files
+[{package.json,package-lock.json,*.yml,*.yaml}]
+indent_size = 2
