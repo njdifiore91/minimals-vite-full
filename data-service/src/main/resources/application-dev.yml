@@ -1,0 +1,202 @@
+# ===============================
+# DATA SERVICE - DEVELOPMENT CONFIGURATION
+# ===============================
+
+# This file contains development-specific configurations that override the base application.yml settings
+# It is automatically loaded when the application is run with the 'dev' profile
+# e.g., java -jar app.jar --spring.profiles.active=dev
+
+# ===============================
+# SERVER CONFIGURATION
+# ===============================
+server:
+  port: 8080
+  error:
+    include-message: always
+    include-binding-errors: always
+    include-stacktrace: always
+    include-exception: true
+
+# ===============================
+# SPRING CONFIGURATION
+# ===============================
+spring:
+  # Application name
+  application:
+    name: mca-data-service
+  
+  # Database configuration
+  datasource:
+    url: jdbc:postgresql://localhost:5432/mca_dev
+    username: mca_dev_user
+    password: mca_dev_password
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      connection-timeout: 20000
+      maximum-pool-size: 10
+      minimum-idle: 5
+      idle-timeout: 300000
+      max-lifetime: 1200000
+  
+  # JPA/Hibernate configuration
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        jdbc:
+          time_zone: UTC
+  
+  # Flyway migration configuration
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    locations: classpath:db/migrations
+    table: flyway_schema_history
+  
+  # RabbitMQ configuration
+  rabbitmq:
+    host: localhost
+    port: 5672
+    username: mca_dev_user
+    password: mca_dev_password
+    virtual-host: mca_dev
+    listener:
+      simple:
+        retry:
+          enabled: true
+          initial-interval: 1000
+          max-attempts: 3
+          max-interval: 10000
+          multiplier: 2.0
+    exchange:
+      name: mca.documents
+      type: fanout
+      durable: true
+    queues:
+      document-processing: document-processing
+      data-extraction: data-extraction
+      notification: notification
+  
+  # Redis configuration
+  redis:
+    host: localhost
+    port: 6379
+    password: mca_dev_password
+    database: 0
+    timeout: 60000
+    connect-timeout: 10000
+    client-name: mca-data-service-dev
+
+# ===============================
+# CACHE CONFIGURATION
+# ===============================
+cache:
+  redis:
+    time-to-live:
+      application-data: 900  # 15 minutes in seconds
+      user-sessions: 86400  # 24 hours in seconds
+
+# ===============================
+# S3 STORAGE CONFIGURATION
+# ===============================
+storage:
+  s3:
+    endpoint: http://localhost:9000
+    region: us-east-1
+    bucket-name: mca-documents-staging
+    access-key: mca_dev_access_key
+    secret-key: mca_dev_secret_key
+    encryption:
+      enabled: true
+      type: AES256
+
+# ===============================
+# SECURITY CONFIGURATION
+# ===============================
+security:
+  jwt:
+    token:
+      secret-key: dev_secret_key_for_signing_jwt_tokens_this_should_be_very_long_and_secure
+      # Using shorter expiration times for development to facilitate testing
+      expiration: 1800  # 30 minutes in seconds (shorter for development)
+      refresh-expiration: 86400  # 24 hours in seconds (shorter for development)
+    public-key: classpath:jwt/public_key.pem
+    private-key: classpath:jwt/private_key.pem
+  cors:
+    allowed-origins: http://localhost:3000,http://localhost:5173
+    allowed-methods: GET,POST,PUT,DELETE,OPTIONS
+    allowed-headers: Authorization,Content-Type,X-Requested-With
+    exposed-headers: X-Total-Count
+    allow-credentials: true
+    max-age: 3600
+
+# ===============================
+# FIELD-LEVEL ENCRYPTION CONFIGURATION
+# ===============================
+encryption:
+  enabled: true
+  algorithm: AES/GCM/NoPadding
+  secret-key: dev_encryption_key_for_pii_fields_this_should_be_very_secure
+  fields:
+    - entity: com.dollarfunding.mca.entity.MerchantDetails
+      properties: [legalName, dbaName, ein, address]
+
+# ===============================
+# LOGGING CONFIGURATION
+# ===============================
+logging:
+  level:
+    root: INFO
+    com.dollarfunding.mca: DEBUG
+    org.springframework.web: DEBUG
+    org.springframework.security: DEBUG
+    org.springframework.data: DEBUG
+    org.hibernate.SQL: DEBUG
+    org.hibernate.type.descriptor.sql.BasicBinder: TRACE
+
+# ===============================
+# ACTUATOR CONFIGURATION
+# ===============================
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,env,loggers,flyway,caches,configprops,mappings,beans
+  endpoint:
+    health:
+      show-details: always
+  info:
+    git:
+      mode: full
+    env:
+      enabled: true
+    build:
+      enabled: true
+
+# ===============================
+# APPLICATION-SPECIFIC CONFIGURATION
+# ===============================
+app:
+  # Feature flags for development
+  features:
+    document-processing-automation: true
+    webhook-delivery: true
+    field-level-encryption: true
+  
+  # Development-specific application settings
+  processing:
+    max-concurrent-applications: 10
+    max-document-size-mb: 20
+    supported-document-types: pdf,jpg,jpeg,png,tiff
+  
+  # Notification settings
+  notification:
+    retry:
+      max-attempts: 5
+      initial-delay: 1000
+      multiplier: 2.0
+      max-delay: 60000
