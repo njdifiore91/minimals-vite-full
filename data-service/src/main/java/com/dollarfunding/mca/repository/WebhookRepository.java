@@ -153,4 +153,36 @@ public interface WebhookRepository extends JpaRepository<Webhook, Long> {
      */
     @Query("SELECT w FROM Webhook w WHERE w.active = true AND w.eventType IN ('DOCUMENT_UPLOADED', 'DOCUMENT_PROCESSED')")
     List<Webhook> findActiveDocumentWebhooks();
+    
+    /**
+     * Finds all webhooks with successful delivery status.
+     *
+     * @return a list of webhooks with successful delivery status
+     */
+    @Query("SELECT w FROM Webhook w WHERE w.lastDeliverySuccess = true")
+    List<Webhook> findSuccessfulWebhooks();
+    
+    /**
+     * Finds all webhooks with failed delivery status.
+     *
+     * @return a list of webhooks with failed delivery status
+     */
+    @Query("SELECT w FROM Webhook w WHERE w.lastDeliverySuccess = false")
+    List<Webhook> findFailedWebhooks();
+    
+    /**
+     * Finds all webhooks that have never been delivered.
+     *
+     * @return a list of webhooks that have never been delivered
+     */
+    @Query("SELECT w FROM Webhook w WHERE w.lastDeliveryAttempt IS NULL")
+    List<Webhook> findNeverDeliveredWebhooks();
+    
+    /**
+     * Finds all webhooks with a specific HTTP status code from the last delivery.
+     *
+     * @param statusCode the HTTP status code to filter by
+     * @return a list of webhooks with the specified HTTP status code
+     */
+    List<Webhook> findByLastDeliveryStatusCode(Integer statusCode);
 }
