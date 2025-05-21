@@ -99,6 +99,42 @@ public class Webhook {
     private Integer failedAttempts = 0;
 
     /**
+     * Whether the last delivery was successful.
+     */
+    @Column(name = "last_delivery_success")
+    private Boolean lastDeliverySuccess;
+
+    /**
+     * The HTTP status code from the last delivery attempt.
+     */
+    @Column(name = "last_delivery_status_code")
+    private Integer lastDeliveryStatusCode;
+
+    /**
+     * The error message from the last delivery attempt, if any.
+     */
+    @Column(name = "last_delivery_error")
+    private String lastDeliveryError;
+
+    /**
+     * Total number of successful deliveries.
+     */
+    @Column(name = "successful_deliveries_count")
+    private Long successfulDeliveriesCount = 0L;
+
+    /**
+     * Total number of failed deliveries.
+     */
+    @Column(name = "failed_deliveries_count")
+    private Long failedDeliveriesCount = 0L;
+
+    /**
+     * The name of the signature header used (e.g., "X-Webhook-Signature").
+     */
+    @Column(name = "signature_header")
+    private String signatureHeader = "X-Webhook-Signature";
+
+    /**
      * The timestamp when this webhook was created.
      */
     @Column(name = "created_at", nullable = false, updatable = false)
@@ -139,6 +175,15 @@ public class Webhook {
         LocalDateTime now = LocalDateTime.now();
         this.createdAt = now;
         this.updatedAt = now;
+        if (this.successfulDeliveriesCount == null) {
+            this.successfulDeliveriesCount = 0L;
+        }
+        if (this.failedDeliveriesCount == null) {
+            this.failedDeliveriesCount = 0L;
+        }
+        if (this.signatureHeader == null) {
+            this.signatureHeader = "X-Webhook-Signature";
+        }
     }
 
     /**
@@ -185,6 +230,15 @@ public class Webhook {
      */
     public void resetFailedAttempts() {
         this.failedAttempts = 0;
+    }
+
+    /**
+     * Checks if the webhook is active.
+     *
+     * @return true if the webhook is active, false otherwise
+     */
+    public boolean isActive() {
+        return Boolean.TRUE.equals(this.active);
     }
 
     // Getters and Setters
@@ -261,6 +315,54 @@ public class Webhook {
         this.failedAttempts = failedAttempts;
     }
 
+    public Boolean getLastDeliverySuccess() {
+        return lastDeliverySuccess;
+    }
+
+    public void setLastDeliverySuccess(Boolean lastDeliverySuccess) {
+        this.lastDeliverySuccess = lastDeliverySuccess;
+    }
+
+    public Integer getLastDeliveryStatusCode() {
+        return lastDeliveryStatusCode;
+    }
+
+    public void setLastDeliveryStatusCode(Integer lastDeliveryStatusCode) {
+        this.lastDeliveryStatusCode = lastDeliveryStatusCode;
+    }
+
+    public String getLastDeliveryError() {
+        return lastDeliveryError;
+    }
+
+    public void setLastDeliveryError(String lastDeliveryError) {
+        this.lastDeliveryError = lastDeliveryError;
+    }
+
+    public Long getSuccessfulDeliveriesCount() {
+        return successfulDeliveriesCount;
+    }
+
+    public void setSuccessfulDeliveriesCount(Long successfulDeliveriesCount) {
+        this.successfulDeliveriesCount = successfulDeliveriesCount;
+    }
+
+    public Long getFailedDeliveriesCount() {
+        return failedDeliveriesCount;
+    }
+
+    public void setFailedDeliveriesCount(Long failedDeliveriesCount) {
+        this.failedDeliveriesCount = failedDeliveriesCount;
+    }
+
+    public String getSignatureHeader() {
+        return signatureHeader;
+    }
+
+    public void setSignatureHeader(String signatureHeader) {
+        this.signatureHeader = signatureHeader;
+    }
+
     public LocalDateTime getCreatedAt() {
         return createdAt;
     }
@@ -280,6 +382,11 @@ public class Webhook {
                 ", failedAttempts=" + failedAttempts +
                 ", lastDeliveryStatus='" + lastDeliveryStatus + '\'' +
                 ", lastDeliveryAttempt=" + lastDeliveryAttempt +
+                ", lastDeliverySuccess=" + lastDeliverySuccess +
+                ", lastDeliveryStatusCode=" + lastDeliveryStatusCode +
+                ", successfulDeliveriesCount=" + successfulDeliveriesCount +
+                ", failedDeliveriesCount=" + failedDeliveriesCount +
+                ", signatureHeader='" + signatureHeader + '\'' +
                 ", createdAt=" + createdAt +
                 ", updatedAt=" + updatedAt +
                 '}';
