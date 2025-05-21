@@ -2,171 +2,272 @@ package com.dollarfunding.mca.dto;
 
 import com.fasterxml.jackson.annotation.JsonFormat;
 import com.fasterxml.jackson.annotation.JsonInclude;
-import lombok.AllArgsConstructor;
-import lombok.Builder;
-import lombok.Data;
-import lombok.NoArgsConstructor;
-import org.springframework.http.HttpStatus;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 
 /**
- * DTO class for standardized error responses.
- * <p>
- * This class defines a consistent structure for error information including error code,
- * message, details, timestamp, and path. It is used by the global exception handler
- * to provide uniform error responses across all API endpoints.
- * </p>
+ * Data Transfer Object for standardized error responses across all API endpoints.
+ * This class provides a consistent structure for error information including
+ * error code, message, details, timestamp, and path.
  */
-@Data
-@Builder
-@NoArgsConstructor
-@AllArgsConstructor
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class ErrorResponseDTO {
 
-    /**
-     * HTTP status code of the error response
-     */
+    private String errorCode;
+    private String message;
+    private List<ValidationError> details;
+    
+    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
+    private LocalDateTime timestamp;
+    
+    private String path;
     private int status;
 
     /**
-     * Application-specific error code
+     * Default constructor
      */
-    private String code;
-
-    /**
-     * Human-readable error message
-     */
-    private String message;
-
-    /**
-     * Detailed error description
-     */
-    private String details;
-
-    /**
-     * Request path that generated the error
-     */
-    private String path;
-
-    /**
-     * Timestamp when the error occurred
-     */
-    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
-    private LocalDateTime timestamp;
-
-    /**
-     * List of field-level validation errors
-     */
-    @Builder.Default
-    private List<ValidationError> errors = new ArrayList<>();
-
-    /**
-     * Static factory method to create an error response from an HTTP status
-     *
-     * @param status  HTTP status code
-     * @param message Error message
-     * @param path    Request path
-     * @return ErrorResponseDTO instance
-     */
-    public static ErrorResponseDTO of(HttpStatus status, String message, String path) {
-        return ErrorResponseDTO.builder()
-                .status(status.value())
-                .code(status.name())
-                .message(message)
-                .path(path)
-                .timestamp(LocalDateTime.now())
-                .build();
+    public ErrorResponseDTO() {
+        this.timestamp = LocalDateTime.now();
     }
 
     /**
-     * Static factory method to create an error response with details
-     *
-     * @param status  HTTP status code
+     * Constructor with error message
+     * 
      * @param message Error message
-     * @param details Detailed error description
-     * @param path    Request path
-     * @return ErrorResponseDTO instance
      */
-    public static ErrorResponseDTO of(HttpStatus status, String message, String details, String path) {
-        return ErrorResponseDTO.builder()
-                .status(status.value())
-                .code(status.name())
-                .message(message)
-                .details(details)
-                .path(path)
-                .timestamp(LocalDateTime.now())
-                .build();
+    public ErrorResponseDTO(String message) {
+        this();
+        this.message = message;
     }
 
     /**
-     * Static factory method to create an error response with a custom error code
-     *
-     * @param status  HTTP status code
-     * @param code    Custom error code
+     * Constructor with error message and status code
+     * 
      * @param message Error message
-     * @param details Detailed error description
-     * @param path    Request path
-     * @return ErrorResponseDTO instance
+     * @param status HTTP status code
      */
-    public static ErrorResponseDTO of(HttpStatus status, String code, String message, String details, String path) {
-        return ErrorResponseDTO.builder()
-                .status(status.value())
-                .code(code)
-                .message(message)
-                .details(details)
-                .path(path)
-                .timestamp(LocalDateTime.now())
-                .build();
+    public ErrorResponseDTO(String message, int status) {
+        this(message);
+        this.status = status;
     }
 
     /**
-     * Add a validation error to the error response
-     *
-     * @param field   Field name with validation error
-     * @param message Error message for the field
+     * Constructor with error code, message, and status
+     * 
+     * @param errorCode Error code
+     * @param message Error message
+     * @param status HTTP status code
+     */
+    public ErrorResponseDTO(String errorCode, String message, int status) {
+        this(message, status);
+        this.errorCode = errorCode;
+    }
+
+    /**
+     * Nested class for validation error details
+     */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static class ValidationError {
+        private String field;
+        private String message;
+        private Object rejectedValue;
+
+        public ValidationError() {
+        }
+
+        public ValidationError(String field, String message) {
+            this.field = field;
+            this.message = message;
+        }
+
+        public ValidationError(String field, String message, Object rejectedValue) {
+            this.field = field;
+            this.message = message;
+            this.rejectedValue = rejectedValue;
+        }
+
+        public String getField() {
+            return field;
+        }
+
+        public void setField(String field) {
+            this.field = field;
+        }
+
+        public String getMessage() {
+            return message;
+        }
+
+        public void setMessage(String message) {
+            this.message = message;
+        }
+
+        public Object getRejectedValue() {
+            return rejectedValue;
+        }
+
+        public void setRejectedValue(Object rejectedValue) {
+            this.rejectedValue = rejectedValue;
+        }
+    }
+
+    /**
+     * Add a validation error to the details list
+     * 
+     * @param field Field name with error
+     * @param message Error message
+     * @param rejectedValue The value that was rejected
+     * @return This ErrorResponseDTO instance for method chaining
+     */
+    public ErrorResponseDTO addValidationError(String field, String message, Object rejectedValue) {
+        if (details == null) {
+            details = new ArrayList<>();
+        }
+        details.add(new ValidationError(field, message, rejectedValue));
+        return this;
+    }
+
+    /**
+     * Add a validation error to the details list
+     * 
+     * @param field Field name with error
+     * @param message Error message
      * @return This ErrorResponseDTO instance for method chaining
      */
     public ErrorResponseDTO addValidationError(String field, String message) {
-        if (this.errors == null) {
-            this.errors = new ArrayList<>();
+        if (details == null) {
+            details = new ArrayList<>();
         }
-        this.errors.add(new ValidationError(field, message));
+        details.add(new ValidationError(field, message));
         return this;
     }
 
     /**
-     * Add multiple validation errors to the error response
-     *
-     * @param validationErrors List of validation errors to add
-     * @return This ErrorResponseDTO instance for method chaining
+     * Builder class for creating ErrorResponseDTO instances
      */
-    public ErrorResponseDTO addValidationErrors(List<ValidationError> validationErrors) {
-        if (this.errors == null) {
-            this.errors = new ArrayList<>();
-        }
-        this.errors.addAll(validationErrors);
-        return this;
-    }
-
-    /**
-     * Inner class representing a field-level validation error
-     */
-    @Data
-    @NoArgsConstructor
-    @AllArgsConstructor
-    public static class ValidationError {
-        /**
-         * Field name with validation error
-         */
-        private String field;
-
-        /**
-         * Error message for the field
-         */
+    public static class Builder {
+        private String errorCode;
         private String message;
+        private List<ValidationError> details;
+        private LocalDateTime timestamp;
+        private String path;
+        private int status;
+
+        public Builder() {
+            this.timestamp = LocalDateTime.now();
+        }
+
+        public Builder errorCode(String errorCode) {
+            this.errorCode = errorCode;
+            return this;
+        }
+
+        public Builder message(String message) {
+            this.message = message;
+            return this;
+        }
+
+        public Builder status(int status) {
+            this.status = status;
+            return this;
+        }
+
+        public Builder path(String path) {
+            this.path = path;
+            return this;
+        }
+
+        public Builder timestamp(LocalDateTime timestamp) {
+            this.timestamp = timestamp;
+            return this;
+        }
+
+        public Builder addValidationError(String field, String message) {
+            if (details == null) {
+                details = new ArrayList<>();
+            }
+            details.add(new ValidationError(field, message));
+            return this;
+        }
+
+        public Builder addValidationError(String field, String message, Object rejectedValue) {
+            if (details == null) {
+                details = new ArrayList<>();
+            }
+            details.add(new ValidationError(field, message, rejectedValue));
+            return this;
+        }
+
+        public ErrorResponseDTO build() {
+            ErrorResponseDTO errorResponse = new ErrorResponseDTO();
+            errorResponse.errorCode = this.errorCode;
+            errorResponse.message = this.message;
+            errorResponse.details = this.details;
+            errorResponse.timestamp = this.timestamp;
+            errorResponse.path = this.path;
+            errorResponse.status = this.status;
+            return errorResponse;
+        }
+    }
+
+    /**
+     * Create a new builder instance
+     * 
+     * @return A new Builder instance
+     */
+    public static Builder builder() {
+        return new Builder();
+    }
+
+    // Getters and Setters
+
+    public String getErrorCode() {
+        return errorCode;
+    }
+
+    public void setErrorCode(String errorCode) {
+        this.errorCode = errorCode;
+    }
+
+    public String getMessage() {
+        return message;
+    }
+
+    public void setMessage(String message) {
+        this.message = message;
+    }
+
+    public List<ValidationError> getDetails() {
+        return details;
+    }
+
+    public void setDetails(List<ValidationError> details) {
+        this.details = details;
+    }
+
+    public LocalDateTime getTimestamp() {
+        return timestamp;
+    }
+
+    public void setTimestamp(LocalDateTime timestamp) {
+        this.timestamp = timestamp;
+    }
+
+    public String getPath() {
+        return path;
+    }
+
+    public void setPath(String path) {
+        this.path = path;
+    }
+
+    public int getStatus() {
+        return status;
+    }
+
+    public void setStatus(int status) {
+        this.status = status;
     }
 }
