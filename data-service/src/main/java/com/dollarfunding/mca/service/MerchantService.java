@@ -18,6 +18,10 @@ import java.util.UUID;
  * associated with applications. This interface is implemented by MerchantServiceImpl and used
  * by ApplicationService to handle merchant-related operations.
  * </p>
+ * <p>
+ * The service handles field-level encryption for sensitive merchant data (PII) and provides
+ * methods for filtering and retrieving merchant details with various criteria.
+ * </p>
  */
 public interface MerchantService {
 
