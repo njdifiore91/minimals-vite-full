@@ -1,0 +1,732 @@
+{
+  "version": "1.0.0",
+  "description": "Manifest of handwritten document test samples for OCR service testing",
+  "last_updated": "2025-05-21",
+  "document_count": 12,
+  "handwriting_styles": [
+    "PRINT",
+    "CURSIVE",
+    "MIXED",
+    "BLOCK_LETTERS"
+  ],
+  "quality_levels": [
+    "HIGH",
+    "MEDIUM",
+    "LOW"
+  ],
+  "documents": {
+    "application_forms": [
+      {
+        "id": "app_form_handwritten_001",
+        "file_path": "application_forms/mca_application_handwritten.pdf",
+        "document_type": "APPLICATION_FORM",
+        "handwriting_style": "PRINT",
+        "quality": "MEDIUM",
+        "description": "MCA application form with handwritten information in print style",
+        "expected_fields": {
+          "business_name": {
+            "value": "Johnson Plumbing",
+            "position": {"x1": 120, "y1": 150, "x2": 350, "y2": 170},
+            "expected_confidence": 0.85
+          },
+          "dba_name": {
+            "value": "Johnson's",
+            "position": {"x1": 120, "y1": 180, "x2": 350, "y2": 200},
+            "expected_confidence": 0.82
+          },
+          "ein": {
+            "value": "45-6789012",
+            "position": {"x1": 120, "y1": 210, "x2": 250, "y2": 230},
+            "expected_confidence": 0.88
+          },
+          "business_address": {
+            "value": "789 Elm Street, Anytown, TX 75001",
+            "position": {"x1": 120, "y1": 240, "x2": 450, "y2": 260},
+            "expected_confidence": 0.80
+          },
+          "business_phone": {
+            "value": "(555) 234-5678",
+            "position": {"x1": 120, "y1": 270, "x2": 250, "y2": 290},
+            "expected_confidence": 0.84
+          },
+          "business_email": {
+            "value": "bob@johnsonplumbing.com",
+            "position": {"x1": 120, "y1": 300, "x2": 300, "y2": 320},
+            "expected_confidence": 0.81
+          },
+          "owner_name": {
+            "value": "Robert Johnson",
+            "position": {"x1": 120, "y1": 330, "x2": 250, "y2": 350},
+            "expected_confidence": 0.86
+          },
+          "owner_title": {
+            "value": "Owner",
+            "position": {"x1": 120, "y1": 360, "x2": 180, "y2": 380},
+            "expected_confidence": 0.88
+          },
+          "funding_amount": {
+            "value": "$75,000.00",
+            "position": {"x1": 120, "y1": 390, "x2": 220, "y2": 410},
+            "expected_confidence": 0.82
+          },
+          "business_start_date": {
+            "value": "06/10/2010",
+            "position": {"x1": 120, "y1": 420, "x2": 220, "y2": 440},
+            "expected_confidence": 0.83
+          },
+          "monthly_revenue": {
+            "value": "$35,000.00",
+            "position": {"x1": 120, "y1": 450, "x2": 220, "y2": 470},
+            "expected_confidence": 0.80
+          },
+          "industry_type": {
+            "value": "Construction",
+            "position": {"x1": 120, "y1": 480, "x2": 220, "y2": 500},
+            "expected_confidence": 0.84
+          }
+        },
+        "expected_classification_confidence": 0.95,
+        "expected_overall_confidence": 0.83
+      },
+      {
+        "id": "app_form_handwritten_002",
+        "file_path": "application_forms/mca_application_cursive.pdf",
+        "document_type": "APPLICATION_FORM",
+        "handwriting_style": "CURSIVE",
+        "quality": "MEDIUM",
+        "description": "MCA application form with cursive handwriting",
+        "expected_fields": {
+          "business_name": {
+            "value": "Garcia's Restaurant",
+            "position": {"x1": 120, "y1": 150, "x2": 350, "y2": 170},
+            "expected_confidence": 0.78
+          },
+          "dba_name": {
+            "value": "Garcia's",
+            "position": {"x1": 120, "y1": 180, "x2": 350, "y2": 200},
+            "expected_confidence": 0.80
+          },
+          "ein": {
+            "value": "56-7890123",
+            "position": {"x1": 120, "y1": 210, "x2": 250, "y2": 230},
+            "expected_confidence": 0.82
+          },
+          "business_address": {
+            "value": "321 Pine Road, Somewhere, FL 33101",
+            "position": {"x1": 120, "y1": 240, "x2": 450, "y2": 260},
+            "expected_confidence": 0.75
+          },
+          "business_phone": {
+            "value": "(555) 345-6789",
+            "position": {"x1": 120, "y1": 270, "x2": 250, "y2": 290},
+            "expected_confidence": 0.81
+          },
+          "business_email": {
+            "value": "maria@garciasrestaurant.com",
+            "position": {"x1": 120, "y1": 300, "x2": 300, "y2": 320},
+            "expected_confidence": 0.76
+          },
+          "owner_name": {
+            "value": "Maria Garcia",
+            "position": {"x1": 120, "y1": 330, "x2": 250, "y2": 350},
+            "expected_confidence": 0.79
+          },
+          "owner_title": {
+            "value": "Owner",
+            "position": {"x1": 120, "y1": 360, "x2": 180, "y2": 380},
+            "expected_confidence": 0.83
+          },
+          "funding_amount": {
+            "value": "$50,000.00",
+            "position": {"x1": 120, "y1": 390, "x2": 220, "y2": 410},
+            "expected_confidence": 0.77
+          },
+          "business_start_date": {
+            "value": "09/15/2012",
+            "position": {"x1": 120, "y1": 420, "x2": 220, "y2": 440},
+            "expected_confidence": 0.78
+          },
+          "monthly_revenue": {
+            "value": "$40,000.00",
+            "position": {"x1": 120, "y1": 450, "x2": 220, "y2": 470},
+            "expected_confidence": 0.76
+          },
+          "industry_type": {
+            "value": "Restaurant",
+            "position": {"x1": 120, "y1": 480, "x2": 220, "y2": 500},
+            "expected_confidence": 0.80
+          }
+        },
+        "expected_classification_confidence": 0.92,
+        "expected_overall_confidence": 0.79
+      },
+      {
+        "id": "app_form_handwritten_003",
+        "file_path": "application_forms/mca_application_low_quality.pdf",
+        "document_type": "APPLICATION_FORM",
+        "handwriting_style": "MIXED",
+        "quality": "LOW",
+        "description": "MCA application form with mixed handwriting styles and low quality (faded ink, smudges)",
+        "expected_fields": {
+          "business_name": {
+            "value": "Wilson Consulting",
+            "position": {"x1": 120, "y1": 150, "x2": 350, "y2": 170},
+            "expected_confidence": 0.72
+          },
+          "dba_name": {
+            "value": "Wilson & Associates",
+            "position": {"x1": 120, "y1": 180, "x2": 350, "y2": 200},
+            "expected_confidence": 0.70
+          },
+          "ein": {
+            "value": "78-9012345",
+            "position": {"x1": 120, "y1": 210, "x2": 250, "y2": 230},
+            "expected_confidence": 0.75
+          },
+          "business_address": {
+            "value": "567 Oak Lane, Suite 200, Metropolis, IL 60614",
+            "position": {"x1": 120, "y1": 240, "x2": 450, "y2": 260},
+            "expected_confidence": 0.68
+          },
+          "business_phone": {
+            "value": "(555) 456-7890",
+            "position": {"x1": 120, "y1": 270, "x2": 250, "y2": 290},
+            "expected_confidence": 0.73
+          },
+          "business_email": {
+            "value": "david@wilsonconsulting.com",
+            "position": {"x1": 120, "y1": 300, "x2": 300, "y2": 320},
+            "expected_confidence": 0.69
+          },
+          "owner_name": {
+            "value": "David Wilson",
+            "position": {"x1": 120, "y1": 330, "x2": 250, "y2": 350},
+            "expected_confidence": 0.74
+          },
+          "owner_title": {
+            "value": "President",
+            "position": {"x1": 120, "y1": 360, "x2": 180, "y2": 380},
+            "expected_confidence": 0.76
+          },
+          "funding_amount": {
+            "value": "$125,000.00",
+            "position": {"x1": 120, "y1": 390, "x2": 220, "y2": 410},
+            "expected_confidence": 0.71
+          },
+          "business_start_date": {
+            "value": "03/22/2014",
+            "position": {"x1": 120, "y1": 420, "x2": 220, "y2": 440},
+            "expected_confidence": 0.72
+          },
+          "monthly_revenue": {
+            "value": "$55,000.00",
+            "position": {"x1": 120, "y1": 450, "x2": 220, "y2": 470},
+            "expected_confidence": 0.70
+          },
+          "industry_type": {
+            "value": "Consulting",
+            "position": {"x1": 120, "y1": 480, "x2": 220, "y2": 500},
+            "expected_confidence": 0.73
+          }
+        },
+        "expected_classification_confidence": 0.88,
+        "expected_overall_confidence": 0.72,
+        "challenging_factors": ["faded ink", "smudges", "inconsistent handwriting"]
+      }
+    ],
+    "financial_documents": [
+      {
+        "id": "bank_statement_handwritten_001",
+        "file_path": "financial_documents/bank_statement_annotated.pdf",
+        "document_type": "BANK_STATEMENT",
+        "handwriting_style": "PRINT",
+        "quality": "MEDIUM",
+        "description": "Bank statement with handwritten annotations and calculations",
+        "expected_fields": {
+          "annotation_1": {
+            "value": "Business expense",
+            "position": {"x1": 550, "y1": 300, "x2": 650, "y2": 320},
+            "expected_confidence": 0.85
+          },
+          "annotation_2": {
+            "value": "New equipment purchase",
+            "position": {"x1": 550, "y1": 350, "x2": 650, "y2": 370},
+            "expected_confidence": 0.83
+          },
+          "annotation_3": {
+            "value": "Loan payment",
+            "position": {"x1": 550, "y1": 400, "x2": 650, "y2": 420},
+            "expected_confidence": 0.86
+          },
+          "calculation_1": {
+            "value": "$5,432.10 + $2,345.67 = $7,777.77",
+            "position": {"x1": 550, "y1": 450, "x2": 700, "y2": 470},
+            "expected_confidence": 0.82
+          },
+          "calculation_2": {
+            "value": "$12,500.00 - $3,456.78 = $9,043.22",
+            "position": {"x1": 550, "y1": 500, "x2": 700, "y2": 520},
+            "expected_confidence": 0.81
+          }
+        },
+        "expected_classification_confidence": 0.94,
+        "expected_overall_confidence": 0.83
+      },
+      {
+        "id": "invoice_handwritten_001",
+        "file_path": "financial_documents/handwritten_invoice.pdf",
+        "document_type": "INVOICE",
+        "handwriting_style": "PRINT",
+        "quality": "MEDIUM",
+        "description": "Handwritten invoice for services rendered",
+        "expected_fields": {
+          "invoice_number": {
+            "value": "INV-2025-0123",
+            "position": {"x1": 450, "y1": 150, "x2": 550, "y2": 170},
+            "expected_confidence": 0.87
+          },
+          "invoice_date": {
+            "value": "05/10/2025",
+            "position": {"x1": 450, "y1": 180, "x2": 550, "y2": 200},
+            "expected_confidence": 0.88
+          },
+          "due_date": {
+            "value": "06/10/2025",
+            "position": {"x1": 450, "y1": 210, "x2": 550, "y2": 230},
+            "expected_confidence": 0.88
+          },
+          "vendor_name": {
+            "value": "Johnson Plumbing",
+            "position": {"x1": 100, "y1": 120, "x2": 300, "y2": 140},
+            "expected_confidence": 0.86
+          },
+          "customer_name": {
+            "value": "Smith Auto Repair",
+            "position": {"x1": 100, "y1": 250, "x2": 300, "y2": 270},
+            "expected_confidence": 0.85
+          },
+          "service_1": {
+            "value": "Plumbing repair - main line",
+            "position": {"x1": 100, "y1": 350, "x2": 400, "y2": 370},
+            "expected_confidence": 0.83
+          },
+          "amount_1": {
+            "value": "$750.00",
+            "position": {"x1": 450, "y1": 350, "x2": 550, "y2": 370},
+            "expected_confidence": 0.87
+          },
+          "service_2": {
+            "value": "Water heater installation",
+            "position": {"x1": 100, "y1": 380, "x2": 400, "y2": 400},
+            "expected_confidence": 0.84
+          },
+          "amount_2": {
+            "value": "$1,200.00",
+            "position": {"x1": 450, "y1": 380, "x2": 550, "y2": 400},
+            "expected_confidence": 0.86
+          },
+          "subtotal": {
+            "value": "$1,950.00",
+            "position": {"x1": 450, "y1": 450, "x2": 550, "y2": 470},
+            "expected_confidence": 0.85
+          },
+          "tax": {
+            "value": "$156.00",
+            "position": {"x1": 450, "y1": 480, "x2": 550, "y2": 500},
+            "expected_confidence": 0.86
+          },
+          "total": {
+            "value": "$2,106.00",
+            "position": {"x1": 450, "y1": 510, "x2": 550, "y2": 530},
+            "expected_confidence": 0.87
+          }
+        },
+        "expected_classification_confidence": 0.91,
+        "expected_overall_confidence": 0.86
+      },
+      {
+        "id": "receipt_handwritten_001",
+        "file_path": "financial_documents/handwritten_receipt.pdf",
+        "document_type": "INVOICE",
+        "handwriting_style": "MIXED",
+        "quality": "LOW",
+        "description": "Handwritten receipt with mixed handwriting styles and low quality",
+        "expected_fields": {
+          "receipt_number": {
+            "value": "REC-5678",
+            "position": {"x1": 400, "y1": 100, "x2": 500, "y2": 120},
+            "expected_confidence": 0.76
+          },
+          "date": {
+            "value": "04/25/2025",
+            "position": {"x1": 400, "y1": 130, "x2": 500, "y2": 150},
+            "expected_confidence": 0.78
+          },
+          "vendor_name": {
+            "value": "City Hardware Store",
+            "position": {"x1": 100, "y1": 100, "x2": 300, "y2": 120},
+            "expected_confidence": 0.75
+          },
+          "customer_name": {
+            "value": "Johnson Plumbing",
+            "position": {"x1": 100, "y1": 160, "x2": 300, "y2": 180},
+            "expected_confidence": 0.74
+          },
+          "item_1": {
+            "value": "Copper pipe fittings",
+            "position": {"x1": 100, "y1": 200, "x2": 350, "y2": 220},
+            "expected_confidence": 0.72
+          },
+          "amount_1": {
+            "value": "$45.75",
+            "position": {"x1": 400, "y1": 200, "x2": 500, "y2": 220},
+            "expected_confidence": 0.77
+          },
+          "item_2": {
+            "value": "PVC pipes",
+            "position": {"x1": 100, "y1": 230, "x2": 350, "y2": 250},
+            "expected_confidence": 0.75
+          },
+          "amount_2": {
+            "value": "$32.50",
+            "position": {"x1": 400, "y1": 230, "x2": 500, "y2": 250},
+            "expected_confidence": 0.76
+          },
+          "item_3": {
+            "value": "Pipe wrench",
+            "position": {"x1": 100, "y1": 260, "x2": 350, "y2": 280},
+            "expected_confidence": 0.74
+          },
+          "amount_3": {
+            "value": "$28.99",
+            "position": {"x1": 400, "y1": 260, "x2": 500, "y2": 280},
+            "expected_confidence": 0.75
+          },
+          "total": {
+            "value": "$107.24",
+            "position": {"x1": 400, "y1": 300, "x2": 500, "y2": 320},
+            "expected_confidence": 0.78
+          }
+        },
+        "expected_classification_confidence": 0.87,
+        "expected_overall_confidence": 0.75,
+        "challenging_factors": ["faded ink", "cramped writing", "inconsistent spacing"]
+      }
+    ],
+    "business_documents": [
+      {
+        "id": "contract_handwritten_001",
+        "file_path": "business_documents/handwritten_contract.pdf",
+        "document_type": "BUSINESS_DOCUMENT",
+        "handwriting_style": "MIXED",
+        "quality": "MEDIUM",
+        "description": "Handwritten contract with signatures and annotations",
+        "expected_fields": {
+          "contract_title": {
+            "value": "Service Agreement",
+            "position": {"x1": 250, "y1": 100, "x2": 450, "y2": 130},
+            "expected_confidence": 0.87
+          },
+          "contract_date": {
+            "value": "05/05/2025",
+            "position": {"x1": 450, "y1": 150, "x2": 550, "y2": 170},
+            "expected_confidence": 0.88
+          },
+          "party_1": {
+            "value": "Johnson Plumbing",
+            "position": {"x1": 150, "y1": 200, "x2": 350, "y2": 220},
+            "expected_confidence": 0.86
+          },
+          "party_2": {
+            "value": "Smith Auto Repair",
+            "position": {"x1": 150, "y1": 230, "x2": 350, "y2": 250},
+            "expected_confidence": 0.85
+          },
+          "service_description": {
+            "value": "Monthly maintenance of all plumbing systems",
+            "position": {"x1": 150, "y1": 300, "x2": 550, "y2": 320},
+            "expected_confidence": 0.82
+          },
+          "payment_terms": {
+            "value": "$350 per month, due on the 1st of each month",
+            "position": {"x1": 150, "y1": 350, "x2": 550, "y2": 370},
+            "expected_confidence": 0.83
+          },
+          "contract_duration": {
+            "value": "12 months from signing date",
+            "position": {"x1": 150, "y1": 400, "x2": 450, "y2": 420},
+            "expected_confidence": 0.84
+          },
+          "signature_1": {
+            "value": "Robert Johnson",
+            "position": {"x1": 150, "y1": 500, "x2": 300, "y2": 530},
+            "expected_confidence": 0.80
+          },
+          "signature_2": {
+            "value": "Michael Smith",
+            "position": {"x1": 400, "y1": 500, "x2": 550, "y2": 530},
+            "expected_confidence": 0.81
+          }
+        },
+        "expected_classification_confidence": 0.90,
+        "expected_overall_confidence": 0.84
+      },
+      {
+        "id": "business_plan_handwritten_001",
+        "file_path": "business_documents/handwritten_business_plan.pdf",
+        "document_type": "BUSINESS_DOCUMENT",
+        "handwriting_style": "PRINT",
+        "quality": "HIGH",
+        "description": "Handwritten business plan with neat print handwriting",
+        "expected_fields": {
+          "title": {
+            "value": "Business Expansion Plan",
+            "position": {"x1": 200, "y1": 100, "x2": 500, "y2": 130},
+            "expected_confidence": 0.89
+          },
+          "business_name": {
+            "value": "Garcia's Restaurant",
+            "position": {"x1": 200, "y1": 150, "x2": 400, "y2": 170},
+            "expected_confidence": 0.88
+          },
+          "prepared_by": {
+            "value": "Maria Garcia",
+            "position": {"x1": 200, "y1": 180, "x2": 350, "y2": 200},
+            "expected_confidence": 0.89
+          },
+          "date": {
+            "value": "05/01/2025",
+            "position": {"x1": 400, "y1": 180, "x2": 500, "y2": 200},
+            "expected_confidence": 0.90
+          },
+          "expansion_cost": {
+            "value": "$175,000",
+            "position": {"x1": 300, "y1": 300, "x2": 400, "y2": 320},
+            "expected_confidence": 0.87
+          },
+          "projected_revenue": {
+            "value": "$350,000 annually",
+            "position": {"x1": 300, "y1": 350, "x2": 450, "y2": 370},
+            "expected_confidence": 0.86
+          },
+          "roi_period": {
+            "value": "18 months",
+            "position": {"x1": 300, "y1": 400, "x2": 400, "y2": 420},
+            "expected_confidence": 0.88
+          }
+        },
+        "expected_classification_confidence": 0.92,
+        "expected_overall_confidence": 0.88
+      }
+    ],
+    "identity_documents": [
+      {
+        "id": "signature_sample_001",
+        "file_path": "identity_documents/signature_sample.pdf",
+        "document_type": "ID_DOCUMENT",
+        "handwriting_style": "CURSIVE",
+        "quality": "HIGH",
+        "description": "Sample signature page with multiple signatures",
+        "expected_fields": {
+          "signature_1": {
+            "value": "Robert Johnson",
+            "position": {"x1": 200, "y1": 200, "x2": 400, "y2": 230},
+            "expected_confidence": 0.82
+          },
+          "date_1": {
+            "value": "05/10/2025",
+            "position": {"x1": 450, "y1": 200, "x2": 550, "y2": 220},
+            "expected_confidence": 0.88
+          },
+          "signature_2": {
+            "value": "Maria Garcia",
+            "position": {"x1": 200, "y1": 300, "x2": 400, "y2": 330},
+            "expected_confidence": 0.80
+          },
+          "date_2": {
+            "value": "05/11/2025",
+            "position": {"x1": 450, "y1": 300, "x2": 550, "y2": 320},
+            "expected_confidence": 0.87
+          },
+          "signature_3": {
+            "value": "David Wilson",
+            "position": {"x1": 200, "y1": 400, "x2": 400, "y2": 430},
+            "expected_confidence": 0.81
+          },
+          "date_3": {
+            "value": "05/12/2025",
+            "position": {"x1": 450, "y1": 400, "x2": 550, "y2": 420},
+            "expected_confidence": 0.88
+          }
+        },
+        "expected_classification_confidence": 0.94,
+        "expected_overall_confidence": 0.84
+      },
+      {
+        "id": "id_card_handwritten_001",
+        "file_path": "identity_documents/handwritten_id_card.pdf",
+        "document_type": "ID_DOCUMENT",
+        "handwriting_style": "BLOCK_LETTERS",
+        "quality": "MEDIUM",
+        "description": "Handwritten identification card with block letters",
+        "expected_fields": {
+          "name": {
+            "value": "ROBERT JOHNSON",
+            "position": {"x1": 200, "y1": 150, "x2": 400, "y2": 170},
+            "expected_confidence": 0.89
+          },
+          "id_number": {
+            "value": "ID-12345678",
+            "position": {"x1": 200, "y1": 200, "x2": 350, "y2": 220},
+            "expected_confidence": 0.90
+          },
+          "issue_date": {
+            "value": "01/15/2023",
+            "position": {"x1": 200, "y1": 250, "x2": 300, "y2": 270},
+            "expected_confidence": 0.88
+          },
+          "expiry_date": {
+            "value": "01/15/2028",
+            "position": {"x1": 350, "y1": 250, "x2": 450, "y2": 270},
+            "expected_confidence": 0.87
+          },
+          "signature": {
+            "value": "Robert Johnson",
+            "position": {"x1": 200, "y1": 300, "x2": 400, "y2": 330},
+            "expected_confidence": 0.82
+          }
+        },
+        "expected_classification_confidence": 0.93,
+        "expected_overall_confidence": 0.87
+      }
+    ],
+    "mixed_content": [
+      {
+        "id": "notes_handwritten_001",
+        "file_path": "mixed_content/meeting_notes.pdf",
+        "document_type": "OTHER",
+        "handwriting_style": "MIXED",
+        "quality": "MEDIUM",
+        "description": "Handwritten meeting notes with diagrams and calculations",
+        "expected_fields": {
+          "meeting_title": {
+            "value": "Expansion Planning Meeting",
+            "position": {"x1": 200, "y1": 100, "x2": 500, "y2": 130},
+            "expected_confidence": 0.84
+          },
+          "date": {
+            "value": "05/15/2025",
+            "position": {"x1": 200, "y1": 150, "x2": 300, "y2": 170},
+            "expected_confidence": 0.86
+          },
+          "attendees": {
+            "value": "Robert, Maria, David, Susan",
+            "position": {"x1": 200, "y1": 180, "x2": 450, "y2": 200},
+            "expected_confidence": 0.82
+          },
+          "action_item_1": {
+            "value": "Contact bank about financing options",
+            "position": {"x1": 200, "y1": 300, "x2": 500, "y2": 320},
+            "expected_confidence": 0.80
+          },
+          "action_item_2": {
+            "value": "Prepare updated business plan by 5/30",
+            "position": {"x1": 200, "y1": 330, "x2": 500, "y2": 350},
+            "expected_confidence": 0.81
+          },
+          "calculation": {
+            "value": "$175K investment / $40K monthly profit = 4.4 months payback",
+            "position": {"x1": 200, "y1": 400, "x2": 600, "y2": 420},
+            "expected_confidence": 0.78
+          }
+        },
+        "expected_classification_confidence": 0.88,
+        "expected_overall_confidence": 0.82
+      },
+      {
+        "id": "form_with_annotations_001",
+        "file_path": "mixed_content/form_with_annotations.pdf",
+        "document_type": "APPLICATION_FORM",
+        "handwriting_style": "MIXED",
+        "quality": "MEDIUM",
+        "description": "Printed form with handwritten annotations and corrections",
+        "expected_fields": {
+          "business_name": {
+            "value": "Wilson Consulting",
+            "position": {"x1": 200, "y1": 150, "x2": 400, "y2": 170},
+            "expected_confidence": 0.83
+          },
+          "correction_1": {
+            "value": "Changed to LLC as of 4/1/2025",
+            "position": {"x1": 450, "y1": 150, "x2": 650, "y2": 170},
+            "expected_confidence": 0.79
+          },
+          "business_address": {
+            "value": "567 Oak Lane, Suite 200, Metropolis, IL 60614",
+            "position": {"x1": 200, "y1": 200, "x2": 550, "y2": 220},
+            "expected_confidence": 0.81
+          },
+          "correction_2": {
+            "value": "Moving to Suite 300 on 6/1/2025",
+            "position": {"x1": 450, "y1": 200, "x2": 650, "y2": 220},
+            "expected_confidence": 0.78
+          },
+          "funding_amount": {
+            "value": "$125,000.00",
+            "position": {"x1": 200, "y1": 250, "x2": 350, "y2": 270},
+            "expected_confidence": 0.84
+          },
+          "correction_3": {
+            "value": "Increased from $100K due to new project",
+            "position": {"x1": 450, "y1": 250, "x2": 650, "y2": 270},
+            "expected_confidence": 0.77
+          }
+        },
+        "expected_classification_confidence": 0.90,
+        "expected_overall_confidence": 0.80
+      }
+    ]
+  },
+  "confidence_thresholds": {
+    "high_confidence": 0.90,
+    "medium_confidence": 0.75,
+    "low_confidence": 0.60,
+    "human_review_threshold": 0.75
+  },
+  "test_parameters": {
+    "handwritten_text_accuracy_target": 0.85,
+    "print_style_accuracy_target": 0.88,
+    "cursive_style_accuracy_target": 0.80,
+    "mixed_style_accuracy_target": 0.82,
+    "block_letters_accuracy_target": 0.90,
+    "classification_accuracy_target": 0.95,
+    "field_extraction_accuracy_target": 0.85,
+    "overall_accuracy_target": 0.85
+  },
+  "challenging_scenarios": [
+    {
+      "scenario": "Cursive Handwriting",
+      "description": "Cursive handwriting presents challenges for OCR due to connected letters and variable styles",
+      "expected_confidence_impact": "-10% to -15% compared to print handwriting",
+      "mitigation_strategy": "Enhanced training on cursive datasets and post-processing algorithms"
+    },
+    {
+      "scenario": "Low Quality Documents",
+      "description": "Faded ink, smudges, and poor contrast reduce OCR accuracy",
+      "expected_confidence_impact": "-15% to -20% compared to high quality documents",
+      "mitigation_strategy": "Image preprocessing with adaptive thresholding and contrast enhancement"
+    },
+    {
+      "scenario": "Mixed Handwriting Styles",
+      "description": "Documents with multiple handwriting styles from different individuals",
+      "expected_confidence_impact": "-5% to -10% compared to consistent handwriting",
+      "mitigation_strategy": "Segmentation-based approach with style-specific OCR models"
+    },
+    {
+      "scenario": "Overlapping Content",
+      "description": "Annotations that overlap with existing text or form elements",
+      "expected_confidence_impact": "-10% to -15% for affected regions",
+      "mitigation_strategy": "Layer separation techniques and contextual analysis"
+    }
+  ]
+}
