@@ -1,126 +1,168 @@
 package com.dollarfunding.mca.service;
 
-import com.dollarfunding.mca.dto.WebhookRequestDTO;
-import com.dollarfunding.mca.dto.WebhookResponseDTO;
-import com.dollarfunding.mca.dto.WebhookTestRequestDTO;
-import com.dollarfunding.mca.dto.WebhookTestResponseDTO;
-import com.dollarfunding.mca.entity.EventType;
-import com.dollarfunding.mca.entity.Webhook;
-import com.dollarfunding.mca.exception.ResourceNotFoundException;
-import com.dollarfunding.mca.exception.WebhookDeliveryException;
+import com.dollarfunding.mca.dto.WebhookConfigurationDTO;
+import com.dollarfunding.mca.dto.WebhookDeliveryStatusDTO;
+import com.dollarfunding.mca.dto.WebhookTestResultDTO;
 
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.CompletableFuture;
+import java.util.Optional;
 
 /**
- * Service interface that defines the contract for webhook management in the MCA application.
- * <p>
- * It provides methods for creating, retrieving, updating, and deleting webhook configurations,
- * as well as methods for webhook delivery and status tracking.
- * </p>
- * <p>
- * This interface is implemented by WebhookServiceImpl and used by WebhookController
- * to handle webhook-related operations.
- * </p>
+ * Service interface for webhook management in the MCA application.
+ * Provides methods for creating, retrieving, updating, and deleting webhook configurations,
+ * as well as methods for webhook delivery, status tracking, and security.
  */
 public interface WebhookService {
 
     /**
      * Creates a new webhook configuration.
      *
-     * @param webhookRequestDTO The webhook configuration data
-     * @return The created webhook as a WebhookResponseDTO
+     * @param webhookConfigurationDTO the webhook configuration to create
+     * @return the created webhook configuration with generated ID
+     * @throws IllegalArgumentException if the webhook configuration is invalid
      */
-    WebhookResponseDTO createWebhook(WebhookRequestDTO webhookRequestDTO);
+    WebhookConfigurationDTO createWebhookConfiguration(WebhookConfigurationDTO webhookConfigurationDTO);
+
+    /**
+     * Retrieves a webhook configuration by its ID.
+     *
+     * @param id the ID of the webhook configuration to retrieve
+     * @return an Optional containing the webhook configuration, or empty if not found
+     */
+    Optional<WebhookConfigurationDTO> getWebhookConfigurationById(String id);
 
     /**
      * Retrieves all webhook configurations.
      *
-     * @return A list of all webhooks as WebhookResponseDTOs
+     * @return a list of all webhook configurations
      */
-    List<WebhookResponseDTO> getAllWebhooks();
-
-    /**
-     * Retrieves a webhook configuration by ID.
-     *
-     * @param id The ID of the webhook to retrieve
-     * @return The webhook as a WebhookResponseDTO
-     * @throws ResourceNotFoundException if the webhook is not found
-     */
-    WebhookResponseDTO getWebhookById(Long id);
+    List<WebhookConfigurationDTO> getAllWebhookConfigurations();
 
     /**
      * Updates an existing webhook configuration.
      *
-     * @param id The ID of the webhook to update
-     * @param webhookRequestDTO The updated webhook configuration data
-     * @return The updated webhook as a WebhookResponseDTO
-     * @throws ResourceNotFoundException if the webhook is not found
+     * @param id the ID of the webhook configuration to update
+     * @param webhookConfigurationDTO the updated webhook configuration
+     * @return the updated webhook configuration
+     * @throws IllegalArgumentException if the webhook configuration is invalid
+     * @throws javax.persistence.EntityNotFoundException if the webhook configuration is not found
      */
-    WebhookResponseDTO updateWebhook(Long id, WebhookRequestDTO webhookRequestDTO);
+    WebhookConfigurationDTO updateWebhookConfiguration(String id, WebhookConfigurationDTO webhookConfigurationDTO);
 
     /**
-     * Deletes a webhook configuration.
+     * Deletes a webhook configuration by its ID.
      *
-     * @param id The ID of the webhook to delete
-     * @throws ResourceNotFoundException if the webhook is not found
+     * @param id the ID of the webhook configuration to delete
+     * @throws javax.persistence.EntityNotFoundException if the webhook configuration is not found
      */
-    void deleteWebhook(Long id);
+    void deleteWebhookConfiguration(String id);
 
     /**
-     * Retrieves all active webhooks for a specific event type.
+     * Delivers a webhook event to all configured endpoints for the specified event type.
      *
-     * @param eventType The event type to filter by
-     * @return A list of active webhooks for the specified event type
+     * @param eventType the type of event to deliver
+     * @param payload the payload to deliver
+     * @return a list of delivery status results
      */
-    List<Webhook> getActiveWebhooksByEventType(EventType eventType);
+    List<WebhookDeliveryStatusDTO> deliverWebhookEvent(String eventType, Map<String, Object> payload);
 
     /**
-     * Tests a webhook delivery with a custom payload.
+     * Delivers a webhook event to a specific endpoint.
      *
-     * @param id The ID of the webhook to test
-     * @param testRequestDTO The test request data
-     * @return The test results as a WebhookTestResponseDTO
-     * @throws ResourceNotFoundException if the webhook is not found
+     * @param webhookConfigurationId the ID of the webhook configuration to deliver to
+     * @param payload the payload to deliver
+     * @return the delivery status result
+     * @throws javax.persistence.EntityNotFoundException if the webhook configuration is not found
      */
-    WebhookTestResponseDTO testWebhook(Long id, WebhookTestRequestDTO testRequestDTO);
+    WebhookDeliveryStatusDTO deliverWebhookEventToEndpoint(String webhookConfigurationId, Map<String, Object> payload);
 
     /**
-     * Delivers a webhook notification.
+     * Tests a webhook configuration by sending a test payload to the endpoint.
      *
-     * @param webhookId The ID of the webhook to deliver
-     * @param payload The payload to send
-     * @return true if the delivery was successful, false otherwise
-     * @throws ResourceNotFoundException if the webhook is not found
-     * @throws WebhookDeliveryException if there is an error delivering the webhook
+     * @param webhookConfigurationId the ID of the webhook configuration to test
+     * @return the test result including response status and details
+     * @throws javax.persistence.EntityNotFoundException if the webhook configuration is not found
      */
-    boolean deliverWebhook(Long webhookId, Map<String, Object> payload);
+    WebhookTestResultDTO testWebhookConfiguration(String webhookConfigurationId);
 
     /**
-     * Delivers a webhook notification asynchronously.
+     * Validates a webhook URL by sending a simple ping request.
      *
-     * @param webhookId The ID of the webhook to deliver
-     * @param payload The payload to send
-     * @return A CompletableFuture that completes when the webhook delivery is done
-     * @throws ResourceNotFoundException if the webhook is not found
+     * @param url the URL to validate
+     * @return true if the URL is valid and responds correctly, false otherwise
      */
-    CompletableFuture<Boolean> deliverWebhookAsync(Long webhookId, Map<String, Object> payload);
+    boolean validateWebhookUrl(String url);
 
     /**
-     * Retries failed webhook deliveries.
+     * Generates a new HMAC secret key for a webhook configuration.
      *
-     * @return The number of webhooks that were retried
+     * @param webhookConfigurationId the ID of the webhook configuration
+     * @return the new secret key
+     * @throws javax.persistence.EntityNotFoundException if the webhook configuration is not found
      */
-    int retryFailedWebhooks();
+    String generateHmacSecretKey(String webhookConfigurationId);
 
     /**
-     * Activates or deactivates a webhook.
+     * Generates an HMAC signature for a webhook payload.
      *
-     * @param id The ID of the webhook to update
-     * @param active Whether the webhook should be active
-     * @return The updated webhook as a WebhookResponseDTO
-     * @throws ResourceNotFoundException if the webhook is not found
+     * @param payload the payload to sign
+     * @param secretKey the secret key to use for signing
+     * @return the HMAC signature
      */
-    WebhookResponseDTO setWebhookActive(Long id, boolean active);
+    String generateHmacSignature(String payload, String secretKey);
+
+    /**
+     * Verifies an HMAC signature for a webhook payload.
+     *
+     * @param payload the payload to verify
+     * @param signature the signature to verify
+     * @param secretKey the secret key to use for verification
+     * @return true if the signature is valid, false otherwise
+     */
+    boolean verifyHmacSignature(String payload, String signature, String secretKey);
+
+    /**
+     * Retrieves the delivery status history for a webhook configuration.
+     *
+     * @param webhookConfigurationId the ID of the webhook configuration
+     * @param limit the maximum number of status entries to retrieve
+     * @return a list of delivery status entries
+     * @throws javax.persistence.EntityNotFoundException if the webhook configuration is not found
+     */
+    List<WebhookDeliveryStatusDTO> getWebhookDeliveryStatusHistory(String webhookConfigurationId, int limit);
+
+    /**
+     * Retrieves failed webhook deliveries that are eligible for retry.
+     *
+     * @return a list of failed delivery status entries
+     */
+    List<WebhookDeliveryStatusDTO> getFailedWebhookDeliveriesForRetry();
+
+    /**
+     * Retries a failed webhook delivery.
+     *
+     * @param deliveryId the ID of the failed delivery to retry
+     * @return the updated delivery status
+     * @throws IllegalArgumentException if the delivery is not in a failed state
+     * @throws javax.persistence.EntityNotFoundException if the delivery is not found
+     */
+    WebhookDeliveryStatusDTO retryWebhookDelivery(String deliveryId);
+
+    /**
+     * Schedules automatic retries for failed webhook deliveries based on configured retry policy.
+     * This method is typically called by a scheduled job.
+     *
+     * @return the number of deliveries scheduled for retry
+     */
+    int scheduleWebhookRetries();
+
+    /**
+     * Purges old webhook delivery status records based on retention policy.
+     * This method is typically called by a scheduled job.
+     *
+     * @param retentionDays the number of days to retain delivery status records
+     * @return the number of records purged
+     */
+    int purgeOldWebhookDeliveryStatuses(int retentionDays);
 }
