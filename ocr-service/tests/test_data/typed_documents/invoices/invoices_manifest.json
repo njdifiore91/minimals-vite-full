@@ -1,0 +1,785 @@
+{
+  "manifest_version": "1.0.0",
+  "description": "Manifest of invoice documents for OCR testing",
+  "last_updated": "2023-05-21",
+  "document_categories": [
+    "vendor_invoices",
+    "service_invoices",
+    "retail_receipts",
+    "utility_bills",
+    "subscription_invoices"
+  ],
+  "quality_levels": [
+    "high",
+    "medium",
+    "low"
+  ],
+  "documents": [
+    {
+      "id": "inv_vendor_001",
+      "filename": "vendor_invoice_standard.pdf",
+      "category": "vendor_invoices",
+      "document_type": "invoice",
+      "quality": "high",
+      "orientation": "portrait",
+      "page_count": 1,
+      "characteristics": {
+        "resolution": "300dpi",
+        "has_tables": true,
+        "has_checkboxes": false,
+        "has_signatures": false,
+        "complexity": "medium"
+      },
+      "expected_extraction": {
+        "fields": [
+          {
+            "name": "invoice_number",
+            "expected_value": "INV-5678",
+            "position": {"page": 1, "top": 100, "left": 500, "bottom": 125, "right": 600},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "invoice_date",
+            "expected_value": "05/01/2023",
+            "position": {"page": 1, "top": 130, "left": 500, "bottom": 155, "right": 600},
+            "expected_confidence": 0.98
+          },
+          {
+            "name": "due_date",
+            "expected_value": "05/31/2023",
+            "position": {"page": 1, "top": 160, "left": 500, "bottom": 185, "right": 600},
+            "expected_confidence": 0.98
+          },
+          {
+            "name": "vendor_name",
+            "expected_value": "ABC Supplies, Inc.",
+            "position": {"page": 1, "top": 100, "left": 100, "bottom": 125, "right": 350},
+            "expected_confidence": 0.98
+          },
+          {
+            "name": "vendor_address",
+            "expected_value": "789 Vendor Street, Suppliertown, CA 92345",
+            "position": {"page": 1, "top": 130, "left": 100, "bottom": 180, "right": 350},
+            "expected_confidence": 0.96
+          },
+          {
+            "name": "customer_name",
+            "expected_value": "Acme Corporation",
+            "position": {"page": 1, "top": 200, "left": 100, "bottom": 225, "right": 350},
+            "expected_confidence": 0.98
+          },
+          {
+            "name": "customer_address",
+            "expected_value": "123 Main Street, Suite 100, Anytown, CA 90210",
+            "position": {"page": 1, "top": 230, "left": 100, "bottom": 280, "right": 350},
+            "expected_confidence": 0.96
+          },
+          {
+            "name": "subtotal",
+            "expected_value": "$4,500.00",
+            "position": {"page": 1, "top": 500, "left": 600, "bottom": 525, "right": 700},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "tax",
+            "expected_value": "$360.00",
+            "position": {"page": 1, "top": 530, "left": 600, "bottom": 555, "right": 700},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "total",
+            "expected_value": "$4,860.00",
+            "position": {"page": 1, "top": 560, "left": 600, "bottom": 585, "right": 700},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "payment_terms",
+            "expected_value": "Net 30",
+            "position": {"page": 1, "top": 600, "left": 100, "bottom": 625, "right": 200},
+            "expected_confidence": 0.97
+          }
+        ],
+        "tables": [
+          {
+            "name": "line_items",
+            "position": {"page": 1, "top": 300, "left": 100, "bottom": 480, "right": 700},
+            "expected_confidence": 0.97,
+            "rows": 6,
+            "columns": 5,
+            "headers": ["Item #", "Description", "Quantity", "Unit Price", "Amount"],
+            "data": [
+              ["A-101", "Widget Type A", "10", "$50.00", "$500.00"],
+              ["B-202", "Widget Type B", "5", "$100.00", "$500.00"],
+              ["C-303", "Premium Service Package", "1", "$2,000.00", "$2,000.00"],
+              ["D-404", "Maintenance Contract", "1", "$1,000.00", "$1,000.00"],
+              ["E-505", "Installation Fee", "1", "$500.00", "$500.00"]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "inv_service_001",
+      "filename": "service_invoice_standard.pdf",
+      "category": "service_invoices",
+      "document_type": "invoice",
+      "quality": "high",
+      "orientation": "portrait",
+      "page_count": 1,
+      "characteristics": {
+        "resolution": "300dpi",
+        "has_tables": true,
+        "has_checkboxes": false,
+        "has_signatures": true,
+        "complexity": "medium"
+      },
+      "expected_extraction": {
+        "fields": [
+          {
+            "name": "invoice_number",
+            "expected_value": "SRV-2023-0456",
+            "position": {"page": 1, "top": 120, "left": 520, "bottom": 145, "right": 620},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "invoice_date",
+            "expected_value": "04/15/2023",
+            "position": {"page": 1, "top": 150, "left": 520, "bottom": 175, "right": 620},
+            "expected_confidence": 0.98
+          },
+          {
+            "name": "due_date",
+            "expected_value": "05/15/2023",
+            "position": {"page": 1, "top": 180, "left": 520, "bottom": 205, "right": 620},
+            "expected_confidence": 0.98
+          },
+          {
+            "name": "service_provider",
+            "expected_value": "Tech Solutions LLC",
+            "position": {"page": 1, "top": 120, "left": 100, "bottom": 145, "right": 350},
+            "expected_confidence": 0.98
+          },
+          {
+            "name": "provider_address",
+            "expected_value": "456 Tech Avenue, Suite 200, Silicon Valley, CA 94043",
+            "position": {"page": 1, "top": 150, "left": 100, "bottom": 200, "right": 400},
+            "expected_confidence": 0.96
+          },
+          {
+            "name": "customer_name",
+            "expected_value": "Acme Corporation",
+            "position": {"page": 1, "top": 220, "left": 100, "bottom": 245, "right": 350},
+            "expected_confidence": 0.98
+          },
+          {
+            "name": "customer_address",
+            "expected_value": "123 Main Street, Suite 100, Anytown, CA 90210",
+            "position": {"page": 1, "top": 250, "left": 100, "bottom": 300, "right": 400},
+            "expected_confidence": 0.96
+          },
+          {
+            "name": "subtotal",
+            "expected_value": "$3,750.00",
+            "position": {"page": 1, "top": 520, "left": 620, "bottom": 545, "right": 720},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "tax",
+            "expected_value": "$300.00",
+            "position": {"page": 1, "top": 550, "left": 620, "bottom": 575, "right": 720},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "total",
+            "expected_value": "$4,050.00",
+            "position": {"page": 1, "top": 580, "left": 620, "bottom": 605, "right": 720},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "payment_terms",
+            "expected_value": "Net 30",
+            "position": {"page": 1, "top": 620, "left": 100, "bottom": 645, "right": 200},
+            "expected_confidence": 0.97
+          },
+          {
+            "name": "service_period",
+            "expected_value": "04/01/2023 - 04/30/2023",
+            "position": {"page": 1, "top": 210, "left": 520, "bottom": 235, "right": 720},
+            "expected_confidence": 0.97
+          },
+          {
+            "name": "technician_name",
+            "expected_value": "Jane Smith",
+            "position": {"page": 1, "top": 650, "left": 520, "bottom": 675, "right": 650},
+            "expected_confidence": 0.95
+          },
+          {
+            "name": "technician_signature",
+            "expected_value": "Jane Smith",
+            "position": {"page": 1, "top": 680, "left": 520, "bottom": 730, "right": 650},
+            "expected_confidence": 0.90
+          }
+        ],
+        "tables": [
+          {
+            "name": "service_items",
+            "position": {"page": 1, "top": 320, "left": 100, "bottom": 500, "right": 720},
+            "expected_confidence": 0.97,
+            "rows": 5,
+            "columns": 4,
+            "headers": ["Service Description", "Hours", "Rate", "Amount"],
+            "data": [
+              ["Network Infrastructure Setup", "10", "$150.00", "$1,500.00"],
+              ["Software Configuration", "8", "$125.00", "$1,000.00"],
+              ["Data Migration", "5", "$150.00", "$750.00"],
+              ["Staff Training", "4", "$125.00", "$500.00"]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "inv_retail_001",
+      "filename": "retail_receipt_standard.pdf",
+      "category": "retail_receipts",
+      "document_type": "receipt",
+      "quality": "high",
+      "orientation": "portrait",
+      "page_count": 1,
+      "characteristics": {
+        "resolution": "300dpi",
+        "has_tables": true,
+        "has_checkboxes": false,
+        "has_signatures": false,
+        "complexity": "low"
+      },
+      "expected_extraction": {
+        "fields": [
+          {
+            "name": "receipt_number",
+            "expected_value": "REC-78901",
+            "position": {"page": 1, "top": 100, "left": 300, "bottom": 125, "right": 400},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "transaction_date",
+            "expected_value": "05/05/2023",
+            "position": {"page": 1, "top": 130, "left": 300, "bottom": 155, "right": 400},
+            "expected_confidence": 0.98
+          },
+          {
+            "name": "transaction_time",
+            "expected_value": "14:30:45",
+            "position": {"page": 1, "top": 160, "left": 300, "bottom": 185, "right": 400},
+            "expected_confidence": 0.98
+          },
+          {
+            "name": "store_name",
+            "expected_value": "Retail Mart",
+            "position": {"page": 1, "top": 100, "left": 100, "bottom": 125, "right": 250},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "store_address",
+            "expected_value": "123 Retail Street, Shopping Center, CA 95678",
+            "position": {"page": 1, "top": 130, "left": 100, "bottom": 180, "right": 350},
+            "expected_confidence": 0.96
+          },
+          {
+            "name": "cashier_name",
+            "expected_value": "John Doe",
+            "position": {"page": 1, "top": 190, "left": 100, "bottom": 215, "right": 200},
+            "expected_confidence": 0.97
+          },
+          {
+            "name": "subtotal",
+            "expected_value": "$145.75",
+            "position": {"page": 1, "top": 400, "left": 300, "bottom": 425, "right": 400},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "tax",
+            "expected_value": "$11.66",
+            "position": {"page": 1, "top": 430, "left": 300, "bottom": 455, "right": 400},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "total",
+            "expected_value": "$157.41",
+            "position": {"page": 1, "top": 460, "left": 300, "bottom": 485, "right": 400},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "payment_method",
+            "expected_value": "Credit Card",
+            "position": {"page": 1, "top": 490, "left": 100, "bottom": 515, "right": 200},
+            "expected_confidence": 0.98
+          },
+          {
+            "name": "card_last_four",
+            "expected_value": "1234",
+            "position": {"page": 1, "top": 520, "left": 100, "bottom": 545, "right": 150},
+            "expected_confidence": 0.99
+          }
+        ],
+        "tables": [
+          {
+            "name": "purchased_items",
+            "position": {"page": 1, "top": 230, "left": 100, "bottom": 380, "right": 400},
+            "expected_confidence": 0.98,
+            "rows": 6,
+            "columns": 4,
+            "headers": ["Item", "Quantity", "Unit Price", "Amount"],
+            "data": [
+              ["T-Shirt (Large)", "2", "$19.99", "$39.98"],
+              ["Jeans (32x34)", "1", "$49.99", "$49.99"],
+              ["Socks (3-pack)", "1", "$12.99", "$12.99"],
+              ["Belt (Medium)", "1", "$24.99", "$24.99"],
+              ["Hat (One Size)", "1", "$17.80", "$17.80"]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "inv_utility_001",
+      "filename": "utility_bill_standard.pdf",
+      "category": "utility_bills",
+      "document_type": "invoice",
+      "quality": "high",
+      "orientation": "portrait",
+      "page_count": 2,
+      "characteristics": {
+        "resolution": "300dpi",
+        "has_tables": true,
+        "has_checkboxes": false,
+        "has_signatures": false,
+        "complexity": "medium"
+      },
+      "expected_extraction": {
+        "fields": [
+          {
+            "name": "account_number",
+            "expected_value": "1234567890",
+            "position": {"page": 1, "top": 150, "left": 500, "bottom": 175, "right": 650},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "bill_date",
+            "expected_value": "05/10/2023",
+            "position": {"page": 1, "top": 180, "left": 500, "bottom": 205, "right": 600},
+            "expected_confidence": 0.98
+          },
+          {
+            "name": "due_date",
+            "expected_value": "06/01/2023",
+            "position": {"page": 1, "top": 210, "left": 500, "bottom": 235, "right": 600},
+            "expected_confidence": 0.98
+          },
+          {
+            "name": "utility_provider",
+            "expected_value": "City Power & Water",
+            "position": {"page": 1, "top": 100, "left": 100, "bottom": 125, "right": 350},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "provider_address",
+            "expected_value": "789 Utility Road, Powertown, CA 95123",
+            "position": {"page": 1, "top": 130, "left": 100, "bottom": 180, "right": 400},
+            "expected_confidence": 0.96
+          },
+          {
+            "name": "customer_name",
+            "expected_value": "Acme Corporation",
+            "position": {"page": 1, "top": 200, "left": 100, "bottom": 225, "right": 350},
+            "expected_confidence": 0.98
+          },
+          {
+            "name": "service_address",
+            "expected_value": "123 Main Street, Suite 100, Anytown, CA 90210",
+            "position": {"page": 1, "top": 230, "left": 100, "bottom": 280, "right": 400},
+            "expected_confidence": 0.96
+          },
+          {
+            "name": "previous_balance",
+            "expected_value": "$245.67",
+            "position": {"page": 1, "top": 300, "left": 500, "bottom": 325, "right": 600},
+            "expected_confidence": 0.98
+          },
+          {
+            "name": "payments_received",
+            "expected_value": "$245.67",
+            "position": {"page": 1, "top": 330, "left": 500, "bottom": 355, "right": 600},
+            "expected_confidence": 0.98
+          },
+          {
+            "name": "current_charges",
+            "expected_value": "$267.89",
+            "position": {"page": 1, "top": 360, "left": 500, "bottom": 385, "right": 600},
+            "expected_confidence": 0.98
+          },
+          {
+            "name": "total_amount_due",
+            "expected_value": "$267.89",
+            "position": {"page": 1, "top": 390, "left": 500, "bottom": 415, "right": 600},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "service_period",
+            "expected_value": "04/01/2023 - 04/30/2023",
+            "position": {"page": 1, "top": 240, "left": 500, "bottom": 265, "right": 700},
+            "expected_confidence": 0.97
+          }
+        ],
+        "tables": [
+          {
+            "name": "usage_details",
+            "position": {"page": 1, "top": 450, "left": 100, "bottom": 600, "right": 700},
+            "expected_confidence": 0.97,
+            "rows": 4,
+            "columns": 4,
+            "headers": ["Service Type", "Usage", "Rate", "Amount"],
+            "data": [
+              ["Electricity", "1,250 kWh", "$0.15/kWh", "$187.50"],
+              ["Water", "8,500 gallons", "$0.008/gallon", "$68.00"],
+              ["Sewer", "Flat Rate", "-", "$12.39"]
+            ]
+          },
+          {
+            "name": "payment_history",
+            "position": {"page": 2, "top": 150, "left": 100, "bottom": 300, "right": 700},
+            "expected_confidence": 0.96,
+            "rows": 4,
+            "columns": 3,
+            "headers": ["Date", "Description", "Amount"],
+            "data": [
+              ["04/05/2023", "Payment - Thank You", "$245.67"],
+              ["03/05/2023", "Payment - Thank You", "$231.45"],
+              ["02/05/2023", "Payment - Thank You", "$239.78"]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "inv_subscription_001",
+      "filename": "subscription_invoice_standard.pdf",
+      "category": "subscription_invoices",
+      "document_type": "invoice",
+      "quality": "high",
+      "orientation": "portrait",
+      "page_count": 1,
+      "characteristics": {
+        "resolution": "300dpi",
+        "has_tables": true,
+        "has_checkboxes": false,
+        "has_signatures": false,
+        "complexity": "low"
+      },
+      "expected_extraction": {
+        "fields": [
+          {
+            "name": "invoice_number",
+            "expected_value": "SUB-2023-1234",
+            "position": {"page": 1, "top": 120, "left": 500, "bottom": 145, "right": 650},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "invoice_date",
+            "expected_value": "05/01/2023",
+            "position": {"page": 1, "top": 150, "left": 500, "bottom": 175, "right": 600},
+            "expected_confidence": 0.98
+          },
+          {
+            "name": "due_date",
+            "expected_value": "05/01/2023",
+            "position": {"page": 1, "top": 180, "left": 500, "bottom": 205, "right": 600},
+            "expected_confidence": 0.98
+          },
+          {
+            "name": "subscription_period",
+            "expected_value": "05/01/2023 - 05/31/2023",
+            "position": {"page": 1, "top": 210, "left": 500, "bottom": 235, "right": 700},
+            "expected_confidence": 0.97
+          },
+          {
+            "name": "service_provider",
+            "expected_value": "SaaS Solutions Inc.",
+            "position": {"page": 1, "top": 120, "left": 100, "bottom": 145, "right": 350},
+            "expected_confidence": 0.98
+          },
+          {
+            "name": "provider_address",
+            "expected_value": "456 Cloud Street, Tech City, CA 94567",
+            "position": {"page": 1, "top": 150, "left": 100, "bottom": 200, "right": 400},
+            "expected_confidence": 0.96
+          },
+          {
+            "name": "customer_name",
+            "expected_value": "Acme Corporation",
+            "position": {"page": 1, "top": 220, "left": 100, "bottom": 245, "right": 350},
+            "expected_confidence": 0.98
+          },
+          {
+            "name": "customer_address",
+            "expected_value": "123 Main Street, Suite 100, Anytown, CA 90210",
+            "position": {"page": 1, "top": 250, "left": 100, "bottom": 300, "right": 400},
+            "expected_confidence": 0.96
+          },
+          {
+            "name": "account_id",
+            "expected_value": "ACME-12345",
+            "position": {"page": 1, "top": 240, "left": 500, "bottom": 265, "right": 600},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "subtotal",
+            "expected_value": "$1,200.00",
+            "position": {"page": 1, "top": 450, "left": 600, "bottom": 475, "right": 700},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "tax",
+            "expected_value": "$96.00",
+            "position": {"page": 1, "top": 480, "left": 600, "bottom": 505, "right": 700},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "total",
+            "expected_value": "$1,296.00",
+            "position": {"page": 1, "top": 510, "left": 600, "bottom": 535, "right": 700},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "payment_method",
+            "expected_value": "Credit Card ending in 5678",
+            "position": {"page": 1, "top": 540, "left": 100, "bottom": 565, "right": 400},
+            "expected_confidence": 0.97
+          },
+          {
+            "name": "payment_status",
+            "expected_value": "Paid",
+            "position": {"page": 1, "top": 540, "left": 600, "bottom": 565, "right": 650},
+            "expected_confidence": 0.99
+          }
+        ],
+        "tables": [
+          {
+            "name": "subscription_items",
+            "position": {"page": 1, "top": 320, "left": 100, "bottom": 430, "right": 700},
+            "expected_confidence": 0.98,
+            "rows": 4,
+            "columns": 4,
+            "headers": ["Service", "Users", "Rate", "Amount"],
+            "data": [
+              ["Enterprise Plan", "50", "$20.00/user", "$1,000.00"],
+              ["Premium Support", "-", "$200.00/month", "$200.00"]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "inv_vendor_002",
+      "filename": "vendor_invoice_low_quality.pdf",
+      "category": "vendor_invoices",
+      "document_type": "invoice",
+      "quality": "low",
+      "orientation": "portrait",
+      "page_count": 1,
+      "characteristics": {
+        "resolution": "150dpi",
+        "has_tables": true,
+        "has_checkboxes": false,
+        "has_signatures": false,
+        "complexity": "medium",
+        "issues": ["low_contrast", "noise", "skewed"]
+      },
+      "expected_extraction": {
+        "fields": [
+          {
+            "name": "invoice_number",
+            "expected_value": "INV-9876",
+            "position": {"page": 1, "top": 100, "left": 500, "bottom": 125, "right": 600},
+            "expected_confidence": 0.85
+          },
+          {
+            "name": "invoice_date",
+            "expected_value": "04/15/2023",
+            "position": {"page": 1, "top": 130, "left": 500, "bottom": 155, "right": 600},
+            "expected_confidence": 0.82
+          },
+          {
+            "name": "due_date",
+            "expected_value": "05/15/2023",
+            "position": {"page": 1, "top": 160, "left": 500, "bottom": 185, "right": 600},
+            "expected_confidence": 0.80
+          },
+          {
+            "name": "vendor_name",
+            "expected_value": "XYZ Manufacturing Co.",
+            "position": {"page": 1, "top": 100, "left": 100, "bottom": 125, "right": 350},
+            "expected_confidence": 0.83
+          },
+          {
+            "name": "vendor_address",
+            "expected_value": "456 Factory Lane, Industrial Park, CA 91234",
+            "position": {"page": 1, "top": 130, "left": 100, "bottom": 180, "right": 350},
+            "expected_confidence": 0.78
+          },
+          {
+            "name": "customer_name",
+            "expected_value": "Acme Corporation",
+            "position": {"page": 1, "top": 200, "left": 100, "bottom": 225, "right": 350},
+            "expected_confidence": 0.85
+          },
+          {
+            "name": "subtotal",
+            "expected_value": "$3,250.00",
+            "position": {"page": 1, "top": 500, "left": 600, "bottom": 525, "right": 700},
+            "expected_confidence": 0.88
+          },
+          {
+            "name": "tax",
+            "expected_value": "$260.00",
+            "position": {"page": 1, "top": 530, "left": 600, "bottom": 555, "right": 700},
+            "expected_confidence": 0.86
+          },
+          {
+            "name": "total",
+            "expected_value": "$3,510.00",
+            "position": {"page": 1, "top": 560, "left": 600, "bottom": 585, "right": 700},
+            "expected_confidence": 0.87
+          }
+        ],
+        "tables": [
+          {
+            "name": "line_items",
+            "position": {"page": 1, "top": 300, "left": 100, "bottom": 480, "right": 700},
+            "expected_confidence": 0.80,
+            "rows": 5,
+            "columns": 5,
+            "headers": ["Item #", "Description", "Quantity", "Unit Price", "Amount"],
+            "data": [
+              ["X-101", "Industrial Component A", "5", "$250.00", "$1,250.00"],
+              ["X-202", "Industrial Component B", "10", "$150.00", "$1,500.00"],
+              ["X-303", "Assembly Service", "1", "$500.00", "$500.00"]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "inv_retail_002",
+      "filename": "retail_receipt_medium_quality.pdf",
+      "category": "retail_receipts",
+      "document_type": "receipt",
+      "quality": "medium",
+      "orientation": "portrait",
+      "page_count": 1,
+      "characteristics": {
+        "resolution": "200dpi",
+        "has_tables": true,
+        "has_checkboxes": false,
+        "has_signatures": false,
+        "complexity": "low",
+        "issues": ["slight_blur", "faded_text"]
+      },
+      "expected_extraction": {
+        "fields": [
+          {
+            "name": "receipt_number",
+            "expected_value": "REC-45678",
+            "position": {"page": 1, "top": 100, "left": 300, "bottom": 125, "right": 400},
+            "expected_confidence": 0.92
+          },
+          {
+            "name": "transaction_date",
+            "expected_value": "04/20/2023",
+            "position": {"page": 1, "top": 130, "left": 300, "bottom": 155, "right": 400},
+            "expected_confidence": 0.90
+          },
+          {
+            "name": "store_name",
+            "expected_value": "Fashion Outlet",
+            "position": {"page": 1, "top": 100, "left": 100, "bottom": 125, "right": 250},
+            "expected_confidence": 0.93
+          },
+          {
+            "name": "subtotal",
+            "expected_value": "$89.97",
+            "position": {"page": 1, "top": 400, "left": 300, "bottom": 425, "right": 400},
+            "expected_confidence": 0.94
+          },
+          {
+            "name": "tax",
+            "expected_value": "$7.20",
+            "position": {"page": 1, "top": 430, "left": 300, "bottom": 455, "right": 400},
+            "expected_confidence": 0.93
+          },
+          {
+            "name": "total",
+            "expected_value": "$97.17",
+            "position": {"page": 1, "top": 460, "left": 300, "bottom": 485, "right": 400},
+            "expected_confidence": 0.94
+          },
+          {
+            "name": "payment_method",
+            "expected_value": "Debit Card",
+            "position": {"page": 1, "top": 490, "left": 100, "bottom": 515, "right": 200},
+            "expected_confidence": 0.91
+          }
+        ],
+        "tables": [
+          {
+            "name": "purchased_items",
+            "position": {"page": 1, "top": 230, "left": 100, "bottom": 380, "right": 400},
+            "expected_confidence": 0.89,
+            "rows": 4,
+            "columns": 4,
+            "headers": ["Item", "Quantity", "Unit Price", "Amount"],
+            "data": [
+              ["Dress Shirt", "1", "$29.99", "$29.99"],
+              ["Casual Pants", "1", "$39.99", "$39.99"],
+              ["Accessories", "1", "$19.99", "$19.99"]
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "test_parameters": {
+    "confidence_thresholds": {
+      "high_quality": 0.95,
+      "medium_quality": 0.85,
+      "low_quality": 0.75
+    },
+    "accuracy_metrics": {
+      "field_extraction": {
+        "exact_match": "Value must match exactly, including capitalization and punctuation",
+        "fuzzy_match": "Value must have Levenshtein distance <= 2 for short fields, <= 5 for long fields",
+        "numeric_match": "Numeric values must be within 0.1% of expected value"
+      },
+      "position_tolerance": {
+        "high_quality": {"x": 10, "y": 5},
+        "medium_quality": {"x": 15, "y": 10},
+        "low_quality": {"x": 25, "y": 15}
+      }
+    },
+    "performance_requirements": {
+      "processing_time": {
+        "per_page": "< 2 seconds",
+        "per_document": "< 10 seconds"
+      },
+      "memory_usage": "< 1GB per document",
+      "gpu_acceleration": "Required for production environment"
+    }
+  },
+  "related_manifests": [
+    "financial_documents/financial_documents_manifest.json",
+    "business_documents/business_documents_manifest.json",
+    "quality_variations/low_quality_manifest.json",
+    "quality_variations/medium_quality_manifest.json",
+    "quality_variations/high_quality_manifest.json"
+  ]
+}
