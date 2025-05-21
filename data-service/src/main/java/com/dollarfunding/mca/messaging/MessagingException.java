@@ -1,279 +1,226 @@
 package com.dollarfunding.mca.messaging;
 
-import com.dollarfunding.mca.exception.BaseException;
-import org.springframework.http.HttpStatus;
-
 /**
  * Custom exception class for messaging-related errors in the MCA application.
- * Provides specialized handling for RabbitMQ connection issues, message 
- * serialization/deserialization errors, and delivery failures.
+ * It extends RuntimeException and provides specialized handling for RabbitMQ connection issues,
+ * message serialization/deserialization errors, and delivery failures.
  */
-public class MessagingException extends BaseException {
+public class MessagingException extends RuntimeException {
 
     /**
-     * Enum defining the types of messaging errors that can occur.
+     * Enum defining the possible error types for messaging exceptions.
      */
     public enum ErrorType {
-        CONNECTION,      // RabbitMQ connection issues
-        SERIALIZATION,   // Message serialization/deserialization errors
-        DELIVERY,        // Message delivery failures
-        CONFIGURATION,   // Configuration-related errors
-        AUTHENTICATION,  // TLS/certificate authentication errors
-        UNKNOWN          // Unclassified errors
+        CONNECTION_ERROR,
+        SERIALIZATION_ERROR,
+        DESERIALIZATION_ERROR,
+        DELIVERY_ERROR,
+        VALIDATION_ERROR,
+        PROCESSING_ERROR
     }
 
     private final ErrorType errorType;
-    private final RetryInfo retryInfo;
+    private final boolean retryable;
+    private final Integer retryCount;
+    private final Integer maxRetries;
 
     /**
-     * Class to hold retry-related information for recovery strategies.
-     */
-    public static class RetryInfo {
-        private final int attemptCount;
-        private final long lastAttemptTimestamp;
-        private final long nextAttemptTimestamp;
-        private final long backoffPeriodMs;
-
-        /**
-         * Constructs a new RetryInfo instance.
-         *
-         * @param attemptCount Number of retry attempts made so far
-         * @param lastAttemptTimestamp Timestamp of the last retry attempt
-         * @param nextAttemptTimestamp Timestamp for the next retry attempt
-         * @param backoffPeriodMs Current backoff period in milliseconds
-         */
-        public RetryInfo(int attemptCount, long lastAttemptTimestamp, long nextAttemptTimestamp, long backoffPeriodMs) {
-            this.attemptCount = attemptCount;
-            this.lastAttemptTimestamp = lastAttemptTimestamp;
-            this.nextAttemptTimestamp = nextAttemptTimestamp;
-            this.backoffPeriodMs = backoffPeriodMs;
-        }
-
-        /**
-         * Creates a new RetryInfo instance for the first attempt.
-         *
-         * @param initialBackoffMs Initial backoff period in milliseconds
-         * @return A new RetryInfo instance
-         */
-        public static RetryInfo forFirstAttempt(long initialBackoffMs) {
-            long now = System.currentTimeMillis();
-            return new RetryInfo(0, 0, now, initialBackoffMs);
-        }
-
-        /**
-         * Creates a new RetryInfo instance for the next attempt with exponential backoff.
-         *
-         * @param factor Multiplier for exponential backoff calculation
-         * @return A new RetryInfo instance with updated values
-         */
-        public RetryInfo forNextAttempt(double factor) {
-            long now = System.currentTimeMillis();
-            long newBackoff = Math.min(
-                    (long) (this.backoffPeriodMs * factor),
-                    30_000 // Maximum backoff of 30 seconds
-            );
-            return new RetryInfo(
-                    this.attemptCount + 1,
-                    now,
-                    now + newBackoff,
-                    newBackoff
-            );
-        }
-
-        /**
-         * @return Number of retry attempts made so far
-         */
-        public int getAttemptCount() {
-            return attemptCount;
-        }
-
-        /**
-         * @return Timestamp of the last retry attempt
-         */
-        public long getLastAttemptTimestamp() {
-            return lastAttemptTimestamp;
-        }
-
-        /**
-         * @return Timestamp for the next retry attempt
-         */
-        public long getNextAttemptTimestamp() {
-            return nextAttemptTimestamp;
-        }
-
-        /**
-         * @return Current backoff period in milliseconds
-         */
-        public long getBackoffPeriodMs() {
-            return backoffPeriodMs;
-        }
-
-        /**
-         * @return Whether the next retry attempt is due based on current time
-         */
-        public boolean isRetryDue() {
-            return System.currentTimeMillis() >= nextAttemptTimestamp;
-        }
-
-        @Override
-        public String toString() {
-            return String.format(
-                    "RetryInfo{attempts=%d, lastAttempt=%d, nextAttempt=%d, backoffMs=%d}",
-                    attemptCount, lastAttemptTimestamp, nextAttemptTimestamp, backoffPeriodMs
-            );
-        }
-    }
-
-    /**
-     * Constructs a new MessagingException with the specified error type, message, and cause.
+     * Constructor with error message and type.
      *
-     * @param errorType The type of messaging error
-     * @param message Detailed error message
-     * @param cause The underlying cause of the exception
-     * @param retryInfo Information about retry attempts
+     * @param message   The error message
+     * @param errorType The type of error
      */
-    public MessagingException(ErrorType errorType, String message, Throwable cause, RetryInfo retryInfo) {
-        super("MESSAGING_" + errorType.name(), message, HttpStatus.INTERNAL_SERVER_ERROR, cause);
+    public MessagingException(String message, ErrorType errorType) {
+        super(message);
         this.errorType = errorType;
-        this.retryInfo = retryInfo;
+        this.retryable = isRetryableErrorType(errorType);
+        this.retryCount = null;
+        this.maxRetries = null;
     }
 
     /**
-     * Constructs a new MessagingException with the specified error type and message.
+     * Constructor with error message, cause, and type.
      *
-     * @param errorType The type of messaging error
-     * @param message Detailed error message
-     * @param retryInfo Information about retry attempts
+     * @param message   The error message
+     * @param cause     The cause of the error
+     * @param errorType The type of error
      */
-    public MessagingException(ErrorType errorType, String message, RetryInfo retryInfo) {
-        this(errorType, message, null, retryInfo);
+    public MessagingException(String message, Throwable cause, ErrorType errorType) {
+        super(message, cause);
+        this.errorType = errorType;
+        this.retryable = isRetryableErrorType(errorType);
+        this.retryCount = null;
+        this.maxRetries = null;
     }
 
     /**
-     * Constructs a new MessagingException with the specified error type, message, and cause.
-     * Creates a new RetryInfo for the first attempt.
+     * Constructor with error message, type, and retry information.
      *
-     * @param errorType The type of messaging error
-     * @param message Detailed error message
-     * @param cause The underlying cause of the exception
-     * @param initialBackoffMs Initial backoff period in milliseconds
+     * @param message    The error message
+     * @param errorType  The type of error
+     * @param retryable  Whether the error is retryable
+     * @param retryCount The current retry count
+     * @param maxRetries The maximum number of retries
      */
-    public MessagingException(ErrorType errorType, String message, Throwable cause, long initialBackoffMs) {
-        this(errorType, message, cause, RetryInfo.forFirstAttempt(initialBackoffMs));
+    public MessagingException(String message, ErrorType errorType, boolean retryable, Integer retryCount, Integer maxRetries) {
+        super(message);
+        this.errorType = errorType;
+        this.retryable = retryable;
+        this.retryCount = retryCount;
+        this.maxRetries = maxRetries;
     }
 
     /**
-     * Constructs a new MessagingException with the specified error type and message.
-     * Creates a new RetryInfo for the first attempt.
+     * Constructor with error message, cause, type, and retry information.
      *
-     * @param errorType The type of messaging error
-     * @param message Detailed error message
-     * @param initialBackoffMs Initial backoff period in milliseconds
+     * @param message    The error message
+     * @param cause      The cause of the error
+     * @param errorType  The type of error
+     * @param retryable  Whether the error is retryable
+     * @param retryCount The current retry count
+     * @param maxRetries The maximum number of retries
      */
-    public MessagingException(ErrorType errorType, String message, long initialBackoffMs) {
-        this(errorType, message, null, RetryInfo.forFirstAttempt(initialBackoffMs));
+    public MessagingException(String message, Throwable cause, ErrorType errorType, boolean retryable, Integer retryCount, Integer maxRetries) {
+        super(message, cause);
+        this.errorType = errorType;
+        this.retryable = retryable;
+        this.retryCount = retryCount;
+        this.maxRetries = maxRetries;
     }
 
     /**
-     * @return The type of messaging error
+     * Gets the error type.
+     *
+     * @return The error type
      */
     public ErrorType getErrorType() {
         return errorType;
     }
 
     /**
-     * @return Information about retry attempts
+     * Checks if the error is retryable.
+     *
+     * @return true if the error is retryable, false otherwise
      */
-    public RetryInfo getRetryInfo() {
-        return retryInfo;
+    public boolean isRetryable() {
+        return retryable;
     }
 
     /**
-     * Creates a new MessagingException for the next retry attempt with updated retry information.
+     * Gets the current retry count.
      *
-     * @param backoffFactor Multiplier for exponential backoff calculation
-     * @return A new MessagingException with updated retry information
+     * @return The retry count, or null if not applicable
      */
-    public MessagingException forNextAttempt(double backoffFactor) {
-        return new MessagingException(
-                this.errorType,
-                this.getMessage(),
-                this.getCause(),
-                this.retryInfo.forNextAttempt(backoffFactor)
-        );
+    public Integer getRetryCount() {
+        return retryCount;
     }
 
     /**
-     * Factory method for creating a connection error exception.
+     * Gets the maximum number of retries.
      *
-     * @param message Detailed error message
-     * @param cause The underlying cause of the exception
+     * @return The maximum retries, or null if not applicable
+     */
+    public Integer getMaxRetries() {
+        return maxRetries;
+    }
+
+    /**
+     * Checks if the error has exceeded the maximum number of retries.
+     *
+     * @return true if retries are exhausted, false otherwise or if not applicable
+     */
+    public boolean isRetriesExhausted() {
+        return retryCount != null && maxRetries != null && retryCount >= maxRetries;
+    }
+
+    /**
+     * Determines if an error type is retryable by default.
+     *
+     * @param errorType The error type to check
+     * @return true if the error type is retryable by default, false otherwise
+     */
+    private boolean isRetryableErrorType(ErrorType errorType) {
+        switch (errorType) {
+            case CONNECTION_ERROR:
+            case DELIVERY_ERROR:
+                return true;
+            case SERIALIZATION_ERROR:
+            case DESERIALIZATION_ERROR:
+            case VALIDATION_ERROR:
+                return false;
+            case PROCESSING_ERROR:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    /**
+     * Creates a connection error exception.
+     *
+     * @param message The error message
+     * @param cause   The cause of the error
      * @return A new MessagingException for connection errors
      */
     public static MessagingException connectionError(String message, Throwable cause) {
-        return new MessagingException(ErrorType.CONNECTION, message, cause, 1000); // 1 second initial backoff
+        return new MessagingException(message, cause, ErrorType.CONNECTION_ERROR);
     }
 
     /**
-     * Factory method for creating a serialization error exception.
+     * Creates a serialization error exception.
      *
-     * @param message Detailed error message
-     * @param cause The underlying cause of the exception
+     * @param message The error message
+     * @param cause   The cause of the error
      * @return A new MessagingException for serialization errors
      */
     public static MessagingException serializationError(String message, Throwable cause) {
-        return new MessagingException(ErrorType.SERIALIZATION, message, cause, 500); // 0.5 second initial backoff
+        return new MessagingException(message, cause, ErrorType.SERIALIZATION_ERROR);
     }
 
     /**
-     * Factory method for creating a delivery error exception.
+     * Creates a deserialization error exception.
      *
-     * @param message Detailed error message
-     * @param cause The underlying cause of the exception
+     * @param message The error message
+     * @param cause   The cause of the error
+     * @return A new MessagingException for deserialization errors
+     */
+    public static MessagingException deserializationError(String message, Throwable cause) {
+        return new MessagingException(message, cause, ErrorType.DESERIALIZATION_ERROR);
+    }
+
+    /**
+     * Creates a delivery error exception.
+     *
+     * @param message    The error message
+     * @param cause      The cause of the error
+     * @param retryCount The current retry count
+     * @param maxRetries The maximum number of retries
      * @return A new MessagingException for delivery errors
      */
-    public static MessagingException deliveryError(String message, Throwable cause) {
-        return new MessagingException(ErrorType.DELIVERY, message, cause, 2000); // 2 second initial backoff
+    public static MessagingException deliveryError(String message, Throwable cause, Integer retryCount, Integer maxRetries) {
+        return new MessagingException(message, cause, ErrorType.DELIVERY_ERROR, true, retryCount, maxRetries);
     }
 
     /**
-     * Factory method for creating a configuration error exception.
+     * Creates a validation error exception.
      *
-     * @param message Detailed error message
-     * @param cause The underlying cause of the exception
-     * @return A new MessagingException for configuration errors
+     * @param message The error message
+     * @return A new MessagingException for validation errors
      */
-    public static MessagingException configurationError(String message, Throwable cause) {
-        return new MessagingException(ErrorType.CONFIGURATION, message, cause, 5000); // 5 second initial backoff
+    public static MessagingException validationError(String message) {
+        return new MessagingException(message, ErrorType.VALIDATION_ERROR);
     }
 
     /**
-     * Factory method for creating an authentication error exception.
+     * Creates a processing error exception.
      *
-     * @param message Detailed error message
-     * @param cause The underlying cause of the exception
-     * @return A new MessagingException for authentication errors
+     * @param message    The error message
+     * @param cause      The cause of the error
+     * @param retryCount The current retry count
+     * @param maxRetries The maximum number of retries
+     * @return A new MessagingException for processing errors
      */
-    public static MessagingException authenticationError(String message, Throwable cause) {
-        return new MessagingException(ErrorType.AUTHENTICATION, message, cause, 3000); // 3 second initial backoff
-    }
-
-    /**
-     * Factory method for creating an unknown error exception.
-     *
-     * @param message Detailed error message
-     * @param cause The underlying cause of the exception
-     * @return A new MessagingException for unknown errors
-     */
-    public static MessagingException unknownError(String message, Throwable cause) {
-        return new MessagingException(ErrorType.UNKNOWN, message, cause, 1000); // 1 second initial backoff
-    }
-
-    @Override
-    public String toString() {
-        return String.format(
-                "MessagingException{errorType=%s, message='%s', retryInfo=%s}",
-                errorType, getMessage(), retryInfo
-        );
+    public static MessagingException processingError(String message, Throwable cause, Integer retryCount, Integer maxRetries) {
+        return new MessagingException(message, cause, ErrorType.PROCESSING_ERROR, true, retryCount, maxRetries);
     }
 }
