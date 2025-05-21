@@ -1,17 +1,18 @@
+import type { IApplicationItem, IApplicationStatus } from 'src/types/application';
+import type { CardProps } from '@mui/material/Card';
+
 import { useState } from 'react';
-import { useTheme } from '@mui/material/styles';
 
 import Box from '@mui/material/Box';
-import Link from '@mui/material/Link';
 import Card from '@mui/material/Card';
 import Stack from '@mui/material/Stack';
 import Button from '@mui/material/Button';
 import Divider from '@mui/material/Divider';
 import Typography from '@mui/material/Typography';
+import IconButton from '@mui/material/IconButton';
 
+import { useRouter } from 'src/routes/hooks';
 import { paths } from 'src/routes/paths';
-import { RouterLink } from 'src/routes/components';
-import { useUpdateApplicationStatus } from 'src/actions/applications';
 
 import { fCurrency } from 'src/utils/format-number';
 import { fDate } from 'src/utils/format-time';
@@ -19,159 +20,163 @@ import { fDate } from 'src/utils/format-time';
 import { Label } from 'src/components/label';
 import { Iconify } from 'src/components/iconify';
 
-import type { IApplicationItem, IApplicationStatus } from 'src/types/application';
-
 // ----------------------------------------------------------------------
 
-type Props = {
+type Props = CardProps & {
   application: IApplicationItem;
+  userRole?: 'operations_staff' | 'system_admin';
 };
 
-/**
- * ApplicationCard Component
- * 
- * Renders an individual Merchant Cash Advance (MCA) application summary card.
- * Displays merchant details, application status, submission date, requested amount,
- * and provides action buttons based on user role permissions.
- * 
- * @param {Props} props - Component props
- * @returns {React.ReactElement} The rendered ApplicationCard component
- */
-export default function ApplicationCard({ application }: Props) {
-  const theme = useTheme();
-  const { updateStatus, isUpdating } = useUpdateApplicationStatus();
+export function ApplicationCard({ application, userRole = 'operations_staff', sx, ...other }: Props) {
+  const router = useRouter();
   
-  // Get application data
-  const {
-    id,
-    status,
-    created_at,
-    merchant,
-    metadata,
-  } = application;
-
-  // Get requested amount from metadata
+  const { id, status, created_at, merchant, metadata } = application;
+  
   const requestedAmount = metadata?.requested_amount || 0;
 
-  // Handle status update
-  const handleStatusUpdate = async (newStatus: IApplicationStatus) => {
-    await updateStatus(id, newStatus);
+  const handleViewDetails = () => {
+    router.push(paths.dashboard.applications.details(id));
   };
 
-  // Get status color based on application status
-  const getStatusColor = (status: IApplicationStatus) => {
-    switch (status) {
-      case IApplicationStatus.APPROVED:
-        return 'success';
-      case IApplicationStatus.REJECTED:
-        return 'error';
-      case IApplicationStatus.REVIEWING:
-        return 'fundingPrimary';
-      case IApplicationStatus.INCOMPLETE:
-        return 'warning';
-      default:
-        return 'info';
-    }
+  const handleProcessApplication = () => {
+    router.push(paths.dashboard.applications.process(id));
   };
+
+  const renderStatus = () => (
+    <Label
+      variant="filled"
+      color={
+        (status === IApplicationStatus.APPROVED && 'success') ||
+        (status === IApplicationStatus.REJECTED && 'error') ||
+        (status === IApplicationStatus.REVIEWING && 'warning') ||
+        (status === IApplicationStatus.INCOMPLETE && 'error') ||
+        'info'
+      }
+      sx={{
+        textTransform: 'uppercase',
+        fontSize: '0.75rem',
+        fontWeight: 'bold',
+        ...(status === IApplicationStatus.APPROVED && {
+          bgcolor: (theme) => theme.palette.fundingSuccess || theme.palette.success.main,
+        }),
+        ...(status === IApplicationStatus.REJECTED && {
+          bgcolor: (theme) => theme.palette.fundingError || theme.palette.error.main,
+        }),
+        ...(status === IApplicationStatus.REVIEWING && {
+          bgcolor: (theme) => theme.palette.fundingWarning || theme.palette.warning.main,
+        }),
+        ...(status === IApplicationStatus.INCOMPLETE && {
+          bgcolor: (theme) => theme.palette.fundingError || theme.palette.error.main,
+        }),
+        ...(status === IApplicationStatus.PENDING && {
+          bgcolor: (theme) => theme.palette.fundingPrimary || theme.palette.info.main,
+        }),
+      }}
+    >
+      {status}
+    </Label>
+  );
+
+  const renderMerchantInfo = () => (
+    <Stack spacing={0.5}>
+      <Typography variant="subtitle1" noWrap>
+        {merchant.legal_name}
+      </Typography>
+      
+      {merchant.dba_name && (
+        <Typography variant="body2" sx={{ color: 'text.secondary' }} noWrap>
+          DBA: {merchant.dba_name}
+        </Typography>
+      )}
+      
+      <Typography variant="body2" sx={{ color: 'text.secondary' }}>
+        EIN: {merchant.ein}
+      </Typography>
+    </Stack>
+  );
+
+  const renderMetadata = () => (
+    <Stack
+      direction="row"
+      flexWrap="wrap"
+      alignItems="center"
+      justifyContent="space-between"
+      sx={{ mt: 3, mb: 1 }}
+    >
+      <Stack direction="row" spacing={1} alignItems="center">
+        <Iconify icon="solar:calendar-date-bold" width={16} />
+        <Typography variant="caption" sx={{ color: 'text.disabled' }}>
+          Submitted: {fDate(created_at)}
+        </Typography>
+      </Stack>
+
+      <Stack direction="row" spacing={1} alignItems="center">
+        <Iconify icon="solar:dollar-bold" width={16} />
+        <Typography variant="subtitle1">
+          {fCurrency(requestedAmount)}
+        </Typography>
+      </Stack>
+    </Stack>
+  );
+
+  const renderActions = () => (
+    <Stack direction="row" spacing={2} sx={{ mt: 2 }}>
+      <Button
+        fullWidth
+        size="small"
+        color="inherit"
+        variant="outlined"
+        onClick={handleViewDetails}
+        startIcon={<Iconify icon="solar:eye-bold" />}
+      >
+        View
+      </Button>
+
+      {(status === IApplicationStatus.PENDING || status === IApplicationStatus.REVIEWING) && (
+        <Button
+          fullWidth
+          size="small"
+          variant="contained"
+          onClick={handleProcessApplication}
+          startIcon={<Iconify icon="solar:file-check-bold" />}
+          sx={{
+            bgcolor: (theme) => theme.palette.fundingPrimary || theme.palette.primary.main,
+            '&:hover': {
+              bgcolor: (theme) => theme.palette.fundingSecondary || theme.palette.primary.dark,
+            },
+          }}
+        >
+          Process
+        </Button>
+      )}
+    </Stack>
+  );
 
   return (
     <Card
       sx={{
         p: 3,
-        display: 'flex',
-        flexDirection: 'column',
-        height: '100%',
+        width: 1,
+        boxShadow: (theme) => theme.customShadows?.z8,
+        ...(Array.isArray(sx) ? sx : [sx]),
       }}
+      {...other}
     >
-      <Stack spacing={2} flexGrow={1}>
-        {/* Status badge */}
-        <Label
-          variant="soft"
-          color={getStatusColor(status as IApplicationStatus)}
-          sx={{ 
-            alignSelf: 'flex-start',
-            textTransform: 'capitalize',
-            px: 2,
-            py: 0.75,
-            borderRadius: 1,
-            fontSize: '0.75rem',
-            fontWeight: 'bold',
-          }}
-        >
-          {status}
-        </Label>
+      <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={2}>
+        <Box sx={{ flexGrow: 1 }}>
+          {renderMerchantInfo()}
+        </Box>
 
-        {/* Merchant details */}
-        <Link
-          component={RouterLink}
-          href={paths.dashboard.application.details(id)}
-          color="inherit"
-          variant="subtitle2"
-          noWrap
-          sx={{ fontWeight: 'bold' }}
-        >
-          {merchant.legal_name}
-        </Link>
-
-        {merchant.dba_name && (
-          <Typography variant="body2" sx={{ color: 'text.secondary' }} noWrap>
-            DBA: {merchant.dba_name}
-          </Typography>
-        )}
-
-        <Stack
-          direction="row"
-          alignItems="center"
-          justifyContent="space-between"
-          sx={{ typography: 'body2', color: 'text.secondary' }}
-        >
-          <Typography variant="body2">EIN: {merchant.ein}</Typography>
-          <Typography variant="body2">{merchant.industry}</Typography>
-        </Stack>
-
-        <Stack
-          direction="row"
-          alignItems="center"
-          justifyContent="space-between"
-          sx={{ typography: 'body2', color: 'text.secondary' }}
-        >
-          <Typography variant="body2">Submitted: {fDate(created_at)}</Typography>
-          <Typography variant="subtitle1" sx={{ fontWeight: 'bold' }}>
-            {fCurrency(requestedAmount)}
-          </Typography>
-        </Stack>
+        <Box>
+          {renderStatus()}
+        </Box>
       </Stack>
 
       <Divider sx={{ borderStyle: 'dashed', my: 2 }} />
 
-      {/* Action buttons */}
-      <Stack direction="row" spacing={2}>
-        <Button
-          fullWidth
-          component={RouterLink}
-          href={paths.dashboard.application.details(id)}
-          color="fundingPrimary"
-          variant="outlined"
-          size="small"
-          startIcon={<Iconify icon="eva:eye-fill" />}
-        >
-          View
-        </Button>
+      {renderMetadata()}
 
-        {status === IApplicationStatus.PENDING && (
-          <Button
-            fullWidth
-            color="fundingPrimary"
-            variant="contained"
-            size="small"
-            startIcon={<Iconify icon="eva:edit-fill" />}
-            onClick={() => handleStatusUpdate(IApplicationStatus.REVIEWING)}
-            disabled={isUpdating}
-          >
-            Process
-          </Button>
-        )}
-      </Stack>
+      {userRole && renderActions()}
     </Card>
   );
 }
