@@ -1,0 +1,367 @@
+{
+  "manifest_version": "1.0",
+  "description": "Manifest of medium-quality typed document test samples for OCR testing",
+  "quality_characteristics": {
+    "resolution_range": "150-300 DPI",
+    "contrast_issues": "moderate",
+    "noise_level": "slight",
+    "blur_amount": "minimal to moderate",
+    "expected_accuracy": "85-95%"
+  },
+  "documents": [
+    {
+      "document_id": "med_app_form_001",
+      "file_path": "application_forms/medium_quality_application_form_001.pdf",
+      "document_type": "loan_application",
+      "characteristics": {
+        "resolution": "200 DPI",
+        "contrast_issues": "moderate fading in top section",
+        "noise_level": "slight speckles throughout",
+        "blur_amount": "minimal"
+      },
+      "expected_extraction": {
+        "fields": {
+          "applicant_name": {
+            "value": "John A. Smith",
+            "expected_confidence": 0.92,
+            "position": {"x": 120, "y": 150, "width": 200, "height": 30}
+          },
+          "business_name": {
+            "value": "Smith's Hardware LLC",
+            "expected_confidence": 0.89,
+            "position": {"x": 120, "y": 190, "width": 250, "height": 30}
+          },
+          "ein": {
+            "value": "83-2947561",
+            "expected_confidence": 0.87,
+            "position": {"x": 120, "y": 230, "width": 150, "height": 30}
+          },
+          "requested_amount": {
+            "value": "$75,000.00",
+            "expected_confidence": 0.91,
+            "position": {"x": 350, "y": 270, "width": 150, "height": 30}
+          },
+          "business_address": {
+            "value": "123 Main Street, Suite 101, Anytown, CA 90210",
+            "expected_confidence": 0.85,
+            "position": {"x": 120, "y": 310, "width": 400, "height": 30}
+          },
+          "phone_number": {
+            "value": "(555) 123-4567",
+            "expected_confidence": 0.93,
+            "position": {"x": 120, "y": 350, "width": 150, "height": 30}
+          },
+          "email_address": {
+            "value": "john.smith@smithhardware.com",
+            "expected_confidence": 0.90,
+            "position": {"x": 120, "y": 390, "width": 300, "height": 30}
+          },
+          "years_in_business": {
+            "value": "5",
+            "expected_confidence": 0.95,
+            "position": {"x": 350, "y": 430, "width": 50, "height": 30}
+          },
+          "signature": {
+            "value": "John A Smith",
+            "expected_confidence": 0.82,
+            "position": {"x": 120, "y": 650, "width": 200, "height": 50}
+          },
+          "date": {
+            "value": "03/15/2023",
+            "expected_confidence": 0.94,
+            "position": {"x": 350, "y": 650, "width": 150, "height": 30}
+          }
+        }
+      }
+    },
+    {
+      "document_id": "med_tax_return_001",
+      "file_path": "financial_documents/medium_quality_tax_return_001.pdf",
+      "document_type": "tax_return",
+      "characteristics": {
+        "resolution": "180 DPI",
+        "contrast_issues": "moderate contrast variation",
+        "noise_level": "slight background noise",
+        "blur_amount": "minimal in text areas, moderate in form borders"
+      },
+      "expected_extraction": {
+        "fields": {
+          "taxpayer_name": {
+            "value": "Smith's Hardware LLC",
+            "expected_confidence": 0.91,
+            "position": {"x": 150, "y": 120, "width": 250, "height": 30}
+          },
+          "ein": {
+            "value": "83-2947561",
+            "expected_confidence": 0.89,
+            "position": {"x": 450, "y": 120, "width": 150, "height": 30}
+          },
+          "tax_year": {
+            "value": "2022",
+            "expected_confidence": 0.96,
+            "position": {"x": 650, "y": 120, "width": 80, "height": 30}
+          },
+          "gross_receipts": {
+            "value": "$1,245,789.00",
+            "expected_confidence": 0.88,
+            "position": {"x": 450, "y": 250, "width": 150, "height": 30}
+          },
+          "total_expenses": {
+            "value": "$987,654.00",
+            "expected_confidence": 0.87,
+            "position": {"x": 450, "y": 350, "width": 150, "height": 30}
+          },
+          "net_profit": {
+            "value": "$258,135.00",
+            "expected_confidence": 0.90,
+            "position": {"x": 450, "y": 450, "width": 150, "height": 30}
+          },
+          "tax_due": {
+            "value": "$54,208.00",
+            "expected_confidence": 0.89,
+            "position": {"x": 450, "y": 550, "width": 150, "height": 30}
+          },
+          "preparer_name": {
+            "value": "Jane Wilson, CPA",
+            "expected_confidence": 0.86,
+            "position": {"x": 150, "y": 650, "width": 250, "height": 30}
+          },
+          "preparation_date": {
+            "value": "04/10/2023",
+            "expected_confidence": 0.92,
+            "position": {"x": 450, "y": 650, "width": 150, "height": 30}
+          }
+        }
+      }
+    },
+    {
+      "document_id": "med_bank_statement_001",
+      "file_path": "financial_documents/medium_quality_bank_statement_001.pdf",
+      "document_type": "bank_statement",
+      "characteristics": {
+        "resolution": "220 DPI",
+        "contrast_issues": "moderate fading in transaction section",
+        "noise_level": "slight background texture",
+        "blur_amount": "minimal text blur in some areas"
+      },
+      "expected_extraction": {
+        "fields": {
+          "account_holder": {
+            "value": "Smith's Hardware LLC",
+            "expected_confidence": 0.93,
+            "position": {"x": 100, "y": 100, "width": 250, "height": 30}
+          },
+          "account_number": {
+            "value": "XXXX-XX-1234",
+            "expected_confidence": 0.91,
+            "position": {"x": 500, "y": 100, "width": 150, "height": 30}
+          },
+          "statement_period": {
+            "value": "01/01/2023 - 01/31/2023",
+            "expected_confidence": 0.94,
+            "position": {"x": 500, "y": 140, "width": 200, "height": 30}
+          },
+          "opening_balance": {
+            "value": "$45,678.92",
+            "expected_confidence": 0.90,
+            "position": {"x": 500, "y": 180, "width": 150, "height": 30}
+          },
+          "closing_balance": {
+            "value": "$52,431.87",
+            "expected_confidence": 0.89,
+            "position": {"x": 500, "y": 650, "width": 150, "height": 30}
+          },
+          "total_deposits": {
+            "value": "$87,654.32",
+            "expected_confidence": 0.88,
+            "position": {"x": 500, "y": 690, "width": 150, "height": 30}
+          },
+          "total_withdrawals": {
+            "value": "$80,901.37",
+            "expected_confidence": 0.87,
+            "position": {"x": 500, "y": 730, "width": 150, "height": 30}
+          }
+        },
+        "table_data": {
+          "transactions": {
+            "expected_confidence": 0.85,
+            "position": {"x": 50, "y": 250, "width": 700, "height": 350},
+            "headers": ["Date", "Description", "Amount", "Balance"],
+            "rows": [
+              ["01/03/2023", "Customer Payment - ABC Corp", "$12,345.67", "$58,024.59"],
+              ["01/05/2023", "Supplier Payment - XYZ Supplies", "-$8,765.43", "$49,259.16"],
+              ["01/10/2023", "Customer Payment - 123 Industries", "$9,876.54", "$59,135.70"],
+              ["01/15/2023", "Payroll", "-$15,432.10", "$43,703.60"],
+              ["01/20/2023", "Customer Payment - EFG Company", "$14,567.89", "$58,271.49"],
+              ["01/25/2023", "Rent Payment", "-$5,839.62", "$52,431.87"]
+            ]
+          }
+        }
+      }
+    },
+    {
+      "document_id": "med_invoice_001",
+      "file_path": "business_documents/medium_quality_invoice_001.pdf",
+      "document_type": "invoice",
+      "characteristics": {
+        "resolution": "250 DPI",
+        "contrast_issues": "moderate contrast in logo area",
+        "noise_level": "slight scanner artifacts",
+        "blur_amount": "minimal text blur"
+      },
+      "expected_extraction": {
+        "fields": {
+          "invoice_number": {
+            "value": "INV-2023-0456",
+            "expected_confidence": 0.94,
+            "position": {"x": 500, "y": 100, "width": 150, "height": 30}
+          },
+          "invoice_date": {
+            "value": "02/15/2023",
+            "expected_confidence": 0.93,
+            "position": {"x": 500, "y": 140, "width": 150, "height": 30}
+          },
+          "due_date": {
+            "value": "03/15/2023",
+            "expected_confidence": 0.92,
+            "position": {"x": 500, "y": 180, "width": 150, "height": 30}
+          },
+          "vendor_name": {
+            "value": "Smith's Hardware LLC",
+            "expected_confidence": 0.95,
+            "position": {"x": 100, "y": 100, "width": 250, "height": 30}
+          },
+          "vendor_address": {
+            "value": "123 Main Street, Suite 101, Anytown, CA 90210",
+            "expected_confidence": 0.88,
+            "position": {"x": 100, "y": 140, "width": 350, "height": 60}
+          },
+          "customer_name": {
+            "value": "Acme Construction Inc.",
+            "expected_confidence": 0.91,
+            "position": {"x": 100, "y": 250, "width": 250, "height": 30}
+          },
+          "customer_address": {
+            "value": "456 Oak Avenue, Building B, Somewhere, CA 90211",
+            "expected_confidence": 0.86,
+            "position": {"x": 100, "y": 290, "width": 350, "height": 60}
+          },
+          "subtotal": {
+            "value": "$4,567.89",
+            "expected_confidence": 0.90,
+            "position": {"x": 500, "y": 550, "width": 150, "height": 30}
+          },
+          "tax": {
+            "value": "$365.43",
+            "expected_confidence": 0.89,
+            "position": {"x": 500, "y": 590, "width": 150, "height": 30}
+          },
+          "total": {
+            "value": "$4,933.32",
+            "expected_confidence": 0.92,
+            "position": {"x": 500, "y": 630, "width": 150, "height": 30}
+          }
+        },
+        "table_data": {
+          "line_items": {
+            "expected_confidence": 0.87,
+            "position": {"x": 50, "y": 350, "width": 700, "height": 150},
+            "headers": ["Item #", "Description", "Quantity", "Unit Price", "Amount"],
+            "rows": [
+              ["HW-001", "Premium Hammer", "10", "$45.99", "$459.90"],
+              ["HW-002", "Professional Screwdriver Set", "5", "$129.99", "$649.95"],
+              ["HW-003", "Heavy Duty Power Drill", "3", "$299.99", "$899.97"],
+              ["HW-004", "Construction-Grade Nails (Box)", "25", "$19.99", "$499.75"],
+              ["HW-005", "Premium Lumber 2x4x8", "50", "$41.16", "$2,058.32"]
+            ]
+          }
+        }
+      }
+    },
+    {
+      "document_id": "med_id_document_001",
+      "file_path": "identity_documents/medium_quality_drivers_license_001.pdf",
+      "document_type": "identity_document",
+      "characteristics": {
+        "resolution": "300 DPI",
+        "contrast_issues": "moderate contrast in photo area",
+        "noise_level": "slight scanner artifacts",
+        "blur_amount": "minimal blur in text, moderate in security features"
+      },
+      "expected_extraction": {
+        "fields": {
+          "document_type": {
+            "value": "DRIVER LICENSE",
+            "expected_confidence": 0.95,
+            "position": {"x": 300, "y": 50, "width": 200, "height": 30}
+          },
+          "license_number": {
+            "value": "A1234567",
+            "expected_confidence": 0.92,
+            "position": {"x": 400, "y": 100, "width": 150, "height": 30}
+          },
+          "full_name": {
+            "value": "SMITH, JOHN ANDREW",
+            "expected_confidence": 0.93,
+            "position": {"x": 150, "y": 150, "width": 300, "height": 30}
+          },
+          "address": {
+            "value": "123 MAIN STREET, ANYTOWN CA 90210",
+            "expected_confidence": 0.87,
+            "position": {"x": 150, "y": 190, "width": 350, "height": 30}
+          },
+          "date_of_birth": {
+            "value": "05/12/1980",
+            "expected_confidence": 0.91,
+            "position": {"x": 150, "y": 230, "width": 150, "height": 30}
+          },
+          "issue_date": {
+            "value": "06/15/2020",
+            "expected_confidence": 0.90,
+            "position": {"x": 150, "y": 270, "width": 150, "height": 30}
+          },
+          "expiration_date": {
+            "value": "05/12/2028",
+            "expected_confidence": 0.89,
+            "position": {"x": 150, "y": 310, "width": 150, "height": 30}
+          },
+          "class": {
+            "value": "C",
+            "expected_confidence": 0.96,
+            "position": {"x": 400, "y": 230, "width": 50, "height": 30}
+          },
+          "restrictions": {
+            "value": "NONE",
+            "expected_confidence": 0.94,
+            "position": {"x": 400, "y": 270, "width": 100, "height": 30}
+          },
+          "sex": {
+            "value": "M",
+            "expected_confidence": 0.95,
+            "position": {"x": 400, "y": 310, "width": 50, "height": 30}
+          },
+          "height": {
+            "value": "5'-10\"",
+            "expected_confidence": 0.93,
+            "position": {"x": 500, "y": 230, "width": 100, "height": 30}
+          },
+          "weight": {
+            "value": "180 LB",
+            "expected_confidence": 0.92,
+            "position": {"x": 500, "y": 270, "width": 100, "height": 30}
+          },
+          "eyes": {
+            "value": "BRN",
+            "expected_confidence": 0.94,
+            "position": {"x": 500, "y": 310, "width": 100, "height": 30}
+          },
+          "hair": {
+            "value": "BRN",
+            "expected_confidence": 0.93,
+            "position": {"x": 500, "y": 350, "width": 100, "height": 30}
+          }
+        }
+      }
+    }
+  ]
+}
