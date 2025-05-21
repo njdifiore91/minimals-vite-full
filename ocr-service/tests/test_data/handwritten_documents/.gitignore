@@ -1,0 +1,48 @@
+# OCR Service - Handwritten Documents Test Data
+# =============================================
+
+# Exclude all binary document files from version control to prevent repository bloat
+# These files should be downloaded separately from the secure document storage
+# See README.md for instructions on obtaining test documents
+
+# Document file formats
+*.pdf
+*.PDF
+*.tiff
+*.TIFF
+*.tif
+*.TIF
+*.png
+*.PNG
+*.jpg
+*.JPG
+*.jpeg
+*.JPEG
+
+# Exclude temporary files that might be created during testing
+*.tmp
+*.temp
+
+# Exclude any extracted text files that might contain sensitive information
+*.txt
+*.json
+
+# Exceptions - Files that should be tracked in version control
+!README.md
+!config.json
+!metadata.json
+!document_catalog.csv
+!sample_structure.md
+
+# Include placeholder files to maintain directory structure
+!.placeholder
+
+# Note: To obtain the actual test documents, please follow these steps:
+# 1. Request access to the secure document storage from the project administrator
+# 2. Download the handwritten_documents.zip package from the shared storage location
+# 3. Extract the contents to this directory
+# 4. Verify the extraction by running the document validation script: 
+#    python ../../test_utils/validate_test_documents.py
+#
+# DO NOT commit the actual document files to version control!
+# The OCR service tests will automatically detect and use these files when present.
