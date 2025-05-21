@@ -1,115 +1,111 @@
 package com.dollarfunding.mca.cache;
 
-import org.springframework.data.redis.core.RedisTemplate;
-
-import java.time.Duration;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
-import java.util.function.Supplier;
+import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Interface defining the core caching operations for the MCA application.
- * This interface provides a standardized API for cache interactions, abstracting the underlying cache implementation details.
- * It includes methods for get, set, delete, and exists operations, supporting both single values and collections,
- * with and without TTL specifications.
+ * This service provides a standardized API for cache interactions, abstracting
+ * the underlying cache implementation details (Redis 7.0).
+ * 
+ * The cache is configured with the following TTL defaults:
+ * - Application data: 15 minutes
+ * - Session information: 24 hours
  */
 public interface CacheService {
-
+    
     /**
-     * Gets a value from the cache.
+     * Default TTL for application data in seconds (15 minutes)
+     */
+    long DEFAULT_DATA_TTL_SECONDS = 15 * 60;
+    
+    /**
+     * Default TTL for session data in seconds (24 hours)
+     */
+    long DEFAULT_SESSION_TTL_SECONDS = 24 * 60 * 60;
+    
+    /**
+     * Retrieves a value from the cache by key.
      *
+     * @param <T> The type of the value to retrieve
      * @param key The cache key
-     * @param <T> The type of the value
-     * @return The cached value, or null if not found
+     * @param clazz The class type of the value
+     * @return An Optional containing the value if found, empty otherwise
      */
-    <T> T get(String key);
-
+    <T> Optional<T> get(String key, Class<T> clazz);
+    
     /**
-     * Gets a value from the cache, or computes it if not present.
+     * Retrieves multiple values from the cache by keys.
      *
-     * @param key      The cache key
-     * @param supplier The supplier to compute the value if not in cache
-     * @param <T>      The type of the value
-     * @return The cached or computed value
+     * @param <T> The type of the values to retrieve
+     * @param keys Collection of cache keys
+     * @param clazz The class type of the values
+     * @return A Map of keys to values for all keys that exist in the cache
      */
-    <T> T getOrCompute(String key, Supplier<T> supplier);
-
+    <T> Map<String, T> multiGet(Collection<String> keys, Class<T> clazz);
+    
     /**
-     * Gets a value from the cache, or computes it if not present, with a custom TTL.
+     * Stores a value in the cache with the default application data TTL (15 minutes).
      *
-     * @param key      The cache key
-     * @param supplier The supplier to compute the value if not in cache
-     * @param ttl      The time-to-live duration for the cached value
-     * @param <T>      The type of the value
-     * @return The cached or computed value
-     */
-    <T> T getOrCompute(String key, Supplier<T> supplier, Duration ttl);
-
-    /**
-     * Sets a value in the cache with the default application data TTL.
-     *
-     * @param key   The cache key
-     * @param value The value to cache
-     * @param <T>   The type of the value
-     * @return true if successful, false otherwise
+     * @param <T> The type of the value to store
+     * @param key The cache key
+     * @param value The value to store
+     * @return true if the operation was successful, false otherwise
      */
     <T> boolean set(String key, T value);
-
+    
     /**
-     * Sets a value in the cache with a custom TTL.
+     * Stores a value in the cache with a custom TTL.
      *
-     * @param key   The cache key
-     * @param value The value to cache
-     * @param ttl   The time-to-live duration for the cached value
-     * @param <T>   The type of the value
-     * @return true if successful, false otherwise
+     * @param <T> The type of the value to store
+     * @param key The cache key
+     * @param value The value to store
+     * @param ttl The time-to-live duration
+     * @param timeUnit The time unit of the TTL duration
+     * @return true if the operation was successful, false otherwise
      */
-    <T> boolean set(String key, T value, Duration ttl);
-
+    <T> boolean set(String key, T value, long ttl, TimeUnit timeUnit);
+    
     /**
-     * Sets multiple values in the cache with the default application data TTL.
+     * Stores multiple key-value pairs in the cache with the default application data TTL (15 minutes).
      *
-     * @param keyValueMap The map of keys to values to cache
-     * @param <T>         The type of the values
-     * @return true if successful, false otherwise
+     * @param <T> The type of the values to store
+     * @param map The map of key-value pairs to store
+     * @return true if the operation was successful, false otherwise
      */
-    <T> boolean setAll(Map<String, T> keyValueMap);
-
+    <T> boolean multiSet(Map<String, T> map);
+    
     /**
-     * Sets multiple values in the cache with a custom TTL.
+     * Stores multiple key-value pairs in the cache with a custom TTL.
      *
-     * @param keyValueMap The map of keys to values to cache
-     * @param ttl         The time-to-live duration for the cached values
-     * @param <T>         The type of the values
-     * @return true if successful, false otherwise
+     * @param <T> The type of the values to store
+     * @param map The map of key-value pairs to store
+     * @param ttl The time-to-live duration
+     * @param timeUnit The time unit of the TTL duration
+     * @return true if the operation was successful, false otherwise
      */
-    <T> boolean setAll(Map<String, T> keyValueMap, Duration ttl);
-
+    <T> boolean multiSet(Map<String, T> map, long ttl, TimeUnit timeUnit);
+    
     /**
-     * Deletes a value from the cache.
+     * Deletes a value from the cache by key.
      *
      * @param key The cache key to delete
-     * @return true if successful, false otherwise
+     * @return true if the key was deleted, false if the key didn't exist
      */
     boolean delete(String key);
-
+    
     /**
-     * Deletes multiple values from the cache.
+     * Deletes multiple values from the cache by keys.
      *
-     * @param keys The collection of cache keys to delete
+     * @param keys Collection of cache keys to delete
      * @return The number of keys that were deleted
      */
-    long deleteAll(Collection<String> keys);
-
-    /**
-     * Deletes all keys matching a pattern.
-     *
-     * @param pattern The pattern to match keys against
-     * @return The number of keys that were deleted
-     */
-    long deleteByPattern(String pattern);
-
+    long multiDelete(Collection<String> keys);
+    
     /**
      * Checks if a key exists in the cache.
      *
@@ -117,67 +113,151 @@ public interface CacheService {
      * @return true if the key exists, false otherwise
      */
     boolean exists(String key);
-
+    
+    /**
+     * Checks if multiple keys exist in the cache.
+     *
+     * @param keys Collection of cache keys to check
+     * @return A Set containing the keys that exist in the cache
+     */
+    Set<String> multiExists(Collection<String> keys);
+    
+    /**
+     * Atomically increments a counter stored at the given key.
+     * If the key does not exist, it is initialized to 0 before performing the increment.
+     *
+     * @param key The cache key of the counter
+     * @param delta The value to increment by
+     * @return The new value of the counter after the increment
+     */
+    long increment(String key, long delta);
+    
+    /**
+     * Atomically decrements a counter stored at the given key.
+     * If the key does not exist, it is initialized to 0 before performing the decrement.
+     *
+     * @param key The cache key of the counter
+     * @param delta The value to decrement by
+     * @return The new value of the counter after the decrement
+     */
+    long decrement(String key, long delta);
+    
+    /**
+     * Sets the expiration time for a key.
+     *
+     * @param key The cache key
+     * @param ttl The time-to-live duration
+     * @param timeUnit The time unit of the TTL duration
+     * @return true if the expiration was set, false if the key doesn't exist
+     */
+    boolean expire(String key, long ttl, TimeUnit timeUnit);
+    
     /**
      * Gets the remaining time-to-live for a key.
      *
      * @param key The cache key
-     * @return The remaining TTL in milliseconds, or -1 if the key does not exist or has no TTL
+     * @param timeUnit The time unit for the result
+     * @return The remaining TTL in the specified time unit, or -1 if the key doesn't exist or has no TTL
      */
-    long getTimeToLive(String key);
-
+    long getExpire(String key, TimeUnit timeUnit);
+    
     /**
-     * Updates the time-to-live for a key.
+     * Removes the expiration from a key, making it persist indefinitely.
      *
      * @param key The cache key
-     * @param ttl The new time-to-live duration
-     * @return true if successful, false otherwise
+     * @return true if the operation was successful, false if the key doesn't exist
      */
-    boolean updateTimeToLive(String key, Duration ttl);
-
+    boolean persist(String key);
+    
     /**
-     * Increments a counter in the cache.
+     * Adds a value to a list stored at the given key.
+     * If the key does not exist, a new list is created.
      *
-     * @param key       The cache key
-     * @param increment The amount to increment by
-     * @return The new value, or -1 if the operation failed
+     * @param <T> The type of the value to add
+     * @param key The cache key of the list
+     * @param value The value to add to the list
+     * @return The new size of the list after the addition
      */
-    long increment(String key, long increment);
-
+    <T> long listAdd(String key, T value);
+    
     /**
-     * Decrements a counter in the cache.
+     * Retrieves all values from a list stored at the given key.
      *
-     * @param key       The cache key
-     * @param decrement The amount to decrement by
-     * @return The new value, or -1 if the operation failed
+     * @param <T> The type of the values in the list
+     * @param key The cache key of the list
+     * @param clazz The class type of the values
+     * @return A List containing all values, or an empty list if the key doesn't exist
      */
-    long decrement(String key, long decrement);
-
+    <T> List<T> listGetAll(String key, Class<T> clazz);
+    
     /**
-     * Gets multiple values from the cache.
+     * Adds a value to a set stored at the given key.
+     * If the key does not exist, a new set is created.
      *
-     * @param keys The collection of cache keys
-     * @param <T>  The type of the values
-     * @return A list of values in the same order as the keys
+     * @param <T> The type of the value to add
+     * @param key The cache key of the set
+     * @param value The value to add to the set
+     * @return true if the value was added, false if the value already existed
      */
-    <T> List<T> multiGet(Collection<String> keys);
-
+    <T> boolean setAdd(String key, T value);
+    
     /**
-     * Gets the Redis template for direct access to Redis operations.
-     * This should be used with caution and only for operations not covered by the standard methods.
+     * Retrieves all values from a set stored at the given key.
      *
-     * @return The RedisTemplate instance
+     * @param <T> The type of the values in the set
+     * @param key The cache key of the set
+     * @param clazz The class type of the values
+     * @return A Set containing all values, or an empty set if the key doesn't exist
      */
-    RedisTemplate<String, Object> getRedisTemplate();
-
+    <T> Set<T> setGetAll(String key, Class<T> clazz);
+    
     /**
-     * Executes a cache operation with fallback to a supplier if the cache operation fails.
-     * This is a utility method for implementing resilient cache operations.
+     * Adds a field-value pair to a hash stored at the given key.
+     * If the key does not exist, a new hash is created.
      *
-     * @param cacheOperation The cache operation to execute
-     * @param fallback       The fallback supplier to use if the cache operation fails
-     * @param <T>            The type of the result
-     * @return The result of the cache operation or fallback
+     * @param <T> The type of the value to add
+     * @param key The cache key of the hash
+     * @param field The field name within the hash
+     * @param value The value to store
+     * @return true if a new field was created, false if the field was updated
      */
-    <T> T executeWithFallback(Supplier<T> cacheOperation, Supplier<T> fallback);
+    <T> boolean hashSet(String key, String field, T value);
+    
+    /**
+     * Retrieves a value from a hash stored at the given key.
+     *
+     * @param <T> The type of the value to retrieve
+     * @param key The cache key of the hash
+     * @param field The field name within the hash
+     * @param clazz The class type of the value
+     * @return An Optional containing the value if found, empty otherwise
+     */
+    <T> Optional<T> hashGet(String key, String field, Class<T> clazz);
+    
+    /**
+     * Retrieves all field-value pairs from a hash stored at the given key.
+     *
+     * @param <T> The type of the values in the hash
+     * @param key The cache key of the hash
+     * @param clazz The class type of the values
+     * @return A Map containing all field-value pairs, or an empty map if the key doesn't exist
+     */
+    <T> Map<String, T> hashGetAll(String key, Class<T> clazz);
+    
+    /**
+     * Deletes a field from a hash stored at the given key.
+     *
+     * @param key The cache key of the hash
+     * @param field The field name within the hash to delete
+     * @return true if the field was deleted, false if the field or key didn't exist
+     */
+    boolean hashDelete(String key, String field);
+    
+    /**
+     * Clears all entries from the cache.
+     * This operation should be used with caution and typically only in testing environments.
+     *
+     * @return true if the operation was successful, false otherwise
+     */
+    boolean clear();
 }
