@@ -1,0 +1,69 @@
+# OCR Service Test Data - Typed Documents Quality Variations .gitignore
+#
+# This file specifies which document files should be excluded from version control
+# to prevent repository bloat while ensuring that documentation and configuration
+# files are properly tracked.
+#
+# The quality_variations directory contains test documents with varying quality levels
+# (high, medium, low) to test the OCR service's robustness against different document qualities.
+
+# Exclude all binary document files by default
+*.pdf
+*.PDF
+*.tiff
+*.TIFF
+*.tif
+*.TIF
+*.png
+*.PNG
+*.jpg
+*.JPG
+*.jpeg
+*.JPEG
+
+# Exclude large data files
+*.zip
+*.ZIP
+*.tar.gz
+*.TAR.GZ
+
+# Exclude temporary files
+*.tmp
+*~
+
+# Keep all README files and documentation
+!README.md
+!README.txt
+!*.md
+
+# Keep configuration files
+!*.json
+!*.yaml
+!*.yml
+!*.config
+
+# Keep metadata files
+!metadata.csv
+!document_index.csv
+!annotations.csv
+!quality_metrics.csv
+
+# INSTRUCTIONS FOR TEST DOCUMENTS
+#
+# The actual test documents are not stored in the Git repository to avoid bloat.
+# To obtain the quality variation test documents for development and testing:
+#
+# 1. Download the quality variation test document package from the secure S3 bucket:
+#    s3://mca-documents-staging/test-data/typed_documents/quality_variations.zip
+#
+# 2. Extract the package to this directory, preserving the folder structure
+#
+# 3. Run the verification script to ensure all required test documents are present:
+#    python ../../../verify_test_data.py typed_documents/quality_variations
+#
+# 4. The quality_variations directory contains documents with the following quality levels:
+#    - high_quality/: Documents with clear text and optimal scanning conditions
+#    - medium_quality/: Documents with moderate noise, slight blurring, or lower resolution
+#    - low_quality/: Documents with significant noise, blurring, or poor scanning conditions
+#
+# For more information, see the README.md file in this directory.
