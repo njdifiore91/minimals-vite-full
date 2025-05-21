@@ -1,0 +1,224 @@
+# ===============================
+# PRODUCTION ENVIRONMENT CONFIGURATION
+# ===============================
+
+# Application configuration
+spring:
+  application:
+    name: mca-data-service
+  
+  # Database configuration with 2 read replicas
+  datasource:
+    url: jdbc:postgresql://mca-postgres-primary.production.svc.cluster.local:5432/mca_db
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+    driver-class-name: org.postgresql.Driver
+    # Connection pooling optimized for production workloads
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      idle-timeout: 120000
+      connection-timeout: 30000
+      max-lifetime: 1800000
+    # Read replica configuration
+    replica:
+      enabled: true
+      nodes:
+        - url: jdbc:postgresql://mca-postgres-replica-1.production.svc.cluster.local:5432/mca_db
+          username: ${DB_READONLY_USERNAME}
+          password: ${DB_READONLY_PASSWORD}
+        - url: jdbc:postgresql://mca-postgres-replica-2.production.svc.cluster.local:5432/mca_db
+          username: ${DB_READONLY_USERNAME}
+          password: ${DB_READONLY_PASSWORD}
+  
+  # JPA configuration
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: false
+        show_sql: false
+        use_sql_comments: false
+        jdbc.batch_size: 50
+        order_inserts: true
+        order_updates: true
+    open-in-view: false
+  
+  # Flyway migration configuration
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    locations: classpath:db/migrations
+    table: schema_version
+    validate-on-migrate: true
+  
+  # RabbitMQ configuration with TLS and client certificate authentication
+  rabbitmq:
+    host: mca-rabbitmq.production.svc.cluster.local
+    port: 5671
+    username: ${RABBITMQ_USERNAME}
+    password: ${RABBITMQ_PASSWORD}
+    virtual-host: mca
+    ssl:
+      enabled: true
+      key-store: ${RABBITMQ_KEYSTORE_LOCATION}
+      key-store-password: ${RABBITMQ_KEYSTORE_PASSWORD}
+      trust-store: ${RABBITMQ_TRUSTSTORE_LOCATION}
+      trust-store-password: ${RABBITMQ_TRUSTSTORE_PASSWORD}
+      algorithm: TLSv1.3
+      verify-hostname: true
+    connection-timeout: 5000
+    template:
+      receive-timeout: 10000
+      reply-timeout: 10000
+    listener:
+      simple:
+        concurrency: 5
+        max-concurrency: 10
+        prefetch: 10
+        default-requeue-rejected: false
+        retry:
+          enabled: true
+          initial-interval: 1000
+          max-attempts: 3
+          max-interval: 10000
+          multiplier: 2.0
+  
+  # Redis cluster configuration
+  redis:
+    cluster:
+      nodes:
+        - mca-redis-0.production.svc.cluster.local:6379
+        - mca-redis-1.production.svc.cluster.local:6379
+        - mca-redis-2.production.svc.cluster.local:6379
+    password: ${REDIS_PASSWORD}
+    ssl: true
+    timeout: 5000
+    connect-timeout: 5000
+    # Cache TTL settings
+    cache:
+      application-data:
+        ttl: 900  # 15 minutes in seconds
+      user-sessions:
+        ttl: 86400  # 24 hours in seconds
+  
+  # S3 bucket configuration with strict security settings
+  cloud:
+    aws:
+      s3:
+        bucket: mca-documents-production
+        region: us-east-1
+        endpoint: https://s3.amazonaws.com
+        access-key: ${AWS_ACCESS_KEY}
+        secret-key: ${AWS_SECRET_KEY}
+        encryption:
+          enabled: true
+          type: AES256
+  
+  # Security configuration
+  security:
+    jwt:
+      token:
+        secret-key: ${JWT_SECRET_KEY}
+        expiration: 3600  # 60 minutes in seconds
+        issuer: dollarfunding-mca
+        audience: mca-api
+        algorithm: RS256
+      refresh-token:
+        expiration: 604800  # 7 days in seconds
+    encryption:
+      field-level:
+        enabled: true
+        algorithm: AES/GCM/NoPadding
+        key: ${FIELD_ENCRYPTION_KEY}
+  
+  # Actuator endpoints configuration
+  management:
+    endpoints:
+      web:
+        exposure:
+          include: health,info,metrics
+        base-path: /actuator
+    endpoint:
+      health:
+        show-details: never
+      info:
+        enabled: true
+    health:
+      db:
+        enabled: true
+      redis:
+        enabled: true
+      rabbit:
+        enabled: true
+  
+  # CORS configuration for production
+  web:
+    cors:
+      allowed-origins: https://app.dollarfunding.com
+      allowed-methods: GET,POST,PUT,DELETE,OPTIONS
+      allowed-headers: Authorization,Content-Type,X-Requested-With
+      allow-credentials: true
+      max-age: 3600
+
+# Server configuration
+server:
+  port: 8080
+  servlet:
+    context-path: /api/v1
+  tomcat:
+    max-threads: 200
+    min-spare-threads: 20
+    max-connections: 10000
+    connection-timeout: 20000
+    accept-count: 100
+  compression:
+    enabled: true
+    mime-types: application/json,application/xml,text/html,text/xml,text/plain
+    min-response-size: 2048
+  error:
+    include-stacktrace: never
+    include-message: never
+    whitelabel:
+      enabled: false
+
+# Logging configuration for production (ERROR and WARN levels only)
+logging:
+  level:
+    root: WARN
+    com.dollarfunding.mca: WARN
+    org.springframework: ERROR
+    org.hibernate: ERROR
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
+  file:
+    name: /var/log/mca/data-service.log
+    max-size: 100MB
+    max-history: 30
+
+# Application-specific configuration
+app:
+  document-storage:
+    base-path: /mca-documents
+    temp-directory: /tmp/mca-documents
+    allowed-extensions: pdf,jpg,jpeg,png,tiff,doc,docx,xls,xlsx
+    max-file-size: 10485760  # 10MB in bytes
+  processing:
+    batch-size: 50
+    max-concurrent-processes: 10
+    timeout: 300000  # 5 minutes in milliseconds
+  notification:
+    webhook:
+      retry-count: 3
+      retry-delay: 60000  # 1 minute in milliseconds
+      signature-header: X-MCA-Signature
+      hmac-algorithm: HmacSHA256
+  field-encryption:
+    fields:
+      - entity: com.dollarfunding.mca.entity.MerchantDetails
+        properties: [legalName, dbaName, ein, address]
+      - entity: com.dollarfunding.mca.entity.ApplicationEntity
+        properties: [metadata]
