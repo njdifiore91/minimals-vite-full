@@ -1,0 +1,517 @@
+{
+  "manifest_version": "1.0",
+  "description": "Manifest of low-quality typed document test samples for OCR validation",
+  "quality_category": "low",
+  "quality_parameters": {
+    "resolution_range": [72, 150],
+    "contrast_range": [0.1, 0.4],
+    "noise_level_range": [0.6, 0.9],
+    "blur_level_range": [0.5, 0.8],
+    "expected_confidence_range": [0.5, 0.85]
+  },
+  "test_documents": [
+    {
+      "id": "low_res_application_form",
+      "filename": "low_res_application_form.pdf",
+      "document_type": "APPLICATION_FORM",
+      "characteristics": {
+        "resolution": 72,
+        "contrast": 0.3,
+        "noise_level": 0.6,
+        "blur_level": 0.5,
+        "description": "Low resolution scan of a merchant cash advance application form"
+      },
+      "expected_extraction": {
+        "fields": [
+          {
+            "name": "business_name",
+            "expected_value": "Coastal Supplies LLC",
+            "location": {
+              "page": 0,
+              "bounding_box": [120, 240, 320, 265]
+            },
+            "expected_confidence": 0.82
+          },
+          {
+            "name": "tax_id",
+            "expected_value": "83-2947561",
+            "location": {
+              "page": 0,
+              "bounding_box": [420, 240, 520, 265]
+            },
+            "expected_confidence": 0.75
+          },
+          {
+            "name": "business_address",
+            "expected_value": "1742 Harbor Way, Suite 100, Portland, OR 97201",
+            "location": {
+              "page": 0,
+              "bounding_box": [120, 290, 520, 315]
+            },
+            "expected_confidence": 0.68
+          },
+          {
+            "name": "contact_name",
+            "expected_value": "Michael J. Thompson",
+            "location": {
+              "page": 0,
+              "bounding_box": [120, 340, 320, 365]
+            },
+            "expected_confidence": 0.79
+          },
+          {
+            "name": "phone_number",
+            "expected_value": "503-555-7890",
+            "location": {
+              "page": 0,
+              "bounding_box": [420, 340, 520, 365]
+            },
+            "expected_confidence": 0.77
+          },
+          {
+            "name": "email_address",
+            "expected_value": "mthompson@coastalsupplies.com",
+            "location": {
+              "page": 0,
+              "bounding_box": [120, 390, 420, 415]
+            },
+            "expected_confidence": 0.71
+          },
+          {
+            "name": "funding_amount",
+            "expected_value": "$75,000",
+            "location": {
+              "page": 0,
+              "bounding_box": [420, 440, 520, 465]
+            },
+            "expected_confidence": 0.73
+          }
+        ],
+        "tables": [
+          {
+            "name": "monthly_revenue",
+            "location": {
+              "page": 0,
+              "bounding_box": [120, 490, 520, 590]
+            },
+            "expected_rows": 3,
+            "expected_columns": 4,
+            "expected_values": [
+              ["Month", "Revenue", "Expenses", "Net"],
+              ["January 2023", "$42,500", "$31,200", "$11,300"],
+              ["February 2023", "$38,900", "$29,700", "$9,200"]
+            ],
+            "expected_confidence": 0.65
+          }
+        ]
+      }
+    },
+    {
+      "id": "low_contrast_bank_statement",
+      "filename": "low_contrast_bank_statement.pdf",
+      "document_type": "BANK_STATEMENT",
+      "characteristics": {
+        "resolution": 150,
+        "contrast": 0.2,
+        "noise_level": 0.3,
+        "blur_level": 0.4,
+        "description": "Bank statement with very low contrast between text and background"
+      },
+      "expected_extraction": {
+        "fields": [
+          {
+            "name": "account_holder",
+            "expected_value": "Coastal Supplies LLC",
+            "location": {
+              "page": 0,
+              "bounding_box": [50, 120, 350, 140]
+            },
+            "expected_confidence": 0.81
+          },
+          {
+            "name": "account_number",
+            "expected_value": "XXXX-XX-7839",
+            "location": {
+              "page": 0,
+              "bounding_box": [400, 120, 550, 140]
+            },
+            "expected_confidence": 0.76
+          },
+          {
+            "name": "statement_period",
+            "expected_value": "03/01/2023 - 03/31/2023",
+            "location": {
+              "page": 0,
+              "bounding_box": [400, 150, 550, 170]
+            },
+            "expected_confidence": 0.72
+          },
+          {
+            "name": "opening_balance",
+            "expected_value": "$24,387.92",
+            "location": {
+              "page": 0,
+              "bounding_box": [450, 200, 550, 220]
+            },
+            "expected_confidence": 0.68
+          },
+          {
+            "name": "closing_balance",
+            "expected_value": "$29,842.15",
+            "location": {
+              "page": 0,
+              "bounding_box": [450, 650, 550, 670]
+            },
+            "expected_confidence": 0.67
+          }
+        ],
+        "tables": [
+          {
+            "name": "transactions",
+            "location": {
+              "page": 0,
+              "bounding_box": [50, 250, 550, 600]
+            },
+            "expected_rows": 10,
+            "expected_columns": 4,
+            "expected_values": [
+              ["Date", "Description", "Amount", "Balance"],
+              ["03/02/2023", "Deposit", "$12,450.00", "$36,837.92"],
+              ["03/05/2023", "Check #1082", "-$3,245.67", "$33,592.25"],
+              ["03/08/2023", "ACH Payment - Supplier Inc", "-$8,742.50", "$24,849.75"],
+              ["03/12/2023", "Deposit", "$9,875.00", "$34,724.75"],
+              ["03/15/2023", "Withdrawal", "-$2,500.00", "$32,224.75"],
+              ["03/18/2023", "Check #1083", "-$1,875.32", "$30,349.43"],
+              ["03/22/2023", "ACH Payment - Utilities", "-$842.18", "$29,507.25"],
+              ["03/25/2023", "Deposit", "$1,250.00", "$30,757.25"],
+              ["03/29/2023", "Service Fee", "-$915.10", "$29,842.15"]
+            ],
+            "expected_confidence": 0.62
+          }
+        ]
+      }
+    },
+    {
+      "id": "noisy_tax_return",
+      "filename": "noisy_tax_return.pdf",
+      "document_type": "TAX_RETURN",
+      "characteristics": {
+        "resolution": 120,
+        "contrast": 0.35,
+        "noise_level": 0.8,
+        "blur_level": 0.3,
+        "description": "Tax return with significant background noise and artifacts"
+      },
+      "expected_extraction": {
+        "fields": [
+          {
+            "name": "business_name",
+            "expected_value": "Coastal Supplies LLC",
+            "location": {
+              "page": 0,
+              "bounding_box": [150, 180, 450, 200]
+            },
+            "expected_confidence": 0.78
+          },
+          {
+            "name": "tax_year",
+            "expected_value": "2022",
+            "location": {
+              "page": 0,
+              "bounding_box": [500, 180, 550, 200]
+            },
+            "expected_confidence": 0.85
+          },
+          {
+            "name": "ein",
+            "expected_value": "83-2947561",
+            "location": {
+              "page": 0,
+              "bounding_box": [350, 210, 450, 230]
+            },
+            "expected_confidence": 0.76
+          },
+          {
+            "name": "gross_receipts",
+            "expected_value": "$542,387.00",
+            "location": {
+              "page": 0,
+              "bounding_box": [450, 300, 550, 320]
+            },
+            "expected_confidence": 0.71
+          },
+          {
+            "name": "total_expenses",
+            "expected_value": "$398,245.00",
+            "location": {
+              "page": 0,
+              "bounding_box": [450, 400, 550, 420]
+            },
+            "expected_confidence": 0.69
+          },
+          {
+            "name": "net_profit",
+            "expected_value": "$144,142.00",
+            "location": {
+              "page": 0,
+              "bounding_box": [450, 450, 550, 470]
+            },
+            "expected_confidence": 0.72
+          },
+          {
+            "name": "tax_due",
+            "expected_value": "$30,269.82",
+            "location": {
+              "page": 0,
+              "bounding_box": [450, 550, 550, 570]
+            },
+            "expected_confidence": 0.68
+          }
+        ],
+        "tables": [
+          {
+            "name": "expense_breakdown",
+            "location": {
+              "page": 1,
+              "bounding_box": [100, 150, 500, 400]
+            },
+            "expected_rows": 6,
+            "expected_columns": 2,
+            "expected_values": [
+              ["Expense Category", "Amount"],
+              ["Cost of Goods Sold", "$215,782.00"],
+              ["Salaries and Wages", "$98,450.00"],
+              ["Rent and Utilities", "$42,875.00"],
+              ["Marketing and Advertising", "$24,350.00"],
+              ["Other Expenses", "$16,788.00"]
+            ],
+            "expected_confidence": 0.58
+          }
+        ]
+      }
+    },
+    {
+      "id": "blurry_invoice",
+      "filename": "blurry_invoice.pdf",
+      "document_type": "INVOICE",
+      "characteristics": {
+        "resolution": 100,
+        "contrast": 0.4,
+        "noise_level": 0.4,
+        "blur_level": 0.8,
+        "description": "Severely blurred invoice with small font"
+      },
+      "expected_extraction": {
+        "fields": [
+          {
+            "name": "invoice_number",
+            "expected_value": "INV-2023-0472",
+            "location": {
+              "page": 0,
+              "bounding_box": [450, 120, 550, 140]
+            },
+            "expected_confidence": 0.65
+          },
+          {
+            "name": "invoice_date",
+            "expected_value": "04/15/2023",
+            "location": {
+              "page": 0,
+              "bounding_box": [450, 150, 550, 170]
+            },
+            "expected_confidence": 0.68
+          },
+          {
+            "name": "vendor_name",
+            "expected_value": "Office Supply Warehouse",
+            "location": {
+              "page": 0,
+              "bounding_box": [50, 120, 300, 140]
+            },
+            "expected_confidence": 0.72
+          },
+          {
+            "name": "vendor_address",
+            "expected_value": "8721 Commerce Blvd, Portland, OR 97218",
+            "location": {
+              "page": 0,
+              "bounding_box": [50, 150, 300, 190]
+            },
+            "expected_confidence": 0.61
+          },
+          {
+            "name": "customer_name",
+            "expected_value": "Coastal Supplies LLC",
+            "location": {
+              "page": 0,
+              "bounding_box": [50, 220, 300, 240]
+            },
+            "expected_confidence": 0.75
+          },
+          {
+            "name": "customer_address",
+            "expected_value": "1742 Harbor Way, Suite 100, Portland, OR 97201",
+            "location": {
+              "page": 0,
+              "bounding_box": [50, 250, 300, 290]
+            },
+            "expected_confidence": 0.58
+          },
+          {
+            "name": "subtotal",
+            "expected_value": "$1,245.75",
+            "location": {
+              "page": 0,
+              "bounding_box": [450, 500, 550, 520]
+            },
+            "expected_confidence": 0.69
+          },
+          {
+            "name": "tax",
+            "expected_value": "$112.12",
+            "location": {
+              "page": 0,
+              "bounding_box": [450, 530, 550, 550]
+            },
+            "expected_confidence": 0.67
+          },
+          {
+            "name": "total",
+            "expected_value": "$1,357.87",
+            "location": {
+              "page": 0,
+              "bounding_box": [450, 560, 550, 580]
+            },
+            "expected_confidence": 0.71
+          }
+        ],
+        "tables": [
+          {
+            "name": "line_items",
+            "location": {
+              "page": 0,
+              "bounding_box": [50, 320, 550, 480]
+            },
+            "expected_rows": 5,
+            "expected_columns": 5,
+            "expected_values": [
+              ["Item #", "Description", "Quantity", "Unit Price", "Amount"],
+              ["OS-4872", "Premium Copy Paper (Case)", "5", "$42.99", "$214.95"],
+              ["OS-3245", "Toner Cartridge - Black", "3", "$189.50", "$568.50"],
+              ["OS-7812", "Office Chair - Ergonomic", "2", "$179.99", "$359.98"],
+              ["OS-1024", "Filing Cabinet - 4 Drawer", "1", "$102.32", "$102.32"]
+            ],
+            "expected_confidence": 0.55
+          }
+        ]
+      }
+    },
+    {
+      "id": "faded_contract",
+      "filename": "faded_contract.pdf",
+      "document_type": "CONTRACT",
+      "characteristics": {
+        "resolution": 150,
+        "contrast": 0.15,
+        "noise_level": 0.7,
+        "blur_level": 0.6,
+        "description": "Faded contract with low contrast and significant noise"
+      },
+      "expected_extraction": {
+        "fields": [
+          {
+            "name": "contract_title",
+            "expected_value": "Equipment Lease Agreement",
+            "location": {
+              "page": 0,
+              "bounding_box": [150, 100, 450, 130]
+            },
+            "expected_confidence": 0.74
+          },
+          {
+            "name": "contract_date",
+            "expected_value": "May 10, 2023",
+            "location": {
+              "page": 0,
+              "bounding_box": [350, 150, 450, 170]
+            },
+            "expected_confidence": 0.69
+          },
+          {
+            "name": "lessor_name",
+            "expected_value": "Capital Equipment Financing Inc.",
+            "location": {
+              "page": 0,
+              "bounding_box": [150, 200, 450, 220]
+            },
+            "expected_confidence": 0.65
+          },
+          {
+            "name": "lessee_name",
+            "expected_value": "Coastal Supplies LLC",
+            "location": {
+              "page": 0,
+              "bounding_box": [150, 230, 450, 250]
+            },
+            "expected_confidence": 0.72
+          },
+          {
+            "name": "equipment_description",
+            "expected_value": "Forklift - Toyota 8FGU25 (Serial #: TY8FG-28471)",
+            "location": {
+              "page": 0,
+              "bounding_box": [150, 300, 550, 320]
+            },
+            "expected_confidence": 0.58
+          },
+          {
+            "name": "lease_term",
+            "expected_value": "36 months",
+            "location": {
+              "page": 0,
+              "bounding_box": [350, 350, 450, 370]
+            },
+            "expected_confidence": 0.71
+          },
+          {
+            "name": "monthly_payment",
+            "expected_value": "$875.00",
+            "location": {
+              "page": 0,
+              "bounding_box": [350, 380, 450, 400]
+            },
+            "expected_confidence": 0.68
+          },
+          {
+            "name": "total_lease_value",
+            "expected_value": "$31,500.00",
+            "location": {
+              "page": 0,
+              "bounding_box": [350, 410, 450, 430]
+            },
+            "expected_confidence": 0.64
+          }
+        ],
+        "tables": [
+          {
+            "name": "payment_schedule",
+            "location": {
+              "page": 1,
+              "bounding_box": [100, 200, 500, 400]
+            },
+            "expected_rows": 5,
+            "expected_columns": 3,
+            "expected_values": [
+              ["Payment #", "Due Date", "Amount"],
+              ["1", "June 1, 2023", "$875.00"],
+              ["2", "July 1, 2023", "$875.00"],
+              ["3", "August 1, 2023", "$875.00"],
+              ["...", "...", "..."]
+            ],
+            "expected_confidence": 0.52
+          }
+        ]
+      }
+    }
+  ]
+}
