@@ -1,0 +1,54 @@
+# Node.js dependencies and package management
+node_modules/
+npm-debug.log
+yarn-debug.log
+yarn-error.log
+.npm/
+.yarn/
+
+# Environment and configuration files
+.env
+.env.*
+.editorconfig
+.eslintrc*
+.prettierrc*
+nodemon.json
+
+# Git related files
+.git/
+.gitignore
+.github/
+
+# Test files and directories
+tests/
+**/*.test.ts
+**/*.spec.ts
+coverage/
+
+# Build artifacts and temporary files
+dist/
+build/
+tmp/
+temp/
+tsconfig.tsbuildinfo
+
+# Documentation and non-essential files
+README.md
+CHANGELOG.md
+LICENSE
+docs/
+
+# OS specific files
+.DS_Store
+Thumbs.db
+
+# Docker related files (to prevent recursion)
+Dockerfile
+.dockerignore
+
+# IDE specific files
+.idea/
+.vscode/
+*.sublime-*
+*.swp
+*.swo
