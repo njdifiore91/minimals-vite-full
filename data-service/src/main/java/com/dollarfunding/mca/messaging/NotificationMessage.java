@@ -5,38 +5,34 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 import javax.validation.constraints.NotBlank;
+import javax.validation.constraints.NotEmpty;
 import javax.validation.constraints.NotNull;
 import java.time.LocalDateTime;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
  * Model class for notification messages published to RabbitMQ.
- * It defines the structure of messages sent to the Notification Service
+ * This class defines the structure of messages sent to the Notification Service
  * for delivery to external systems via webhooks or other channels.
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class NotificationMessage {
 
     /**
-     * Notification type enumeration.
+     * Enum defining the types of notifications that can be sent.
      */
-    public enum Type {
+    public enum NotificationType {
         STATUS_UPDATE,
         ERROR,
-        COMPLETION,
-        DOCUMENT_RECEIVED,
-        DOCUMENT_PROCESSED,
-        APPLICATION_CREATED,
-        APPLICATION_UPDATED,
-        APPLICATION_APPROVED,
-        APPLICATION_REJECTED
+        COMPLETION
     }
 
     /**
-     * Notification priority enumeration.
+     * Enum defining the priority levels for notifications.
      */
-    public enum Priority {
+    public enum NotificationPriority {
         LOW,
         MEDIUM,
         HIGH,
@@ -44,9 +40,9 @@ public class NotificationMessage {
     }
 
     /**
-     * Recipient type enumeration.
+     * Enum defining the channels through which notifications can be delivered.
      */
-    public enum RecipientType {
+    public enum NotificationChannel {
         WEBHOOK,
         EMAIL,
         SMS,
@@ -54,25 +50,25 @@ public class NotificationMessage {
     }
 
     @NotNull
-    @JsonProperty("notification_id")
-    private String notificationId;
+    @JsonProperty("id")
+    private String id;
 
     @NotNull
     @JsonProperty("type")
-    private Type type;
-
-    @NotNull
-    @JsonProperty("priority")
-    private Priority priority;
+    private NotificationType type;
 
     @NotNull
     @JsonProperty("timestamp")
-    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd'T'HH:mm:ss.SSSZ")
+    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
     private LocalDateTime timestamp;
 
     @NotNull
-    @JsonProperty("recipient")
-    private Recipient recipient;
+    @JsonProperty("priority")
+    private NotificationPriority priority;
+
+    @NotEmpty
+    @JsonProperty("recipients")
+    private List<Recipient> recipients;
 
     @NotNull
     @JsonProperty("payload")
@@ -81,62 +77,11 @@ public class NotificationMessage {
     @JsonProperty("metadata")
     private Map<String, Object> metadata;
 
-    /**
-     * Recipient information for the notification.
-     */
-    public static class Recipient {
-        @NotNull
-        @JsonProperty("type")
-        private RecipientType type;
-
-        @NotBlank
-        @JsonProperty("destination")
-        private String destination;
-
-        @JsonProperty("properties")
-        private Map<String, Object> properties;
-
-        public Recipient() {
-            this.properties = new HashMap<>();
-        }
-
-        public Recipient(RecipientType type, String destination) {
-            this.type = type;
-            this.destination = destination;
-            this.properties = new HashMap<>();
-        }
-
-        public RecipientType getType() {
-            return type;
-        }
-
-        public void setType(RecipientType type) {
-            this.type = type;
-        }
-
-        public String getDestination() {
-            return destination;
-        }
-
-        public void setDestination(String destination) {
-            this.destination = destination;
-        }
-
-        public Map<String, Object> getProperties() {
-            return properties;
-        }
-
-        public void setProperties(Map<String, Object> properties) {
-            this.properties = properties;
-        }
-
-        public void addProperty(String key, Object value) {
-            this.properties.put(key, value);
-        }
-    }
+    @JsonProperty("delivery_options")
+    private DeliveryOptions deliveryOptions;
 
     /**
-     * Default constructor.
+     * Default constructor for serialization frameworks.
      */
     public NotificationMessage() {
         this.timestamp = LocalDateTime.now();
@@ -147,143 +92,313 @@ public class NotificationMessage {
     /**
      * Constructor with essential fields.
      *
-     * @param notificationId Unique identifier for the notification
-     * @param type Type of notification
-     * @param priority Priority level of the notification
-     * @param recipient Recipient information
+     * @param id         Unique identifier for the notification
+     * @param type       Type of notification
+     * @param priority   Priority level of the notification
+     * @param recipients List of recipients for the notification
+     * @param payload    Data payload of the notification
      */
-    public NotificationMessage(String notificationId, Type type, Priority priority, Recipient recipient) {
-        this.notificationId = notificationId;
+    public NotificationMessage(String id, NotificationType type, NotificationPriority priority,
+                              List<Recipient> recipients, Map<String, Object> payload) {
+        this.id = id;
         this.type = type;
-        this.priority = priority;
-        this.recipient = recipient;
         this.timestamp = LocalDateTime.now();
-        this.payload = new HashMap<>();
+        this.priority = priority;
+        this.recipients = recipients;
+        this.payload = payload;
         this.metadata = new HashMap<>();
     }
 
     /**
-     * @return Unique identifier for the notification
+     * Inner class representing a notification recipient.
      */
-    public String getNotificationId() {
-        return notificationId;
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static class Recipient {
+        @NotNull
+        @JsonProperty("channel")
+        private NotificationChannel channel;
+
+        @NotBlank
+        @JsonProperty("destination")
+        private String destination;
+
+        @JsonProperty("name")
+        private String name;
+
+        @JsonProperty("properties")
+        private Map<String, Object> properties;
+
+        /**
+         * Default constructor for serialization frameworks.
+         */
+        public Recipient() {
+            this.properties = new HashMap<>();
+        }
+
+        /**
+         * Constructor with essential fields.
+         *
+         * @param channel     Channel for notification delivery
+         * @param destination Destination address (webhook URL, email, phone number, etc.)
+         */
+        public Recipient(NotificationChannel channel, String destination) {
+            this.channel = channel;
+            this.destination = destination;
+            this.properties = new HashMap<>();
+        }
+
+        /**
+         * Constructor with all fields.
+         *
+         * @param channel     Channel for notification delivery
+         * @param destination Destination address (webhook URL, email, phone number, etc.)
+         * @param name        Name of the recipient
+         * @param properties  Additional properties for the recipient
+         */
+        public Recipient(NotificationChannel channel, String destination, String name, Map<String, Object> properties) {
+            this.channel = channel;
+            this.destination = destination;
+            this.name = name;
+            this.properties = properties;
+        }
+
+        public NotificationChannel getChannel() {
+            return channel;
+        }
+
+        public void setChannel(NotificationChannel channel) {
+            this.channel = channel;
+        }
+
+        public String getDestination() {
+            return destination;
+        }
+
+        public void setDestination(String destination) {
+            this.destination = destination;
+        }
+
+        public String getName() {
+            return name;
+        }
+
+        public void setName(String name) {
+            this.name = name;
+        }
+
+        public Map<String, Object> getProperties() {
+            return properties;
+        }
+
+        public void setProperties(Map<String, Object> properties) {
+            this.properties = properties;
+        }
     }
 
     /**
-     * @param notificationId Unique identifier for the notification
+     * Inner class representing delivery options for notifications.
      */
-    public void setNotificationId(String notificationId) {
-        this.notificationId = notificationId;
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static class DeliveryOptions {
+        @JsonProperty("retry_count")
+        private Integer retryCount;
+
+        @JsonProperty("retry_delay_ms")
+        private Long retryDelayMs;
+
+        @JsonProperty("expiration_ms")
+        private Long expirationMs;
+
+        @JsonProperty("require_hmac")
+        private Boolean requireHmac;
+
+        @JsonProperty("hmac_algorithm")
+        private String hmacAlgorithm;
+
+        @JsonProperty("delivery_deadline")
+        @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
+        private LocalDateTime deliveryDeadline;
+
+        /**
+         * Default constructor for serialization frameworks.
+         */
+        public DeliveryOptions() {
+        }
+
+        /**
+         * Constructor with retry options.
+         *
+         * @param retryCount   Number of retry attempts
+         * @param retryDelayMs Delay between retry attempts in milliseconds
+         */
+        public DeliveryOptions(Integer retryCount, Long retryDelayMs) {
+            this.retryCount = retryCount;
+            this.retryDelayMs = retryDelayMs;
+        }
+
+        /**
+         * Constructor with all fields.
+         *
+         * @param retryCount      Number of retry attempts
+         * @param retryDelayMs    Delay between retry attempts in milliseconds
+         * @param expirationMs    Expiration time for the notification in milliseconds
+         * @param requireHmac     Whether HMAC signature is required
+         * @param hmacAlgorithm   Algorithm to use for HMAC signature
+         * @param deliveryDeadline Deadline for delivery of the notification
+         */
+        public DeliveryOptions(Integer retryCount, Long retryDelayMs, Long expirationMs,
+                              Boolean requireHmac, String hmacAlgorithm, LocalDateTime deliveryDeadline) {
+            this.retryCount = retryCount;
+            this.retryDelayMs = retryDelayMs;
+            this.expirationMs = expirationMs;
+            this.requireHmac = requireHmac;
+            this.hmacAlgorithm = hmacAlgorithm;
+            this.deliveryDeadline = deliveryDeadline;
+        }
+
+        public Integer getRetryCount() {
+            return retryCount;
+        }
+
+        public void setRetryCount(Integer retryCount) {
+            this.retryCount = retryCount;
+        }
+
+        public Long getRetryDelayMs() {
+            return retryDelayMs;
+        }
+
+        public void setRetryDelayMs(Long retryDelayMs) {
+            this.retryDelayMs = retryDelayMs;
+        }
+
+        public Long getExpirationMs() {
+            return expirationMs;
+        }
+
+        public void setExpirationMs(Long expirationMs) {
+            this.expirationMs = expirationMs;
+        }
+
+        public Boolean getRequireHmac() {
+            return requireHmac;
+        }
+
+        public void setRequireHmac(Boolean requireHmac) {
+            this.requireHmac = requireHmac;
+        }
+
+        public String getHmacAlgorithm() {
+            return hmacAlgorithm;
+        }
+
+        public void setHmacAlgorithm(String hmacAlgorithm) {
+            this.hmacAlgorithm = hmacAlgorithm;
+        }
+
+        public LocalDateTime getDeliveryDeadline() {
+            return deliveryDeadline;
+        }
+
+        public void setDeliveryDeadline(LocalDateTime deliveryDeadline) {
+            this.deliveryDeadline = deliveryDeadline;
+        }
     }
 
-    /**
-     * @return Type of notification
-     */
-    public Type getType() {
+    // Getters and Setters
+
+    public String getId() {
+        return id;
+    }
+
+    public void setId(String id) {
+        this.id = id;
+    }
+
+    public NotificationType getType() {
         return type;
     }
 
-    /**
-     * @param type Type of notification
-     */
-    public void setType(Type type) {
+    public void setType(NotificationType type) {
         this.type = type;
     }
 
-    /**
-     * @return Priority level of the notification
-     */
-    public Priority getPriority() {
-        return priority;
-    }
-
-    /**
-     * @param priority Priority level of the notification
-     */
-    public void setPriority(Priority priority) {
-        this.priority = priority;
-    }
-
-    /**
-     * @return Timestamp when the notification was created
-     */
     public LocalDateTime getTimestamp() {
         return timestamp;
     }
 
-    /**
-     * @param timestamp Timestamp when the notification was created
-     */
     public void setTimestamp(LocalDateTime timestamp) {
         this.timestamp = timestamp;
     }
 
-    /**
-     * @return Recipient information
-     */
-    public Recipient getRecipient() {
-        return recipient;
+    public NotificationPriority getPriority() {
+        return priority;
     }
 
-    /**
-     * @param recipient Recipient information
-     */
-    public void setRecipient(Recipient recipient) {
-        this.recipient = recipient;
+    public void setPriority(NotificationPriority priority) {
+        this.priority = priority;
     }
 
-    /**
-     * @return Payload data for the notification
-     */
+    public List<Recipient> getRecipients() {
+        return recipients;
+    }
+
+    public void setRecipients(List<Recipient> recipients) {
+        this.recipients = recipients;
+    }
+
     public Map<String, Object> getPayload() {
         return payload;
     }
 
-    /**
-     * @param payload Payload data for the notification
-     */
     public void setPayload(Map<String, Object> payload) {
         this.payload = payload;
     }
 
-    /**
-     * Add a key-value pair to the payload.
-     *
-     * @param key Key for the payload entry
-     * @param value Value for the payload entry
-     */
-    public void addPayload(String key, Object value) {
-        this.payload.put(key, value);
-    }
-
-    /**
-     * @return Metadata for the notification
-     */
     public Map<String, Object> getMetadata() {
         return metadata;
     }
 
-    /**
-     * @param metadata Metadata for the notification
-     */
     public void setMetadata(Map<String, Object> metadata) {
         this.metadata = metadata;
     }
 
-    /**
-     * Add a key-value pair to the metadata.
-     *
-     * @param key Key for the metadata entry
-     * @param value Value for the metadata entry
-     */
-    public void addMetadata(String key, Object value) {
-        this.metadata.put(key, value);
+    public DeliveryOptions getDeliveryOptions() {
+        return deliveryOptions;
+    }
+
+    public void setDeliveryOptions(DeliveryOptions deliveryOptions) {
+        this.deliveryOptions = deliveryOptions;
     }
 
     /**
-     * Creates a builder for the NotificationMessage.
+     * Adds a key-value pair to the payload map.
      *
-     * @return A new builder instance
+     * @param key   The key for the payload entry
+     * @param value The value for the payload entry
+     * @return This NotificationMessage instance for method chaining
+     */
+    public NotificationMessage addPayload(String key, Object value) {
+        this.payload.put(key, value);
+        return this;
+    }
+
+    /**
+     * Adds a key-value pair to the metadata map.
+     *
+     * @param key   The key for the metadata entry
+     * @param value The value for the metadata entry
+     * @return This NotificationMessage instance for method chaining
+     */
+    public NotificationMessage addMetadata(String key, Object value) {
+        this.metadata.put(key, value);
+        return this;
+    }
+
+    /**
+     * Creates a builder for NotificationMessage.
+     *
+     * @return A new Builder instance
      */
     public static Builder builder() {
         return new Builder();
@@ -293,115 +408,74 @@ public class NotificationMessage {
      * Builder class for creating NotificationMessage instances.
      */
     public static class Builder {
-        private String notificationId;
-        private Type type;
-        private Priority priority = Priority.MEDIUM; // Default priority
-        private Recipient recipient;
-        private Map<String, Object> payload = new HashMap<>();
-        private Map<String, Object> metadata = new HashMap<>();
+        private String id;
+        private NotificationType type;
+        private NotificationPriority priority;
+        private List<Recipient> recipients;
+        private Map<String, Object> payload;
+        private Map<String, Object> metadata;
+        private DeliveryOptions deliveryOptions;
 
-        /**
-         * @param notificationId Unique identifier for the notification
-         * @return The builder instance
-         */
-        public Builder notificationId(String notificationId) {
-            this.notificationId = notificationId;
+        private Builder() {
+            this.payload = new HashMap<>();
+            this.metadata = new HashMap<>();
+        }
+
+        public Builder id(String id) {
+            this.id = id;
             return this;
         }
 
-        /**
-         * @param type Type of notification
-         * @return The builder instance
-         */
-        public Builder type(Type type) {
+        public Builder type(NotificationType type) {
             this.type = type;
             return this;
         }
 
-        /**
-         * @param priority Priority level of the notification
-         * @return The builder instance
-         */
-        public Builder priority(Priority priority) {
+        public Builder priority(NotificationPriority priority) {
             this.priority = priority;
             return this;
         }
 
-        /**
-         * @param recipient Recipient information
-         * @return The builder instance
-         */
-        public Builder recipient(Recipient recipient) {
-            this.recipient = recipient;
+        public Builder recipients(List<Recipient> recipients) {
+            this.recipients = recipients;
             return this;
         }
 
-        /**
-         * @param type Recipient type
-         * @param destination Recipient destination
-         * @return The builder instance
-         */
-        public Builder recipient(RecipientType type, String destination) {
-            this.recipient = new Recipient(type, destination);
-            return this;
-        }
-
-        /**
-         * @param payload Payload data for the notification
-         * @return The builder instance
-         */
         public Builder payload(Map<String, Object> payload) {
             this.payload = payload;
             return this;
         }
 
-        /**
-         * Add a key-value pair to the payload.
-         *
-         * @param key Key for the payload entry
-         * @param value Value for the payload entry
-         * @return The builder instance
-         */
         public Builder addPayload(String key, Object value) {
             this.payload.put(key, value);
             return this;
         }
 
-        /**
-         * @param metadata Metadata for the notification
-         * @return The builder instance
-         */
         public Builder metadata(Map<String, Object> metadata) {
             this.metadata = metadata;
             return this;
         }
 
-        /**
-         * Add a key-value pair to the metadata.
-         *
-         * @param key Key for the metadata entry
-         * @param value Value for the metadata entry
-         * @return The builder instance
-         */
         public Builder addMetadata(String key, Object value) {
             this.metadata.put(key, value);
             return this;
         }
 
-        /**
-         * Builds the NotificationMessage instance.
-         *
-         * @return A new NotificationMessage instance
-         */
+        public Builder deliveryOptions(DeliveryOptions deliveryOptions) {
+            this.deliveryOptions = deliveryOptions;
+            return this;
+        }
+
         public NotificationMessage build() {
             NotificationMessage message = new NotificationMessage();
-            message.setNotificationId(notificationId);
-            message.setType(type);
-            message.setPriority(priority);
-            message.setRecipient(recipient);
-            message.setPayload(payload);
-            message.setMetadata(metadata);
-            message.setTimestamp(LocalDateTime.now());
+            message.id = this.id;
+            message.type = this.type;
+            message.timestamp = LocalDateTime.now();
+            message.priority = this.priority;
+            message.recipients = this.recipients;
+            message.payload = this.payload;
+            message.metadata = this.metadata;
+            message.deliveryOptions = this.deliveryOptions;
             return message;
         }
     }
