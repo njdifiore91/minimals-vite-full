@@ -4,74 +4,58 @@
 """
 Document Service Configuration Package
 
-This package provides centralized configuration for the Document Service microservice.
-It imports and re-exports all configuration components to present a single, cohesive
-API surface, simplifying configuration imports throughout the service.
+This package provides a centralized configuration system for the Document Service microservice.
+It imports and re-exports all configuration components to present a single, cohesive API surface,
+simplifying configuration imports throughout the service and ensuring consistent configuration usage.
 
-Components:
+Imported modules:
     - app_config: Core application configuration
     - rabbitmq_config: RabbitMQ connection and messaging settings
-    - s3_config: S3-compatible storage configuration
+    - s3_config: S3-compatible storage client configuration
     - model_config: Machine learning model configuration
     - logging_config: Logging system configuration
+
+Usage:
+    from config import app_config
+    from config import rabbitmq_client
+    from config import s3_client
+    from config import model_config
+    from config import configure_logging
 """
 
-# Import and re-export configuration modules
+# Import configuration modules
 from .app_config import app_config, get_app_config, AppConfig, Environment
-from .rabbitmq_config import (
-    rabbitmq_client, 
-    get_rabbitmq_client, 
-    consume_messages,
-    create_rabbitmq_connection,
-    setup_rabbitmq_channel,
-    publish_message,
-    serialize_message,
-    deserialize_message
-)
-from .s3_config import (
-    create_s3_client,
-    create_s3_resource,
-    upload_file_with_encryption,
-    download_file,
-    check_bucket_exists,
-    create_bucket_if_not_exists,
-    get_bucket_name
-)
-from .model_config import (
-    get_model_config,
-    get_model_path,
-    get_confidence_threshold,
-    get_model_hyperparameters,
-    MODEL_CONFIG
-)
-from .logging_config import (
-    configure_logging,
-    get_logger,
-    LoggingContext
-)
+from .rabbitmq_config import rabbitmq_client, get_rabbitmq_client, consume_messages, RabbitMQClient
+from .s3_config import s3_client, get_s3_client, upload_document, download_document
+from .model_config import model_config, get_model_config, load_model
+from .logging_config import configure_logging, get_logger
 
-# Configure logging when this package is imported
-configure_logging()
-
-# Export all configuration components
+# Re-export all configuration components
 __all__ = [
-    # App config
-    'app_config', 'get_app_config', 'AppConfig', 'Environment',
+    # App configuration
+    'app_config',
+    'get_app_config',
+    'AppConfig',
+    'Environment',
     
-    # RabbitMQ config
-    'rabbitmq_client', 'get_rabbitmq_client', 'consume_messages',
-    'create_rabbitmq_connection', 'setup_rabbitmq_channel',
-    'publish_message', 'serialize_message', 'deserialize_message',
+    # RabbitMQ configuration
+    'rabbitmq_client',
+    'get_rabbitmq_client',
+    'consume_messages',
+    'RabbitMQClient',
     
-    # S3 config
-    'create_s3_client', 'create_s3_resource', 'upload_file_with_encryption',
-    'download_file', 'check_bucket_exists', 'create_bucket_if_not_exists',
-    'get_bucket_name',
+    # S3 configuration
+    's3_client',
+    'get_s3_client',
+    'upload_document',
+    'download_document',
     
-    # Model config
-    'get_model_config', 'get_model_path', 'get_confidence_threshold',
-    'get_model_hyperparameters', 'MODEL_CONFIG',
+    # Model configuration
+    'model_config',
+    'get_model_config',
+    'load_model',
     
-    # Logging config
-    'configure_logging', 'get_logger', 'LoggingContext'
+    # Logging configuration
+    'configure_logging',
+    'get_logger'
 ]
