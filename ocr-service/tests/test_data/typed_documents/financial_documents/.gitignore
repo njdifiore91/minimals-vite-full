@@ -1,0 +1,78 @@
+# OCR Service Test Data - Financial Documents .gitignore
+#
+# This file specifies which financial document files should be excluded from version control
+# to prevent repository bloat while ensuring that documentation and configuration files
+# are properly tracked. Financial documents are typically large binary files that would
+# significantly increase the repository size if included.
+
+# Exclude all binary financial document files by default
+*.pdf
+*.PDF
+*.tiff
+*.TIFF
+*.tif
+*.TIF
+*.png
+*.PNG
+*.jpg
+*.JPG
+*.jpeg
+*.JPEG
+
+# Exclude financial data exports
+*.csv
+*.CSV
+*.xlsx
+*.XLSX
+*.xls
+*.XLS
+
+# Exclude large data files
+*.zip
+*.ZIP
+*.tar.gz
+*.TAR.GZ
+
+# Exclude temporary files
+*.tmp
+*~
+
+# Keep all README files and documentation
+!README.md
+!README.txt
+!*.md
+
+# Keep configuration files
+!*.json
+!*.yaml
+!*.yml
+!*.config
+
+# Keep metadata files
+!metadata.csv
+!financial_document_index.csv
+!financial_annotations.csv
+
+# INSTRUCTIONS FOR FINANCIAL TEST DOCUMENTS
+#
+# The actual financial test documents are not stored in the Git repository to avoid bloat.
+# To obtain the financial test documents for development and testing:
+#
+# 1. Download the financial document test package from the secure S3 bucket:
+#    s3://mca-documents-staging/test-data/financial_documents.zip
+#
+# 2. Extract the package to this directory, preserving the folder structure
+#
+# 3. Run the verification script to ensure all required financial test documents are present:
+#    python ../../../verify_test_data.py typed_documents/financial_documents
+#
+# 4. The financial documents include various types such as:
+#    - Bank statements
+#    - Tax returns
+#    - Profit and loss statements
+#    - Balance sheets
+#    - Income statements
+#    - Cash flow statements
+#    - Credit reports
+#
+# For more information, see the README.md file in this directory.
