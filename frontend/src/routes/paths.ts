@@ -51,6 +51,7 @@ export const paths = {
     application: {
       root: path(ROOTS.DASHBOARD, '/application'),
       list: path(ROOTS.DASHBOARD, '/application/list'),
+      new: path(ROOTS.DASHBOARD, '/application/new'),
       details: (id: string) => path(ROOTS.DASHBOARD, `/application/${id}`),
     },
     // New webhook configuration route
@@ -89,6 +90,7 @@ export const DEMO = {
     // New MCA application demo routes
     application: {
       list: paths.dashboard.application.list,
+      new: paths.dashboard.application.new,
       details: paths.dashboard.application.details(MOCK_ID),
     },
     // New webhook configuration demo route
