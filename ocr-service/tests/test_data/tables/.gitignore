@@ -1,0 +1,45 @@
+# OCR Service - Test Data Tables .gitignore
+
+# Exclude binary document files containing tables to prevent repository bloat
+# These files should be downloaded separately or generated during test setup
+
+# Document files
+*.pdf
+*.PDF
+*.tiff
+*.TIFF
+*.tif
+*.TIF
+*.png
+*.PNG
+*.jpg
+*.JPG
+*.jpeg
+*.JPEG
+
+# Exclude generated OCR output files
+*.csv
+*.json
+*.xml
+
+# Exception: Do not ignore these files
+!README.md
+!metadata.json
+!table_samples.md
+!download_test_data.sh
+!generate_test_data.py
+!table_formats.json
+
+# Instructions for obtaining test documents:
+# 1. Run the download_test_data.sh script to fetch standard test documents from the project's data repository
+# 2. For custom test cases, place your table documents in this directory manually
+# 3. Use generate_test_data.py to create synthetic test tables with controlled variations
+#
+# Note: Test data should include various table formats:
+# - Simple tables with clear borders
+# - Complex tables with merged cells
+# - Tables with varying font sizes and styles
+# - Low-quality scanned tables
+# - Tables with handwritten entries
+# - Financial tables with currency values
+# - Tables embedded in larger documents
