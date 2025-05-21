@@ -1,0 +1,785 @@
+{
+  "version": "1.0.0",
+  "description": "Manifest of tabular document test samples for OCR service validation",
+  "last_updated": "2025-05-21",
+  "table_types": [
+    "SIMPLE",
+    "COMPLEX",
+    "MERGED_CELLS",
+    "MULTI_PAGE",
+    "BORDERED",
+    "BORDERLESS"
+  ],
+  "document_categories": [
+    "FINANCIAL_STATEMENT",
+    "BANK_STATEMENT",
+    "INVOICE",
+    "TRANSACTION_HISTORY",
+    "INVENTORY_LIST",
+    "PRICE_LIST",
+    "SCHEDULE",
+    "REPORT"
+  ],
+  "quality_levels": [
+    "HIGH",
+    "MEDIUM",
+    "LOW"
+  ],
+  "test_samples": [
+    {
+      "id": "financial_table_001",
+      "file_path": "tables/financial_tables/revenue_table.pdf",
+      "document_category": "FINANCIAL_STATEMENT",
+      "table_type": "SIMPLE",
+      "quality": "HIGH",
+      "description": "Monthly revenue table with quarterly totals",
+      "table_structure": {
+        "rows": 13,
+        "columns": 3,
+        "header_row": true,
+        "merged_cells": false,
+        "expected_confidence": 0.98
+      },
+      "expected_headers": [
+        {
+          "value": "Month",
+          "position": {"x1": 100, "y1": 150, "x2": 200, "y2": 170},
+          "expected_confidence": 0.99
+        },
+        {
+          "value": "Revenue",
+          "position": {"x1": 300, "y1": 150, "x2": 400, "y2": 170},
+          "expected_confidence": 0.99
+        },
+        {
+          "value": "Growth (%)",
+          "position": {"x1": 500, "y1": 150, "x2": 600, "y2": 170},
+          "expected_confidence": 0.98
+        }
+      ],
+      "expected_cells": [
+        {
+          "row": 1,
+          "column": 0,
+          "value": "January",
+          "position": {"x1": 100, "y1": 180, "x2": 200, "y2": 200},
+          "expected_confidence": 0.99
+        },
+        {
+          "row": 1,
+          "column": 1,
+          "value": "$45,678.90",
+          "position": {"x1": 300, "y1": 180, "x2": 400, "y2": 200},
+          "expected_confidence": 0.97
+        },
+        {
+          "row": 1,
+          "column": 2,
+          "value": "N/A",
+          "position": {"x1": 500, "y1": 180, "x2": 600, "y2": 200},
+          "expected_confidence": 0.99
+        },
+        {
+          "row": 2,
+          "column": 0,
+          "value": "February",
+          "position": {"x1": 100, "y1": 210, "x2": 200, "y2": 230},
+          "expected_confidence": 0.99
+        },
+        {
+          "row": 2,
+          "column": 1,
+          "value": "$48,765.43",
+          "position": {"x1": 300, "y1": 210, "x2": 400, "y2": 230},
+          "expected_confidence": 0.97
+        },
+        {
+          "row": 2,
+          "column": 2,
+          "value": "6.76%",
+          "position": {"x1": 500, "y1": 210, "x2": 600, "y2": 230},
+          "expected_confidence": 0.96
+        },
+        {
+          "row": 3,
+          "column": 0,
+          "value": "March",
+          "position": {"x1": 100, "y1": 240, "x2": 200, "y2": 260},
+          "expected_confidence": 0.99
+        },
+        {
+          "row": 3,
+          "column": 1,
+          "value": "$52,345.67",
+          "position": {"x1": 300, "y1": 240, "x2": 400, "y2": 260},
+          "expected_confidence": 0.97
+        },
+        {
+          "row": 3,
+          "column": 2,
+          "value": "7.34%",
+          "position": {"x1": 500, "y1": 240, "x2": 600, "y2": 260},
+          "expected_confidence": 0.96
+        },
+        {
+          "row": 4,
+          "column": 0,
+          "value": "Q1 Total",
+          "position": {"x1": 100, "y1": 270, "x2": 200, "y2": 290},
+          "expected_confidence": 0.98
+        },
+        {
+          "row": 4,
+          "column": 1,
+          "value": "$146,790.00",
+          "position": {"x1": 300, "y1": 270, "x2": 400, "y2": 290},
+          "expected_confidence": 0.96
+        },
+        {
+          "row": 4,
+          "column": 2,
+          "value": "",
+          "position": {"x1": 500, "y1": 270, "x2": 600, "y2": 290},
+          "expected_confidence": 0.99
+        }
+      ],
+      "expected_classification_confidence": 0.99,
+      "expected_overall_confidence": 0.97
+    },
+    {
+      "id": "bank_statement_table_001",
+      "file_path": "tables/financial_tables/bank_statement_table.pdf",
+      "document_category": "BANK_STATEMENT",
+      "table_type": "BORDERED",
+      "quality": "HIGH",
+      "description": "Bank statement transaction table with date, description, and amount columns",
+      "table_structure": {
+        "rows": 15,
+        "columns": 4,
+        "header_row": true,
+        "merged_cells": false,
+        "expected_confidence": 0.97
+      },
+      "expected_headers": [
+        {
+          "value": "Date",
+          "position": {"x1": 100, "y1": 200, "x2": 150, "y2": 220},
+          "expected_confidence": 0.99
+        },
+        {
+          "value": "Description",
+          "position": {"x1": 160, "y1": 200, "x2": 400, "y2": 220},
+          "expected_confidence": 0.99
+        },
+        {
+          "value": "Withdrawals",
+          "position": {"x1": 410, "y1": 200, "x2": 500, "y2": 220},
+          "expected_confidence": 0.98
+        },
+        {
+          "value": "Deposits",
+          "position": {"x1": 510, "y1": 200, "x2": 600, "y2": 220},
+          "expected_confidence": 0.98
+        }
+      ],
+      "expected_cells": [
+        {
+          "row": 1,
+          "column": 0,
+          "value": "04/01/2025",
+          "position": {"x1": 100, "y1": 230, "x2": 150, "y2": 250},
+          "expected_confidence": 0.97
+        },
+        {
+          "row": 1,
+          "column": 1,
+          "value": "Opening Balance",
+          "position": {"x1": 160, "y1": 230, "x2": 400, "y2": 250},
+          "expected_confidence": 0.98
+        },
+        {
+          "row": 1,
+          "column": 2,
+          "value": "",
+          "position": {"x1": 410, "y1": 230, "x2": 500, "y2": 250},
+          "expected_confidence": 0.99
+        },
+        {
+          "row": 1,
+          "column": 3,
+          "value": "$125,432.67",
+          "position": {"x1": 510, "y1": 230, "x2": 600, "y2": 250},
+          "expected_confidence": 0.96
+        },
+        {
+          "row": 2,
+          "column": 0,
+          "value": "04/05/2025",
+          "position": {"x1": 100, "y1": 260, "x2": 150, "y2": 280},
+          "expected_confidence": 0.97
+        },
+        {
+          "row": 2,
+          "column": 1,
+          "value": "Vendor Payment - ABC Supplies",
+          "position": {"x1": 160, "y1": 260, "x2": 400, "y2": 280},
+          "expected_confidence": 0.95
+        },
+        {
+          "row": 2,
+          "column": 2,
+          "value": "$12,543.87",
+          "position": {"x1": 410, "y1": 260, "x2": 500, "y2": 280},
+          "expected_confidence": 0.96
+        },
+        {
+          "row": 2,
+          "column": 3,
+          "value": "",
+          "position": {"x1": 510, "y1": 260, "x2": 600, "y2": 280},
+          "expected_confidence": 0.99
+        }
+      ],
+      "expected_classification_confidence": 0.98,
+      "expected_overall_confidence": 0.97
+    },
+    {
+      "id": "invoice_table_001",
+      "file_path": "tables/financial_tables/invoice_line_items.pdf",
+      "document_category": "INVOICE",
+      "table_type": "COMPLEX",
+      "quality": "HIGH",
+      "description": "Invoice line items table with product details, quantities, and pricing",
+      "table_structure": {
+        "rows": 10,
+        "columns": 5,
+        "header_row": true,
+        "merged_cells": false,
+        "expected_confidence": 0.96
+      },
+      "expected_headers": [
+        {
+          "value": "Item #",
+          "position": {"x1": 50, "y1": 300, "x2": 100, "y2": 320},
+          "expected_confidence": 0.98
+        },
+        {
+          "value": "Description",
+          "position": {"x1": 110, "y1": 300, "x2": 350, "y2": 320},
+          "expected_confidence": 0.98
+        },
+        {
+          "value": "Quantity",
+          "position": {"x1": 360, "y1": 300, "x2": 420, "y2": 320},
+          "expected_confidence": 0.97
+        },
+        {
+          "value": "Unit Price",
+          "position": {"x1": 430, "y1": 300, "x2": 500, "y2": 320},
+          "expected_confidence": 0.97
+        },
+        {
+          "value": "Amount",
+          "position": {"x1": 510, "y1": 300, "x2": 580, "y2": 320},
+          "expected_confidence": 0.98
+        }
+      ],
+      "expected_cells": [
+        {
+          "row": 1,
+          "column": 0,
+          "value": "1001",
+          "position": {"x1": 50, "y1": 330, "x2": 100, "y2": 350},
+          "expected_confidence": 0.99
+        },
+        {
+          "row": 1,
+          "column": 1,
+          "value": "Premium Business Cards - 16pt Matte",
+          "position": {"x1": 110, "y1": 330, "x2": 350, "y2": 350},
+          "expected_confidence": 0.94
+        },
+        {
+          "row": 1,
+          "column": 2,
+          "value": "500",
+          "position": {"x1": 360, "y1": 330, "x2": 420, "y2": 350},
+          "expected_confidence": 0.99
+        },
+        {
+          "row": 1,
+          "column": 3,
+          "value": "$0.25",
+          "position": {"x1": 430, "y1": 330, "x2": 500, "y2": 350},
+          "expected_confidence": 0.97
+        },
+        {
+          "row": 1,
+          "column": 4,
+          "value": "$125.00",
+          "position": {"x1": 510, "y1": 330, "x2": 580, "y2": 350},
+          "expected_confidence": 0.97
+        },
+        {
+          "row": 2,
+          "column": 0,
+          "value": "1002",
+          "position": {"x1": 50, "y1": 360, "x2": 100, "y2": 380},
+          "expected_confidence": 0.99
+        },
+        {
+          "row": 2,
+          "column": 1,
+          "value": "Custom Letterhead - 100# Linen",
+          "position": {"x1": 110, "y1": 360, "x2": 350, "y2": 380},
+          "expected_confidence": 0.94
+        },
+        {
+          "row": 2,
+          "column": 2,
+          "value": "250",
+          "position": {"x1": 360, "y1": 360, "x2": 420, "y2": 380},
+          "expected_confidence": 0.99
+        },
+        {
+          "row": 2,
+          "column": 3,
+          "value": "$0.45",
+          "position": {"x1": 430, "y1": 360, "x2": 500, "y2": 380},
+          "expected_confidence": 0.97
+        },
+        {
+          "row": 2,
+          "column": 4,
+          "value": "$112.50",
+          "position": {"x1": 510, "y1": 360, "x2": 580, "y2": 380},
+          "expected_confidence": 0.97
+        }
+      ],
+      "expected_classification_confidence": 0.97,
+      "expected_overall_confidence": 0.96
+    },
+    {
+      "id": "merged_cells_table_001",
+      "file_path": "tables/complex_tables/merged_cells_report.pdf",
+      "document_category": "REPORT",
+      "table_type": "MERGED_CELLS",
+      "quality": "HIGH",
+      "description": "Quarterly sales report with region-based merged cells",
+      "table_structure": {
+        "rows": 8,
+        "columns": 5,
+        "header_row": true,
+        "merged_cells": true,
+        "expected_confidence": 0.94
+      },
+      "expected_headers": [
+        {
+          "value": "Region",
+          "position": {"x1": 50, "y1": 100, "x2": 150, "y2": 120},
+          "expected_confidence": 0.98
+        },
+        {
+          "value": "Q1",
+          "position": {"x1": 160, "y1": 100, "x2": 250, "y2": 120},
+          "expected_confidence": 0.99
+        },
+        {
+          "value": "Q2",
+          "position": {"x1": 260, "y1": 100, "x2": 350, "y2": 120},
+          "expected_confidence": 0.99
+        },
+        {
+          "value": "Q3",
+          "position": {"x1": 360, "y1": 100, "x2": 450, "y2": 120},
+          "expected_confidence": 0.99
+        },
+        {
+          "value": "Q4",
+          "position": {"x1": 460, "y1": 100, "x2": 550, "y2": 120},
+          "expected_confidence": 0.99
+        }
+      ],
+      "expected_cells": [
+        {
+          "row": 1,
+          "column": 0,
+          "value": "North America",
+          "position": {"x1": 50, "y1": 130, "x2": 150, "y2": 170},
+          "merged": true,
+          "rowspan": 2,
+          "colspan": 1,
+          "expected_confidence": 0.96
+        },
+        {
+          "row": 1,
+          "column": 1,
+          "value": "$1,245,678",
+          "position": {"x1": 160, "y1": 130, "x2": 250, "y2": 150},
+          "merged": false,
+          "expected_confidence": 0.95
+        },
+        {
+          "row": 1,
+          "column": 2,
+          "value": "$1,356,789",
+          "position": {"x1": 260, "y1": 130, "x2": 350, "y2": 150},
+          "merged": false,
+          "expected_confidence": 0.95
+        },
+        {
+          "row": 1,
+          "column": 3,
+          "value": "$1,467,890",
+          "position": {"x1": 360, "y1": 130, "x2": 450, "y2": 150},
+          "merged": false,
+          "expected_confidence": 0.95
+        },
+        {
+          "row": 1,
+          "column": 4,
+          "value": "$1,578,901",
+          "position": {"x1": 460, "y1": 130, "x2": 550, "y2": 150},
+          "merged": false,
+          "expected_confidence": 0.95
+        },
+        {
+          "row": 2,
+          "column": 1,
+          "value": "$345,678",
+          "position": {"x1": 160, "y1": 150, "x2": 250, "y2": 170},
+          "merged": false,
+          "expected_confidence": 0.95
+        },
+        {
+          "row": 2,
+          "column": 2,
+          "value": "$456,789",
+          "position": {"x1": 260, "y1": 150, "x2": 350, "y2": 170},
+          "merged": false,
+          "expected_confidence": 0.95
+        },
+        {
+          "row": 2,
+          "column": 3,
+          "value": "$567,890",
+          "position": {"x1": 360, "y1": 150, "x2": 450, "y2": 170},
+          "merged": false,
+          "expected_confidence": 0.95
+        },
+        {
+          "row": 2,
+          "column": 4,
+          "value": "$678,901",
+          "position": {"x1": 460, "y1": 150, "x2": 550, "y2": 170},
+          "merged": false,
+          "expected_confidence": 0.95
+        }
+      ],
+      "expected_classification_confidence": 0.96,
+      "expected_overall_confidence": 0.94
+    },
+    {
+      "id": "borderless_table_001",
+      "file_path": "tables/complex_tables/borderless_price_list.pdf",
+      "document_category": "PRICE_LIST",
+      "table_type": "BORDERLESS",
+      "quality": "MEDIUM",
+      "description": "Product price list with no visible borders, relying on spacing for structure",
+      "table_structure": {
+        "rows": 12,
+        "columns": 3,
+        "header_row": true,
+        "merged_cells": false,
+        "expected_confidence": 0.92
+      },
+      "expected_headers": [
+        {
+          "value": "Product Name",
+          "position": {"x1": 50, "y1": 100, "x2": 300, "y2": 120},
+          "expected_confidence": 0.97
+        },
+        {
+          "value": "SKU",
+          "position": {"x1": 310, "y1": 100, "x2": 400, "y2": 120},
+          "expected_confidence": 0.98
+        },
+        {
+          "value": "Price",
+          "position": {"x1": 410, "y1": 100, "x2": 500, "y2": 120},
+          "expected_confidence": 0.98
+        }
+      ],
+      "expected_cells": [
+        {
+          "row": 1,
+          "column": 0,
+          "value": "Premium Leather Office Chair",
+          "position": {"x1": 50, "y1": 130, "x2": 300, "y2": 150},
+          "expected_confidence": 0.93
+        },
+        {
+          "row": 1,
+          "column": 1,
+          "value": "FRN-CH-001",
+          "position": {"x1": 310, "y1": 130, "x2": 400, "y2": 150},
+          "expected_confidence": 0.94
+        },
+        {
+          "row": 1,
+          "column": 2,
+          "value": "$299.99",
+          "position": {"x1": 410, "y1": 130, "x2": 500, "y2": 150},
+          "expected_confidence": 0.95
+        },
+        {
+          "row": 2,
+          "column": 0,
+          "value": "Adjustable Standing Desk",
+          "position": {"x1": 50, "y1": 160, "x2": 300, "y2": 180},
+          "expected_confidence": 0.93
+        },
+        {
+          "row": 2,
+          "column": 1,
+          "value": "FRN-DSK-002",
+          "position": {"x1": 310, "y1": 160, "x2": 400, "y2": 180},
+          "expected_confidence": 0.94
+        },
+        {
+          "row": 2,
+          "column": 2,
+          "value": "$499.99",
+          "position": {"x1": 410, "y1": 160, "x2": 500, "y2": 180},
+          "expected_confidence": 0.95
+        }
+      ],
+      "expected_classification_confidence": 0.94,
+      "expected_overall_confidence": 0.92
+    },
+    {
+      "id": "low_quality_table_001",
+      "file_path": "tables/quality_variations/low_quality_inventory.pdf",
+      "document_category": "INVENTORY_LIST",
+      "table_type": "SIMPLE",
+      "quality": "LOW",
+      "description": "Low quality scan of inventory list with faded text and noise",
+      "table_structure": {
+        "rows": 10,
+        "columns": 4,
+        "header_row": true,
+        "merged_cells": false,
+        "expected_confidence": 0.85
+      },
+      "expected_headers": [
+        {
+          "value": "Item ID",
+          "position": {"x1": 50, "y1": 100, "x2": 120, "y2": 120},
+          "expected_confidence": 0.90
+        },
+        {
+          "value": "Description",
+          "position": {"x1": 130, "y1": 100, "x2": 350, "y2": 120},
+          "expected_confidence": 0.88
+        },
+        {
+          "value": "Quantity",
+          "position": {"x1": 360, "y1": 100, "x2": 450, "y2": 120},
+          "expected_confidence": 0.89
+        },
+        {
+          "value": "Location",
+          "position": {"x1": 460, "y1": 100, "x2": 550, "y2": 120},
+          "expected_confidence": 0.87
+        }
+      ],
+      "expected_cells": [
+        {
+          "row": 1,
+          "column": 0,
+          "value": "INV-1001",
+          "position": {"x1": 50, "y1": 130, "x2": 120, "y2": 150},
+          "expected_confidence": 0.86
+        },
+        {
+          "row": 1,
+          "column": 1,
+          "value": "Wireless Keyboard and Mouse Combo",
+          "position": {"x1": 130, "y1": 130, "x2": 350, "y2": 150},
+          "expected_confidence": 0.82
+        },
+        {
+          "row": 1,
+          "column": 2,
+          "value": "45",
+          "position": {"x1": 360, "y1": 130, "x2": 450, "y2": 150},
+          "expected_confidence": 0.88
+        },
+        {
+          "row": 1,
+          "column": 3,
+          "value": "Warehouse A",
+          "position": {"x1": 460, "y1": 130, "x2": 550, "y2": 150},
+          "expected_confidence": 0.84
+        },
+        {
+          "row": 2,
+          "column": 0,
+          "value": "INV-1002",
+          "position": {"x1": 50, "y1": 160, "x2": 120, "y2": 180},
+          "expected_confidence": 0.86
+        },
+        {
+          "row": 2,
+          "column": 1,
+          "value": "27-inch 4K Monitor",
+          "position": {"x1": 130, "y1": 160, "x2": 350, "y2": 180},
+          "expected_confidence": 0.83
+        },
+        {
+          "row": 2,
+          "column": 2,
+          "value": "23",
+          "position": {"x1": 360, "y1": 160, "x2": 450, "y2": 180},
+          "expected_confidence": 0.89
+        },
+        {
+          "row": 2,
+          "column": 3,
+          "value": "Warehouse B",
+          "position": {"x1": 460, "y1": 160, "x2": 550, "y2": 180},
+          "expected_confidence": 0.83
+        }
+      ],
+      "expected_classification_confidence": 0.90,
+      "expected_overall_confidence": 0.85
+    },
+    {
+      "id": "multi_page_table_001",
+      "file_path": "tables/complex_tables/multi_page_transaction_history.pdf",
+      "document_category": "TRANSACTION_HISTORY",
+      "table_type": "MULTI_PAGE",
+      "quality": "HIGH",
+      "description": "Transaction history spanning multiple pages with consistent headers",
+      "table_structure": {
+        "rows": 50,
+        "columns": 4,
+        "header_row": true,
+        "merged_cells": false,
+        "pages": 3,
+        "expected_confidence": 0.95
+      },
+      "expected_headers": [
+        {
+          "value": "Date",
+          "position": {"x1": 50, "y1": 100, "x2": 150, "y2": 120},
+          "expected_confidence": 0.98,
+          "repeats_on_pages": [1, 2, 3]
+        },
+        {
+          "value": "Transaction ID",
+          "position": {"x1": 160, "y1": 100, "x2": 260, "y2": 120},
+          "expected_confidence": 0.97,
+          "repeats_on_pages": [1, 2, 3]
+        },
+        {
+          "value": "Description",
+          "position": {"x1": 270, "y1": 100, "x2": 450, "y2": 120},
+          "expected_confidence": 0.98,
+          "repeats_on_pages": [1, 2, 3]
+        },
+        {
+          "value": "Amount",
+          "position": {"x1": 460, "y1": 100, "x2": 550, "y2": 120},
+          "expected_confidence": 0.98,
+          "repeats_on_pages": [1, 2, 3]
+        }
+      ],
+      "expected_cells": [
+        {
+          "row": 1,
+          "column": 0,
+          "value": "04/01/2025",
+          "position": {"x1": 50, "y1": 130, "x2": 150, "y2": 150},
+          "page": 1,
+          "expected_confidence": 0.96
+        },
+        {
+          "row": 1,
+          "column": 1,
+          "value": "TRX-10045678",
+          "position": {"x1": 160, "y1": 130, "x2": 260, "y2": 150},
+          "page": 1,
+          "expected_confidence": 0.95
+        },
+        {
+          "row": 1,
+          "column": 2,
+          "value": "Online Purchase - Amazon",
+          "position": {"x1": 270, "y1": 130, "x2": 450, "y2": 150},
+          "page": 1,
+          "expected_confidence": 0.94
+        },
+        {
+          "row": 1,
+          "column": 3,
+          "value": "-$45.67",
+          "position": {"x1": 460, "y1": 130, "x2": 550, "y2": 150},
+          "page": 1,
+          "expected_confidence": 0.96
+        },
+        {
+          "row": 20,
+          "column": 0,
+          "value": "04/15/2025",
+          "position": {"x1": 50, "y1": 130, "x2": 150, "y2": 150},
+          "page": 2,
+          "expected_confidence": 0.96
+        },
+        {
+          "row": 20,
+          "column": 1,
+          "value": "TRX-10045697",
+          "position": {"x1": 160, "y1": 130, "x2": 260, "y2": 150},
+          "page": 2,
+          "expected_confidence": 0.95
+        },
+        {
+          "row": 20,
+          "column": 2,
+          "value": "Payroll Deposit",
+          "position": {"x1": 270, "y1": 130, "x2": 450, "y2": 150},
+          "page": 2,
+          "expected_confidence": 0.95
+        },
+        {
+          "row": 20,
+          "column": 3,
+          "value": "$2,345.67",
+          "position": {"x1": 460, "y1": 130, "x2": 550, "y2": 150},
+          "page": 2,
+          "expected_confidence": 0.96
+        }
+      ],
+      "expected_classification_confidence": 0.97,
+      "expected_overall_confidence": 0.95
+    }
+  ],
+  "confidence_thresholds": {
+    "high_confidence": 0.90,
+    "medium_confidence": 0.75,
+    "low_confidence": 0.60,
+    "human_review_threshold": 0.75
+  },
+  "test_parameters": {
+    "simple_table_accuracy_target": 0.97,
+    "complex_table_accuracy_target": 0.94,
+    "merged_cells_accuracy_target": 0.92,
+    "borderless_table_accuracy_target": 0.90,
+    "multi_page_table_accuracy_target": 0.93,
+    "low_quality_table_accuracy_target": 0.85,
+    "overall_table_accuracy_target": 0.93,
+    "structure_recognition_accuracy_target": 0.95,
+    "cell_content_extraction_accuracy_target": 0.94
+  }
+}
