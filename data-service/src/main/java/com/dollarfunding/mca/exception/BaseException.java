@@ -1,12 +1,15 @@
 package com.dollarfunding.mca.exception;
 
+import com.dollarfunding.mca.util.Constants;
 import org.springframework.http.HttpStatus;
 
 /**
  * Base exception class that all custom exceptions in the MCA application extend.
- * It provides common functionality such as error code, message, and HTTP status code.
- * This class serves as the foundation for the exception hierarchy, ensuring consistent
- * error handling and response formatting across the application.
+ * <p>
+ * This class provides common functionality such as error code, message, and HTTP status code.
+ * It serves as the foundation for the exception hierarchy, ensuring consistent error handling
+ * and response formatting across the application.
+ * </p>
  */
 public class BaseException extends RuntimeException {
 
@@ -14,61 +17,64 @@ public class BaseException extends RuntimeException {
     private final HttpStatus httpStatus;
 
     /**
-     * Constructs a new BaseException with the specified error code, message, and HTTP status.
-     *
-     * @param errorCode   the error code associated with this exception
-     * @param message     the detail message
-     * @param httpStatus  the HTTP status code to be returned to the client
-     */
-    public BaseException(String errorCode, String message, HttpStatus httpStatus) {
-        super(message);
-        this.errorCode = errorCode;
-        this.httpStatus = httpStatus;
-    }
-
-    /**
-     * Constructs a new BaseException with the specified error code, message, cause, and HTTP status.
-     *
-     * @param errorCode   the error code associated with this exception
-     * @param message     the detail message
-     * @param cause       the cause of this exception
-     * @param httpStatus  the HTTP status code to be returned to the client
-     */
-    public BaseException(String errorCode, String message, Throwable cause, HttpStatus httpStatus) {
-        super(message, cause);
-        this.errorCode = errorCode;
-        this.httpStatus = httpStatus;
-    }
-
-    /**
      * Constructs a new BaseException with the specified message and HTTP status.
-     * The error code will be derived from the exception class name.
      *
-     * @param message     the detail message
-     * @param httpStatus  the HTTP status code to be returned to the client
+     * @param message    the detail message
+     * @param httpStatus the HTTP status code to be returned to the client
      */
     public BaseException(String message, HttpStatus httpStatus) {
-        super(message);
-        this.errorCode = this.getClass().getSimpleName();
-        this.httpStatus = httpStatus;
+        this(message, httpStatus, null);
     }
 
     /**
      * Constructs a new BaseException with the specified message, cause, and HTTP status.
-     * The error code will be derived from the exception class name.
      *
-     * @param message     the detail message
-     * @param cause       the cause of this exception
-     * @param httpStatus  the HTTP status code to be returned to the client
+     * @param message    the detail message
+     * @param cause      the cause of this exception
+     * @param httpStatus the HTTP status code to be returned to the client
      */
     public BaseException(String message, Throwable cause, HttpStatus httpStatus) {
-        super(message, cause);
-        this.errorCode = this.getClass().getSimpleName();
-        this.httpStatus = httpStatus;
+        this(message, cause, httpStatus, determineErrorCode(httpStatus));
     }
 
     /**
-     * Returns the error code associated with this exception.
+     * Constructs a new BaseException with the specified message, HTTP status, and error code.
+     *
+     * @param message    the detail message
+     * @param httpStatus the HTTP status code to be returned to the client
+     * @param errorCode  the application-specific error code
+     */
+    public BaseException(String message, HttpStatus httpStatus, String errorCode) {
+        super(message);
+        this.httpStatus = httpStatus;
+        this.errorCode = errorCode != null ? errorCode : determineErrorCode(httpStatus);
+    }
+
+    /**
+     * Constructs a new BaseException with the specified message, cause, HTTP status, and error code.
+     *
+     * @param message    the detail message
+     * @param cause      the cause of this exception
+     * @param httpStatus the HTTP status code to be returned to the client
+     * @param errorCode  the application-specific error code
+     */
+    public BaseException(String message, Throwable cause, HttpStatus httpStatus, String errorCode) {
+        super(message, cause);
+        this.httpStatus = httpStatus;
+        this.errorCode = errorCode != null ? errorCode : determineErrorCode(httpStatus);
+    }
+
+    /**
+     * Returns the HTTP status code associated with this exception.
+     *
+     * @return the HTTP status code
+     */
+    public HttpStatus getHttpStatus() {
+        return httpStatus;
+    }
+
+    /**
+     * Returns the application-specific error code associated with this exception.
      *
      * @return the error code
      */
@@ -77,11 +83,39 @@ public class BaseException extends RuntimeException {
     }
 
     /**
-     * Returns the HTTP status code to be returned to the client.
+     * Returns the HTTP status code value associated with this exception.
      *
-     * @return the HTTP status code
+     * @return the HTTP status code value
      */
-    public HttpStatus getHttpStatus() {
-        return httpStatus;
+    public int getStatusCode() {
+        return httpStatus.value();
+    }
+
+    /**
+     * Determines an appropriate error code based on the HTTP status code.
+     *
+     * @param httpStatus the HTTP status code
+     * @return an appropriate error code
+     */
+    private static String determineErrorCode(HttpStatus httpStatus) {
+        if (httpStatus == null) {
+            return Constants.ErrorCode.GENERAL_ERROR;
+        }
+
+        switch (httpStatus) {
+            case BAD_REQUEST:
+                return Constants.ErrorCode.VALIDATION_ERROR;
+            case UNAUTHORIZED:
+                return Constants.ErrorCode.UNAUTHORIZED;
+            case FORBIDDEN:
+                return Constants.ErrorCode.FORBIDDEN;
+            case NOT_FOUND:
+                return Constants.ErrorCode.NOT_FOUND;
+            case UNPROCESSABLE_ENTITY:
+                return Constants.ErrorCode.DATA_VALIDATION_ERROR;
+            case INTERNAL_SERVER_ERROR:
+            default:
+                return Constants.ErrorCode.GENERAL_ERROR;
+        }
     }
 }
