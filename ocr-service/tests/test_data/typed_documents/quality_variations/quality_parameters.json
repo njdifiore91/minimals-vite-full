@@ -1,0 +1,316 @@
+{
+  "version": "1.0.0",
+  "description": "Parameters defining document quality variations for OCR testing",
+  "purpose": "Standardize quality definitions across tests to ensure consistent evaluation of OCR accuracy under different quality conditions",
+  "quality_levels": {
+    "high": {
+      "description": "High quality documents with optimal characteristics for OCR processing",
+      "parameters": {
+        "resolution": {
+          "dpi_range": [300, 600],
+          "description": "Document resolution in dots per inch",
+          "impact": "Higher resolution provides more detail for character recognition"
+        },
+        "contrast": {
+          "range": [0.8, 1.0],
+          "description": "Normalized contrast ratio between text and background",
+          "impact": "Higher contrast improves character boundary detection"
+        },
+        "noise_level": {
+          "range": [0.0, 0.05],
+          "description": "Normalized noise ratio (0.0 = no noise, 1.0 = maximum noise)",
+          "impact": "Lower noise reduces false character detection"
+        },
+        "blur": {
+          "range": [0.0, 0.1],
+          "description": "Gaussian blur sigma value",
+          "impact": "Lower blur preserves character edge definition"
+        },
+        "skew_angle": {
+          "range": [-1.0, 1.0],
+          "description": "Document skew in degrees",
+          "impact": "Minimal skew improves line and paragraph detection"
+        },
+        "compression_artifacts": {
+          "range": [0.0, 0.1],
+          "description": "JPEG compression quality loss (0.0 = lossless, 1.0 = maximum loss)",
+          "impact": "Lower compression artifacts preserve character details"
+        },
+        "lighting_uniformity": {
+          "range": [0.9, 1.0],
+          "description": "Uniformity of lighting across document (1.0 = perfectly uniform)",
+          "impact": "Uniform lighting ensures consistent character detection"
+        }
+      },
+      "expected_performance": {
+        "character_accuracy": {
+          "range": [0.99, 1.0],
+          "description": "Expected character-level recognition accuracy"
+        },
+        "word_accuracy": {
+          "range": [0.98, 1.0],
+          "description": "Expected word-level recognition accuracy"
+        },
+        "field_extraction_accuracy": {
+          "range": [0.99, 1.0],
+          "description": "Expected accuracy for structured field extraction"
+        },
+        "confidence_score": {
+          "range": [0.95, 1.0],
+          "description": "Expected confidence score range for extracted data"
+        },
+        "processing_time_factor": {
+          "value": 1.0,
+          "description": "Baseline processing time multiplier (1.0 = standard processing time)"
+        }
+      }
+    },
+    "medium": {
+      "description": "Medium quality documents with moderate imperfections that may affect OCR accuracy",
+      "parameters": {
+        "resolution": {
+          "dpi_range": [150, 299],
+          "description": "Document resolution in dots per inch",
+          "impact": "Medium resolution may lose some character details"
+        },
+        "contrast": {
+          "range": [0.6, 0.79],
+          "description": "Normalized contrast ratio between text and background",
+          "impact": "Moderate contrast may affect character boundary detection"
+        },
+        "noise_level": {
+          "range": [0.06, 0.15],
+          "description": "Normalized noise ratio (0.0 = no noise, 1.0 = maximum noise)",
+          "impact": "Moderate noise may cause occasional character misidentification"
+        },
+        "blur": {
+          "range": [0.11, 0.3],
+          "description": "Gaussian blur sigma value",
+          "impact": "Moderate blur affects character edge definition"
+        },
+        "skew_angle": {
+          "range": [-3.0, 3.0],
+          "description": "Document skew in degrees",
+          "impact": "Moderate skew requires additional preprocessing"
+        },
+        "compression_artifacts": {
+          "range": [0.11, 0.3],
+          "description": "JPEG compression quality loss (0.0 = lossless, 1.0 = maximum loss)",
+          "impact": "Moderate compression artifacts affect character details"
+        },
+        "lighting_uniformity": {
+          "range": [0.7, 0.89],
+          "description": "Uniformity of lighting across document (1.0 = perfectly uniform)",
+          "impact": "Moderately non-uniform lighting may affect character detection in some areas"
+        }
+      },
+      "expected_performance": {
+        "character_accuracy": {
+          "range": [0.95, 0.98],
+          "description": "Expected character-level recognition accuracy"
+        },
+        "word_accuracy": {
+          "range": [0.93, 0.97],
+          "description": "Expected word-level recognition accuracy"
+        },
+        "field_extraction_accuracy": {
+          "range": [0.94, 0.98],
+          "description": "Expected accuracy for structured field extraction"
+        },
+        "confidence_score": {
+          "range": [0.85, 0.94],
+          "description": "Expected confidence score range for extracted data"
+        },
+        "processing_time_factor": {
+          "value": 1.5,
+          "description": "Processing time multiplier compared to high quality (1.5x longer)"
+        }
+      }
+    },
+    "low": {
+      "description": "Low quality documents with significant imperfections that challenge OCR accuracy",
+      "parameters": {
+        "resolution": {
+          "dpi_range": [72, 149],
+          "description": "Document resolution in dots per inch",
+          "impact": "Low resolution significantly impacts character recognition"
+        },
+        "contrast": {
+          "range": [0.4, 0.59],
+          "description": "Normalized contrast ratio between text and background",
+          "impact": "Low contrast makes character boundary detection difficult"
+        },
+        "noise_level": {
+          "range": [0.16, 0.3],
+          "description": "Normalized noise ratio (0.0 = no noise, 1.0 = maximum noise)",
+          "impact": "High noise levels frequently cause character misidentification"
+        },
+        "blur": {
+          "range": [0.31, 0.5],
+          "description": "Gaussian blur sigma value",
+          "impact": "Significant blur severely affects character edge definition"
+        },
+        "skew_angle": {
+          "range": [-10.0, 10.0],
+          "description": "Document skew in degrees",
+          "impact": "Significant skew requires advanced preprocessing"
+        },
+        "compression_artifacts": {
+          "range": [0.31, 0.5],
+          "description": "JPEG compression quality loss (0.0 = lossless, 1.0 = maximum loss)",
+          "impact": "Significant compression artifacts degrade character details"
+        },
+        "lighting_uniformity": {
+          "range": [0.5, 0.69],
+          "description": "Uniformity of lighting across document (1.0 = perfectly uniform)",
+          "impact": "Non-uniform lighting significantly affects character detection"
+        }
+      },
+      "expected_performance": {
+        "character_accuracy": {
+          "range": [0.85, 0.94],
+          "description": "Expected character-level recognition accuracy"
+        },
+        "word_accuracy": {
+          "range": [0.8, 0.92],
+          "description": "Expected word-level recognition accuracy"
+        },
+        "field_extraction_accuracy": {
+          "range": [0.85, 0.93],
+          "description": "Expected accuracy for structured field extraction"
+        },
+        "confidence_score": {
+          "range": [0.7, 0.84],
+          "description": "Expected confidence score range for extracted data"
+        },
+        "processing_time_factor": {
+          "value": 2.5,
+          "description": "Processing time multiplier compared to high quality (2.5x longer)"
+        }
+      }
+    }
+  },
+  "document_type_specific_adjustments": {
+    "application_forms": {
+      "field_importance_weights": {
+        "legal_name": 1.0,
+        "dba_name": 0.9,
+        "ein": 1.0,
+        "address": 0.95,
+        "phone": 0.9,
+        "email": 0.9,
+        "requested_amount": 1.0,
+        "business_start_date": 0.95,
+        "signature": 1.0
+      },
+      "critical_fields": ["legal_name", "ein", "requested_amount", "signature"],
+      "validation_rules": {
+        "ein": "^\\d{2}-\\d{7}$",
+        "phone": "^\\(\\d{3}\\) \\d{3}-\\d{4}$",
+        "email": "^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$",
+        "requested_amount": "^\\$?\\d{1,3}(,\\d{3})*(\\.\\d{2})?$"
+      }
+    },
+    "financial_documents": {
+      "field_importance_weights": {
+        "bank_name": 0.9,
+        "account_number": 1.0,
+        "routing_number": 1.0,
+        "statement_date": 0.95,
+        "beginning_balance": 0.95,
+        "ending_balance": 1.0,
+        "average_daily_balance": 0.9,
+        "deposits_total": 0.95,
+        "withdrawals_total": 0.95
+      },
+      "critical_fields": ["account_number", "routing_number", "ending_balance"],
+      "validation_rules": {
+        "account_number": "^\\d{4,17}$",
+        "routing_number": "^\\d{9}$",
+        "statement_date": "^(0[1-9]|1[0-2])/(0[1-9]|[12]\\d|3[01])/\\d{4}$",
+        "beginning_balance": "^\\$?\\d{1,3}(,\\d{3})*(\\.\\d{2})?$",
+        "ending_balance": "^\\$?\\d{1,3}(,\\d{3})*(\\.\\d{2})?$"
+      }
+    },
+    "business_documents": {
+      "field_importance_weights": {
+        "business_name": 1.0,
+        "business_type": 0.9,
+        "registration_number": 1.0,
+        "registration_date": 0.9,
+        "state_of_incorporation": 0.95,
+        "registered_agent": 0.85,
+        "business_address": 0.95,
+        "owner_names": 1.0
+      },
+      "critical_fields": ["business_name", "registration_number", "owner_names"],
+      "validation_rules": {
+        "registration_number": "^[A-Z0-9]{5,15}$",
+        "registration_date": "^(0[1-9]|1[0-2])/(0[1-9]|[12]\\d|3[01])/\\d{4}$",
+        "state_of_incorporation": "^[A-Z]{2}$"
+      }
+    }
+  },
+  "confidence_score_thresholds": {
+    "auto_approve": 0.95,
+    "manual_review": 0.85,
+    "rejection": 0.7
+  },
+  "performance_metrics": {
+    "accuracy": {
+      "description": "Percentage of correctly extracted characters or fields",
+      "calculation": "(correct_extractions / total_extractions) * 100",
+      "target": 99.0
+    },
+    "precision": {
+      "description": "Percentage of extracted data that is correct",
+      "calculation": "(true_positives / (true_positives + false_positives)) * 100",
+      "target": 98.0
+    },
+    "recall": {
+      "description": "Percentage of actual data that was correctly extracted",
+      "calculation": "(true_positives / (true_positives + false_negatives)) * 100",
+      "target": 97.0
+    },
+    "f1_score": {
+      "description": "Harmonic mean of precision and recall",
+      "calculation": "2 * ((precision * recall) / (precision + recall))",
+      "target": 97.5
+    },
+    "processing_time": {
+      "description": "Time taken to process a document in seconds",
+      "target": {
+        "high_quality": "< 2.0",
+        "medium_quality": "< 3.0",
+        "low_quality": "< 5.0"
+      }
+    }
+  },
+  "test_generation_parameters": {
+    "sample_count_per_quality_level": 50,
+    "document_types": ["application_forms", "financial_documents", "business_documents"],
+    "random_seed": 42,
+    "variation_within_range": "uniform",
+    "gpu_requirements": {
+      "minimum_vram": "8GB",
+      "cuda_version": "11.8+",
+      "tensorflow_gpu": true
+    }
+  },
+  "hardware_requirements": {
+    "minimum": {
+      "cpu": "4 cores",
+      "ram": "16GB",
+      "gpu": "NVIDIA T4 or equivalent",
+      "vram": "8GB",
+      "storage": "100GB SSD"
+    },
+    "recommended": {
+      "cpu": "8+ cores",
+      "ram": "32GB",
+      "gpu": "NVIDIA A10 or equivalent",
+      "vram": "16GB",
+      "storage": "250GB SSD"
+    }
+  }
+}
