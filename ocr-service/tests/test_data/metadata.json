@@ -1,0 +1,794 @@
+{
+  "version": "1.0.0",
+  "description": "Central metadata file for OCR service test documents",
+  "last_updated": "2025-05-21",
+  "document_types": [
+    "APPLICATION_FORM",
+    "TAX_RETURN",
+    "BANK_STATEMENT",
+    "PAY_STUB",
+    "ID_DOCUMENT",
+    "INVOICE",
+    "BUSINESS_DOCUMENT",
+    "FINANCIAL_DOCUMENT",
+    "OTHER"
+  ],
+  "text_types": [
+    "TYPED",
+    "HANDWRITTEN",
+    "MIXED"
+  ],
+  "quality_levels": [
+    "HIGH",
+    "MEDIUM",
+    "LOW"
+  ],
+  "documents": {
+    "typed_documents": {
+      "application_forms": [
+        {
+          "id": "app_form_typed_001",
+          "file_path": "typed_documents/application_forms/mca_application_standard.pdf",
+          "document_type": "APPLICATION_FORM",
+          "text_type": "TYPED",
+          "quality": "HIGH",
+          "description": "Standard MCA application form with typed information",
+          "expected_fields": {
+            "business_name": {
+              "value": "Acme Corporation",
+              "position": {"x1": 120, "y1": 150, "x2": 350, "y2": 170},
+              "expected_confidence": 0.98
+            },
+            "dba_name": {
+              "value": "Acme Business Solutions",
+              "position": {"x1": 120, "y1": 180, "x2": 350, "y2": 200},
+              "expected_confidence": 0.97
+            },
+            "ein": {
+              "value": "12-3456789",
+              "position": {"x1": 120, "y1": 210, "x2": 250, "y2": 230},
+              "expected_confidence": 0.99
+            },
+            "business_address": {
+              "value": "123 Main Street, Suite 100, Anytown, CA 90210",
+              "position": {"x1": 120, "y1": 240, "x2": 450, "y2": 260},
+              "expected_confidence": 0.96
+            },
+            "business_phone": {
+              "value": "(555) 123-4567",
+              "position": {"x1": 120, "y1": 270, "x2": 250, "y2": 290},
+              "expected_confidence": 0.99
+            },
+            "business_email": {
+              "value": "info@acmecorp.com",
+              "position": {"x1": 120, "y1": 300, "x2": 300, "y2": 320},
+              "expected_confidence": 0.98
+            },
+            "owner_name": {
+              "value": "John Smith",
+              "position": {"x1": 120, "y1": 330, "x2": 250, "y2": 350},
+              "expected_confidence": 0.99
+            },
+            "owner_title": {
+              "value": "CEO",
+              "position": {"x1": 120, "y1": 360, "x2": 180, "y2": 380},
+              "expected_confidence": 0.99
+            },
+            "funding_amount": {
+              "value": "$250,000.00",
+              "position": {"x1": 120, "y1": 390, "x2": 220, "y2": 410},
+              "expected_confidence": 0.97
+            },
+            "business_start_date": {
+              "value": "01/15/2015",
+              "position": {"x1": 120, "y1": 420, "x2": 220, "y2": 440},
+              "expected_confidence": 0.98
+            },
+            "monthly_revenue": {
+              "value": "$75,000.00",
+              "position": {"x1": 120, "y1": 450, "x2": 220, "y2": 470},
+              "expected_confidence": 0.97
+            },
+            "industry_type": {
+              "value": "Technology",
+              "position": {"x1": 120, "y1": 480, "x2": 220, "y2": 500},
+              "expected_confidence": 0.98
+            }
+          },
+          "expected_classification_confidence": 0.99,
+          "expected_overall_confidence": 0.98
+        },
+        {
+          "id": "app_form_typed_002",
+          "file_path": "typed_documents/application_forms/mca_application_low_quality.pdf",
+          "document_type": "APPLICATION_FORM",
+          "text_type": "TYPED",
+          "quality": "LOW",
+          "description": "Low quality scan of MCA application form with typed information",
+          "expected_fields": {
+            "business_name": {
+              "value": "XYZ Enterprises",
+              "position": {"x1": 120, "y1": 150, "x2": 350, "y2": 170},
+              "expected_confidence": 0.85
+            },
+            "dba_name": {
+              "value": "XYZ Solutions",
+              "position": {"x1": 120, "y1": 180, "x2": 350, "y2": 200},
+              "expected_confidence": 0.82
+            },
+            "ein": {
+              "value": "98-7654321",
+              "position": {"x1": 120, "y1": 210, "x2": 250, "y2": 230},
+              "expected_confidence": 0.88
+            },
+            "business_address": {
+              "value": "456 Oak Avenue, Building B, Somewhere, NY 10001",
+              "position": {"x1": 120, "y1": 240, "x2": 450, "y2": 260},
+              "expected_confidence": 0.80
+            },
+            "business_phone": {
+              "value": "(555) 987-6543",
+              "position": {"x1": 120, "y1": 270, "x2": 250, "y2": 290},
+              "expected_confidence": 0.87
+            },
+            "business_email": {
+              "value": "contact@xyzenterprises.com",
+              "position": {"x1": 120, "y1": 300, "x2": 300, "y2": 320},
+              "expected_confidence": 0.83
+            },
+            "owner_name": {
+              "value": "Jane Doe",
+              "position": {"x1": 120, "y1": 330, "x2": 250, "y2": 350},
+              "expected_confidence": 0.86
+            },
+            "owner_title": {
+              "value": "President",
+              "position": {"x1": 120, "y1": 360, "x2": 180, "y2": 380},
+              "expected_confidence": 0.85
+            },
+            "funding_amount": {
+              "value": "$175,000.00",
+              "position": {"x1": 120, "y1": 390, "x2": 220, "y2": 410},
+              "expected_confidence": 0.82
+            },
+            "business_start_date": {
+              "value": "03/22/2018",
+              "position": {"x1": 120, "y1": 420, "x2": 220, "y2": 440},
+              "expected_confidence": 0.84
+            },
+            "monthly_revenue": {
+              "value": "$45,000.00",
+              "position": {"x1": 120, "y1": 450, "x2": 220, "y2": 470},
+              "expected_confidence": 0.81
+            },
+            "industry_type": {
+              "value": "Retail",
+              "position": {"x1": 120, "y1": 480, "x2": 220, "y2": 500},
+              "expected_confidence": 0.85
+            }
+          },
+          "expected_classification_confidence": 0.92,
+          "expected_overall_confidence": 0.84
+        }
+      ],
+      "financial_documents": [
+        {
+          "id": "bank_statement_typed_001",
+          "file_path": "typed_documents/financial_documents/bank_statement_standard.pdf",
+          "document_type": "BANK_STATEMENT",
+          "text_type": "TYPED",
+          "quality": "HIGH",
+          "description": "Standard bank statement with transaction history",
+          "expected_fields": {
+            "account_holder": {
+              "value": "Acme Corporation",
+              "position": {"x1": 100, "y1": 120, "x2": 300, "y2": 140},
+              "expected_confidence": 0.99
+            },
+            "account_number": {
+              "value": "XXXX-XXXX-1234",
+              "position": {"x1": 400, "y1": 120, "x2": 550, "y2": 140},
+              "expected_confidence": 0.98
+            },
+            "statement_period": {
+              "value": "04/01/2025 - 04/30/2025",
+              "position": {"x1": 100, "y1": 150, "x2": 300, "y2": 170},
+              "expected_confidence": 0.97
+            },
+            "opening_balance": {
+              "value": "$125,432.67",
+              "position": {"x1": 400, "y1": 200, "x2": 500, "y2": 220},
+              "expected_confidence": 0.98
+            },
+            "closing_balance": {
+              "value": "$142,567.89",
+              "position": {"x1": 400, "y1": 600, "x2": 500, "y2": 620},
+              "expected_confidence": 0.98
+            },
+            "total_deposits": {
+              "value": "$87,500.00",
+              "position": {"x1": 400, "y1": 550, "x2": 500, "y2": 570},
+              "expected_confidence": 0.97
+            },
+            "total_withdrawals": {
+              "value": "$70,364.78",
+              "position": {"x1": 400, "y1": 575, "x2": 500, "y2": 595},
+              "expected_confidence": 0.97
+            }
+          },
+          "expected_classification_confidence": 0.99,
+          "expected_overall_confidence": 0.98
+        },
+        {
+          "id": "tax_return_typed_001",
+          "file_path": "typed_documents/financial_documents/tax_return_business.pdf",
+          "document_type": "TAX_RETURN",
+          "text_type": "TYPED",
+          "quality": "HIGH",
+          "description": "Business tax return form",
+          "expected_fields": {
+            "business_name": {
+              "value": "Acme Corporation",
+              "position": {"x1": 150, "y1": 200, "x2": 400, "y2": 220},
+              "expected_confidence": 0.99
+            },
+            "ein": {
+              "value": "12-3456789",
+              "position": {"x1": 500, "y1": 200, "x2": 600, "y2": 220},
+              "expected_confidence": 0.99
+            },
+            "tax_year": {
+              "value": "2024",
+              "position": {"x1": 300, "y1": 150, "x2": 350, "y2": 170},
+              "expected_confidence": 0.99
+            },
+            "gross_receipts": {
+              "value": "$1,250,000.00",
+              "position": {"x1": 500, "y1": 300, "x2": 650, "y2": 320},
+              "expected_confidence": 0.98
+            },
+            "total_income": {
+              "value": "$1,250,000.00",
+              "position": {"x1": 500, "y1": 350, "x2": 650, "y2": 370},
+              "expected_confidence": 0.98
+            },
+            "total_deductions": {
+              "value": "$875,000.00",
+              "position": {"x1": 500, "y1": 450, "x2": 650, "y2": 470},
+              "expected_confidence": 0.97
+            },
+            "taxable_income": {
+              "value": "$375,000.00",
+              "position": {"x1": 500, "y1": 500, "x2": 650, "y2": 520},
+              "expected_confidence": 0.98
+            },
+            "total_tax": {
+              "value": "$78,750.00",
+              "position": {"x1": 500, "y1": 550, "x2": 650, "y2": 570},
+              "expected_confidence": 0.98
+            }
+          },
+          "expected_classification_confidence": 0.99,
+          "expected_overall_confidence": 0.98
+        }
+      ],
+      "business_documents": [
+        {
+          "id": "invoice_typed_001",
+          "file_path": "typed_documents/business_documents/invoice_standard.pdf",
+          "document_type": "INVOICE",
+          "text_type": "TYPED",
+          "quality": "HIGH",
+          "description": "Standard business invoice",
+          "expected_fields": {
+            "invoice_number": {
+              "value": "INV-2025-1234",
+              "position": {"x1": 450, "y1": 150, "x2": 550, "y2": 170},
+              "expected_confidence": 0.99
+            },
+            "invoice_date": {
+              "value": "05/15/2025",
+              "position": {"x1": 450, "y1": 180, "x2": 550, "y2": 200},
+              "expected_confidence": 0.98
+            },
+            "due_date": {
+              "value": "06/15/2025",
+              "position": {"x1": 450, "y1": 210, "x2": 550, "y2": 230},
+              "expected_confidence": 0.98
+            },
+            "vendor_name": {
+              "value": "Acme Corporation",
+              "position": {"x1": 100, "y1": 120, "x2": 300, "y2": 140},
+              "expected_confidence": 0.99
+            },
+            "customer_name": {
+              "value": "XYZ Enterprises",
+              "position": {"x1": 100, "y1": 250, "x2": 300, "y2": 270},
+              "expected_confidence": 0.98
+            },
+            "subtotal": {
+              "value": "$5,000.00",
+              "position": {"x1": 450, "y1": 500, "x2": 550, "y2": 520},
+              "expected_confidence": 0.98
+            },
+            "tax": {
+              "value": "$400.00",
+              "position": {"x1": 450, "y1": 530, "x2": 550, "y2": 550},
+              "expected_confidence": 0.98
+            },
+            "total": {
+              "value": "$5,400.00",
+              "position": {"x1": 450, "y1": 560, "x2": 550, "y2": 580},
+              "expected_confidence": 0.99
+            }
+          },
+          "expected_classification_confidence": 0.98,
+          "expected_overall_confidence": 0.98
+        }
+      ]
+    },
+    "handwritten_documents": {
+      "application_forms": [
+        {
+          "id": "app_form_handwritten_001",
+          "file_path": "handwritten_documents/application_forms/mca_application_handwritten.pdf",
+          "document_type": "APPLICATION_FORM",
+          "text_type": "HANDWRITTEN",
+          "quality": "MEDIUM",
+          "description": "MCA application form with handwritten information",
+          "expected_fields": {
+            "business_name": {
+              "value": "Johnson Plumbing",
+              "position": {"x1": 120, "y1": 150, "x2": 350, "y2": 170},
+              "expected_confidence": 0.85
+            },
+            "dba_name": {
+              "value": "Johnson's",
+              "position": {"x1": 120, "y1": 180, "x2": 350, "y2": 200},
+              "expected_confidence": 0.82
+            },
+            "ein": {
+              "value": "45-6789012",
+              "position": {"x1": 120, "y1": 210, "x2": 250, "y2": 230},
+              "expected_confidence": 0.88
+            },
+            "business_address": {
+              "value": "789 Elm Street, Anytown, TX 75001",
+              "position": {"x1": 120, "y1": 240, "x2": 450, "y2": 260},
+              "expected_confidence": 0.80
+            },
+            "business_phone": {
+              "value": "(555) 234-5678",
+              "position": {"x1": 120, "y1": 270, "x2": 250, "y2": 290},
+              "expected_confidence": 0.84
+            },
+            "business_email": {
+              "value": "bob@johnsonplumbing.com",
+              "position": {"x1": 120, "y1": 300, "x2": 300, "y2": 320},
+              "expected_confidence": 0.81
+            },
+            "owner_name": {
+              "value": "Robert Johnson",
+              "position": {"x1": 120, "y1": 330, "x2": 250, "y2": 350},
+              "expected_confidence": 0.86
+            },
+            "owner_title": {
+              "value": "Owner",
+              "position": {"x1": 120, "y1": 360, "x2": 180, "y2": 380},
+              "expected_confidence": 0.88
+            },
+            "funding_amount": {
+              "value": "$75,000.00",
+              "position": {"x1": 120, "y1": 390, "x2": 220, "y2": 410},
+              "expected_confidence": 0.82
+            },
+            "business_start_date": {
+              "value": "06/10/2010",
+              "position": {"x1": 120, "y1": 420, "x2": 220, "y2": 440},
+              "expected_confidence": 0.83
+            },
+            "monthly_revenue": {
+              "value": "$35,000.00",
+              "position": {"x1": 120, "y1": 450, "x2": 220, "y2": 470},
+              "expected_confidence": 0.80
+            },
+            "industry_type": {
+              "value": "Construction",
+              "position": {"x1": 120, "y1": 480, "x2": 220, "y2": 500},
+              "expected_confidence": 0.84
+            }
+          },
+          "expected_classification_confidence": 0.95,
+          "expected_overall_confidence": 0.83
+        },
+        {
+          "id": "app_form_handwritten_002",
+          "file_path": "handwritten_documents/application_forms/mca_application_cursive.pdf",
+          "document_type": "APPLICATION_FORM",
+          "text_type": "HANDWRITTEN",
+          "quality": "MEDIUM",
+          "description": "MCA application form with cursive handwriting",
+          "expected_fields": {
+            "business_name": {
+              "value": "Garcia's Restaurant",
+              "position": {"x1": 120, "y1": 150, "x2": 350, "y2": 170},
+              "expected_confidence": 0.78
+            },
+            "dba_name": {
+              "value": "Garcia's",
+              "position": {"x1": 120, "y1": 180, "x2": 350, "y2": 200},
+              "expected_confidence": 0.80
+            },
+            "ein": {
+              "value": "56-7890123",
+              "position": {"x1": 120, "y1": 210, "x2": 250, "y2": 230},
+              "expected_confidence": 0.82
+            },
+            "business_address": {
+              "value": "321 Pine Road, Somewhere, FL 33101",
+              "position": {"x1": 120, "y1": 240, "x2": 450, "y2": 260},
+              "expected_confidence": 0.75
+            },
+            "business_phone": {
+              "value": "(555) 345-6789",
+              "position": {"x1": 120, "y1": 270, "x2": 250, "y2": 290},
+              "expected_confidence": 0.81
+            },
+            "business_email": {
+              "value": "maria@garciasrestaurant.com",
+              "position": {"x1": 120, "y1": 300, "x2": 300, "y2": 320},
+              "expected_confidence": 0.76
+            },
+            "owner_name": {
+              "value": "Maria Garcia",
+              "position": {"x1": 120, "y1": 330, "x2": 250, "y2": 350},
+              "expected_confidence": 0.79
+            },
+            "owner_title": {
+              "value": "Owner",
+              "position": {"x1": 120, "y1": 360, "x2": 180, "y2": 380},
+              "expected_confidence": 0.83
+            },
+            "funding_amount": {
+              "value": "$50,000.00",
+              "position": {"x1": 120, "y1": 390, "x2": 220, "y2": 410},
+              "expected_confidence": 0.77
+            },
+            "business_start_date": {
+              "value": "09/15/2012",
+              "position": {"x1": 120, "y1": 420, "x2": 220, "y2": 440},
+              "expected_confidence": 0.78
+            },
+            "monthly_revenue": {
+              "value": "$40,000.00",
+              "position": {"x1": 120, "y1": 450, "x2": 220, "y2": 470},
+              "expected_confidence": 0.76
+            },
+            "industry_type": {
+              "value": "Restaurant",
+              "position": {"x1": 120, "y1": 480, "x2": 220, "y2": 500},
+              "expected_confidence": 0.80
+            }
+          },
+          "expected_classification_confidence": 0.92,
+          "expected_overall_confidence": 0.79
+        }
+      ]
+    },
+    "mixed_documents": {
+      "application_forms": [
+        {
+          "id": "app_form_mixed_001",
+          "file_path": "mixed_documents/application_forms/mca_application_mixed.pdf",
+          "document_type": "APPLICATION_FORM",
+          "text_type": "MIXED",
+          "quality": "HIGH",
+          "description": "MCA application form with typed form fields and handwritten responses",
+          "expected_fields": {
+            "business_name": {
+              "value": "Smith Auto Repair",
+              "position": {"x1": 120, "y1": 150, "x2": 350, "y2": 170},
+              "expected_confidence": 0.88,
+              "text_type": "HANDWRITTEN"
+            },
+            "dba_name": {
+              "value": "Smith's",
+              "position": {"x1": 120, "y1": 180, "x2": 350, "y2": 200},
+              "expected_confidence": 0.86,
+              "text_type": "HANDWRITTEN"
+            },
+            "ein": {
+              "value": "67-8901234",
+              "position": {"x1": 120, "y1": 210, "x2": 250, "y2": 230},
+              "expected_confidence": 0.90,
+              "text_type": "HANDWRITTEN"
+            },
+            "business_address": {
+              "value": "456 Maple Avenue, Somewhere, IL 60601",
+              "position": {"x1": 120, "y1": 240, "x2": 450, "y2": 260},
+              "expected_confidence": 0.85,
+              "text_type": "HANDWRITTEN"
+            },
+            "business_phone": {
+              "value": "(555) 456-7890",
+              "position": {"x1": 120, "y1": 270, "x2": 250, "y2": 290},
+              "expected_confidence": 0.89,
+              "text_type": "HANDWRITTEN"
+            },
+            "business_email": {
+              "value": "mike@smithautorepair.com",
+              "position": {"x1": 120, "y1": 300, "x2": 300, "y2": 320},
+              "expected_confidence": 0.84,
+              "text_type": "HANDWRITTEN"
+            },
+            "owner_name": {
+              "value": "Michael Smith",
+              "position": {"x1": 120, "y1": 330, "x2": 250, "y2": 350},
+              "expected_confidence": 0.87,
+              "text_type": "HANDWRITTEN"
+            },
+            "owner_title": {
+              "value": "Owner",
+              "position": {"x1": 120, "y1": 360, "x2": 180, "y2": 380},
+              "expected_confidence": 0.90,
+              "text_type": "HANDWRITTEN"
+            },
+            "funding_amount": {
+              "value": "$100,000.00",
+              "position": {"x1": 120, "y1": 390, "x2": 220, "y2": 410},
+              "expected_confidence": 0.86,
+              "text_type": "HANDWRITTEN"
+            },
+            "business_start_date": {
+              "value": "05/20/2008",
+              "position": {"x1": 120, "y1": 420, "x2": 220, "y2": 440},
+              "expected_confidence": 0.87,
+              "text_type": "HANDWRITTEN"
+            },
+            "monthly_revenue": {
+              "value": "$60,000.00",
+              "position": {"x1": 120, "y1": 450, "x2": 220, "y2": 470},
+              "expected_confidence": 0.85,
+              "text_type": "HANDWRITTEN"
+            },
+            "industry_type": {
+              "value": "Automotive",
+              "position": {"x1": 120, "y1": 480, "x2": 220, "y2": 500},
+              "expected_confidence": 0.88,
+              "text_type": "HANDWRITTEN"
+            },
+            "form_title": {
+              "value": "MERCHANT CASH ADVANCE APPLICATION",
+              "position": {"x1": 200, "y1": 50, "x2": 600, "y2": 80},
+              "expected_confidence": 0.98,
+              "text_type": "TYPED"
+            },
+            "form_instructions": {
+              "value": "Please complete all fields below. Print clearly if writing by hand.",
+              "position": {"x1": 200, "y1": 90, "x2": 600, "y2": 110},
+              "expected_confidence": 0.97,
+              "text_type": "TYPED"
+            }
+          },
+          "expected_classification_confidence": 0.96,
+          "expected_overall_confidence": 0.89
+        }
+      ],
+      "financial_documents": [
+        {
+          "id": "bank_statement_mixed_001",
+          "file_path": "mixed_documents/financial_documents/bank_statement_annotated.pdf",
+          "document_type": "BANK_STATEMENT",
+          "text_type": "MIXED",
+          "quality": "HIGH",
+          "description": "Bank statement with handwritten annotations",
+          "expected_fields": {
+            "account_holder": {
+              "value": "Smith Auto Repair",
+              "position": {"x1": 100, "y1": 120, "x2": 300, "y2": 140},
+              "expected_confidence": 0.98,
+              "text_type": "TYPED"
+            },
+            "account_number": {
+              "value": "XXXX-XXXX-5678",
+              "position": {"x1": 400, "y1": 120, "x2": 550, "y2": 140},
+              "expected_confidence": 0.98,
+              "text_type": "TYPED"
+            },
+            "statement_period": {
+              "value": "03/01/2025 - 03/31/2025",
+              "position": {"x1": 100, "y1": 150, "x2": 300, "y2": 170},
+              "expected_confidence": 0.97,
+              "text_type": "TYPED"
+            },
+            "opening_balance": {
+              "value": "$45,678.90",
+              "position": {"x1": 400, "y1": 200, "x2": 500, "y2": 220},
+              "expected_confidence": 0.98,
+              "text_type": "TYPED"
+            },
+            "closing_balance": {
+              "value": "$52,345.67",
+              "position": {"x1": 400, "y1": 600, "x2": 500, "y2": 620},
+              "expected_confidence": 0.98,
+              "text_type": "TYPED"
+            },
+            "annotation_1": {
+              "value": "Business expense",
+              "position": {"x1": 550, "y1": 300, "x2": 650, "y2": 320},
+              "expected_confidence": 0.85,
+              "text_type": "HANDWRITTEN"
+            },
+            "annotation_2": {
+              "value": "New equipment purchase",
+              "position": {"x1": 550, "y1": 350, "x2": 650, "y2": 370},
+              "expected_confidence": 0.83,
+              "text_type": "HANDWRITTEN"
+            },
+            "annotation_3": {
+              "value": "Loan payment",
+              "position": {"x1": 550, "y1": 400, "x2": 650, "y2": 420},
+              "expected_confidence": 0.86,
+              "text_type": "HANDWRITTEN"
+            }
+          },
+          "expected_classification_confidence": 0.97,
+          "expected_overall_confidence": 0.92
+        }
+      ]
+    },
+    "images": [
+      {
+        "id": "id_document_001",
+        "file_path": "images/id_documents/drivers_license.jpg",
+        "document_type": "ID_DOCUMENT",
+        "text_type": "MIXED",
+        "quality": "HIGH",
+        "description": "Driver's license image",
+        "expected_fields": {
+          "full_name": {
+            "value": "JOHN A SMITH",
+            "position": {"x1": 200, "y1": 150, "x2": 400, "y2": 170},
+            "expected_confidence": 0.95,
+            "text_type": "TYPED"
+          },
+          "address": {
+            "value": "123 MAIN ST, ANYTOWN, CA 90210",
+            "position": {"x1": 200, "y1": 200, "x2": 450, "y2": 220},
+            "expected_confidence": 0.93,
+            "text_type": "TYPED"
+          },
+          "date_of_birth": {
+            "value": "01/15/1980",
+            "position": {"x1": 200, "y1": 250, "x2": 300, "y2": 270},
+            "expected_confidence": 0.94,
+            "text_type": "TYPED"
+          },
+          "id_number": {
+            "value": "D1234567",
+            "position": {"x1": 200, "y1": 300, "x2": 300, "y2": 320},
+            "expected_confidence": 0.96,
+            "text_type": "TYPED"
+          },
+          "expiration_date": {
+            "value": "01/15/2028",
+            "position": {"x1": 200, "y1": 350, "x2": 300, "y2": 370},
+            "expected_confidence": 0.95,
+            "text_type": "TYPED"
+          },
+          "signature": {
+            "value": "John A Smith",
+            "position": {"x1": 200, "y1": 400, "x2": 350, "y2": 430},
+            "expected_confidence": 0.85,
+            "text_type": "HANDWRITTEN"
+          }
+        },
+        "expected_classification_confidence": 0.98,
+        "expected_overall_confidence": 0.93
+      }
+    ],
+    "tables": [
+      {
+        "id": "financial_table_001",
+        "file_path": "tables/financial_tables/revenue_table.pdf",
+        "document_type": "FINANCIAL_DOCUMENT",
+        "text_type": "TYPED",
+        "quality": "HIGH",
+        "description": "Monthly revenue table",
+        "expected_fields": {
+          "table_title": {
+            "value": "Monthly Revenue Report - 2025",
+            "position": {"x1": 200, "y1": 100, "x2": 500, "y2": 120},
+            "expected_confidence": 0.98
+          },
+          "january": {
+            "value": "$45,678.90",
+            "position": {"x1": 300, "y1": 150, "x2": 400, "y2": 170},
+            "expected_confidence": 0.97
+          },
+          "february": {
+            "value": "$48,765.43",
+            "position": {"x1": 300, "y1": 180, "x2": 400, "y2": 200},
+            "expected_confidence": 0.97
+          },
+          "march": {
+            "value": "$52,345.67",
+            "position": {"x1": 300, "y1": 210, "x2": 400, "y2": 230},
+            "expected_confidence": 0.97
+          },
+          "q1_total": {
+            "value": "$146,790.00",
+            "position": {"x1": 300, "y1": 240, "x2": 400, "y2": 260},
+            "expected_confidence": 0.96
+          },
+          "table_structure": {
+            "rows": 13,
+            "columns": 3,
+            "header_row": true,
+            "expected_confidence": 0.95
+          }
+        },
+        "expected_classification_confidence": 0.97,
+        "expected_overall_confidence": 0.97
+      }
+    ],
+    "forms": [
+      {
+        "id": "application_form_001",
+        "file_path": "forms/application_forms/mca_application_template.pdf",
+        "document_type": "APPLICATION_FORM",
+        "text_type": "TYPED",
+        "quality": "HIGH",
+        "description": "Empty MCA application form template",
+        "expected_fields": {
+          "form_title": {
+            "value": "MERCHANT CASH ADVANCE APPLICATION",
+            "position": {"x1": 200, "y1": 50, "x2": 600, "y2": 80},
+            "expected_confidence": 0.99
+          },
+          "business_name_label": {
+            "value": "Business Legal Name:",
+            "position": {"x1": 50, "y1": 150, "x2": 200, "y2": 170},
+            "expected_confidence": 0.98
+          },
+          "dba_name_label": {
+            "value": "DBA Name (if different):",
+            "position": {"x1": 50, "y1": 180, "x2": 200, "y2": 200},
+            "expected_confidence": 0.98
+          },
+          "ein_label": {
+            "value": "Federal Tax ID (EIN):",
+            "position": {"x1": 50, "y1": 210, "x2": 200, "y2": 230},
+            "expected_confidence": 0.98
+          },
+          "business_address_label": {
+            "value": "Business Address:",
+            "position": {"x1": 50, "y1": 240, "x2": 200, "y2": 260},
+            "expected_confidence": 0.98
+          },
+          "form_structure": {
+            "fields": 15,
+            "sections": 3,
+            "expected_confidence": 0.99
+          }
+        },
+        "expected_classification_confidence": 0.99,
+        "expected_overall_confidence": 0.98
+      }
+    ]
+  },
+  "confidence_thresholds": {
+    "high_confidence": 0.90,
+    "medium_confidence": 0.75,
+    "low_confidence": 0.60,
+    "human_review_threshold": 0.75
+  },
+  "test_parameters": {
+    "typed_text_accuracy_target": 0.98,
+    "handwritten_text_accuracy_target": 0.85,
+    "mixed_text_accuracy_target": 0.90,
+    "classification_accuracy_target": 0.95,
+    "field_extraction_accuracy_target": 0.95,
+    "overall_accuracy_target": 0.93
+  }
+}
