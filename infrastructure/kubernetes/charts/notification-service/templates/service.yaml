@@ -1,0 +1,71 @@
+{{- /*
+service.yaml: Kubernetes Service for the Notification Service
+
+This template creates a Kubernetes Service resource that exposes the Notification Service
+within the cluster. It configures port 3000 for the Node.js notification service and
+sets appropriate session affinity for webhook delivery consistency.
+
+The Notification Service handles webhooks and alerts as specified in section 0.1.2 of the
+technical specification. It provides configurable endpoints with JSON payload delivery
+as specified in section 0.1.4.
+
+Key features:
+- Handles status updates and constructs notification payloads
+- Delivers notifications to configured webhooks and endpoints
+- Implements retry mechanisms with exponential backoff
+- Secures webhook payloads with HMAC signatures
+- Supports multiple notification channels (webhook, email, SMS, push)
+*/}}
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "common.names.fullname" . }}
+  labels:
+    {{- include "common.labels.standard" . | nindent 4 }}
+    app.kubernetes.io/component: webhook-service
+    app.kubernetes.io/part-of: mca-processing-system
+    {{- if .Values.service.labels }}
+    {{- include "common.tplvalues.render" (dict "value" .Values.service.labels "context" $) | nindent 4 }}
+    {{- end }}
+  {{- if or .Values.service.annotations .Values.commonAnnotations }}
+  annotations:
+    # Add service discovery annotations
+    prometheus.io/scrape: "{{ .Values.metrics.enabled | default "false" }}"
+    prometheus.io/port: "{{ .Values.metrics.port | default "9090" }}"
+    {{- if .Values.service.annotations }}
+    {{- include "common.tplvalues.render" (dict "value" .Values.service.annotations "context" $) | nindent 4 }}
+    {{- end }}
+    {{- if .Values.commonAnnotations }}
+    {{- include "common.tplvalues.render" (dict "value" .Values.commonAnnotations "context" $) | nindent 4 }}
+    {{- end }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.type | default "ClusterIP" }}
+  {{- if .Values.service.sessionAffinity.enabled | default true }}
+  # Enable session affinity for consistent webhook delivery
+  # This ensures that webhook retries go to the same pod that has the delivery state
+  sessionAffinity: ClientIP
+  {{- if .Values.service.sessionAffinity.timeoutSeconds }}
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: {{ .Values.service.sessionAffinity.timeoutSeconds | default 10800 }}
+  {{- end }}
+  {{- end }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port | default 3000 }}
+      targetPort: {{ .Values.service.targetPort | default "http" }}
+      protocol: TCP
+    {{- if .Values.metrics.enabled | default false }}
+    - name: metrics
+      port: {{ .Values.metrics.port | default 9090 }}
+      targetPort: metrics
+      protocol: TCP
+    {{- end }}
+  selector:
+    {{- include "common.labels.matchLabels" . | nindent 4 }}
+    app.kubernetes.io/component: webhook-service
+    {{- if .Values.service.selector }}
+    {{- include "common.tplvalues.render" (dict "value" .Values.service.selector "context" $) | nindent 4 }}
+    {{- end }}
