@@ -1,16 +1,10 @@
-# Variables for the monitoring module
-# This file defines all input variables for configuring monitoring infrastructure
-# across different environments (development, staging, production)
+# infrastructure/terraform/modules/monitoring/variables.tf
 
-# General monitoring configuration
-variable "monitoring_type" {
-  description = "Type of monitoring solution to deploy (datadog or prometheus)"
+# Core variables
+variable "project_name" {
+  description = "Name of the project"
   type        = string
-  default     = "datadog"
-  validation {
-    condition     = contains(["datadog", "prometheus"], var.monitoring_type)
-    error_message = "The monitoring_type must be either 'datadog' or 'prometheus'."
-  }
+  default     = "mca-application-processing"
 }
 
 variable "environment" {
@@ -18,318 +12,135 @@ variable "environment" {
   type        = string
   validation {
     condition     = contains(["development", "staging", "production"], var.environment)
-    error_message = "The environment must be one of: development, staging, production."
+    error_message = "Environment must be one of: development, staging, production."
   }
 }
 
-variable "resource_tags" {
-  description = "Tags to apply to all monitoring resources for cost tracking and organization"
+variable "monitoring_type" {
+  description = "Type of monitoring solution to deploy (datadog or prometheus)"
+  type        = string
+  default     = "datadog"
+  validation {
+    condition     = contains(["datadog", "prometheus"], var.monitoring_type)
+    error_message = "Monitoring type must be either 'datadog' or 'prometheus'."
+  }
+}
+
+variable "additional_tags" {
+  description = "Additional tags to apply to all resources"
   type        = map(string)
   default     = {}
 }
 
-# Datadog specific configuration
+# Datadog-specific variables
 variable "datadog_api_key" {
   description = "Datadog API key for authentication"
   type        = string
-  sensitive   = true
   default     = ""
+  sensitive   = true
 }
 
 variable "datadog_app_key" {
   description = "Datadog application key for API access"
   type        = string
-  sensitive   = true
   default     = ""
+  sensitive   = true
 }
 
-variable "datadog_site" {
-  description = "Datadog site (e.g., 'us', 'eu')"
-  type        = string
-  default     = "us"
-}
-
-variable "datadog_enable_apm" {
-  description = "Enable Application Performance Monitoring in Datadog"
-  type        = bool
-  default     = true
-}
-
-variable "datadog_enable_logs" {
-  description = "Enable log collection in Datadog"
-  type        = bool
-  default     = true
-}
-
-variable "datadog_enable_process_monitoring" {
-  description = "Enable process monitoring in Datadog"
-  type        = bool
-  default     = true
-}
-
-# Prometheus and Grafana specific configuration
-variable "prometheus_retention_days" {
-  description = "Number of days to retain Prometheus metrics"
-  type        = number
-  default     = 15
-}
-
+# Prometheus-specific variables
 variable "prometheus_storage_size" {
-  description = "Storage size for Prometheus in GB"
-  type        = number
-  default     = 50
-}
-
-variable "grafana_admin_password" {
-  description = "Admin password for Grafana"
+  description = "Storage size for Prometheus in Gi"
   type        = string
-  sensitive   = true
-  default     = ""
+  default     = "50Gi"
 }
 
-variable "grafana_version" {
-  description = "Grafana version to deploy"
+variable "grafana_storage_size" {
+  description = "Storage size for Grafana in Gi"
   type        = string
-  default     = "9.5.1"
+  default     = "10Gi"
 }
 
-variable "grafana_plugins" {
-  description = "List of Grafana plugins to install"
-  type        = list(string)
-  default     = ["grafana-piechart-panel", "grafana-clock-panel"]
+variable "storage_class_name" {
+  description = "Kubernetes storage class name for Prometheus and Grafana PVCs"
+  type        = string
+  default     = "standard"
 }
 
-# Monitoring thresholds and retention configuration
-variable "metrics_retention_policy" {
-  description = "Retention policy for different metric types in days"
-  type = object({
-    infrastructure = number
-    container     = number
-    application   = number
-    database      = number
-    frontend      = number
-  })
-  default = {
-    infrastructure = 30
-    container     = 14
-    application   = 90
-    database      = 30
-    frontend      = 90
-  }
-}
-
-variable "alert_thresholds" {
-  description = "Thresholds for different alert types"
-  type = object({
-    cpu_utilization_percent    = number
-    memory_utilization_percent = number
-    disk_utilization_percent   = number
-    error_rate_percent         = number
-    api_latency_ms             = number
-    queue_depth_messages       = number
-  })
-  default = {
-    cpu_utilization_percent    = 80
-    memory_utilization_percent = 85
-    disk_utilization_percent   = 85
-    error_rate_percent         = 5
-    api_latency_ms             = 500
-    queue_depth_messages       = 1000
-  }
-}
-
-# Alert notification configuration
-variable "alert_notification_channels" {
-  description = "Configuration for alert notification channels"
-  type = object({
-    email_recipients  = list(string)
-    slack_webhook_url = string
-    pagerduty_key     = string
-    use_pagerduty     = bool
-    use_slack         = bool
-    use_email         = bool
-  })
-  default = {
-    email_recipients  = []
-    slack_webhook_url = ""
-    pagerduty_key     = ""
-    use_pagerduty     = false
-    use_slack         = true
-    use_email         = true
-  }
-  sensitive = true
-}
-
-# Environment-specific monitoring configuration
-variable "environment_config" {
-  description = "Environment-specific monitoring configuration"
-  type = object({
-    agent_count             = number
-    enable_detailed_metrics = bool
-    sampling_rate_percent   = number
-    log_level               = string
-  })
-  default = {
-    agent_count             = 1
-    enable_detailed_metrics = true
-    sampling_rate_percent   = 100
-    log_level               = "INFO"
-  }
-}
-
-# Cost monitoring configuration
-variable "cost_monitoring_enabled" {
-  description = "Enable cost monitoring and optimization features"
+# Kubernetes integration variables
+variable "kubernetes_integration_enabled" {
+  description = "Whether to enable Kubernetes integration"
   type        = bool
   default     = true
 }
 
-variable "budget_alert_thresholds" {
-  description = "Budget alert thresholds as percentages of allocated budget"
-  type        = list(number)
-  default     = [70, 85, 95]
-  validation {
-    condition     = length([for threshold in var.budget_alert_thresholds : threshold if threshold >= 0 && threshold <= 100]) == length(var.budget_alert_thresholds)
-    error_message = "Budget alert thresholds must be between 0 and 100."
-  }
+variable "kubernetes_cluster_name" {
+  description = "Name of the Kubernetes cluster to monitor"
+  type        = string
+  default     = ""
 }
 
-# Web vitals monitoring configuration for frontend
-variable "web_vitals_monitoring" {
-  description = "Configuration for Web Vitals monitoring"
-  type = object({
-    enabled                = bool
-    lcp_threshold_ms       = number # Largest Contentful Paint threshold
-    fid_threshold_ms       = number # First Input Delay threshold
-    cls_threshold          = number # Cumulative Layout Shift threshold
-    ttfb_threshold_ms      = number # Time to First Byte threshold
-    sampling_rate_percent  = number # Percentage of sessions to sample
-  })
-  default = {
-    enabled                = true
-    lcp_threshold_ms       = 2500
-    fid_threshold_ms       = 100
-    cls_threshold          = 0.1
-    ttfb_threshold_ms      = 600
-    sampling_rate_percent  = 10
-  }
+variable "kubernetes_namespace" {
+  description = "Kubernetes namespace to deploy Prometheus and Grafana"
+  type        = string
+  default     = "monitoring"
 }
 
-# Service-specific monitoring configuration
-variable "service_monitors" {
-  description = "Configuration for service-specific monitoring"
+# Notification variables
+variable "notification_channels" {
+  description = "Map of notification channels for alerts"
   type = map(object({
-    enabled                = bool
-    scrape_interval_seconds = number
-    port                   = number
-    path                   = string
-    custom_labels          = map(string)
+    type  = string
+    value = string
   }))
   default = {
-    "email-service" = {
-      enabled                = true
-      scrape_interval_seconds = 30
-      port                   = 8080
-      path                   = "/metrics"
-      custom_labels          = {}
-    },
-    "document-service" = {
-      enabled                = true
-      scrape_interval_seconds = 30
-      port                   = 8080
-      path                   = "/metrics"
-      custom_labels          = {}
-    },
-    "ocr-service" = {
-      enabled                = true
-      scrape_interval_seconds = 30
-      port                   = 8080
-      path                   = "/metrics"
-      custom_labels          = {}
-    },
-    "data-service" = {
-      enabled                = true
-      scrape_interval_seconds = 30
-      port                   = 8080
-      path                   = "/actuator/prometheus"
-      custom_labels          = {}
-    },
-    "notification-service" = {
-      enabled                = true
-      scrape_interval_seconds = 30
-      port                   = 8080
-      path                   = "/metrics"
-      custom_labels          = {}
+    email = {
+      type  = "email"
+      value = "alerts@dollarfunding.com"
+    }
+    slack = {
+      type  = "slack"
+      value = "#alerts-monitoring"
+    }
+    pagerduty = {
+      type  = "pagerduty"
+      value = "monitoring-service-key"
     }
   }
 }
 
-# Database monitoring configuration
-variable "database_monitoring" {
-  description = "Configuration for database monitoring"
-  type = object({
-    enabled                  = bool
-    connection_pool_metrics  = bool
-    query_performance_metrics = bool
-    replication_lag_threshold_seconds = number
-    max_connections_percent  = number
-  })
-  default = {
-    enabled                  = true
-    connection_pool_metrics  = true
-    query_performance_metrics = true
-    replication_lag_threshold_seconds = 30
-    max_connections_percent  = 80
-  }
-}
-
-# Message queue monitoring configuration
-variable "queue_monitoring" {
-  description = "Configuration for message queue monitoring"
-  type = object({
-    enabled                = bool
-    queue_depth_threshold  = number
-    consumer_lag_threshold = number
-    dead_letter_threshold  = number
-  })
-  default = {
-    enabled                = true
-    queue_depth_threshold  = 1000
-    consumer_lag_threshold = 100
-    dead_letter_threshold  = 10
-  }
-}
-
-# Cache monitoring configuration
-variable "cache_monitoring" {
-  description = "Configuration for Redis cache monitoring"
-  type = object({
-    enabled                = bool
-    memory_usage_percent  = number
-    hit_rate_threshold    = number
-    eviction_threshold    = number
-  })
-  default = {
-    enabled                = true
-    memory_usage_percent  = 80
-    hit_rate_threshold    = 50
-    eviction_threshold    = 100
-  }
-}
-
-# Storage monitoring configuration
-variable "storage_monitoring" {
-  description = "Configuration for S3 storage monitoring"
-  type = object({
-    enabled                = bool
-    error_rate_threshold  = number
-    latency_threshold_ms  = number
-    bucket_size_alert_gb  = number
-  })
-  default = {
-    enabled                = true
-    error_rate_threshold  = 5
-    latency_threshold_ms  = 200
-    bucket_size_alert_gb  = 1000
-  }
+# Metric collection variables
+variable "custom_metrics" {
+  description = "List of custom metrics to collect"
+  type = list(object({
+    name        = string
+    description = string
+    query       = string
+    interval    = number
+  }))
+  default = [
+    {
+      name        = "app_processing_time"
+      description = "Application processing time in seconds"
+      query       = "avg:app.processing.time{*} by {service}"
+      interval    = 60
+    },
+    {
+      name        = "ocr_accuracy"
+      description = "OCR extraction accuracy percentage"
+      query       = "avg:ocr.accuracy{*} by {document_type}"
+      interval    = 60
+    },
+    {
+      name        = "queue_depth"
+      description = "Message queue depth"
+      query       = "avg:rabbitmq.queue.messages{*} by {queue_name}"
+      interval    = 30
+    },
+    {
+      name        = "api_response_time"
+      description = "API response time in milliseconds"
+      query       = "avg:api.response.time{*} by {endpoint}"
+      interval    = 30
+    }
+  ]
 }
