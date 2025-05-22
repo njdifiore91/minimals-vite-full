@@ -1,0 +1,211 @@
+# Resource Quotas for MCA Application Processing System
+# This file defines ResourceQuota objects for each namespace to enforce resource limits
+# and prevent resource contention between services.
+#
+# These quotas ensure:
+# - Fair resource allocation across all microservices
+# - Sufficient GPU resources for the OCR Service using TensorFlow
+# - Appropriate scaling of resources across environments (dev, staging, prod)
+# - Prevention of resource exhaustion that could impact system availability
+# - Support for the 99.9% uptime requirement and 5-minute processing SLA
+
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: development-quota
+  namespace: mca-development
+spec:
+  hard:
+    # Compute Resources
+    requests.cpu: "8"
+    limits.cpu: "16"
+    requests.memory: 16Gi
+    limits.memory: 32Gi
+    
+    # GPU Resources (for OCR Service)
+    requests.nvidia.com/gpu: "1"
+    limits.nvidia.com/gpu: "2"
+    
+    # Storage Resources
+    requests.storage: 100Gi
+    persistentvolumeclaims: "20"
+    
+    # Object Count Limits
+    pods: "50"
+    services: "20"
+    configmaps: "30"
+    secrets: "30"
+    
+    # Load Balancer Limits
+    services.loadbalancers: "1"
+    
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: staging-quota
+  namespace: mca-staging
+spec:
+  hard:
+    # Compute Resources
+    requests.cpu: "16"
+    limits.cpu: "32"
+    requests.memory: 32Gi
+    limits.memory: 64Gi
+    
+    # GPU Resources (for OCR Service)
+    requests.nvidia.com/gpu: "2"
+    limits.nvidia.com/gpu: "4"
+    
+    # Storage Resources
+    requests.storage: 200Gi
+    persistentvolumeclaims: "30"
+    
+    # Object Count Limits
+    pods: "75"
+    services: "30"
+    configmaps: "40"
+    secrets: "40"
+    
+    # Load Balancer Limits
+    services.loadbalancers: "2"
+    
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: production-quota
+  namespace: mca-production
+spec:
+  hard:
+    # Compute Resources
+    requests.cpu: "32"
+    limits.cpu: "64"
+    requests.memory: 64Gi
+    limits.memory: 128Gi
+    
+    # GPU Resources (for OCR Service)
+    requests.nvidia.com/gpu: "4"
+    limits.nvidia.com/gpu: "8"
+    
+    # Storage Resources
+    requests.storage: 500Gi
+    persistentvolumeclaims: "50"
+    
+    # Object Count Limits
+    pods: "100"
+    services: "40"
+    configmaps: "50"
+    secrets: "50"
+    
+    # Load Balancer Limits
+    services.loadbalancers: "3"
+
+---
+# Priority Class Quota for Production
+# This quota ensures that high-priority and critical-priority workloads
+# have dedicated resources to maintain the 99.9% uptime SLA
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: production-priority-quota
+  namespace: mca-production
+spec:
+  hard:
+    pods: "50"
+  scopeSelector:
+    matchExpressions:
+    - operator: In
+      scopeName: PriorityClass
+      values: 
+      - high-priority
+      - critical-priority
+
+---
+# Storage Class Quota for Production
+# This quota allocates storage resources across different storage classes
+# to ensure optimal performance for different types of data:
+# - SSD storage for databases and high-performance needs
+# - Standard storage for document storage and less performance-critical data
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: production-storage-quota
+  namespace: mca-production
+spec:
+  hard:
+    ssd.storageclass.storage.k8s.io/requests.storage: 200Gi
+    standard.storageclass.storage.k8s.io/requests.storage: 300Gi
+
+---
+# Compute Resource Quota for OCR Service in Production
+# This quota reserves dedicated resources for the OCR Service to ensure
+# it has sufficient GPU resources for TensorFlow-based document processing
+# and can meet the 5-minute processing SLA requirement
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: ocr-service-quota
+  namespace: mca-production
+spec:
+  hard:
+    requests.cpu: "16"
+    limits.cpu: "32"
+    requests.memory: 32Gi
+    limits.memory: 64Gi
+    requests.nvidia.com/gpu: "4"
+    limits.nvidia.com/gpu: "8"
+  scopes:
+  - NotTerminating
+  scopeSelector:
+    matchExpressions:
+    - operator: In
+      scopeName: PriorityClass
+      values: 
+      - high-priority
+
+---
+# Compute Resource Quota for Document Service in Production
+# This quota ensures the Document Service has sufficient resources for
+# document classification using scikit-learn models
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: document-service-quota
+  namespace: mca-production
+spec:
+  hard:
+    requests.cpu: "8"
+    limits.cpu: "16"
+    requests.memory: 16Gi
+    limits.memory: 32Gi
+  scopes:
+  - NotTerminating
+  scopeSelector:
+    matchExpressions:
+    - operator: In
+      scopeName: PriorityClass
+      values: 
+      - high-priority
+
+---
+# Resource Quota for Time-Bound Operations in Production
+# This quota ensures that time-sensitive operations have sufficient resources
+# to meet the 5-minute processing SLA requirement
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: time-bound-operations-quota
+  namespace: mca-production
+spec:
+  hard:
+    requests.cpu: "12"
+    limits.cpu: "24"
+    requests.memory: 24Gi
+    limits.memory: 48Gi
+    requests.nvidia.com/gpu: "2"
+    limits.nvidia.com/gpu: "4"
+    pods: "25"
+  scopes:
+  - Terminating
+  - NotBestEffort
