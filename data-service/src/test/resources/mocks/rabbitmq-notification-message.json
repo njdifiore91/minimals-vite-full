@@ -1,0 +1,281 @@
+{
+  "message": {
+    "id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+    "type": "STATUS_UPDATE",
+    "timestamp": "2025-05-20T14:30:45.123Z",
+    "priority": "HIGH",
+    "recipients": [
+      {
+        "channel": "WEBHOOK",
+        "destination": "https://api.partner-system.com/webhooks/mca-updates",
+        "name": "Partner Integration",
+        "properties": {
+          "secretKey": "${WEBHOOK_SECRET_KEY}",
+          "timeout": 30000,
+          "version": "1.0"
+        }
+      },
+      {
+        "channel": "EMAIL",
+        "destination": "operations@dollarfunding.com",
+        "name": "Operations Team",
+        "properties": {
+          "template": "application-status-update",
+          "cc": ["supervisor@dollarfunding.com"]
+        }
+      }
+    ],
+    "payload": {
+      "applicationId": "APP-2025-05-20-00123",
+      "merchantName": "Acme Supplies Inc.",
+      "previousStatus": "DOCUMENT_REVIEW",
+      "newStatus": "UNDERWRITING",
+      "documentIds": ["DOC-2025-05-20-00456", "DOC-2025-05-20-00457"],
+      "updatedBy": "system",
+      "statusChangeReason": "All required documents verified",
+      "nextSteps": "Application is now in underwriting review"
+    },
+    "metadata": {
+      "correlationId": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+      "sourceService": "data-service",
+      "sourceIp": "10.0.12.45",
+      "processingTime": 235
+    },
+    "deliveryOptions": {
+      "retryCount": 3,
+      "retryDelayMs": 60000,
+      "expirationMs": 86400000,
+      "requireHmac": true,
+      "hmacAlgorithm": "HmacSHA256",
+      "deliveryDeadline": "2025-05-20T16:30:45.123Z"
+    }
+  },
+  "properties": {
+    "contentType": "application/json",
+    "contentEncoding": "UTF-8",
+    "correlationId": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+    "messageId": "msg-2025-05-20-123456",
+    "priority": 8,
+    "timestamp": 1716215445123,
+    "deliveryMode": 2,
+    "expiration": "86400000",
+    "headers": {
+      "notification_type": "STATUS_UPDATE",
+      "source_service": "data-service",
+      "x-retry-count": 0
+    }
+  },
+  "routing": {
+    "exchange": "mca.documents",
+    "routingKey": "notification"
+  },
+  "alternativeExamples": [
+    {
+      "description": "Error notification example",
+      "message": {
+        "id": "e37bc10b-48cc-4372-a567-0e02b2c3d123",
+        "type": "ERROR",
+        "timestamp": "2025-05-20T15:45:12.789Z",
+        "priority": "CRITICAL",
+        "recipients": [
+          {
+            "channel": "EMAIL",
+            "destination": "tech-support@dollarfunding.com",
+            "name": "Technical Support",
+            "properties": {
+              "template": "system-error-alert",
+              "cc": ["dev-team@dollarfunding.com"]
+            }
+          },
+          {
+            "channel": "SMS",
+            "destination": "+15551234567",
+            "name": "On-Call Engineer",
+            "properties": {
+              "urgent": true
+            }
+          }
+        ],
+        "payload": {
+          "applicationId": "APP-2025-05-20-00124",
+          "errorCode": "OCR-5001",
+          "errorMessage": "Failed to extract data from tax return document",
+          "severity": "HIGH",
+          "documentId": "DOC-2025-05-20-00458",
+          "stackTrace": "com.dollarfunding.mca.ocr.OcrException: Unable to process document...",
+          "recoveryAction": "Document has been queued for manual review"
+        },
+        "metadata": {
+          "correlationId": "e37bc10b-48cc-4372-a567-0e02b2c3d123",
+          "sourceService": "ocr-service",
+          "sourceIp": "10.0.12.46",
+          "processingTime": 1250
+        },
+        "deliveryOptions": {
+          "retryCount": 5,
+          "retryDelayMs": 30000,
+          "expirationMs": 3600000,
+          "requireHmac": false,
+          "deliveryDeadline": "2025-05-20T16:45:12.789Z"
+        }
+      },
+      "properties": {
+        "contentType": "application/json",
+        "contentEncoding": "UTF-8",
+        "correlationId": "e37bc10b-48cc-4372-a567-0e02b2c3d123",
+        "messageId": "msg-2025-05-20-123457",
+        "priority": 10,
+        "timestamp": 1716219912789,
+        "deliveryMode": 2,
+        "expiration": "3600000",
+        "headers": {
+          "notification_type": "ERROR",
+          "source_service": "ocr-service",
+          "x-retry-count": 0,
+          "error_code": "OCR-5001"
+        }
+      }
+    },
+    {
+      "description": "Application completion notification example",
+      "message": {
+        "id": "a17ac10b-38cc-4372-a567-0e02b2c3d789",
+        "type": "COMPLETION",
+        "timestamp": "2025-05-20T16:15:30.456Z",
+        "priority": "MEDIUM",
+        "recipients": [
+          {
+            "channel": "WEBHOOK",
+            "destination": "https://api.partner-system.com/webhooks/mca-completions",
+            "name": "Partner Integration",
+            "properties": {
+              "secretKey": "${WEBHOOK_SECRET_KEY}",
+              "timeout": 30000,
+              "version": "1.0"
+            }
+          },
+          {
+            "channel": "EMAIL",
+            "destination": "merchant@acmesupplies.com",
+            "name": "Merchant Contact",
+            "properties": {
+              "template": "application-approved",
+              "attachments": ["approval-letter.pdf"]
+            }
+          },
+          {
+            "channel": "PUSH",
+            "destination": "device-token-123456",
+            "name": "Mobile App",
+            "properties": {
+              "sound": "default",
+              "badge": 1
+            }
+          }
+        ],
+        "payload": {
+          "applicationId": "APP-2025-05-20-00123",
+          "merchantName": "Acme Supplies Inc.",
+          "approvalStatus": "APPROVED",
+          "approvedAmount": 50000.00,
+          "approvedTerm": 12,
+          "approvedRate": 1.25,
+          "approvedBy": "John Underwriter",
+          "approvalDate": "2025-05-20T16:10:22.123Z",
+          "nextSteps": "Contract will be sent for signature within 24 hours"
+        },
+        "metadata": {
+          "correlationId": "a17ac10b-38cc-4372-a567-0e02b2c3d789",
+          "sourceService": "data-service",
+          "sourceIp": "10.0.12.45",
+          "processingTime": 345
+        },
+        "deliveryOptions": {
+          "retryCount": 3,
+          "retryDelayMs": 60000,
+          "expirationMs": 86400000,
+          "requireHmac": true,
+          "hmacAlgorithm": "HmacSHA256",
+          "deliveryDeadline": "2025-05-20T18:15:30.456Z"
+        }
+      },
+      "properties": {
+        "contentType": "application/json",
+        "contentEncoding": "UTF-8",
+        "correlationId": "a17ac10b-38cc-4372-a567-0e02b2c3d789",
+        "messageId": "msg-2025-05-20-123458",
+        "priority": 5,
+        "timestamp": 1716221730456,
+        "deliveryMode": 2,
+        "expiration": "86400000",
+        "headers": {
+          "notification_type": "COMPLETION",
+          "source_service": "data-service",
+          "x-retry-count": 0
+        }
+      }
+    },
+    {
+      "description": "Document processed notification example",
+      "message": {
+        "id": "b27ac10b-68cc-4372-a567-0e02b2c3d456",
+        "type": "STATUS_UPDATE",
+        "timestamp": "2025-05-20T13:45:22.789Z",
+        "priority": "MEDIUM",
+        "recipients": [
+          {
+            "channel": "WEBHOOK",
+            "destination": "https://api.partner-system.com/webhooks/document-updates",
+            "name": "Partner Integration",
+            "properties": {
+              "secretKey": "${WEBHOOK_SECRET_KEY}",
+              "timeout": 30000,
+              "version": "1.0"
+            }
+          }
+        ],
+        "payload": {
+          "applicationId": "APP-2025-05-20-00123",
+          "merchantName": "Acme Supplies Inc.",
+          "documentId": "DOC-2025-05-20-00456",
+          "documentType": "TAX_RETURN",
+          "documentStatus": "PROCESSED",
+          "processingConfidence": 0.95,
+          "extractedFields": 42,
+          "lowConfidenceFields": 3,
+          "processingTime": 2345
+        },
+        "metadata": {
+          "correlationId": "b27ac10b-68cc-4372-a567-0e02b2c3d456",
+          "sourceService": "ocr-service",
+          "sourceIp": "10.0.12.46",
+          "processingTime": 2345
+        },
+        "deliveryOptions": {
+          "retryCount": 3,
+          "retryDelayMs": 60000,
+          "expirationMs": 86400000,
+          "requireHmac": true,
+          "hmacAlgorithm": "HmacSHA256",
+          "deliveryDeadline": "2025-05-20T15:45:22.789Z"
+        }
+      },
+      "properties": {
+        "contentType": "application/json",
+        "contentEncoding": "UTF-8",
+        "correlationId": "b27ac10b-68cc-4372-a567-0e02b2c3d456",
+        "messageId": "msg-2025-05-20-123459",
+        "priority": 5,
+        "timestamp": 1716212722789,
+        "deliveryMode": 2,
+        "expiration": "86400000",
+        "headers": {
+          "notification_type": "STATUS_UPDATE",
+          "document_type": "TAX_RETURN",
+          "source_service": "ocr-service",
+          "x-retry-count": 0
+        }
+      }
+    }
+  ]
+}
