@@ -1,0 +1,128 @@
+{{- /*
+Document Service ConfigMap Template
+
+This template creates a Kubernetes ConfigMap for the Document Service microservice.
+It extends the common configmap template with Document Service specific configuration.
+
+Configuration includes:
+- RabbitMQ connection details
+- S3 storage configuration
+- Model parameters for document classification
+- Application settings
+*/}}
+
+{{- $config := dict -}}
+{{- $data := dict -}}
+
+{{- /* RabbitMQ Configuration */ -}}
+{{- $_ := set $data "RABBITMQ_HOST" (default "rabbitmq.messaging.svc.cluster.local" .Values.rabbitmq.host | quote) -}}
+{{- $_ := set $data "RABBITMQ_PORT" (default "5672" .Values.rabbitmq.port | quote) -}}
+{{- $_ := set $data "RABBITMQ_VHOST" (default "/" .Values.rabbitmq.vhost | quote) -}}
+{{- $_ := set $data "RABBITMQ_EXCHANGE" (default "mca.documents" .Values.rabbitmq.exchange | quote) -}}
+{{- $_ := set $data "RABBITMQ_QUEUE" (default "document-processing" .Values.rabbitmq.queue | quote) -}}
+{{- $_ := set $data "RABBITMQ_ROUTING_KEY" (default "document.classify" .Values.rabbitmq.routingKey | quote) -}}
+{{- $_ := set $data "RABBITMQ_TLS_ENABLED" (default "true" (index .Values.rabbitmq.tls "enabled") | quote) -}}
+{{- $_ := set $data "RABBITMQ_TLS_VERIFY" (default "true" (index .Values.rabbitmq.tls "verify") | quote) -}}
+
+{{- /* S3 Storage Configuration */ -}}
+{{- $_ := set $data "S3_ENDPOINT" (default "s3.amazonaws.com" .Values.s3.endpoint | quote) -}}
+{{- $_ := set $data "S3_REGION" (default "us-east-1" .Values.s3.region | quote) -}}
+{{- $_ := set $data "S3_BUCKET" (default (printf "mca-documents-%s" (default "development" .Values.global.environment)) .Values.s3.bucket | quote) -}}
+{{- $_ := set $data "S3_ENCRYPTION_ENABLED" (default "true" (index .Values.s3.encryption "enabled") | quote) -}}
+{{- $_ := set $data "S3_ENCRYPTION_ALGORITHM" (default "AES256" (index .Values.s3.encryption "algorithm") | quote) -}}
+
+{{- /* Redis Configuration */ -}}
+{{- if .Values.redis.enabled -}}
+{{- $_ := set $data "REDIS_ENABLED" "true" -}}
+{{- $_ := set $data "REDIS_HOST" (default "redis.cache.svc.cluster.local" .Values.redis.host | quote) -}}
+{{- $_ := set $data "REDIS_PORT" (default "6379" .Values.redis.port | quote) -}}
+{{- $_ := set $data "REDIS_TTL" (default "900" .Values.redis.ttl | quote) -}}
+{{- $_ := set $data "REDIS_AUTH_ENABLED" (default "true" (index .Values.redis.auth "enabled") | quote) -}}
+{{- else -}}
+{{- $_ := set $data "REDIS_ENABLED" "false" -}}
+{{- end -}}
+
+{{- /* Application Configuration */ -}}
+{{- $_ := set $data "APP_NAME" (default "document-service" .Values.env.APP_NAME | quote) -}}
+{{- $_ := set $data "LOG_LEVEL" (default "INFO" .Values.env.LOG_LEVEL | quote) -}}
+{{- $_ := set $data "PROCESSING_BATCH_SIZE" (default "50" .Values.env.PROCESSING_BATCH_SIZE | quote) -}}
+{{- $_ := set $data "WORKER_THREADS" (default "4" .Values.env.WORKER_THREADS | quote) -}}
+
+{{- /* Model Configuration */ -}}
+{{- $_ := set $data "MODEL_VERSION" (default "1.0.0" .Values.env.MODEL_VERSION | quote) -}}
+{{- $_ := set $data "CLASSIFIER_TYPE" (default "RandomForest" .Values.env.CLASSIFIER_TYPE | quote) -}}
+{{- $_ := set $data "CONFIDENCE_THRESHOLD" (default "0.85" .Values.env.CONFIDENCE_THRESHOLD | quote) -}}
+{{- $_ := set $data "ENABLE_MODEL_CACHING" (default "true" .Values.env.ENABLE_MODEL_CACHING | quote) -}}
+{{- $_ := set $data "MODEL_CACHE_TTL" (default "3600" .Values.env.MODEL_CACHE_TTL | quote) -}}
+
+{{- /* Python Configuration */ -}}
+{{- $_ := set $data "PYTHONUNBUFFERED" (default "1" .Values.env.PYTHONUNBUFFERED | quote) -}}
+{{- $_ := set $data "SCIKIT_LEARN_VERSION" (default "1.4.1" .Values.env.SCIKIT_LEARN_VERSION | quote) -}}
+
+{{- /* Set the data in the config */ -}}
+{{- $_ := set $config "data" $data -}}
+
+{{- /* JSON Configuration */ -}}
+{{- $json := dict -}}
+
+{{- /* Document Types Configuration */ -}}
+{{- $documentTypes := dict "documentTypes" (list 
+  (dict "id" "loan_application" "name" "Loan Application" "priority" 1 "requiredFields" (list "applicant_name" "loan_amount" "loan_purpose"))
+  (dict "id" "tax_return" "name" "Tax Return" "priority" 2 "requiredFields" (list "tax_year" "taxpayer_id" "adjusted_gross_income"))
+  (dict "id" "bank_statement" "name" "Bank Statement" "priority" 3 "requiredFields" (list "account_number" "statement_date" "ending_balance"))
+  (dict "id" "pay_stub" "name" "Pay Stub" "priority" 4 "requiredFields" (list "employee_name" "pay_period" "gross_pay"))
+  (dict "id" "identity_document" "name" "Identity Document" "priority" 5 "requiredFields" (list "document_type" "document_number" "expiration_date"))
+  (dict "id" "other" "name" "Other Document" "priority" 6 "requiredFields" (list))
+) -}}
+{{- $_ := set $json "document-types.json" $documentTypes -}}
+
+{{- /* Model Configuration */ -}}
+{{- $modelConfig := dict "models" (dict 
+  "svm" (dict 
+    "parameters" (dict "C" 1.0 "kernel" "linear" "probability" true)
+    "featureExtraction" (dict "method" "tfidf" "maxFeatures" 10000)
+  )
+  "randomForest" (dict 
+    "parameters" (dict "n_estimators" 100 "max_depth" 10 "min_samples_split" 2)
+    "featureExtraction" (dict "method" "tfidf" "maxFeatures" 5000)
+  )
+) -}}
+{{- $_ := set $modelConfig "preprocessing" (dict "enableNormalization" true "enableStopwordRemoval" true "enableStemming" true "language" "english") -}}
+{{- $_ := set $modelConfig "evaluation" (dict "crossValidationFolds" 5 "testSplitRatio" 0.2 "metrics" (list "accuracy" "precision" "recall" "f1")) -}}
+{{- $_ := set $json "model-config.json" $modelConfig -}}
+
+{{- /* Set the json in the config */ -}}
+{{- $_ := set $config "json" $json -}}
+
+{{- /* YAML Configuration */ -}}
+{{- $yaml := dict -}}
+
+{{- /* Logging Configuration */ -}}
+{{- $loggingConfig := dict "version" 1 -}}
+{{- $_ := set $loggingConfig "formatters" (dict 
+  "standard" (dict "format" "%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+  "json" (dict "format" "json" "class" "pythonjsonlogger.jsonlogger.JsonFormatter" "json_ensure_ascii" false)
+) -}}
+{{- $_ := set $loggingConfig "handlers" (dict 
+  "console" (dict "class" "logging.StreamHandler" "level" (default "INFO" .Values.env.LOG_LEVEL) "formatter" "json" "stream" "ext://sys.stdout")
+  "file" (dict "class" "logging.handlers.RotatingFileHandler" "level" (default "INFO" .Values.env.LOG_LEVEL) "formatter" "json" "filename" "/var/log/document-service/document-service.log" "maxBytes" 10485760 "backupCount" 5)
+) -}}
+{{- $_ := set $loggingConfig "loggers" (dict 
+  "document_service" (dict "level" (default "INFO" .Values.env.LOG_LEVEL) "handlers" (list "console" "file") "propagate" false)
+) -}}
+{{- $_ := set $loggingConfig "root" (dict "level" (default "INFO" .Values.env.LOG_LEVEL) "handlers" (list "console")) -}}
+{{- $_ := set $yaml "logging-config.yaml" $loggingConfig -}}
+
+{{- /* Set the yaml in the config */ -}}
+{{- $_ := set $config "yaml" $yaml -}}
+
+{{- /* Set the config in Values */ -}}
+{{- $_ := set .Values "config" $config -}}
+
+{{- /* Include the common configmap template */ -}}
+{{- include "common.configmap" . -}}
+
+{{- /* Include environment-specific ConfigMap if needed */ -}}
+{{- if .Values.environmentConfig -}}
+{{- include "common.configmap.env" . -}}
+{{- end -}}
