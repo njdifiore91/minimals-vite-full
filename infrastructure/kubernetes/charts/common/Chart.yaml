@@ -1,0 +1,9 @@
+apiVersion: v2
+name: common
+version: 0.1.0
+description: Common Helm chart library providing shared templates for MCA Application Processing System microservices
+type: library
+maintainers:
+  - name: Dollar Funding DevOps Team
+    email: devops@dollarfunding.com
+appVersion: 1.0.0
