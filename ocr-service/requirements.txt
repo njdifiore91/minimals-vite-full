@@ -1,32 +1,36 @@
-# Core OCR and Machine Learning
-tensorflow==2.15.0  # Core ML framework for OCR processing with GPU acceleration
-numpy==1.24.3  # Numerical computing library required by TensorFlow
-pandas==2.0.3  # Data manipulation and analysis
-opencv-python==4.8.1.78  # Image preprocessing and computer vision
-scikit-image==0.21.0  # Additional image processing capabilities
-pillow==10.1.0  # Python Imaging Library for image handling
+# Core TensorFlow dependencies
+tensorflow==2.15.0
+tensorflow-gpu==2.15.0
 
 # API and Web Server
-fastapi==0.104.1  # API framework for endpoints and health checks
-uvicorn==0.23.2  # ASGI server for FastAPI
-pydantic==2.4.2  # Data validation and settings management
-python-multipart==0.0.6  # Multipart form parsing for FastAPI
+fastapi==0.104.1
+uvicorn==0.24.0
+python-multipart==0.0.6
+pydantic==2.4.2
+
+# Image Processing
+opencv-python==4.8.1.78
+pillow==10.1.0
+numpy==1.24.3
+pandas==2.1.2
 
 # Message Queue
-pika==1.3.2  # RabbitMQ client for message queue integration
+pika==1.3.2
 
 # Storage
-boto3==1.28.62  # AWS SDK for S3-compatible storage access
-
-# Utilities
-python-dotenv==1.0.0  # Environment variable management
-requests==2.31.0  # HTTP client for API requests
-cryptography==41.0.5  # Encryption for secure storage (AES-256)
-
-# Monitoring and Logging
-prometheus-client==0.17.1  # Metrics collection for monitoring
-loguru==0.7.2  # Enhanced logging capabilities
+boto3==1.28.62
 
 # Testing
-pytest==7.4.3  # Testing framework
-pytest-cov==4.1.0  # Test coverage reporting
+pytest==7.4.3
+pytest-cov==4.1.0
+
+# Utilities
+python-dotenv==1.0.0
+requests==2.31.0
+loguru==0.7.2
+
+# Performance monitoring
+prometheus-client==0.17.1
+
+# Health checks
+python-json-logger==2.0.7
