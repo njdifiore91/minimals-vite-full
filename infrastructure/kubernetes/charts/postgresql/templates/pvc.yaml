@@ -1,0 +1,167 @@
+{{- /*
+PersistentVolumeClaim templates for PostgreSQL data storage.
+This template creates PVCs for both primary and replica PostgreSQL instances with environment-specific configurations.
+*/}}
+
+{{- $environment := .Values.environment | default "staging" }}
+{{- $isProd := eq $environment "production" }}
+{{- $isStaging := eq $environment "staging" }}
+
+{{- /* Determine storage class based on environment */}}
+{{- $storageClass := .Values.storage.storageClass }}
+{{- if $isProd }}
+  {{- $storageClass = .Values.storage.production.storageClass | default $storageClass }}
+{{- else if $isStaging }}
+  {{- $storageClass = .Values.storage.staging.storageClass | default $storageClass }}
+{{- end }}
+
+{{- /* Determine primary storage size based on environment */}}
+{{- $primarySize := .Values.storage.primary.size }}
+{{- if $isProd }}
+  {{- $primarySize = .Values.storage.production.primary.size | default $primarySize }}
+{{- else if $isStaging }}
+  {{- $primarySize = .Values.storage.staging.primary.size | default $primarySize }}
+{{- end }}
+
+{{- /* Determine replica storage size based on environment */}}
+{{- $replicaSize := .Values.storage.replica.size }}
+{{- if $isProd }}
+  {{- $replicaSize = .Values.storage.production.replica.size | default $replicaSize }}
+{{- else if $isStaging }}
+  {{- $replicaSize = .Values.storage.staging.replica.size | default $replicaSize }}
+{{- end }}
+
+{{- /* Determine volume expansion setting */}}
+{{- $allowVolumeExpansion := .Values.storage.allowVolumeExpansion | default true }}
+
+{{- /* Determine storage encryption setting */}}
+{{- $storageEncryption := .Values.storage.encryption | default false }}
+
+{{- /* Common labels and annotations */}}
+{{- $labels := .Values.global.labels | default dict }}
+{{- $annotations := .Values.global.annotations | default dict }}
+
+{{- /* Persistence annotations */}}
+{{- $persistenceAnnotations := .Values.persistence.annotations | default dict }}
+
+---
+# PersistentVolumeClaim for PostgreSQL primary instance
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "postgresql.fullname" . }}-primary
+  labels:
+    {{- include "postgresql.labels" . | nindent 4 }}
+    app.kubernetes.io/component: primary
+    {{- with $labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  annotations:
+    {{- with $annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- with $persistenceAnnotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- if $storageEncryption }}
+    encrypt-volume: "true"
+    {{- end }}
+    {{- if $allowVolumeExpansion }}
+    "volume.beta.kubernetes.io/storage-provisioner": "kubernetes.io/aws-ebs"
+    {{- end }}
+    {{- if $isProd }}
+    "volume.kubernetes.io/selected-node": "{{ .Release.Name }}-primary"
+    {{- if hasKey .Values.storage.production.primary "iops" }}
+    "volume.beta.kubernetes.io/aws-volume-type": "io1"
+    "volume.beta.kubernetes.io/aws-volume-iops": "{{ .Values.storage.production.primary.iops }}"
+    {{- end }}
+    {{- else if $isStaging }}
+    {{- if hasKey .Values.storage.staging.primary "iops" }}
+    "volume.beta.kubernetes.io/aws-volume-type": "io1"
+    "volume.beta.kubernetes.io/aws-volume-iops": "{{ .Values.storage.staging.primary.iops }}"
+    {{- end }}
+    {{- end }}
+spec:
+  accessModes:
+    {{- with .Values.persistence.accessModes }}
+    {{- toYaml . | nindent 4 }}
+    {{- else }}
+    - ReadWriteOnce
+    {{- end }}
+  {{- if $storageClass }}
+  storageClassName: {{ $storageClass }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $primarySize }}
+  {{- if $allowVolumeExpansion }}
+  volumeMode: Filesystem
+  {{- end }}
+
+{{- /* Create PVCs for replicas only if replica count > 0 */}}
+{{- $replicaCount := 0 }}
+{{- if $isProd }}
+  {{- $replicaCount = .Values.replicas.production.count | default 0 }}
+{{- else if $isStaging }}
+  {{- $replicaCount = .Values.replicas.staging.count | default 0 }}
+{{- else }}
+  {{- $replicaCount = .Values.replicas.count | default 0 }}
+{{- end }}
+
+{{- if gt $replicaCount 0 }}
+{{- range $i := until $replicaCount }}
+---
+# PersistentVolumeClaim for PostgreSQL replica-{{ $i }} instance
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "postgresql.fullname" $ }}-replica-{{ $i }}
+  labels:
+    {{- include "postgresql.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: replica
+    app.kubernetes.io/replica-index: "{{ $i }}"
+    {{- with $labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  annotations:
+    {{- with $annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- with $persistenceAnnotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- if $storageEncryption }}
+    encrypt-volume: "true"
+    {{- end }}
+    {{- if $allowVolumeExpansion }}
+    "volume.beta.kubernetes.io/storage-provisioner": "kubernetes.io/aws-ebs"
+    {{- end }}
+    {{- if $isProd }}
+    {{- if hasKey $.Values.storage.production.replica "iops" }}
+    "volume.beta.kubernetes.io/aws-volume-type": "io1"
+    "volume.beta.kubernetes.io/aws-volume-iops": "{{ $.Values.storage.production.replica.iops }}"
+    {{- end }}
+    {{- else if $isStaging }}
+    {{- if hasKey $.Values.storage.staging.replica "iops" }}
+    "volume.beta.kubernetes.io/aws-volume-type": "io1"
+    "volume.beta.kubernetes.io/aws-volume-iops": "{{ $.Values.storage.staging.replica.iops }}"
+    {{- end }}
+    {{- end }}
+spec:
+  accessModes:
+    {{- with $.Values.persistence.accessModes }}
+    {{- toYaml . | nindent 4 }}
+    {{- else }}
+    - ReadWriteOnce
+    {{- end }}
+  {{- if $storageClass }}
+  storageClassName: {{ $storageClass }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $replicaSize }}
+  {{- if $allowVolumeExpansion }}
+  volumeMode: Filesystem
+  {{- end }}
+{{- end }}
+{{- end }}
