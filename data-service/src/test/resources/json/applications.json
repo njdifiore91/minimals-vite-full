@@ -1,0 +1,512 @@
+[
+  {
+    "id": "APP-2023-001",
+    "status": "approved",
+    "metadata": {
+      "funding_amount": 75000.00,
+      "term_length": 12,
+      "purpose": "Inventory expansion",
+      "business_type": "Retail",
+      "time_in_business": 36,
+      "monthly_revenue": 45000.00,
+      "credit_score": 720,
+      "automation_confidence": 0.95
+    },
+    "created_at": "2023-11-15T09:23:45.000Z",
+    "updated_at": "2023-11-15T09:27:12.000Z",
+    "review_status": "automated_approval"
+  },
+  {
+    "id": "APP-2023-002",
+    "status": "rejected",
+    "metadata": {
+      "funding_amount": 150000.00,
+      "term_length": 18,
+      "purpose": "Equipment purchase",
+      "business_type": "Manufacturing",
+      "time_in_business": 8,
+      "monthly_revenue": 25000.00,
+      "credit_score": 580,
+      "automation_confidence": 0.92
+    },
+    "created_at": "2023-11-15T10:15:22.000Z",
+    "updated_at": "2023-11-15T10:18:45.000Z",
+    "review_status": "automated_rejection"
+  },
+  {
+    "id": "APP-2023-003",
+    "status": "pending",
+    "metadata": {
+      "funding_amount": 50000.00,
+      "term_length": 6,
+      "purpose": "Working capital",
+      "business_type": "Service",
+      "time_in_business": 24,
+      "monthly_revenue": 30000.00,
+      "credit_score": 650,
+      "automation_confidence": 0.88
+    },
+    "created_at": "2023-11-15T11:05:33.000Z",
+    "updated_at": "2023-11-15T11:05:33.000Z",
+    "review_status": "awaiting_documents"
+  },
+  {
+    "id": "APP-2023-004",
+    "status": "in_review",
+    "metadata": {
+      "funding_amount": 200000.00,
+      "term_length": 24,
+      "purpose": "Business expansion",
+      "business_type": "Construction",
+      "time_in_business": 60,
+      "monthly_revenue": 120000.00,
+      "credit_score": 700,
+      "automation_confidence": 0.75
+    },
+    "created_at": "2023-11-15T13:45:12.000Z",
+    "updated_at": "2023-11-15T13:48:22.000Z",
+    "review_status": "manual_review"
+  },
+  {
+    "id": "APP-2023-005",
+    "status": "approved",
+    "metadata": {
+      "funding_amount": 35000.00,
+      "term_length": 9,
+      "purpose": "Marketing campaign",
+      "business_type": "E-commerce",
+      "time_in_business": 18,
+      "monthly_revenue": 28000.00,
+      "credit_score": 680,
+      "automation_confidence": 0.94
+    },
+    "created_at": "2023-11-16T09:12:33.000Z",
+    "updated_at": "2023-11-16T09:15:45.000Z",
+    "review_status": "automated_approval"
+  },
+  {
+    "id": "APP-2023-006",
+    "status": "exception",
+    "metadata": {
+      "funding_amount": 125000.00,
+      "term_length": 18,
+      "purpose": "Debt refinancing",
+      "business_type": "Healthcare",
+      "time_in_business": 48,
+      "monthly_revenue": 85000.00,
+      "credit_score": 710,
+      "automation_confidence": 0.65
+    },
+    "created_at": "2023-11-16T10:33:21.000Z",
+    "updated_at": "2023-11-16T10:38:45.000Z",
+    "review_status": "document_error"
+  },
+  {
+    "id": "APP-2023-007",
+    "status": "approved",
+    "metadata": {
+      "funding_amount": 80000.00,
+      "term_length": 12,
+      "purpose": "Inventory purchase",
+      "business_type": "Wholesale",
+      "time_in_business": 36,
+      "monthly_revenue": 65000.00,
+      "credit_score": 740,
+      "automation_confidence": 0.97
+    },
+    "created_at": "2023-11-16T14:22:11.000Z",
+    "updated_at": "2023-11-16T14:25:33.000Z",
+    "review_status": "automated_approval"
+  },
+  {
+    "id": "APP-2023-008",
+    "status": "rejected",
+    "metadata": {
+      "funding_amount": 175000.00,
+      "term_length": 24,
+      "purpose": "Location expansion",
+      "business_type": "Restaurant",
+      "time_in_business": 12,
+      "monthly_revenue": 40000.00,
+      "credit_score": 600,
+      "automation_confidence": 0.91
+    },
+    "created_at": "2023-11-17T09:05:45.000Z",
+    "updated_at": "2023-11-17T09:09:12.000Z",
+    "review_status": "automated_rejection"
+  },
+  {
+    "id": "APP-2023-009",
+    "status": "in_review",
+    "metadata": {
+      "funding_amount": 95000.00,
+      "term_length": 15,
+      "purpose": "Equipment upgrade",
+      "business_type": "Technology",
+      "time_in_business": 30,
+      "monthly_revenue": 75000.00,
+      "credit_score": 690,
+      "automation_confidence": 0.78
+    },
+    "created_at": "2023-11-17T11:33:22.000Z",
+    "updated_at": "2023-11-17T11:36:45.000Z",
+    "review_status": "manual_review"
+  },
+  {
+    "id": "APP-2023-010",
+    "status": "approved",
+    "metadata": {
+      "funding_amount": 45000.00,
+      "term_length": 9,
+      "purpose": "Working capital",
+      "business_type": "Professional services",
+      "time_in_business": 54,
+      "monthly_revenue": 35000.00,
+      "credit_score": 730,
+      "automation_confidence": 0.96
+    },
+    "created_at": "2023-11-17T13:45:33.000Z",
+    "updated_at": "2023-11-17T13:48:12.000Z",
+    "review_status": "automated_approval"
+  },
+  {
+    "id": "APP-2023-011",
+    "status": "pending",
+    "metadata": {
+      "funding_amount": 60000.00,
+      "term_length": 12,
+      "purpose": "Seasonal inventory",
+      "business_type": "Retail",
+      "time_in_business": 24,
+      "monthly_revenue": 42000.00,
+      "credit_score": 670,
+      "automation_confidence": 0.85
+    },
+    "created_at": "2023-11-18T09:15:22.000Z",
+    "updated_at": "2023-11-18T09:15:22.000Z",
+    "review_status": "awaiting_documents"
+  },
+  {
+    "id": "APP-2023-012",
+    "status": "exception",
+    "metadata": {
+      "funding_amount": 110000.00,
+      "term_length": 18,
+      "purpose": "Franchise fee",
+      "business_type": "Food service",
+      "time_in_business": 6,
+      "monthly_revenue": 0.00,
+      "credit_score": 720,
+      "automation_confidence": 0.62
+    },
+    "created_at": "2023-11-18T10:45:33.000Z",
+    "updated_at": "2023-11-18T10:49:12.000Z",
+    "review_status": "business_rule_exception"
+  },
+  {
+    "id": "APP-2023-013",
+    "status": "approved",
+    "metadata": {
+      "funding_amount": 55000.00,
+      "term_length": 12,
+      "purpose": "Equipment purchase",
+      "business_type": "Construction",
+      "time_in_business": 42,
+      "monthly_revenue": 60000.00,
+      "credit_score": 710,
+      "automation_confidence": 0.93
+    },
+    "created_at": "2023-11-18T13:22:45.000Z",
+    "updated_at": "2023-11-18T13:26:33.000Z",
+    "review_status": "automated_approval"
+  },
+  {
+    "id": "APP-2023-014",
+    "status": "rejected",
+    "metadata": {
+      "funding_amount": 85000.00,
+      "term_length": 15,
+      "purpose": "Debt consolidation",
+      "business_type": "Retail",
+      "time_in_business": 18,
+      "monthly_revenue": 30000.00,
+      "credit_score": 590,
+      "automation_confidence": 0.94
+    },
+    "created_at": "2023-11-19T09:33:12.000Z",
+    "updated_at": "2023-11-19T09:36:45.000Z",
+    "review_status": "automated_rejection"
+  },
+  {
+    "id": "APP-2023-015",
+    "status": "in_review",
+    "metadata": {
+      "funding_amount": 150000.00,
+      "term_length": 24,
+      "purpose": "Business acquisition",
+      "business_type": "Manufacturing",
+      "time_in_business": 72,
+      "monthly_revenue": 95000.00,
+      "credit_score": 700,
+      "automation_confidence": 0.72
+    },
+    "created_at": "2023-11-19T11:15:33.000Z",
+    "updated_at": "2023-11-19T11:19:22.000Z",
+    "review_status": "manual_review"
+  },
+  {
+    "id": "APP-2023-016",
+    "status": "approved",
+    "metadata": {
+      "funding_amount": 40000.00,
+      "term_length": 6,
+      "purpose": "Marketing",
+      "business_type": "E-commerce",
+      "time_in_business": 24,
+      "monthly_revenue": 32000.00,
+      "credit_score": 680,
+      "automation_confidence": 0.95
+    },
+    "created_at": "2023-11-19T14:05:45.000Z",
+    "updated_at": "2023-11-19T14:08:33.000Z",
+    "review_status": "automated_approval"
+  },
+  {
+    "id": "APP-2023-017",
+    "status": "pending",
+    "metadata": {
+      "funding_amount": 70000.00,
+      "term_length": 12,
+      "purpose": "Working capital",
+      "business_type": "Healthcare",
+      "time_in_business": 36,
+      "monthly_revenue": 55000.00,
+      "credit_score": 660,
+      "automation_confidence": 0.87
+    },
+    "created_at": "2023-11-20T09:22:33.000Z",
+    "updated_at": "2023-11-20T09:22:33.000Z",
+    "review_status": "awaiting_documents"
+  },
+  {
+    "id": "APP-2023-018",
+    "status": "exception",
+    "metadata": {
+      "funding_amount": 130000.00,
+      "term_length": 18,
+      "purpose": "Real estate purchase",
+      "business_type": "Real estate",
+      "time_in_business": 48,
+      "monthly_revenue": 75000.00,
+      "credit_score": 720,
+      "automation_confidence": 0.68
+    },
+    "created_at": "2023-11-20T10:45:12.000Z",
+    "updated_at": "2023-11-20T10:49:33.000Z",
+    "review_status": "document_verification_needed"
+  },
+  {
+    "id": "APP-2023-019",
+    "status": "approved",
+    "metadata": {
+      "funding_amount": 65000.00,
+      "term_length": 12,
+      "purpose": "Inventory expansion",
+      "business_type": "Wholesale",
+      "time_in_business": 30,
+      "monthly_revenue": 48000.00,
+      "credit_score": 700,
+      "automation_confidence": 0.92
+    },
+    "created_at": "2023-11-20T13:15:45.000Z",
+    "updated_at": "2023-11-20T13:19:22.000Z",
+    "review_status": "automated_approval"
+  },
+  {
+    "id": "APP-2023-020",
+    "status": "rejected",
+    "metadata": {
+      "funding_amount": 90000.00,
+      "term_length": 15,
+      "purpose": "Equipment purchase",
+      "business_type": "Transportation",
+      "time_in_business": 12,
+      "monthly_revenue": 25000.00,
+      "credit_score": 610,
+      "automation_confidence": 0.90
+    },
+    "created_at": "2023-11-21T09:33:22.000Z",
+    "updated_at": "2023-11-21T09:36:45.000Z",
+    "review_status": "automated_rejection"
+  },
+  {
+    "id": "APP-2023-021",
+    "status": "in_review",
+    "metadata": {
+      "funding_amount": 120000.00,
+      "term_length": 18,
+      "purpose": "Business expansion",
+      "business_type": "Technology",
+      "time_in_business": 36,
+      "monthly_revenue": 85000.00,
+      "credit_score": 680,
+      "automation_confidence": 0.76
+    },
+    "created_at": "2023-11-21T11:15:33.000Z",
+    "updated_at": "2023-11-21T11:19:12.000Z",
+    "review_status": "manual_review"
+  },
+  {
+    "id": "APP-2023-022",
+    "status": "approved",
+    "metadata": {
+      "funding_amount": 50000.00,
+      "term_length": 9,
+      "purpose": "Working capital",
+      "business_type": "Professional services",
+      "time_in_business": 48,
+      "monthly_revenue": 40000.00,
+      "credit_score": 720,
+      "automation_confidence": 0.94
+    },
+    "created_at": "2023-11-21T14:05:45.000Z",
+    "updated_at": "2023-11-21T14:08:33.000Z",
+    "review_status": "automated_approval"
+  },
+  {
+    "id": "APP-2023-023",
+    "status": "pending",
+    "metadata": {
+      "funding_amount": 75000.00,
+      "term_length": 12,
+      "purpose": "Seasonal inventory",
+      "business_type": "Retail",
+      "time_in_business": 24,
+      "monthly_revenue": 50000.00,
+      "credit_score": 650,
+      "automation_confidence": 0.86
+    },
+    "created_at": "2023-11-22T09:22:33.000Z",
+    "updated_at": "2023-11-22T09:22:33.000Z",
+    "review_status": "awaiting_documents"
+  },
+  {
+    "id": "APP-2023-024",
+    "status": "exception",
+    "metadata": {
+      "funding_amount": 140000.00,
+      "term_length": 24,
+      "purpose": "Franchise fee",
+      "business_type": "Food service",
+      "time_in_business": 6,
+      "monthly_revenue": 0.00,
+      "credit_score": 700,
+      "automation_confidence": 0.64
+    },
+    "created_at": "2023-11-22T10:45:12.000Z",
+    "updated_at": "2023-11-22T10:49:33.000Z",
+    "review_status": "business_rule_exception"
+  },
+  {
+    "id": "APP-2023-025",
+    "status": "approved",
+    "metadata": {
+      "funding_amount": 60000.00,
+      "term_length": 12,
+      "purpose": "Equipment purchase",
+      "business_type": "Construction",
+      "time_in_business": 36,
+      "monthly_revenue": 55000.00,
+      "credit_score": 690,
+      "automation_confidence": 0.93
+    },
+    "created_at": "2023-11-22T13:15:45.000Z",
+    "updated_at": "2023-11-22T13:18:22.000Z",
+    "review_status": "automated_approval"
+  },
+  {
+    "id": "APP-2023-026",
+    "status": "rejected",
+    "metadata": {
+      "funding_amount": 95000.00,
+      "term_length": 15,
+      "purpose": "Debt consolidation",
+      "business_type": "Retail",
+      "time_in_business": 12,
+      "monthly_revenue": 28000.00,
+      "credit_score": 580,
+      "automation_confidence": 0.95
+    },
+    "created_at": "2023-11-23T09:33:22.000Z",
+    "updated_at": "2023-11-23T09:36:45.000Z",
+    "review_status": "automated_rejection"
+  },
+  {
+    "id": "APP-2023-027",
+    "status": "in_review",
+    "metadata": {
+      "funding_amount": 180000.00,
+      "term_length": 24,
+      "purpose": "Business acquisition",
+      "business_type": "Manufacturing",
+      "time_in_business": 60,
+      "monthly_revenue": 110000.00,
+      "credit_score": 710,
+      "automation_confidence": 0.74
+    },
+    "created_at": "2023-11-23T11:15:33.000Z",
+    "updated_at": "2023-11-23T11:19:12.000Z",
+    "review_status": "manual_review"
+  },
+  {
+    "id": "APP-2023-028",
+    "status": "approved",
+    "metadata": {
+      "funding_amount": 45000.00,
+      "term_length": 6,
+      "purpose": "Marketing",
+      "business_type": "E-commerce",
+      "time_in_business": 30,
+      "monthly_revenue": 38000.00,
+      "credit_score": 700,
+      "automation_confidence": 0.96
+    },
+    "created_at": "2023-11-23T14:05:45.000Z",
+    "updated_at": "2023-11-23T14:08:33.000Z",
+    "review_status": "automated_approval"
+  },
+  {
+    "id": "APP-2023-029",
+    "status": "pending",
+    "metadata": {
+      "funding_amount": 80000.00,
+      "term_length": 12,
+      "purpose": "Working capital",
+      "business_type": "Healthcare",
+      "time_in_business": 42,
+      "monthly_revenue": 65000.00,
+      "credit_score": 670,
+      "automation_confidence": 0.88
+    },
+    "created_at": "2023-11-24T09:22:33.000Z",
+    "updated_at": "2023-11-24T09:22:33.000Z",
+    "review_status": "awaiting_documents"
+  },
+  {
+    "id": "APP-2023-030",
+    "status": "exception",
+    "metadata": {
+      "funding_amount": 135000.00,
+      "term_length": 18,
+      "purpose": "Real estate purchase",
+      "business_type": "Real estate",
+      "time_in_business": 54,
+      "monthly_revenue": 80000.00,
+      "credit_score": 730,
+      "automation_confidence": 0.67
+    },
+    "created_at": "2023-11-24T10:45:12.000Z",
+    "updated_at": "2023-11-24T10:49:33.000Z",
+    "review_status": "document_verification_needed"
+  }
+]
