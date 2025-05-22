@@ -2,6 +2,22 @@
 # Default configuration values for the Kong API Gateway deployment
 # This file serves as the single source of truth for deployment configuration across environments
 
+# ServiceAccount configuration
+serviceAccount:
+  # Specifies whether a ServiceAccount should be created
+  create: true
+  # The name of the ServiceAccount to use.
+  # If not set and create is true, a name is generated using the fullname template
+  name: ""
+  # Annotations to add to the service account for IAM role integration
+  annotations:
+    eks.amazonaws.com/role-arn: "arn:aws:iam::123456789012:role/kong-api-gateway-role"
+  # Image pull secrets for private registry access
+  imagePullSecrets: []
+  # Disable automatic mounting of the service account token if not needed
+  # Setting to false enhances security by following the principle of least privilege
+  automountServiceAccountToken: true
+
 # Image configuration
 image:
   repository: kong/kong-gateway
