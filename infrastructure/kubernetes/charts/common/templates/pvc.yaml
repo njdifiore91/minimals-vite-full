@@ -1,0 +1,364 @@
+{{- /*
+PersistentVolumeClaim template for MCA Application Processing System microservices.
+
+This template creates a PersistentVolumeClaim resource for services that require persistent storage.
+It supports different storage classes, access modes, and sizes based on service requirements.
+
+Usage:
+  - Include this template in your service's templates directory
+  - Define the required values in your service's values.yaml file
+
+Parameters:
+  - persistence.enabled: Whether to create a PVC (default: false)
+  - persistence.existingClaim: Use an existing PVC instead of creating a new one
+  - persistence.storageClass: Storage class to use (or use cluster default if not specified)
+    - For production: Use high-performance SSD storage class
+    - For staging: Use standard storage class
+    - For development: Use default storage class
+  - persistence.accessModes: List of access modes
+    - ReadWriteOnce (RWO): Volume can be mounted as read-write by a single node
+    - ReadOnlyMany (ROX): Volume can be mounted read-only by many nodes
+    - ReadWriteMany (RWX): Volume can be mounted as read-write by many nodes
+  - persistence.size: Size of the volume
+    - PostgreSQL: 100Gi for production, 50Gi for staging
+    - RabbitMQ: 20Gi for production, 10Gi for staging
+    - Redis: 20Gi for production, 10Gi for staging
+    - Document storage: Based on expected document volume
+  - persistence.annotations: Additional annotations for the PVC
+    - Cloud provider specific features
+    - Backup integration annotations
+    - Encryption annotations
+  - persistence.selector: Selector to bind to a specific PV
+  - persistence.volumeMode: Volume mode (default: Filesystem)
+  - persistence.volumeName: Bind to a specific volume by name
+  - persistence.allowVolumeExpansion: Allow the volume to be expanded (default: true)
+*/}}
+
+{{- if and .Values.persistence.enabled (not .Values.persistence.existingClaim) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "common.fullname" . }}
+  labels:
+    {{- include "common.labels" . | nindent 4 }}
+    app.kubernetes.io/component: {{ .Values.component | default "storage" }}
+  annotations:
+    {{- if .Values.global.environment }}
+    mca.dollarfunding.com/environment: {{ .Values.global.environment }}
+    {{- end }}
+    {{- if eq .Values.global.environment "production" }}
+    mca.dollarfunding.com/backup-enabled: "true"
+    mca.dollarfunding.com/backup-schedule: "0 2 * * *"  # Daily at 2 AM
+    mca.dollarfunding.com/backup-retention: "30d"       # 30 days retention
+    {{- end }}
+    {{- with .Values.persistence.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  accessModes:
+    {{- if .Values.persistence.accessModes }}
+    {{- toYaml .Values.persistence.accessModes | nindent 4 }}
+    {{- else }}
+    - ReadWriteOnce
+    {{- end }}
+  {{- if .Values.persistence.volumeMode }}
+  volumeMode: {{ .Values.persistence.volumeMode }}
+  {{- else }}
+  volumeMode: Filesystem
+  {{- end }}
+  {{- if .Values.persistence.storageClass }}
+  {{- if (eq "-" .Values.persistence.storageClass) }}
+  storageClassName: ""
+  {{- else }}
+  storageClassName: {{ .Values.persistence.storageClass }}
+  {{- end }}
+  {{- else if .Values.global.environment }}
+  {{- if eq .Values.global.environment "production" }}
+  storageClassName: {{ .Values.global.storageClasses.production | default "managed-premium" }}
+  {{- else if eq .Values.global.environment "staging" }}
+  storageClassName: {{ .Values.global.storageClasses.staging | default "managed-standard" }}
+  {{- else }}
+  storageClassName: {{ .Values.global.storageClasses.development | default "standard" }}
+  {{- end }}
+  {{- end }}
+  {{- if .Values.persistence.volumeName }}
+  volumeName: {{ .Values.persistence.volumeName }}
+  {{- end }}
+  {{- with .Values.persistence.selector }}
+  selector:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.size | default "1Gi" }}
+  {{- if or .Values.persistence.allowVolumeExpansion (and .Values.global.environment (or (eq .Values.global.environment "production") (eq .Values.global.environment "staging"))) }}
+  allowVolumeExpansion: true
+  {{- end }}
+{{- end }}
+
+{{- /*
+Create additional PVCs if specified in .Values.additionalPersistentVolumes
+This allows services to create multiple PVCs with different configurations
+
+Example values.yaml:
+
+additionalPersistentVolumes:
+  - name: data
+    size: 100Gi
+    accessModes:
+      - ReadWriteOnce
+  - name: logs
+    size: 20Gi
+    accessModes:
+      - ReadWriteOnce
+*/}}
+{{- if .Values.additionalPersistentVolumes }}
+{{- range .Values.additionalPersistentVolumes }}
+{{- if not .existingClaim }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "common.fullname" $ }}-{{ .name }}
+  labels:
+    {{- include "common.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ .component | default "storage" }}
+  annotations:
+    {{- if $.Values.global.environment }}
+    mca.dollarfunding.com/environment: {{ $.Values.global.environment }}
+    {{- end }}
+    {{- if eq $.Values.global.environment "production" }}
+    mca.dollarfunding.com/backup-enabled: {{ .backup.enabled | default "true" | quote }}
+    mca.dollarfunding.com/backup-schedule: {{ .backup.schedule | default "0 2 * * *" | quote }}
+    mca.dollarfunding.com/backup-retention: {{ .backup.retention | default "30d" | quote }}
+    {{- end }}
+    {{- with .annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  accessModes:
+    {{- if .accessModes }}
+    {{- toYaml .accessModes | nindent 4 }}
+    {{- else }}
+    - ReadWriteOnce
+    {{- end }}
+  {{- if .volumeMode }}
+  volumeMode: {{ .volumeMode }}
+  {{- else }}
+  volumeMode: Filesystem
+  {{- end }}
+  {{- if .storageClass }}
+  {{- if (eq "-" .storageClass) }}
+  storageClassName: ""
+  {{- else }}
+  storageClassName: {{ .storageClass }}
+  {{- end }}
+  {{- else if $.Values.global.environment }}
+  {{- if eq $.Values.global.environment "production" }}
+  storageClassName: {{ $.Values.global.storageClasses.production | default "managed-premium" }}
+  {{- else if eq $.Values.global.environment "staging" }}
+  storageClassName: {{ $.Values.global.storageClasses.staging | default "managed-standard" }}
+  {{- else }}
+  storageClassName: {{ $.Values.global.storageClasses.development | default "standard" }}
+  {{- end }}
+  {{- end }}
+  {{- if .volumeName }}
+  volumeName: {{ .volumeName }}
+  {{- end }}
+  {{- with .selector }}
+  selector:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .size | default "1Gi" }}
+  {{- if or .allowVolumeExpansion (and $.Values.global.environment (or (eq $.Values.global.environment "production") (eq $.Values.global.environment "staging"))) }}
+  allowVolumeExpansion: true
+  {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{- /*
+Define a helper template for StatefulSet volumeClaimTemplates
+This can be included in StatefulSet templates to create consistent PVC templates
+
+Usage in StatefulSet template:
+
+kind: StatefulSet
+spec:
+  volumeClaimTemplates:
+    {{- include "common.statefulset.volumeClaimTemplates" . | nindent 4 }}
+*/}}
+{{- define "common.statefulset.volumeClaimTemplates" }}
+{{- if .Values.persistence.enabled }}
+- metadata:
+    name: {{ .Values.persistence.name | default "data" }}
+    labels:
+      {{- include "common.labels" . | nindent 6 }}
+      app.kubernetes.io/component: {{ .Values.component | default "storage" }}
+    annotations:
+      {{- if .Values.global.environment }}
+      mca.dollarfunding.com/environment: {{ .Values.global.environment }}
+      {{- end }}
+      {{- if eq .Values.global.environment "production" }}
+      mca.dollarfunding.com/backup-enabled: "true"
+      mca.dollarfunding.com/backup-schedule: "0 2 * * *"  # Daily at 2 AM
+      mca.dollarfunding.com/backup-retention: "30d"       # 30 days retention
+      {{- end }}
+      {{- with .Values.persistence.annotations }}
+      {{- toYaml . | nindent 6 }}
+      {{- end }}
+  spec:
+    accessModes:
+      {{- if .Values.persistence.accessModes }}
+      {{- toYaml .Values.persistence.accessModes | nindent 6 }}
+      {{- else }}
+      - ReadWriteOnce
+      {{- end }}
+    {{- if .Values.persistence.volumeMode }}
+    volumeMode: {{ .Values.persistence.volumeMode }}
+    {{- else }}
+    volumeMode: Filesystem
+    {{- end }}
+    {{- if .Values.persistence.storageClass }}
+    {{- if (eq "-" .Values.persistence.storageClass) }}
+    storageClassName: ""
+    {{- else }}
+    storageClassName: {{ .Values.persistence.storageClass }}
+    {{- end }}
+    {{- else if .Values.global.environment }}
+    {{- if eq .Values.global.environment "production" }}
+    storageClassName: {{ .Values.global.storageClasses.production | default "managed-premium" }}
+    {{- else if eq .Values.global.environment "staging" }}
+    storageClassName: {{ .Values.global.storageClasses.staging | default "managed-standard" }}
+    {{- else }}
+    storageClassName: {{ .Values.global.storageClasses.development | default "standard" }}
+    {{- end }}
+    {{- end }}
+    {{- with .Values.persistence.selector }}
+    selector:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    resources:
+      requests:
+        storage: {{ .Values.persistence.size | default "1Gi" }}
+    {{- if or .Values.persistence.allowVolumeExpansion (and .Values.global.environment (or (eq .Values.global.environment "production") (eq .Values.global.environment "staging"))) }}
+    allowVolumeExpansion: true
+    {{- end }}
+{{- end }}
+{{- if .Values.additionalStatefulSetVolumes }}
+{{- range .Values.additionalStatefulSetVolumes }}
+- metadata:
+    name: {{ .name }}
+    labels:
+      {{- include "common.labels" $ | nindent 6 }}
+      app.kubernetes.io/component: {{ .component | default "storage" }}
+    annotations:
+      {{- if $.Values.global.environment }}
+      mca.dollarfunding.com/environment: {{ $.Values.global.environment }}
+      {{- end }}
+      {{- if eq $.Values.global.environment "production" }}
+      mca.dollarfunding.com/backup-enabled: {{ .backup.enabled | default "true" | quote }}
+      mca.dollarfunding.com/backup-schedule: {{ .backup.schedule | default "0 2 * * *" | quote }}
+      mca.dollarfunding.com/backup-retention: {{ .backup.retention | default "30d" | quote }}
+      {{- end }}
+      {{- with .annotations }}
+      {{- toYaml . | nindent 6 }}
+      {{- end }}
+  spec:
+    accessModes:
+      {{- if .accessModes }}
+      {{- toYaml .accessModes | nindent 6 }}
+      {{- else }}
+      - ReadWriteOnce
+      {{- end }}
+    {{- if .volumeMode }}
+    volumeMode: {{ .volumeMode }}
+    {{- else }}
+    volumeMode: Filesystem
+    {{- end }}
+    {{- if .storageClass }}
+    {{- if (eq "-" .storageClass) }}
+    storageClassName: ""
+    {{- else }}
+    storageClassName: {{ .storageClass }}
+    {{- end }}
+    {{- else if $.Values.global.environment }}
+    {{- if eq $.Values.global.environment "production" }}
+    storageClassName: {{ $.Values.global.storageClasses.production | default "managed-premium" }}
+    {{- else if eq $.Values.global.environment "staging" }}
+    storageClassName: {{ $.Values.global.storageClasses.staging | default "managed-standard" }}
+    {{- else }}
+    storageClassName: {{ $.Values.global.storageClasses.development | default "standard" }}
+    {{- end }}
+    {{- end }}
+    {{- with .selector }}
+    selector:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    resources:
+      requests:
+        storage: {{ .size | default "1Gi" }}
+    {{- if or .allowVolumeExpansion (and $.Values.global.environment (or (eq $.Values.global.environment "production") (eq $.Values.global.environment "staging"))) }}
+    allowVolumeExpansion: true
+    {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{- /*
+Example values.yaml for different services:
+
+1. PostgreSQL:
+
+persistence:
+  enabled: true
+  size: "100Gi"  # Production
+  # size: "50Gi"  # Staging
+  accessModes:
+    - ReadWriteOnce
+  annotations:
+    mca.dollarfunding.com/backup-priority: "high"
+  allowVolumeExpansion: true
+
+2. RabbitMQ:
+
+persistence:
+  enabled: true
+  size: "20Gi"  # Production
+  # size: "10Gi"  # Staging
+  accessModes:
+    - ReadWriteOnce
+  annotations:
+    mca.dollarfunding.com/backup-priority: "medium"
+
+additionalPersistentVolumes:
+  - name: logs
+    size: "5Gi"
+    accessModes:
+      - ReadWriteOnce
+
+3. Redis:
+
+persistence:
+  enabled: true
+  size: "20Gi"  # Production
+  # size: "10Gi"  # Staging
+  accessModes:
+    - ReadWriteOnce
+  annotations:
+    mca.dollarfunding.com/backup-priority: "medium"
+
+4. Document Storage:
+
+persistence:
+  enabled: true
+  size: "500Gi"  # Production
+  # size: "100Gi"  # Staging
+  accessModes:
+    - ReadWriteMany
+  annotations:
+    mca.dollarfunding.com/backup-priority: "high"
+    mca.dollarfunding.com/encryption: "AES-256"
+*/}}
