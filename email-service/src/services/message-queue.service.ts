@@ -1,224 +1,471 @@
 /**
  * Message Queue Service
  * 
- * This service manages the connection to RabbitMQ and handles publishing messages
- * about new documents to the message queue. It implements the IMessagePublisher
- * interface defined in the message-queue.ts types file.
+ * Manages the connection to RabbitMQ and handles publishing messages about new documents
+ * to the message queue. This service is crucial for communication between the Email Service
+ * and other microservices in the system.
  * 
- * Key features:
- * - RabbitMQ connection with TLS and client certificate authentication
+ * Features:
+ * - Secure connection with TLS and client certificate authentication
  * - Publishing to the 'mca.documents' exchange (fanout)
- * - Message serialization for consistent JSON format
- * - Retry logic for failed message publishing
+ * - Message serialization in standardized JSON format
+ * - Retry logic with configurable backoff periods
  * - Connection error handling and recovery strategies
+ * - Graceful shutdown and reconnection
  */
 
-import amqplib, { Channel, Connection, Options } from 'amqplib';
-import { Logger } from 'winston';
+import amqp, { Channel, Connection, Options } from 'amqplib';
+import { EventEmitter } from 'events';
+import { v4 as uuidv4 } from 'uuid';
 
-import {
-  ConnectionEvent,
-  ConnectionState,
-  DEFAULT_MCA_EXCHANGE,
-  DEFAULT_PUBLISH_OPTIONS,
-  IExchangeConfig,
-  IMessagePayload,
-  IMessagePublisher,
-  IPublishOptions,
-  IRabbitMQConfig,
-  IRetryConfig
+import { 
+  rabbitMQConfig, 
+  mcaDocumentsExchange, 
+  publishOptions, 
+  retryConfig 
+} from '../config/rabbitmq';
+import { 
+  ConnectionState, 
+  ConnectionEventType, 
+  IMessagePayload, 
+  IPublishOptions, 
+  IExchangeConfig 
 } from '../types/message-queue';
-import { IErrorDetails, IResult } from '../types/common';
+import { createComponentLogger, logError } from '../config/logger';
+import { 
+  withRetry, 
+  RABBITMQ_RETRY_OPTIONS, 
+  RetryOptions, 
+  RetryableErrorType 
+} from '../utils/retry';
 
 /**
- * Default retry configuration for message publishing
+ * Message Queue Service class
+ * 
+ * Manages RabbitMQ connections and provides methods for publishing messages
+ * to the document processing exchange.
  */
-const DEFAULT_RETRY_CONFIG: IRetryConfig = {
-  maxRetries: 5,
-  initialDelay: 100, // ms
-  maxDelay: 30000, // 30 seconds
-  backoffFactor: 2,
-  jitter: true
-};
-
-/**
- * Implementation of the IMessagePublisher interface for RabbitMQ
- */
-export class MessageQueueService implements IMessagePublisher {
+export class MessageQueueService extends EventEmitter {
   private connection: Connection | null = null;
   private channel: Channel | null = null;
   private connectionState: ConnectionState = ConnectionState.DISCONNECTED;
-  private eventListeners: Map<ConnectionEvent, Array<(data?: unknown) => void>> = new Map();
   private reconnectTimer: NodeJS.Timeout | null = null;
-  private reconnectAttempts = 0;
-  private readonly maxReconnectAttempts = 10;
-  private readonly initialReconnectDelay = 1000; // 1 second
-  private readonly maxReconnectDelay = 60000; // 1 minute
-
+  private readonly logger = createComponentLogger('MessageQueueService');
+  private readonly config = rabbitMQConfig;
+  private readonly exchange: IExchangeConfig;
+  private readonly publishOpts: IPublishOptions;
+  private readonly retryOpts: RetryOptions;
+  
   /**
    * Creates a new MessageQueueService instance
    * 
-   * @param config - RabbitMQ connection configuration
-   * @param logger - Winston logger instance
-   * @param retryConfig - Configuration for retry logic
+   * @param exchangeConfig - Optional custom exchange configuration
+   * @param publishOptions - Optional custom publish options
+   * @param retryOptions - Optional custom retry options
    */
   constructor(
-    private readonly config: IRabbitMQConfig,
-    private readonly logger: Logger,
-    private readonly retryConfig: IRetryConfig = DEFAULT_RETRY_CONFIG
+    exchangeConfig: IExchangeConfig = mcaDocumentsExchange,
+    publishOpts: IPublishOptions = publishOptions,
+    retryOpts: RetryOptions = RABBITMQ_RETRY_OPTIONS
   ) {
-    // Initialize event listener maps
-    Object.values(ConnectionEvent).forEach(event => {
-      this.eventListeners.set(event, []);
+    super();
+    this.exchange = exchangeConfig;
+    this.publishOpts = publishOpts;
+    this.retryOpts = retryOpts;
+    
+    // Set up event listeners for connection events
+    this.on(ConnectionEventType.CONNECTED, () => {
+      this.logger.info('Connected to RabbitMQ server', { 
+        host: this.config.host, 
+        port: this.config.port,
+        vhost: this.config.vhost,
+        exchange: this.exchange.name
+      });
+    });
+    
+    this.on(ConnectionEventType.DISCONNECTED, (error?: Error) => {
+      if (error) {
+        logError(this.logger, 'Disconnected from RabbitMQ server with error', error, {
+          host: this.config.host,
+          port: this.config.port
+        });
+      } else {
+        this.logger.info('Disconnected from RabbitMQ server', { 
+          host: this.config.host, 
+          port: this.config.port 
+        });
+      }
+    });
+    
+    this.on(ConnectionEventType.ERROR, (error: Error) => {
+      logError(this.logger, 'RabbitMQ connection error', error, {
+        host: this.config.host,
+        port: this.config.port,
+        connectionState: this.connectionState
+      });
+    });
+    
+    this.on(ConnectionEventType.BLOCKED, (reason: string) => {
+      this.logger.warn('RabbitMQ connection blocked', { 
+        reason, 
+        host: this.config.host, 
+        port: this.config.port 
+      });
+    });
+    
+    this.on(ConnectionEventType.UNBLOCKED, () => {
+      this.logger.info('RabbitMQ connection unblocked', { 
+        host: this.config.host, 
+        port: this.config.port 
+      });
     });
   }
-
+  
   /**
-   * Initializes the message queue service
-   * Establishes connection to RabbitMQ and sets up the exchange
-   */
-  public async initialize(): Promise<IResult<void>> {
-    try {
-      this.logger.info('Initializing RabbitMQ connection');
-      const connectionResult = await this.connect();
-      
-      if (!connectionResult.success) {
-        return connectionResult;
-      }
-
-      // Assert the exchange exists
-      await this.assertExchange(DEFAULT_MCA_EXCHANGE);
-      
-      this.logger.info(`RabbitMQ exchange '${DEFAULT_MCA_EXCHANGE.name}' initialized successfully`);
-      return { success: true };
-    } catch (error) {
-      const errorDetails = this.createErrorDetails('RABBITMQ_INIT_ERROR', error);
-      this.logger.error('Failed to initialize RabbitMQ connection', errorDetails);
-      return { success: false, error: errorDetails };
-    }
-  }
-
-  /**
-   * Publishes a message to the specified exchange
+   * Connects to the RabbitMQ server
    * 
-   * @param exchange - Exchange name
-   * @param routingKey - Routing key
-   * @param payload - Message payload
-   * @param options - Publishing options
+   * @returns A promise that resolves when connected
    */
-  public async publish(
-    exchange: string,
-    routingKey: string,
-    payload: IMessagePayload,
-    options: Partial<IPublishOptions> = {}
-  ): Promise<IResult<void>> {
-    // Combine default options with provided options
-    const publishOptions: IPublishOptions = {
-      ...DEFAULT_PUBLISH_OPTIONS,
-      ...options,
-      headers: {
-        ...DEFAULT_PUBLISH_OPTIONS.headers,
-        ...options.headers
-      }
-    };
-
-    // Add timestamp if not provided
-    if (!publishOptions.timestamp) {
-      publishOptions.timestamp = Math.floor(Date.now() / 1000);
+  public async connect(): Promise<void> {
+    if (
+      this.connectionState === ConnectionState.CONNECTED ||
+      this.connectionState === ConnectionState.CONNECTING
+    ) {
+      this.logger.debug('Already connected or connecting to RabbitMQ');
+      return;
     }
-
-    // Add message ID if not provided
-    if (!publishOptions.messageId) {
-      publishOptions.messageId = this.generateMessageId();
-    }
-
+    
+    this.connectionState = ConnectionState.CONNECTING;
+    this.logger.info('Connecting to RabbitMQ server', { 
+      host: this.config.host, 
+      port: this.config.port,
+      vhost: this.config.vhost,
+      useTls: this.config.useTls
+    });
+    
     try {
-      // Ensure we have a connection and channel
-      if (!this.isConnected()) {
-        const connectionResult = await this.connect();
-        if (!connectionResult.success) {
-          return connectionResult;
+      // Build connection URL
+      const protocol = this.config.useTls ? 'amqps' : 'amqp';
+      const auth = `${encodeURIComponent(this.config.username)}:${encodeURIComponent(this.config.password)}`;
+      const vhost = encodeURIComponent(this.config.vhost);
+      const connectionUrl = `${protocol}://${auth}@${this.config.host}:${this.config.port}/${vhost}`;
+      
+      // Connection options
+      const socketOptions: any = {
+        servername: this.config.host, // Required for SNI (Server Name Indication)
+      };
+      
+      // Add TLS options if enabled
+      if (this.config.useTls && this.config.tlsOptions) {
+        Object.assign(socketOptions, this.config.tlsOptions);
+      }
+      
+      const connectionOptions: Options.Connect = {
+        timeout: this.config.connectionTimeout,
+        heartbeat: this.config.heartbeat,
+        socket: socketOptions,
+      };
+      
+      // Connect to RabbitMQ with retry logic
+      const result = await withRetry(
+        async () => amqp.connect(connectionUrl, connectionOptions),
+        {
+          ...this.retryOpts,
+          onRetry: (attempt, delay, error) => {
+            this.logger.warn(
+              `Retrying RabbitMQ connection (attempt ${attempt}/${this.retryOpts.maxRetries}) after ${delay}ms`,
+              { error: error.message, host: this.config.host, port: this.config.port }
+            );
+          },
         }
-      }
-
-      // Serialize the payload to JSON
-      const content = Buffer.from(JSON.stringify(payload));
-
-      // Attempt to publish with retry logic
-      return await this.publishWithRetry(exchange, routingKey, content, publishOptions);
-    } catch (error) {
-      const errorDetails = this.createErrorDetails('RABBITMQ_PUBLISH_ERROR', error);
-      this.logger.error(`Failed to publish message to exchange '${exchange}'`, errorDetails);
-      return { success: false, error: errorDetails };
-    }
-  }
-
-  /**
-   * Closes the RabbitMQ connection and releases resources
-   */
-  public async close(): Promise<IResult<void>> {
-    try {
-      this.logger.info('Closing RabbitMQ connection');
+      );
       
-      // Clear any reconnect timer
-      if (this.reconnectTimer) {
-        clearTimeout(this.reconnectTimer);
-        this.reconnectTimer = null;
+      if (!result.success || !result.result) {
+        throw result.error || new Error('Failed to connect to RabbitMQ');
       }
-
-      // Close the channel if it exists
-      if (this.channel) {
-        await this.channel.close();
+      
+      this.connection = result.result;
+      
+      // Set up connection event handlers
+      this.connection.on('error', (err) => {
+        const error = err as Error;
+        this.emit(ConnectionEventType.ERROR, error);
+        
+        // Only attempt reconnection if not closing/closed
+        if (
+          this.connectionState !== ConnectionState.CLOSING &&
+          this.connectionState !== ConnectionState.CLOSED
+        ) {
+          this.handleConnectionFailure(error);
+        }
+      });
+      
+      this.connection.on('close', (err?: Error) => {
         this.channel = null;
-      }
-
-      // Close the connection if it exists
-      if (this.connection) {
-        await this.connection.close();
-        this.connection = null;
-      }
-
-      this.connectionState = ConnectionState.DISCONNECTED;
-      this.emitEvent(ConnectionEvent.DISCONNECTED);
+        this.connectionState = ConnectionState.DISCONNECTED;
+        this.emit(ConnectionEventType.DISCONNECTED, err);
+        
+        // Only attempt reconnection if not closing/closed
+        if (
+          this.connectionState !== ConnectionState.CLOSING &&
+          this.connectionState !== ConnectionState.CLOSED
+        ) {
+          this.handleConnectionFailure(err);
+        }
+      });
       
-      this.logger.info('RabbitMQ connection closed successfully');
-      return { success: true };
+      this.connection.on('blocked', (reason: string) => {
+        this.emit(ConnectionEventType.BLOCKED, reason);
+      });
+      
+      this.connection.on('unblocked', () => {
+        this.emit(ConnectionEventType.UNBLOCKED);
+      });
+      
+      // Create a channel
+      await this.createChannel();
+      
+      // Update connection state
+      this.connectionState = ConnectionState.CONNECTED;
+      this.emit(ConnectionEventType.CONNECTED);
+      
     } catch (error) {
-      const errorDetails = this.createErrorDetails('RABBITMQ_CLOSE_ERROR', error);
-      this.logger.error('Failed to close RabbitMQ connection', errorDetails);
-      return { success: false, error: errorDetails };
+      this.connectionState = ConnectionState.DISCONNECTED;
+      const err = error instanceof Error ? error : new Error(String(error));
+      logError(this.logger, 'Failed to connect to RabbitMQ', err, {
+        host: this.config.host,
+        port: this.config.port,
+      });
+      
+      this.handleConnectionFailure(err);
+      throw err;
     }
   }
-
+  
   /**
-   * Adds an event listener for connection events
+   * Creates a channel and sets up the exchange
    * 
-   * @param event - Connection event to listen for
-   * @param listener - Event listener function
+   * @returns A promise that resolves when the channel is created
    */
-  public on(event: ConnectionEvent, listener: (data?: unknown) => void): void {
-    const listeners = this.eventListeners.get(event) || [];
-    listeners.push(listener);
-    this.eventListeners.set(event, listeners);
-  }
-
-  /**
-   * Removes an event listener
-   * 
-   * @param event - Connection event
-   * @param listener - Event listener function to remove
-   */
-  public off(event: ConnectionEvent, listener: (data?: unknown) => void): void {
-    const listeners = this.eventListeners.get(event) || [];
-    const index = listeners.indexOf(listener);
-    if (index !== -1) {
-      listeners.splice(index, 1);
-      this.eventListeners.set(event, listeners);
+  private async createChannel(): Promise<void> {
+    if (!this.connection) {
+      throw new Error('Cannot create channel: No RabbitMQ connection');
+    }
+    
+    try {
+      // Create a channel
+      this.channel = await this.connection.createChannel();
+      
+      // Set up channel error handler
+      this.channel.on('error', (err) => {
+        const error = err as Error;
+        logError(this.logger, 'RabbitMQ channel error', error);
+        
+        // Attempt to recreate the channel
+        this.channel = null;
+        this.createChannel().catch((channelError) => {
+          logError(this.logger, 'Failed to recreate RabbitMQ channel', channelError);
+        });
+      });
+      
+      this.channel.on('close', () => {
+        this.logger.info('RabbitMQ channel closed');
+        this.channel = null;
+      });
+      
+      // Assert exchange
+      await this.channel.assertExchange(
+        this.exchange.name,
+        this.exchange.type,
+        {
+          durable: this.exchange.durable,
+          autoDelete: this.exchange.autoDelete,
+          arguments: this.exchange.arguments,
+        }
+      );
+      
+      this.logger.info('RabbitMQ channel created and exchange asserted', {
+        exchange: this.exchange.name,
+        type: this.exchange.type,
+      });
+      
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      logError(this.logger, 'Failed to create RabbitMQ channel', err);
+      this.channel = null;
+      throw err;
     }
   }
-
+  
   /**
-   * Checks if connected to RabbitMQ
+   * Handles connection failures and implements reconnection strategy
+   * 
+   * @param error - The error that caused the connection failure
+   */
+  private handleConnectionFailure(error?: Error): void {
+    // Clear any existing reconnect timer
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    
+    // Set connection state to reconnecting
+    this.connectionState = ConnectionState.RECONNECTING;
+    
+    // Calculate reconnect delay with exponential backoff and jitter
+    const reconnectDelay = Math.floor(
+      1000 * Math.random() + 5000
+    ); // Random delay between 1-6 seconds
+    
+    this.logger.info('Scheduling RabbitMQ reconnection', {
+      delay: reconnectDelay,
+      error: error?.message,
+    });
+    
+    // Schedule reconnection
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.logger.info('Attempting to reconnect to RabbitMQ');
+      
+      this.connect().catch((reconnectError) => {
+        logError(this.logger, 'Failed to reconnect to RabbitMQ', reconnectError);
+        // The connect method will handle scheduling the next reconnection attempt
+      });
+    }, reconnectDelay);
+  }
+  
+  /**
+   * Publishes a message to the RabbitMQ exchange
+   * 
+   * @param payload - The message payload to publish
+   * @param routingKey - Optional routing key (default: '')
+   * @param options - Optional publish options to override defaults
+   * @returns A promise that resolves when the message is published
+   */
+  public async publishMessage(
+    payload: IMessagePayload,
+    routingKey: string = '',
+    options?: Partial<IPublishOptions>
+  ): Promise<boolean> {
+    // Ensure we have a connection and channel
+    if (!this.connection || !this.channel) {
+      this.logger.warn('Attempting to publish without an active connection, connecting first');
+      await this.connect();
+    }
+    
+    // If we still don't have a channel after connecting, throw an error
+    if (!this.channel) {
+      throw new Error('Failed to create channel for publishing');
+    }
+    
+    try {
+      // Merge default options with provided options
+      const publishOpts: IPublishOptions = {
+        ...this.publishOpts,
+        ...options,
+        // Add message ID if not provided
+        messageId: options?.messageId || payload.id || uuidv4(),
+        // Add timestamp if not provided
+        timestamp: options?.timestamp || Math.floor(Date.now() / 1000),
+      };
+      
+      // Serialize the payload to a Buffer
+      const content = Buffer.from(JSON.stringify(payload));
+      
+      // Publish with retry logic
+      const result = await withRetry(
+        async () => {
+          const published = this.channel!.publish(
+            this.exchange.name,
+            routingKey,
+            content,
+            publishOpts
+          );
+          
+          if (!published) {
+            // Channel is experiencing backpressure, wait for drain event
+            await new Promise<void>((resolve, reject) => {
+              const timeout = setTimeout(() => {
+                this.channel!.removeListener('drain', onDrain);
+                reject(new Error('Timeout waiting for drain event'));
+              }, 30000); // 30 second timeout
+              
+              const onDrain = () => {
+                clearTimeout(timeout);
+                resolve();
+              };
+              
+              this.channel!.once('drain', onDrain);
+            });
+          }
+          
+          return true;
+        },
+        {
+          ...this.retryOpts,
+          onRetry: (attempt, delay, error) => {
+            this.logger.warn(
+              `Retrying message publication (attempt ${attempt}/${this.retryOpts.maxRetries}) after ${delay}ms`,
+              { 
+                error: error.message, 
+                exchange: this.exchange.name,
+                routingKey,
+                messageId: publishOpts.messageId 
+              }
+            );
+          },
+        }
+      );
+      
+      if (!result.success) {
+        throw result.error || new Error('Failed to publish message after retries');
+      }
+      
+      this.logger.info('Message published successfully', {
+        exchange: this.exchange.name,
+        routingKey,
+        messageId: publishOpts.messageId,
+        documentType: payload.documentType,
+      });
+      
+      return true;
+      
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      
+      // Add context to the error
+      (err as any).type = RetryableErrorType.QUEUE;
+      (err as any).context = {
+        exchange: this.exchange.name,
+        routingKey,
+        messageId: payload.id,
+      };
+      
+      logError(this.logger, 'Failed to publish message to RabbitMQ', err, {
+        exchange: this.exchange.name,
+        routingKey,
+        messageId: payload.id,
+        documentType: payload.documentType,
+      });
+      
+      throw err;
+    }
+  }
+  
+  /**
+   * Publishes a document message to the MCA documents exchange
+   * 
+   * @param payload - The document message payload
+   * @returns A promise that resolves when the message is published
+   */
+  public async publishDocumentMessage(payload: IMessagePayload): Promise<boolean> {
+    return this.publishMessage(payload);
+  }
+  
+  /**
+   * Checks if the service is connected to RabbitMQ
+   * 
+   * @returns True if connected, false otherwise
    */
   public isConnected(): boolean {
     return (
@@ -227,434 +474,61 @@ export class MessageQueueService implements IMessagePublisher {
       this.channel !== null
     );
   }
-
+  
   /**
-   * Connects to RabbitMQ
-   */
-  private async connect(): Promise<IResult<void>> {
-    // If already connected or connecting, return
-    if (
-      this.connectionState === ConnectionState.CONNECTED ||
-      this.connectionState === ConnectionState.CONNECTING
-    ) {
-      return { success: true };
-    }
-
-    try {
-      this.connectionState = ConnectionState.CONNECTING;
-      this.logger.info('Connecting to RabbitMQ', { host: this.config.host, port: this.config.port });
-
-      // Build connection options
-      const connectionOptions: Options.Connect = {
-        protocol: this.config.useTls ? 'amqps' : 'amqp',
-        hostname: this.config.host,
-        port: this.config.port,
-        username: this.config.username,
-        password: this.config.password,
-        vhost: this.config.vhost,
-        timeout: this.config.connectionTimeout,
-        heartbeat: this.config.heartbeat
-      };
-
-      // Add TLS options if enabled
-      if (this.config.useTls && this.config.tlsOptions) {
-        connectionOptions.cert = this.config.tlsOptions.ca;
-        connectionOptions.rejectUnauthorized = this.config.tlsOptions.rejectUnauthorized;
-      }
-
-      // Connect to RabbitMQ
-      this.connection = await amqplib.connect(connectionOptions);
-
-      // Set up connection event handlers
-      this.connection.on('error', (err) => this.handleConnectionError(err));
-      this.connection.on('close', () => this.handleConnectionClosed());
-      
-      // Create a channel
-      this.channel = await this.connection.createChannel();
-      
-      // Set up channel event handlers
-      this.channel.on('error', (err) => this.handleChannelError(err));
-      this.channel.on('close', () => this.handleChannelClosed());
-      
-      // Reset reconnect attempts on successful connection
-      this.reconnectAttempts = 0;
-      this.connectionState = ConnectionState.CONNECTED;
-      this.emitEvent(ConnectionEvent.CONNECTED);
-      
-      this.logger.info('Successfully connected to RabbitMQ');
-      return { success: true };
-    } catch (error) {
-      this.connectionState = ConnectionState.ERROR;
-      const errorDetails = this.createErrorDetails('RABBITMQ_CONNECTION_ERROR', error);
-      this.logger.error('Failed to connect to RabbitMQ', errorDetails);
-      
-      // Schedule reconnect attempt
-      this.scheduleReconnect();
-      
-      this.emitEvent(ConnectionEvent.ERROR, errorDetails);
-      return { success: false, error: errorDetails };
-    }
-  }
-
-  /**
-   * Asserts that an exchange exists, creating it if it doesn't
+   * Closes the RabbitMQ connection and channel
    * 
-   * @param exchangeConfig - Exchange configuration
+   * @returns A promise that resolves when the connection is closed
    */
-  private async assertExchange(exchangeConfig: IExchangeConfig): Promise<void> {
-    if (!this.channel) {
-      throw new Error('Cannot assert exchange: Channel not available');
-    }
-
-    await this.channel.assertExchange(
-      exchangeConfig.name,
-      exchangeConfig.type,
-      {
-        durable: exchangeConfig.durable,
-        autoDelete: exchangeConfig.autoDelete,
-        arguments: exchangeConfig.arguments
-      }
-    );
-  }
-
-  /**
-   * Publishes a message with retry logic
-   * 
-   * @param exchange - Exchange name
-   * @param routingKey - Routing key
-   * @param content - Message content
-   * @param options - Publishing options
-   */
-  private async publishWithRetry(
-    exchange: string,
-    routingKey: string,
-    content: Buffer,
-    options: IPublishOptions
-  ): Promise<IResult<void>> {
-    let attempt = 0;
-    let lastError: IErrorDetails | undefined;
-
-    while (attempt <= this.retryConfig.maxRetries) {
-      try {
-        if (!this.channel) {
-          throw new Error('Channel not available');
-        }
-
-        // Publish the message
-        const published = this.channel.publish(
-          exchange,
-          routingKey,
-          content,
-          options as Options.Publish
-        );
-
-        if (published) {
-          // Log success on first attempt or after retries
-          if (attempt === 0) {
-            this.logger.debug(`Published message to exchange '${exchange}' with routing key '${routingKey}'`);
-          } else {
-            this.logger.info(`Successfully published message to exchange '${exchange}' after ${attempt} retries`);
-          }
-          return { success: true };
-        } else {
-          // Channel buffer is full, wait and retry
-          this.logger.warn(`Channel buffer full, retrying publish to exchange '${exchange}' (attempt ${attempt + 1} of ${this.retryConfig.maxRetries + 1})`);
-          await this.delay(this.calculateBackoff(attempt));
-          attempt++;
-        }
-      } catch (error) {
-        lastError = this.createErrorDetails('RABBITMQ_PUBLISH_RETRY_ERROR', error);
-        
-        // Check if we should retry based on the error
-        if (this.shouldRetry(error) && attempt < this.retryConfig.maxRetries) {
-          const backoffTime = this.calculateBackoff(attempt);
-          this.logger.warn(
-            `Failed to publish message to exchange '${exchange}', retrying in ${backoffTime}ms (attempt ${attempt + 1} of ${this.retryConfig.maxRetries})`,
-            lastError
-          );
-          
-          await this.delay(backoffTime);
-          attempt++;
-          
-          // If the connection was lost, try to reconnect
-          if (!this.isConnected()) {
-            const reconnectResult = await this.connect();
-            if (!reconnectResult.success) {
-              return reconnectResult;
-            }
-          }
-        } else {
-          // Max retries reached or non-retriable error
-          this.logger.error(
-            `Failed to publish message to exchange '${exchange}' after ${attempt} retries`,
-            lastError
-          );
-          return { success: false, error: lastError };
-        }
-      }
-    }
-
-    // This should only happen if we've exhausted all retries
-    return {
-      success: false,
-      error: lastError || this.createErrorDetails('RABBITMQ_MAX_RETRIES_EXCEEDED', new Error('Max retries exceeded'))
-    };
-  }
-
-  /**
-   * Determines if an error is retriable
-   * 
-   * @param error - The error to check
-   */
-  private shouldRetry(error: unknown): boolean {
-    // Connection errors should be retried
-    if (error instanceof Error) {
-      // These error messages indicate temporary issues that can be retried
-      const retriableErrors = [
-        'connection closed',
-        'channel closed',
-        'connection reset',
-        'socket hang up',
-        'operation timed out',
-        'unexpected socket close',
-        'Channel buffer full',
-        'Connection refused',
-        'ECONNREFUSED',
-        'ETIMEDOUT',
-        'ECONNRESET',
-        'EHOSTUNREACH'
-      ];
-
-      return retriableErrors.some(msg => error.message.includes(msg));
-    }
+  public async close(): Promise<void> {
+    this.logger.info('Closing RabbitMQ connection');
     
-    return false;
-  }
-
-  /**
-   * Calculates backoff time with exponential backoff and optional jitter
-   * 
-   * @param attempt - Current attempt number (0-based)
-   */
-  private calculateBackoff(attempt: number): number {
-    // Calculate exponential backoff
-    const exponentialDelay = this.retryConfig.initialDelay * Math.pow(this.retryConfig.backoffFactor, attempt);
-    
-    // Apply maximum delay cap
-    const cappedDelay = Math.min(exponentialDelay, this.retryConfig.maxDelay);
-    
-    // Add jitter if configured (±20% of the delay)
-    if (this.retryConfig.jitter) {
-      const jitterRange = cappedDelay * 0.2;
-      return cappedDelay - jitterRange + (Math.random() * jitterRange * 2);
-    }
-    
-    return cappedDelay;
-  }
-
-  /**
-   * Handles connection errors
-   * 
-   * @param error - Connection error
-   */
-  private handleConnectionError(error: Error): void {
-    const errorDetails = this.createErrorDetails('RABBITMQ_CONNECTION_ERROR', error);
-    this.logger.error('RabbitMQ connection error', errorDetails);
-    
-    this.connectionState = ConnectionState.ERROR;
-    this.emitEvent(ConnectionEvent.ERROR, errorDetails);
-    
-    // Schedule reconnect
-    this.scheduleReconnect();
-  }
-
-  /**
-   * Handles connection closed events
-   */
-  private handleConnectionClosed(): void {
-    // Only log if we were previously connected (to avoid duplicate logs during intentional disconnects)
-    if (this.connectionState === ConnectionState.CONNECTED) {
-      this.logger.warn('RabbitMQ connection closed unexpectedly');
-      
-      this.connectionState = ConnectionState.DISCONNECTED;
-      this.connection = null;
-      this.channel = null;
-      
-      this.emitEvent(ConnectionEvent.DISCONNECTED);
-      
-      // Schedule reconnect
-      this.scheduleReconnect();
-    }
-  }
-
-  /**
-   * Handles channel errors
-   * 
-   * @param error - Channel error
-   */
-  private handleChannelError(error: Error): void {
-    const errorDetails = this.createErrorDetails('RABBITMQ_CHANNEL_ERROR', error);
-    this.logger.error('RabbitMQ channel error', errorDetails);
-    
-    // Most channel errors are not recoverable, so we'll close and reconnect
-    this.recreateChannel().catch(err => {
-      this.logger.error('Failed to recreate channel after error', this.createErrorDetails('RABBITMQ_CHANNEL_RECREATION_ERROR', err));
-    });
-  }
-
-  /**
-   * Handles channel closed events
-   */
-  private handleChannelClosed(): void {
-    // Only log if we were previously connected
-    if (this.connectionState === ConnectionState.CONNECTED) {
-      this.logger.warn('RabbitMQ channel closed unexpectedly');
-      
-      // Try to recreate the channel
-      this.recreateChannel().catch(err => {
-        this.logger.error('Failed to recreate channel after closure', this.createErrorDetails('RABBITMQ_CHANNEL_RECREATION_ERROR', err));
-      });
-    }
-  }
-
-  /**
-   * Recreates the channel if the connection is still active
-   */
-  private async recreateChannel(): Promise<void> {
-    if (this.connection && this.connectionState === ConnectionState.CONNECTED) {
-      try {
-        // Close the existing channel if it exists
-        if (this.channel) {
-          try {
-            await this.channel.close();
-          } catch (err) {
-            // Ignore errors when closing an already closed channel
-            this.logger.debug('Error while closing channel, likely already closed', { error: err });
-          }
-        }
-        
-        // Create a new channel
-        this.channel = await this.connection.createChannel();
-        
-        // Set up channel event handlers
-        this.channel.on('error', (err) => this.handleChannelError(err));
-        this.channel.on('close', () => this.handleChannelClosed());
-        
-        // Re-assert the exchange
-        await this.assertExchange(DEFAULT_MCA_EXCHANGE);
-        
-        this.logger.info('Successfully recreated RabbitMQ channel');
-      } catch (error) {
-        // If we can't recreate the channel, the connection might be bad
-        // Schedule a full reconnect
-        this.logger.error(
-          'Failed to recreate channel, scheduling full reconnect',
-          this.createErrorDetails('RABBITMQ_CHANNEL_RECREATION_FAILED', error)
-        );
-        
-        this.connectionState = ConnectionState.ERROR;
-        this.scheduleReconnect();
-      }
-    }
-  }
-
-  /**
-   * Schedules a reconnection attempt with exponential backoff
-   */
-  private scheduleReconnect(): void {
-    // Clear any existing reconnect timer
+    // Clear any reconnect timer
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
-
-    // Check if we've exceeded the maximum reconnect attempts
-    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      this.logger.error(
-        `Failed to reconnect to RabbitMQ after ${this.maxReconnectAttempts} attempts, giving up`
-      );
-      return;
-    }
-
-    // Calculate backoff time
-    const delay = Math.min(
-      this.initialReconnectDelay * Math.pow(2, this.reconnectAttempts),
-      this.maxReconnectDelay
-    );
-
-    this.logger.info(`Scheduling RabbitMQ reconnect attempt in ${delay}ms (attempt ${this.reconnectAttempts + 1} of ${this.maxReconnectAttempts})`);
-
-    // Schedule reconnect
-    this.reconnectTimer = setTimeout(() => {
-      this.reconnectTimer = null;
-      this.reconnectAttempts++;
-      
-      // Attempt to reconnect
-      this.connect().catch(err => {
-        this.logger.error(
-          'Error during scheduled reconnect',
-          this.createErrorDetails('RABBITMQ_SCHEDULED_RECONNECT_ERROR', err)
-        );
-      });
-    }, delay);
-  }
-
-  /**
-   * Creates a promise that resolves after the specified delay
-   * 
-   * @param ms - Delay in milliseconds
-   */
-  private delay(ms: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, ms));
-  }
-
-  /**
-   * Generates a unique message ID
-   */
-  private generateMessageId(): string {
-    return `${Date.now()}-${Math.random().toString(36).substring(2, 15)}`;
-  }
-
-  /**
-   * Creates standardized error details
-   * 
-   * @param code - Error code
-   * @param error - Original error
-   */
-  private createErrorDetails(code: string, error: unknown): IErrorDetails {
-    const message = error instanceof Error ? error.message : String(error);
-    const stack = error instanceof Error ? error.stack : undefined;
     
-    return {
-      code,
-      message,
-      stack,
-      timestamp: Date.now(),
-      context: {
-        host: this.config.host,
-        port: this.config.port,
-        connectionState: this.connectionState
+    this.connectionState = ConnectionState.CLOSING;
+    
+    try {
+      // Close channel if it exists
+      if (this.channel) {
+        this.logger.debug('Closing RabbitMQ channel');
+        await this.channel.close();
+        this.channel = null;
       }
-    };
-  }
-
-  /**
-   * Emits an event to all registered listeners
-   * 
-   * @param event - Event to emit
-   * @param data - Optional event data
-   */
-  private emitEvent(event: ConnectionEvent, data?: unknown): void {
-    const listeners = this.eventListeners.get(event) || [];
-    listeners.forEach(listener => {
-      try {
-        listener(data);
-      } catch (error) {
-        this.logger.error(
-          `Error in RabbitMQ ${event} event listener`,
-          this.createErrorDetails('RABBITMQ_EVENT_LISTENER_ERROR', error)
-        );
+      
+      // Close connection if it exists
+      if (this.connection) {
+        this.logger.debug('Closing RabbitMQ connection');
+        await this.connection.close();
+        this.connection = null;
       }
-    });
+      
+      this.connectionState = ConnectionState.CLOSED;
+      this.logger.info('RabbitMQ connection closed successfully');
+      
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      logError(this.logger, 'Error closing RabbitMQ connection', err);
+      
+      // Reset connection and channel
+      this.connection = null;
+      this.channel = null;
+      this.connectionState = ConnectionState.CLOSED;
+      
+      throw err;
+    }
   }
 }
+
+/**
+ * Singleton instance of the MessageQueueService
+ */
+export const messageQueueService = new MessageQueueService();
+
+/**
+ * Default export for the MessageQueueService singleton
+ */
+export default messageQueueService;
