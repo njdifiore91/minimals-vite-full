@@ -1,0 +1,92 @@
+{{- $environment := .Values.environment | default "production" -}}
+{{- $autoscaling := dict -}}
+
+{{- if hasKey .Values.environmentOverrides $environment -}}
+  {{- if hasKey (index .Values.environmentOverrides $environment) "autoscaling" -}}
+    {{- $autoscaling = merge .Values.autoscaling (index .Values.environmentOverrides $environment "autoscaling") -}}
+  {{- else -}}
+    {{- $autoscaling = .Values.autoscaling -}}
+  {{- end -}}
+{{- else -}}
+  {{- $autoscaling = .Values.autoscaling -}}
+{{- end -}}
+
+{{- if (index $autoscaling "enabled") -}}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "kong.fullname" . }}
+  labels:
+    {{- include "kong.labels" . | nindent 4 }}
+  {{- with (index $autoscaling "annotations") }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "kong.fullname" . }}
+  minReplicas: {{ index $autoscaling "minReplicas" | default 1 }}
+  maxReplicas: {{ index $autoscaling "maxReplicas" | default 10 }}
+  
+  {{- if (index $autoscaling "behavior") }}
+  behavior:
+    {{- toYaml (index $autoscaling "behavior") | nindent 4 }}
+  {{- else }}
+  # Default behavior to prevent scaling flapping
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 15
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 15
+      - type: Pods
+        value: 4
+        periodSeconds: 15
+      selectPolicy: Max
+  {{- end }}
+  
+  metrics:
+  {{- if (index $autoscaling "targetCPUUtilizationPercentage") }}
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: {{ index $autoscaling "targetCPUUtilizationPercentage" }}
+  {{- end }}
+  {{- if (index $autoscaling "targetMemoryUtilizationPercentage") }}
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: {{ index $autoscaling "targetMemoryUtilizationPercentage" }}
+  {{- end }}
+  
+  {{- if (index $autoscaling "customMetrics") }}
+  {{- range (index $autoscaling "customMetrics") }}
+  - type: {{ .type }}
+    {{- toYaml (omit . "type") | nindent 4 }}
+  {{- end }}
+  {{- end }}
+  
+  {{- if and (index $autoscaling "requestsPerSecond") (not (index $autoscaling "customMetrics")) }}
+  # Custom metric for request rate-based scaling
+  - type: Pods
+    pods:
+      metric:
+        name: http_requests_per_second
+      target:
+        type: AverageValue
+        averageValue: {{ index $autoscaling "requestsPerSecond" }}
+  {{- end }}
+{{- end }}
