@@ -1,81 +1,31 @@
-/**
- * Webhook Configuration Hooks for MCA Application Processing System
- * 
- * This file implements custom React hooks for webhook configuration using SWR.
- * It provides hooks for listing, creating, testing, and monitoring webhooks.
- * 
- * Key features:
- * - useGetWebhooks: Lists configured webhook endpoints with status information
- * - usePostWebhookConfig: Creates new webhook configurations with validation
- * - useTestWebhook: Sends test payloads with real-time delivery feedback
- * - useWebhookLogs: Retrieves delivery history with status codes and timestamps
- */
-
+import type { SWRConfiguration } from 'swr';
+import useSWR from 'swr';
 import { useMemo, useState } from 'react';
-import useSWR, { SWRConfiguration, useSWRConfig } from 'swr';
-import { webhookEndpoints } from '../lib/axios';
 
-// =============================================================================
-// Types
-// =============================================================================
+import axiosInstance, { API_ENDPOINTS, NormalizedError } from 'src/lib/axios';
+
+// ----------------------------------------------------------------------
 
 /**
- * Webhook HTTP method enum
- */
-export enum WebhookMethod {
-  GET = 'GET',
-  POST = 'POST',
-  PUT = 'PUT',
-  PATCH = 'PATCH',
-  DELETE = 'DELETE'
-}
-
-/**
- * Webhook status enum
- */
-export enum WebhookStatus {
-  ACTIVE = 'ACTIVE',
-  INACTIVE = 'INACTIVE',
-  FAILED = 'FAILED'
-}
-
-/**
- * Webhook configuration interface
+ * Interface for webhook configuration data
  */
 export interface IWebhookConfig {
   id: string;
-  name: string;
   url: string;
-  method: WebhookMethod;
-  status: WebhookStatus;
-  headers?: Record<string, string>;
-  secret?: string;
+  name: string;
   description?: string;
+  events: string[];
+  status: 'active' | 'inactive';
   createdAt: string;
   updatedAt: string;
-  lastTestedAt?: string;
-  lastDeliveryStatus?: string;
-  events: string[];
+  lastDeliveryStatus?: 'success' | 'failed' | 'pending' | null;
+  lastDeliveryTime?: string | null;
 }
 
 /**
- * Webhook creation/update payload interface
+ * Interface for webhook test response
  */
-export interface IWebhookPayload {
-  name: string;
-  url: string;
-  method: WebhookMethod;
-  headers?: Record<string, string>;
-  secret?: string;
-  description?: string;
-  events: string[];
-  active?: boolean;
-}
-
-/**
- * Webhook test result interface
- */
-export interface IWebhookTestResult {
+export interface IWebhookTestResponse {
   success: boolean;
   statusCode?: number;
   responseTime?: number;
@@ -85,79 +35,70 @@ export interface IWebhookTestResult {
 }
 
 /**
- * Webhook log entry interface
+ * Interface for webhook log entry
  */
-export interface IWebhookLogEntry {
+export interface IWebhookLog {
   id: string;
   webhookId: string;
-  eventType: string;
+  event: string;
   requestPayload: string;
   responseStatus: number;
   responseBody?: string;
   error?: string;
   timestamp: string;
   duration: number;
-  retryCount: number;
-  success: boolean;
 }
 
 /**
- * Webhook logs response interface
+ * Interface for creating a new webhook configuration
  */
-export interface IWebhookLogsResponse {
-  logs: IWebhookLogEntry[];
-  pagination: {
-    total: number;
-    page: number;
-    pageSize: number;
-    totalPages: number;
-  };
+export interface ICreateWebhookConfig {
+  url: string;
+  name: string;
+  description?: string;
+  events: string[];
+  status: 'active' | 'inactive';
 }
 
-// =============================================================================
-// SWR Configuration
-// =============================================================================
-
 /**
- * Default SWR options for webhook hooks
- * - Disable automatic revalidation on stale data
- * - Disable revalidation on focus
- * - Disable revalidation on reconnect
+ * Interface for webhook test request
  */
+export interface IWebhookTestRequest {
+  webhookId: string;
+  payload?: Record<string, any>;
+}
+
+// ----------------------------------------------------------------------
+
+// SWR configuration options
 const swrOptions: SWRConfiguration = {
   revalidateIfStale: false,
   revalidateOnFocus: false,
   revalidateOnReconnect: false,
 };
 
-// =============================================================================
-// Hooks
-// =============================================================================
+// ----------------------------------------------------------------------
 
 /**
- * Hook for retrieving webhook configurations
- * 
- * @param params Optional query parameters for filtering webhooks
- * @returns Webhook configurations with loading and error states
+ * Hook for retrieving the list of configured webhook endpoints
+ * @param {Object} options - Optional parameters for filtering and pagination
+ * @returns {Object} Webhook list data and loading states
  */
-export function useGetWebhooks(params?: Record<string, any>) {
-  const { data, error, isLoading, isValidating, mutate } = useSWR<{ webhooks: IWebhookConfig[] }>(
-    ['webhooks', params],
-    async () => {
-      const response = await webhookEndpoints.list(params);
-      return response.data;
-    },
-    swrOptions
-  );
+export function useGetWebhooks(options?: { status?: string; page?: number; limit?: number }) {
+  const url = options
+    ? [API_ENDPOINTS.webhooks.list, { params: options }]
+    : API_ENDPOINTS.webhooks.list;
+
+  const { data, error, isLoading, isValidating, mutate } = useSWR<{ webhooks: IWebhookConfig[] }>(url, undefined, swrOptions);
 
   const memoizedValue = useMemo(
     () => ({
       webhooks: data?.webhooks || [],
       webhooksLoading: isLoading,
-      webhooksError: error,
+      webhooksError: error as NormalizedError | undefined,
       webhooksValidating: isValidating,
       webhooksEmpty: !isLoading && !isValidating && !data?.webhooks.length,
-      mutateWebhooks: mutate,
+      revalidateWebhooks: mutate,
     }),
     [data?.webhooks, error, isLoading, isValidating, mutate]
   );
@@ -165,208 +106,148 @@ export function useGetWebhooks(params?: Record<string, any>) {
   return memoizedValue;
 }
 
-/**
- * Hook for retrieving a specific webhook configuration
- * 
- * @param webhookId ID of the webhook to retrieve
- * @returns Webhook configuration with loading and error states
- */
-export function useGetWebhook(webhookId: string) {
-  const { data, error, isLoading, isValidating, mutate } = useSWR<{ webhook: IWebhookConfig }>(
-    webhookId ? `webhook-${webhookId}` : null,
-    async () => {
-      const response = await webhookEndpoints.getById(webhookId);
-      return response.data;
-    },
-    swrOptions
-  );
-
-  const memoizedValue = useMemo(
-    () => ({
-      webhook: data?.webhook,
-      webhookLoading: isLoading,
-      webhookError: error,
-      webhookValidating: isValidating,
-      mutateWebhook: mutate,
-    }),
-    [data?.webhook, error, isLoading, isValidating, mutate]
-  );
-
-  return memoizedValue;
-}
+// ----------------------------------------------------------------------
 
 /**
- * Hook for creating or updating webhook configurations
- * 
- * @returns Functions for creating and updating webhooks with loading and error states
+ * Hook for creating a new webhook configuration
+ * @returns {Object} Functions and state for creating webhook configurations
  */
 export function usePostWebhookConfig() {
-  const { mutate } = useSWRConfig();
-  const [createLoading, setCreateLoading] = useState(false);
-  const [createError, setCreateError] = useState<any>(null);
-  const [updateLoading, setUpdateLoading] = useState(false);
-  const [updateError, setUpdateError] = useState<any>(null);
+  const { mutate } = useSWR<{ webhooks: IWebhookConfig[] }>(API_ENDPOINTS.webhooks.list);
+
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState<NormalizedError | null>(null);
 
   /**
-   * Creates a new webhook configuration
-   * 
-   * @param payload Webhook configuration payload
-   * @returns Created webhook configuration
+   * Create a new webhook configuration
+   * @param {ICreateWebhookConfig} config - The webhook configuration to create
+   * @returns {Promise<IWebhookConfig>} The created webhook configuration
    */
-  const createWebhook = async (payload: IWebhookPayload) => {
-    setCreateLoading(true);
-    setCreateError(null);
-    
+  const createWebhook = async (config: ICreateWebhookConfig): Promise<IWebhookConfig> => {
+    setIsSubmitting(true);
+    setError(null);
+
     try {
-      const response = await webhookEndpoints.create(payload);
-      
-      // Invalidate webhooks cache to trigger a refetch
-      await mutate((key) => typeof key === 'string' && key.startsWith('webhooks'));
-      
-      setCreateLoading(false);
+      // Validate URL format before sending to server
+      if (!isValidUrl(config.url)) {
+        throw new Error('Invalid URL format');
+      }
+
+      const response = await axiosInstance.post<{ webhook: IWebhookConfig }>(
+        API_ENDPOINTS.webhooks.create,
+        config
+      );
+
+      // Revalidate the webhook list to include the new webhook
+      await mutate();
+
       return response.data.webhook;
-    } catch (error) {
-      setCreateError(error);
-      setCreateLoading(false);
-      throw error;
-    }
-  };
-
-  /**
-   * Updates an existing webhook configuration
-   * 
-   * @param webhookId ID of the webhook to update
-   * @param payload Webhook configuration payload
-   * @returns Updated webhook configuration
-   */
-  const updateWebhook = async (webhookId: string, payload: IWebhookPayload) => {
-    setUpdateLoading(true);
-    setUpdateError(null);
-    
-    try {
-      const response = await webhookEndpoints.update(webhookId, payload);
-      
-      // Invalidate specific webhook cache and webhooks list cache
-      await mutate(`webhook-${webhookId}`);
-      await mutate((key) => typeof key === 'string' && key.startsWith('webhooks'));
-      
-      setUpdateLoading(false);
-      return response.data.webhook;
-    } catch (error) {
-      setUpdateError(error);
-      setUpdateLoading(false);
-      throw error;
-    }
-  };
-
-  /**
-   * Deletes a webhook configuration
-   * 
-   * @param webhookId ID of the webhook to delete
-   * @returns Success status
-   */
-  const deleteWebhook = async (webhookId: string) => {
-    try {
-      const response = await webhookEndpoints.delete(webhookId);
-      
-      // Invalidate webhooks cache to trigger a refetch
-      await mutate((key) => typeof key === 'string' && key.startsWith('webhooks'));
-      
-      return response.data.success;
-    } catch (error) {
-      throw error;
+    } catch (err) {
+      const normalizedError = err as NormalizedError;
+      setError(normalizedError);
+      throw normalizedError;
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   return {
     createWebhook,
-    updateWebhook,
-    deleteWebhook,
-    createLoading,
-    createError,
-    updateLoading,
-    updateError,
+    isSubmitting,
+    error,
   };
 }
 
+// ----------------------------------------------------------------------
+
 /**
  * Hook for testing webhook delivery
- * 
- * @param webhookId ID of the webhook to test
- * @returns Function for testing webhook with loading and error states
+ * @returns {Object} Functions and state for testing webhooks
  */
-export function useTestWebhook(webhookId: string) {
-  const { mutate } = useSWRConfig();
-  const [testLoading, setTestLoading] = useState(false);
-  const [testError, setTestError] = useState<any>(null);
-  const [testResult, setTestResult] = useState<IWebhookTestResult | null>(null);
+export function useTestWebhook() {
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [testResult, setTestResult] = useState<IWebhookTestResponse | null>(null);
+  const [error, setError] = useState<NormalizedError | null>(null);
 
   /**
-   * Tests webhook delivery with a sample payload
-   * 
-   * @param eventType Type of event to simulate for the test
-   * @returns Test result with delivery status
+   * Send a test payload to a webhook endpoint
+   * @param {IWebhookTestRequest} request - The test request configuration
+   * @returns {Promise<IWebhookTestResponse>} The test response
    */
-  const testWebhook = async (eventType: string) => {
-    setTestLoading(true);
-    setTestError(null);
+  const testWebhook = async (request: IWebhookTestRequest): Promise<IWebhookTestResponse> => {
+    setIsSubmitting(true);
+    setError(null);
     setTestResult(null);
-    
+
     try {
-      const response = await webhookEndpoints.test(webhookId, eventType);
-      
-      // Update the test result
-      setTestResult(response.data.result);
-      
-      // Invalidate specific webhook cache to update lastTestedAt and lastDeliveryStatus
-      await mutate(`webhook-${webhookId}`);
-      
-      setTestLoading(false);
-      return response.data.result;
-    } catch (error) {
-      setTestError(error);
-      setTestLoading(false);
-      throw error;
+      const response = await axiosInstance.post<{ result: IWebhookTestResponse }>(
+        API_ENDPOINTS.webhooks.test,
+        request
+      );
+
+      const result = response.data.result;
+      setTestResult(result);
+      return result;
+    } catch (err) {
+      const normalizedError = err as NormalizedError;
+      setError(normalizedError);
+      throw normalizedError;
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   return {
     testWebhook,
-    testLoading,
-    testError,
+    isSubmitting,
     testResult,
+    error,
+    clearTestResult: () => setTestResult(null),
   };
 }
 
+// ----------------------------------------------------------------------
+
 /**
  * Hook for retrieving webhook delivery logs
- * 
- * @param webhookId ID of the webhook to get logs for
- * @param params Optional query parameters for pagination and filtering
- * @returns Webhook logs with loading and error states
+ * @param {string} webhookId - ID of the webhook to retrieve logs for
+ * @param {Object} options - Optional parameters for filtering and pagination
+ * @returns {Object} Webhook logs data and loading states
  */
-export function useWebhookLogs(webhookId: string, params?: Record<string, any>) {
-  const { data, error, isLoading, isValidating, mutate } = useSWR<IWebhookLogsResponse>(
-    webhookId ? [`webhook-logs-${webhookId}`, params] : null,
-    async () => {
-      const response = await webhookEndpoints.logs(webhookId, params);
-      return response.data;
-    },
-    swrOptions
-  );
+export function useWebhookLogs(
+  webhookId: string,
+  options?: { status?: number; startDate?: string; endDate?: string; page?: number; limit?: number }
+) {
+  const url = webhookId
+    ? [API_ENDPOINTS.webhooks.logs, { params: { webhookId, ...options } }]
+    : '';
+
+  const { data, error, isLoading, isValidating, mutate } = useSWR<{ logs: IWebhookLog[] }>(url, undefined, swrOptions);
 
   const memoizedValue = useMemo(
     () => ({
       logs: data?.logs || [],
-      pagination: data?.pagination,
       logsLoading: isLoading,
-      logsError: error,
+      logsError: error as NormalizedError | undefined,
       logsValidating: isValidating,
       logsEmpty: !isLoading && !isValidating && !data?.logs.length,
-      mutateLogs: mutate,
+      revalidateLogs: mutate,
     }),
-    [data?.logs, data?.pagination, error, isLoading, isValidating, mutate]
+    [data?.logs, error, isLoading, isValidating, mutate]
   );
 
   return memoizedValue;
 }
+
+// ----------------------------------------------------------------------
+
+// Helper function to validate URL format
+function isValidUrl(url: string): boolean {
+  try {
+    new URL(url);
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
