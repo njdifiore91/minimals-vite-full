@@ -1,4 +1,5 @@
-"""Health check endpoints for Kubernetes probes in the Document Service.
+"""
+Health check endpoints for Kubernetes probes in the Document Service.
 
 This module provides liveness and readiness probe endpoints that Kubernetes uses to determine
 if the service is running correctly and ready to accept traffic. The liveness probe verifies
@@ -10,190 +11,147 @@ import logging
 from typing import Dict, Any, Optional
 
 from fastapi import APIRouter, Depends, status, Response
+from pydantic import BaseModel
 
-from ..services.queue_service import QueueService
-from ..services.storage_service import StorageService
-from ..utils.logging_utils import get_logger
-from ..utils.time_utils import get_current_timestamp
+from services import QueueService, StorageService
 
-# Initialize logger
-logger = get_logger(__name__)
+# Configure logger
+logger = logging.getLogger(__name__)
 
 # Create router
-health_router = APIRouter(tags=["Health"])
+health_router = APIRouter(tags=["health"])
 
 
-@health_router.get("/liveness", summary="Liveness probe for Kubernetes")
-async def liveness_probe() -> Dict[str, Any]:
-    """Liveness probe endpoint for Kubernetes.
+class HealthStatus(BaseModel):
+    """Model for health check response data."""
+    status: str
+    version: str
+    details: Dict[str, Any]
+
+
+async def get_queue_service() -> QueueService:
+    """Dependency to get the queue service instance."""
+    # In a real implementation, this would be retrieved from a dependency injection system
+    # For this example, we'll assume it's available through app state
+    from app import get_app
+    return get_app().queue_service
+
+
+async def get_storage_service() -> StorageService:
+    """Dependency to get the storage service instance."""
+    # In a real implementation, this would be retrieved from a dependency injection system
+    # For this example, we'll assume it's available through app state
+    from app import get_app
+    return get_app().storage_service
+
+
+@health_router.get("/health/liveness", response_model=HealthStatus)
+async def liveness_check() -> HealthStatus:
+    """
+    Liveness probe endpoint for Kubernetes.
     
-    This endpoint verifies that the application is running and responsive.
+    This endpoint checks if the application is running and responsive.
     It does not check dependencies, only that the service itself is operational.
     
     Returns:
-        Dict[str, Any]: Health status information with timestamp
+        HealthStatus: Health check response with status and details
     """
-    logger.debug("Liveness probe called")
+    logger.debug("Liveness check requested")
     
-    return {
-        "status": "UP",
-        "timestamp": get_current_timestamp(),
-        "service": "document-service",
-        "details": {
-            "message": "Service is running"
+    # If this endpoint is reachable, the service is alive
+    return HealthStatus(
+        status="UP",
+        version="1.0.0",  # This should be retrieved from app config in a real implementation
+        details={
+            "service": "document-service",
+            "status": "operational"
         }
-    }
+    )
 
 
-async def check_rabbitmq_connection(queue_service: QueueService) -> Dict[str, Any]:
-    """Check RabbitMQ connection status.
-    
-    Args:
-        queue_service (QueueService): The queue service instance
-        
-    Returns:
-        Dict[str, Any]: Connection status information
-    """
-    try:
-        is_connected = await queue_service.check_connection()
-        return {
-            "status": "UP" if is_connected else "DOWN",
-            "details": {
-                "connected": is_connected,
-                "message": "Connected to RabbitMQ" if is_connected else "Not connected to RabbitMQ"
-            }
-        }
-    except Exception as e:
-        logger.error(f"Error checking RabbitMQ connection: {str(e)}")
-        return {
-            "status": "DOWN",
-            "details": {
-                "connected": False,
-                "message": f"Error checking RabbitMQ connection: {str(e)}"
-            }
-        }
-
-
-async def check_s3_connection(storage_service: StorageService) -> Dict[str, Any]:
-    """Check S3 connection status.
-    
-    Args:
-        storage_service (StorageService): The storage service instance
-        
-    Returns:
-        Dict[str, Any]: Connection status information
-    """
-    try:
-        is_connected = await storage_service.check_connection()
-        return {
-            "status": "UP" if is_connected else "DOWN",
-            "details": {
-                "connected": is_connected,
-                "message": "Connected to S3" if is_connected else "Not connected to S3"
-            }
-        }
-    except Exception as e:
-        logger.error(f"Error checking S3 connection: {str(e)}")
-        return {
-            "status": "DOWN",
-            "details": {
-                "connected": False,
-                "message": f"Error checking S3 connection: {str(e)}"
-            }
-        }
-
-
-@health_router.get("/readiness", summary="Readiness probe for Kubernetes")
-async def readiness_probe(
+@health_router.get("/health/readiness", response_model=HealthStatus)
+async def readiness_check(
     response: Response,
-    queue_service: QueueService = Depends(),
-    storage_service: StorageService = Depends()
-) -> Dict[str, Any]:
-    """Readiness probe endpoint for Kubernetes.
+    queue_service: QueueService = Depends(get_queue_service),
+    storage_service: StorageService = Depends(get_storage_service)
+) -> HealthStatus:
+    """
+    Readiness probe endpoint for Kubernetes.
     
-    This endpoint verifies that the application is ready to accept traffic by checking
+    This endpoint checks if the application is ready to accept traffic by verifying
     that all dependencies (RabbitMQ, S3) are available and properly connected.
     
     Args:
-        response (Response): FastAPI response object for setting status code
-        queue_service (QueueService): The queue service instance
-        storage_service (StorageService): The storage service instance
+        response: FastAPI Response object for setting status code
+        queue_service: RabbitMQ queue service instance
+        storage_service: S3 storage service instance
         
     Returns:
-        Dict[str, Any]: Health status information with dependency details
+        HealthStatus: Health check response with status and details
     """
-    logger.debug("Readiness probe called")
+    logger.debug("Readiness check requested")
     
-    # Check dependencies
-    rabbitmq_status = await check_rabbitmq_connection(queue_service)
-    s3_status = await check_s3_connection(storage_service)
-    
-    # Determine overall status
-    overall_status = "UP"
-    if rabbitmq_status["status"] == "DOWN" or s3_status["status"] == "DOWN":
-        overall_status = "DOWN"
-        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-    
-    return {
-        "status": overall_status,
-        "timestamp": get_current_timestamp(),
+    # Initialize health details
+    health_details = {
         "service": "document-service",
         "dependencies": {
-            "rabbitmq": rabbitmq_status,
-            "s3": s3_status
+            "rabbitmq": {"status": "DOWN", "details": None},
+            "s3": {"status": "DOWN", "details": None}
         }
     }
-
-
-@health_router.get("/", summary="General health check endpoint")
-async def health_check(
-    response: Response,
-    queue_service: QueueService = Depends(),
-    storage_service: StorageService = Depends()
-) -> Dict[str, Any]:
-    """General health check endpoint that combines liveness and readiness information.
     
-    This endpoint provides comprehensive health information about the service and its
-    dependencies, suitable for manual health checks and monitoring systems.
+    # Check RabbitMQ connection
+    rabbitmq_status = "DOWN"
+    rabbitmq_details = None
+    try:
+        if queue_service.is_connected():
+            rabbitmq_status = "UP"
+            rabbitmq_details = {
+                "connection": "established",
+                "exchange": "mca.documents",
+                "queue": "document-processing"
+            }
+        else:
+            rabbitmq_details = {"error": "Connection not established"}
+    except Exception as e:
+        logger.error(f"Error checking RabbitMQ connection: {str(e)}")
+        rabbitmq_details = {"error": str(e)}
     
-    Args:
-        response (Response): FastAPI response object for setting status code
-        queue_service (QueueService): The queue service instance
-        storage_service (StorageService): The storage service instance
-        
-    Returns:
-        Dict[str, Any]: Comprehensive health status information
-    """
-    logger.info("Health check called")
+    health_details["dependencies"]["rabbitmq"] = {
+        "status": rabbitmq_status,
+        "details": rabbitmq_details
+    }
     
-    # Check dependencies
-    rabbitmq_status = await check_rabbitmq_connection(queue_service)
-    s3_status = await check_s3_connection(storage_service)
+    # Check S3 connection
+    s3_status = "DOWN"
+    s3_details = None
+    try:
+        if storage_service.is_connected():
+            s3_status = "UP"
+            s3_details = {
+                "connection": "established",
+                "bucket": storage_service.get_bucket_name()
+            }
+        else:
+            s3_details = {"error": "Connection not established"}
+    except Exception as e:
+        logger.error(f"Error checking S3 connection: {str(e)}")
+        s3_details = {"error": str(e)}
     
-    # Get service information
-    service_info = {
-        "name": "document-service",
-        "version": "1.0.0",  # This should be retrieved from a version file or environment variable
-        "description": "Document classification service for MCA processing"
+    health_details["dependencies"]["s3"] = {
+        "status": s3_status,
+        "details": s3_details
     }
     
     # Determine overall status
-    overall_status = "UP"
-    if rabbitmq_status["status"] == "DOWN" or s3_status["status"] == "DOWN":
-        overall_status = "DOWN"
+    overall_status = "UP" if (rabbitmq_status == "UP" and s3_status == "UP") else "DOWN"
+    
+    # Set appropriate HTTP status code
+    if overall_status == "DOWN":
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
     
-    return {
-        "status": overall_status,
-        "timestamp": get_current_timestamp(),
-        "service": service_info,
-        "dependencies": {
-            "rabbitmq": rabbitmq_status,
-            "s3": s3_status
-        },
-        "details": {
-            "uptime": "Not implemented",  # This should be implemented to track service uptime
-            "memory_usage": "Not implemented",  # This should be implemented to track memory usage
-            "cpu_usage": "Not implemented"  # This should be implemented to track CPU usage
-        }
-    }
+    return HealthStatus(
+        status=overall_status,
+        version="1.0.0",  # This should be retrieved from app config in a real implementation
+        details=health_details
+    )
