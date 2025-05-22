@@ -1,0 +1,90 @@
+{{- /*
+HorizontalPodAutoscaler template for MCA Application Processing System microservices.
+
+This template creates a HorizontalPodAutoscaler resource that automatically scales
+the number of pods based on CPU and memory utilization, with support for custom metrics.
+
+Parameters:
+  - .Values.autoscaling.enabled: Whether to enable autoscaling (default: true)
+  - .Values.autoscaling.minReplicas: Minimum number of replicas (default: 1)
+  - .Values.autoscaling.maxReplicas: Maximum number of replicas (default: 10)
+  - .Values.autoscaling.targetCPUUtilizationPercentage: Target CPU utilization (default: 70)
+  - .Values.autoscaling.targetMemoryUtilizationPercentage: Target memory utilization (default: 80)
+  - .Values.autoscaling.metrics: Additional metrics for scaling
+  - .Values.autoscaling.behavior: Scaling behavior configuration
+*/}}
+{{- if and .Values.autoscaling.enabled (not (empty .Values.autoscaling)) }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "common.fullname" . }}
+  labels:
+    {{- include "common.labels" . | nindent 4 }}
+  {{- with .Values.autoscaling.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: {{ .Values.autoscaling.scaleTargetRef.kind | default "Deployment" }}
+    name: {{ .Values.autoscaling.scaleTargetRef.name | default (include "common.fullname" .) }}
+  minReplicas: {{ .Values.autoscaling.minReplicas | default 1 }}
+  maxReplicas: {{ .Values.autoscaling.maxReplicas | default 10 }}
+  {{- if or .Values.autoscaling.targetCPUUtilizationPercentage .Values.autoscaling.targetMemoryUtilizationPercentage .Values.autoscaling.metrics }}
+  metrics:
+    {{- if .Values.autoscaling.targetCPUUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.autoscaling.targetCPUUtilizationPercentage }}
+    {{- end }}
+    {{- if .Values.autoscaling.targetMemoryUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.autoscaling.targetMemoryUtilizationPercentage }}
+    {{- end }}
+    {{- if .Values.autoscaling.metrics }}
+    {{- toYaml .Values.autoscaling.metrics | nindent 4 }}
+    {{- end }}
+  {{- end }}
+  {{- if .Values.autoscaling.behavior }}
+  behavior:
+    {{- toYaml .Values.autoscaling.behavior | nindent 4 }}
+  {{- else }}
+  behavior:
+    scaleDown:
+      # Stabilization window of 5 minutes to prevent flapping
+      stabilizationWindowSeconds: 300
+      policies:
+      # Scale down by at most 10% of current replicas per minute
+      - type: Percent
+        value: 10
+        periodSeconds: 60
+      # But never scale down by more than 2 pods per minute
+      - type: Pods
+        value: 2
+        periodSeconds: 60
+      # Use the policy that scales down the least
+      selectPolicy: Min
+    scaleUp:
+      # No stabilization window for scaling up to ensure quick response to load
+      stabilizationWindowSeconds: 0
+      policies:
+      # Scale up by at most 100% of current replicas per minute (double the pods)
+      - type: Percent
+        value: 100
+        periodSeconds: 60
+      # But never scale up by more than 4 pods per minute
+      - type: Pods
+        value: 4
+        periodSeconds: 60
+      # Use the policy that scales up the most
+      selectPolicy: Max
+  {{- end }}
+{{- end }}
