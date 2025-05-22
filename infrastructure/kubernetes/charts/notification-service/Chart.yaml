@@ -1,0 +1,17 @@
+apiVersion: v2
+name: notification-service
+version: 0.1.0
+description: Notification Service for the MCA Application Processing System that handles alerts and webhooks
+type: application
+appVersion: "1.0.0"
+
+# Dependencies
+dependencies:
+  - name: common
+    version: 0.1.0
+    repository: file://../common
+
+# Maintainer information
+maintainers:
+  - name: MCA Application Processing System Team
+    email: devops@dollarfunding.com
