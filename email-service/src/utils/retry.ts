@@ -1,17 +1,9 @@
 /**
- * Retry Utility
+ * Retry Utility Module
  * 
- * Provides retry logic with exponential backoff and jitter for handling temporary failures
- * in external service connections. This utility is used throughout the Email Service for
- * IMAP connections, RabbitMQ publishing, and S3 storage operations.
- * 
- * Key features:
- * - Exponential backoff with configurable parameters
- * - Random jitter to prevent thundering herd problems
- * - Intelligent retry eligibility based on error type
- * - Promise-based API for async operations
- * - Configurable retry limits and delay caps
- * - Callback hooks for monitoring and logging retry attempts
+ * Provides retry logic utilities for the Email Service with exponential backoff, jitter,
+ * and configurable limits. Essential for handling temporary failures in external service
+ * connections and ensuring reliable operation.
  */
 
 /**
@@ -24,24 +16,18 @@ export interface RetryOptions {
   initialDelayMs: number;
   /** Maximum delay in milliseconds between retries */
   maxDelayMs: number;
-  /** Factor by which the delay increases with each retry attempt */
+  /** Factor by which the delay increases with each retry */
   backoffFactor: number;
-  /** Maximum jitter percentage (0-1) to add to the delay to prevent thundering herd */
+  /** Maximum jitter percentage (0-1) to add to delay to prevent thundering herd */
   jitterFactor: number;
-  /** Optional function to determine if an error is retryable */
+  /** Optional function to determine if an error is eligible for retry */
   isRetryable?: (error: Error) => boolean;
-  /** Optional function to execute before each retry attempt */
-  onRetry?: (error: Error, attempt: number, delay: number) => void;
+  /** Optional callback function to execute before each retry attempt */
+  onRetry?: (attempt: number, delay: number, error: Error) => void;
 }
 
 /**
- * Default retry configuration
- * 
- * These defaults provide a reasonable starting point for most operations:
- * - 3 retry attempts (4 total attempts including the initial try)
- * - 1 second initial delay, doubling with each retry (1s, 2s, 4s)
- * - 30 second maximum delay cap to prevent excessive waiting
- * - 20% jitter to randomize retry timing and prevent thundering herd
+ * Default retry options
  */
 export const DEFAULT_RETRY_OPTIONS: RetryOptions = {
   maxRetries: 3,
@@ -52,239 +38,176 @@ export const DEFAULT_RETRY_OPTIONS: RetryOptions = {
 };
 
 /**
- * Aggressive retry configuration for critical operations
- * 
- * Use this configuration for operations that must eventually succeed,
- * such as saving critical data or sending important notifications.
+ * Result of a retry operation
  */
-export const AGGRESSIVE_RETRY_OPTIONS: RetryOptions = {
-  maxRetries: 10,
-  initialDelayMs: 500, // 0.5 seconds
-  maxDelayMs: 60000, // 60 seconds
-  backoffFactor: 1.5,
-  jitterFactor: 0.1, // 10% jitter
-};
+export interface RetryResult<T> {
+  /** The result of the successful operation */
+  result?: T;
+  /** The error if all retries failed */
+  error?: Error;
+  /** Number of retry attempts made */
+  attempts: number;
+  /** Whether the operation was successful */
+  success: boolean;
+  /** Total time spent in retry operations (ms) */
+  totalTimeMs?: number;
+}
 
 /**
- * Conservative retry configuration for non-critical operations
- * 
- * Use this configuration for operations where retries should be limited,
- * such as user-facing requests or operations with side effects.
+ * Common error types that are typically retryable
  */
-export const CONSERVATIVE_RETRY_OPTIONS: RetryOptions = {
-  maxRetries: 2,
-  initialDelayMs: 2000, // 2 seconds
-  maxDelayMs: 10000, // 10 seconds
-  backoffFactor: 2,
-  jitterFactor: 0.3, // 30% jitter
-};
+export enum RetryableErrorType {
+  /** Network connectivity issues */
+  NETWORK = 'network',
+  /** Server overload or temporary unavailability */
+  SERVER_BUSY = 'server_busy',
+  /** Rate limiting or throttling */
+  RATE_LIMIT = 'rate_limit',
+  /** Temporary service unavailability */
+  SERVICE_UNAVAILABLE = 'service_unavailable',
+  /** Connection timeout */
+  TIMEOUT = 'timeout',
+  /** Database connection issues */
+  DATABASE = 'database',
+  /** Message queue connection issues */
+  QUEUE = 'queue',
+  /** Storage service connection issues */
+  STORAGE = 'storage',
+  /** IMAP connection issues */
+  IMAP = 'imap',
+}
 
 /**
- * Common retryable error types for network and connection issues
- * 
- * These error codes typically indicate temporary network issues that may be resolved
- * by retrying the operation after a delay.
+ * Error types that should not be retried
  */
-export const RETRYABLE_ERROR_TYPES = [
-  'ECONNRESET',    // Connection reset by peer
-  'ECONNREFUSED',  // Connection refused
-  'ETIMEDOUT',     // Operation timed out
-  'ESOCKETTIMEDOUT', // Socket timeout
-  'ENOTFOUND',     // DNS lookup failed
-  'ENETUNREACH',   // Network unreachable
-  'EAI_AGAIN',     // Temporary DNS resolution failure
-  'EPIPE',         // Broken pipe
-  'ECONNABORTED',  // Connection aborted
-];
-
-/**
- * Common retryable HTTP status codes
- * 
- * These status codes typically indicate temporary server issues or rate limiting
- * that may be resolved by retrying the request after a delay:
- * - 408: Request Timeout
- * - 429: Too Many Requests (rate limiting)
- * - 500: Internal Server Error
- * - 502: Bad Gateway
- * - 503: Service Unavailable
- * - 504: Gateway Timeout
- */
-export const RETRYABLE_STATUS_CODES = [408, 429, 500, 502, 503, 504];
-
-/**
- * Error with additional properties for network and HTTP errors
- */
-interface ExtendedError extends Error {
-  code?: string;
-  status?: number;
-  statusCode?: number;
-  errno?: number;
-  syscall?: string;
-  response?: { status?: number };
+export enum NonRetryableErrorType {
+  /** Authentication failures */
+  AUTHENTICATION = 'authentication',
+  /** Authorization failures */
+  AUTHORIZATION = 'authorization',
+  /** Invalid request format or parameters */
+  VALIDATION = 'validation',
+  /** Resource not found */
+  NOT_FOUND = 'not_found',
+  /** Business logic errors */
+  BUSINESS_LOGIC = 'business_logic',
+  /** Internal server errors that are not transient */
+  INTERNAL = 'internal',
+  /** Malformed message or document */
+  MALFORMED = 'malformed',
+  /** Virus or security threat detected */
+  SECURITY = 'security',
 }
 
 /**
  * Determines if an error is retryable based on its type or properties
  * 
- * This function examines various properties of the error to determine if the operation
- * that caused it should be retried. It checks error codes, status codes, and message
- * patterns that typically indicate temporary failures.
- * 
  * @param error - The error to check
  * @returns True if the error is retryable, false otherwise
  */
 export function isRetryableError(error: Error): boolean {
-  const extError = error as ExtendedError;
-  
-  // Check for network errors by error code
-  if (extError.code && RETRYABLE_ERROR_TYPES.includes(extError.code)) {
+  // Check for network errors (common in Node.js)
+  if (
+    error.message.includes('ECONNREFUSED') ||
+    error.message.includes('ECONNRESET') ||
+    error.message.includes('ETIMEDOUT') ||
+    error.message.includes('EHOSTUNREACH') ||
+    error.message.includes('ENETUNREACH') ||
+    error.message.includes('socket hang up') ||
+    error.message.includes('network error')
+  ) {
     return true;
   }
 
-  // Check for HTTP errors with retryable status codes (direct status property)
-  if (extError.status && RETRYABLE_STATUS_CODES.includes(extError.status)) {
-    return true;
-  }
-  
-  // Check for HTTP errors with retryable status codes (statusCode property)
-  if (extError.statusCode && RETRYABLE_STATUS_CODES.includes(extError.statusCode)) {
-    return true;
-  }
-  
-  // Check for HTTP errors in response object (for axios/fetch-like errors)
-  if (extError.response?.status && RETRYABLE_STATUS_CODES.includes(extError.response.status)) {
+  // Check for HTTP status codes that indicate retryable errors
+  if (
+    error.message.includes('status code 429') || // Too Many Requests
+    error.message.includes('status code 503') || // Service Unavailable
+    error.message.includes('status code 502') || // Bad Gateway
+    error.message.includes('status code 504')    // Gateway Timeout
+  ) {
     return true;
   }
 
-  // Check for specific error messages that indicate temporary issues
-  const errorMessage = error.message.toLowerCase();
-  return (
-    errorMessage.includes('timeout') ||
-    errorMessage.includes('temporarily unavailable') ||
-    errorMessage.includes('connection reset') ||
-    errorMessage.includes('connection closed') ||
-    errorMessage.includes('connection refused') ||
-    errorMessage.includes('network error') ||
-    errorMessage.includes('socket hang up') ||
-    errorMessage.includes('eai_again') ||
-    errorMessage.includes('too many requests') ||
-    errorMessage.includes('rate limit') ||
-    errorMessage.includes('server error') ||
-    errorMessage.includes('service unavailable') ||
-    errorMessage.includes('gateway timeout')
-  );
+  // Check for custom error type property if it exists
+  const anyError = error as any;
+  if (anyError.type && Object.values(RetryableErrorType).includes(anyError.type)) {
+    return true;
+  }
+
+  // Check for IMAP-specific errors
+  if (
+    error.message.includes('IMAP connection') ||
+    error.message.includes('imap failure') ||
+    error.message.includes('connection closed') ||
+    error.message.includes('connection dropped')
+  ) {
+    return true;
+  }
+
+  // Check for RabbitMQ-specific errors
+  if (
+    error.message.includes('AMQP connection') ||
+    error.message.includes('channel closed') ||
+    error.message.includes('connection closed')
+  ) {
+    return true;
+  }
+
+  // Check for S3/storage-specific errors
+  if (
+    error.message.includes('SlowDown') ||
+    error.message.includes('RequestTimeout') ||
+    error.message.includes('RequestTimeTooSkewed') ||
+    error.message.includes('OperationAborted')
+  ) {
+    return true;
+  }
+
+  return false;
 }
 
 /**
- * Calculates the delay for the next retry attempt with exponential backoff and jitter
+ * Calculates the delay for the next retry attempt using exponential backoff with jitter
  * 
- * @param attempt - The current retry attempt (1-based)
- * @param options - Retry configuration options
+ * @param attempt - The current attempt number (0-based)
+ * @param options - The retry options
  * @returns The delay in milliseconds before the next retry
  */
-export function calculateBackoffDelay(attempt: number, options: RetryOptions): number {
-  // Calculate exponential backoff: initialDelay * (backoffFactor ^ attempt)
-  const exponentialDelay = options.initialDelayMs * Math.pow(options.backoffFactor, attempt - 1);
+export function calculateBackoff(attempt: number, options: RetryOptions): number {
+  // Calculate base delay with exponential backoff
+  const exponentialDelay = options.initialDelayMs * Math.pow(options.backoffFactor, attempt);
   
-  // Apply maximum delay constraint
+  // Apply maximum delay cap
   const cappedDelay = Math.min(exponentialDelay, options.maxDelayMs);
   
   // Apply jitter to prevent thundering herd problem
-  // Formula: delay = baseDelay * (1 - jitterFactor/2 + jitterFactor * random)
-  const jitterMultiplier = 1 - (options.jitterFactor / 2) + (options.jitterFactor * Math.random());
+  // Formula: delay = baseDelay * (1 - jitterFactor/2 + random * jitterFactor)
+  // This creates a range of [baseDelay * (1 - jitterFactor/2), baseDelay * (1 + jitterFactor/2)]
+  const jitterMultiplier = 1 - options.jitterFactor / 2 + Math.random() * options.jitterFactor;
   
   // Return the final delay with jitter applied
   return Math.floor(cappedDelay * jitterMultiplier);
 }
 
 /**
- * Result of a retry operation, including metadata about the attempts
+ * Creates a promise that resolves after the specified delay
+ * 
+ * @param ms - The delay in milliseconds
+ * @returns A promise that resolves after the delay
  */
-export interface RetryResult<T> {
-  /** The successful result of the operation */
-  result: T;
-  /** Number of attempts made (1 means success on first try) */
-  attempts: number;
-  /** Total time spent in retry delays (ms) */
-  totalDelayMs: number;
-  /** Whether the operation succeeded on the first attempt */
-  succeededImmediately: boolean;
+export function delay(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 /**
- * Executes a function with retry logic using exponential backoff and jitter
+ * Executes a function with retry logic
  * 
- * @param fn - The async function to execute with retry logic
- * @param options - Retry configuration options
- * @returns A promise that resolves with the result of the function or rejects after all retries fail
+ * @param fn - The function to execute with retry logic
+ * @param options - The retry options
+ * @returns A promise that resolves with the retry result
  */
 export async function withRetry<T>(
-  fn: () => Promise<T>,
-  options: Partial<RetryOptions> = {}
-): Promise<T> {
-  // Merge provided options with defaults
-  const retryOptions: RetryOptions = {
-    ...DEFAULT_RETRY_OPTIONS,
-    ...options,
-    isRetryable: options.isRetryable || isRetryableError,
-  };
-
-  let lastError: Error;
-  let attempt = 0;
-  let totalDelayMs = 0;
-
-  while (attempt <= retryOptions.maxRetries) {
-    try {
-      // Attempt to execute the function
-      return await fn();
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error));
-      attempt++;
-
-      // If we've exhausted all retry attempts, throw the last error
-      if (attempt > retryOptions.maxRetries) {
-        // Add retry metadata to the error for debugging
-        (lastError as any).retryAttempts = attempt - 1;
-        (lastError as any).totalDelayMs = totalDelayMs;
-        throw lastError;
-      }
-
-      // Check if the error is retryable
-      if (retryOptions.isRetryable && !retryOptions.isRetryable(lastError)) {
-        // Add retry metadata to the error for debugging
-        (lastError as any).retryAttempts = attempt - 1;
-        (lastError as any).totalDelayMs = totalDelayMs;
-        (lastError as any).notRetryable = true;
-        throw lastError;
-      }
-
-      // Calculate delay for next retry
-      const delay = calculateBackoffDelay(attempt, retryOptions);
-      totalDelayMs += delay;
-
-      // Execute onRetry callback if provided
-      if (retryOptions.onRetry) {
-        retryOptions.onRetry(lastError, attempt, delay);
-      }
-
-      // Wait for the calculated delay before retrying
-      await new Promise(resolve => setTimeout(resolve, delay));
-    }
-  }
-
-  // This should never be reached due to the throw in the loop,
-  // but TypeScript requires a return statement
-  throw lastError!;
-}
-
-/**
- * Executes a function with retry logic and returns detailed metadata about the operation
- * 
- * @param fn - The async function to execute with retry logic
- * @param options - Retry configuration options
- * @returns A promise that resolves with the result and retry metadata or rejects after all retries fail
- */
-export async function withRetryDetailed<T>(
   fn: () => Promise<T>,
   options: Partial<RetryOptions> = {}
 ): Promise<RetryResult<T>> {
@@ -292,216 +215,219 @@ export async function withRetryDetailed<T>(
   const retryOptions: RetryOptions = {
     ...DEFAULT_RETRY_OPTIONS,
     ...options,
-    isRetryable: options.isRetryable || isRetryableError,
   };
 
-  let attempt = 0;
-  let totalDelayMs = 0;
-  let lastError: Error;
+  let attempts = 0;
+  let lastError: Error | undefined;
+  const startTime = Date.now();
 
-  while (attempt <= retryOptions.maxRetries) {
+  while (attempts <= retryOptions.maxRetries) {
     try {
-      // Increment attempt counter (first attempt is 1)
-      attempt++;
-      
-      // If this is the first attempt, execute immediately
-      if (attempt === 1) {
-        const result = await fn();
-        return {
-          result,
-          attempts: 1,
-          totalDelayMs: 0,
-          succeededImmediately: true,
-        };
+      // If this isn't the first attempt, apply delay
+      if (attempts > 0) {
+        const delayMs = calculateBackoff(attempts - 1, retryOptions);
+        
+        // Call onRetry callback if provided
+        if (retryOptions.onRetry && lastError) {
+          retryOptions.onRetry(attempts, delayMs, lastError);
+        }
+        
+        await delay(delayMs);
       }
-      
-      // For retry attempts, execute after recording metadata
+
+      // Attempt to execute the function
       const result = await fn();
+      
+      // If successful, return the result
       return {
         result,
-        attempts: attempt,
-        totalDelayMs,
-        succeededImmediately: false,
+        attempts,
+        success: true,
+        totalTimeMs: Date.now() - startTime,
       };
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
-      
-      // If we've exhausted all retry attempts, throw the last error
-      if (attempt >= retryOptions.maxRetries) {
-        // Add retry metadata to the error for debugging
-        (lastError as any).retryAttempts = attempt;
-        (lastError as any).totalDelayMs = totalDelayMs;
-        throw lastError;
+      attempts++;
+
+      // Check if we've exhausted all retry attempts
+      if (attempts > retryOptions.maxRetries) {
+        break;
       }
 
       // Check if the error is retryable
-      if (retryOptions.isRetryable && !retryOptions.isRetryable(lastError)) {
-        // Add retry metadata to the error for debugging
-        (lastError as any).retryAttempts = attempt;
-        (lastError as any).totalDelayMs = totalDelayMs;
-        (lastError as any).notRetryable = true;
-        throw lastError;
+      const isRetryableFn = retryOptions.isRetryable || isRetryableError;
+      if (!isRetryableFn(lastError)) {
+        break;
       }
-
-      // Calculate delay for next retry
-      const delay = calculateBackoffDelay(attempt, retryOptions);
-      totalDelayMs += delay;
-
-      // Execute onRetry callback if provided
-      if (retryOptions.onRetry) {
-        retryOptions.onRetry(lastError, attempt, delay);
-      }
-
-      // Wait for the calculated delay before retrying
-      await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
 
-  // This should never be reached due to the throw in the loop,
-  // but TypeScript requires a return statement
-  throw lastError!;
+  // If we get here, all retries failed
+  return {
+    error: lastError,
+    attempts,
+    success: false,
+    totalTimeMs: Date.now() - startTime,
+  };
 }
 
 /**
  * Creates a retryable version of an async function
  * 
- * This utility wraps an existing async function with retry logic, returning a new function
- * with the same signature that automatically retries on failure according to the specified options.
- * 
- * @param fn - The async function to make retryable
- * @param options - Retry configuration options
- * @returns A new function that wraps the original with retry logic
- * 
- * @example
- * ```typescript
- * // Original function
- * async function fetchUserData(userId: string): Promise<UserData> {
- *   const response = await fetch(`/api/users/${userId}`);
- *   if (!response.ok) throw new Error(`Failed to fetch user: ${response.status}`);
- *   return response.json();
- * }
- * 
- * // Create retryable version
- * const retryableFetchUserData = createRetryableFunction(fetchUserData, {
- *   maxRetries: 3,
- *   onRetry: (error, attempt) => console.log(`Retry ${attempt} after error: ${error.message}`)
- * });
- * 
- * // Use exactly like the original function
- * const userData = await retryableFetchUserData('user123');
- * ```
+ * @param fn - The function to make retryable
+ * @param options - The retry options
+ * @returns A wrapped function that will retry on failure
  */
-export function createRetryableFunction<T extends (...args: any[]) => Promise<any>>(
-  fn: T,
+export function createRetryableFunction<T, Args extends any[]>(
+  fn: (...args: Args) => Promise<T>,
   options: Partial<RetryOptions> = {}
-): T {
-  return ((...args: Parameters<T>): ReturnType<T> => {
-    return withRetry(() => fn(...args), options) as ReturnType<T>;
-  }) as T;
-}
-
-/**
- * Creates a retryable version of an async function with detailed retry information
- * 
- * Similar to createRetryableFunction, but the returned function provides detailed
- * information about the retry process, including number of attempts and total delay.
- * 
- * @param fn - The async function to make retryable
- * @param options - Retry configuration options
- * @returns A new function that wraps the original with retry logic and returns detailed results
- * 
- * @example
- * ```typescript
- * // Create detailed retryable version
- * const detailedFetchUserData = createDetailedRetryableFunction(fetchUserData);
- * 
- * // Get result with retry metadata
- * const { result: userData, attempts, totalDelayMs } = await detailedFetchUserData('user123');
- * console.log(`Fetched user data after ${attempts} attempts with ${totalDelayMs}ms total delay`);
- * ```
- */
-export function createDetailedRetryableFunction<T extends (...args: any[]) => Promise<any>>(
-  fn: T,
-  options: Partial<RetryOptions> = {}
-): (...args: Parameters<T>) => Promise<RetryResult<Awaited<ReturnType<T>>>> {
-  return (...args: Parameters<T>): Promise<RetryResult<Awaited<ReturnType<T>>>> => {
-    return withRetryDetailed(() => fn(...args), options);
+): (...args: Args) => Promise<T> {
+  return async (...args: Args): Promise<T> => {
+    const result = await withRetry(() => fn(...args), options);
+    
+    if (!result.success) {
+      throw result.error;
+    }
+    
+    return result.result as T;
   };
 }
 
 /**
- * Utility for retrying a specific operation with custom options
+ * Retry decorator for class methods
  * 
- * This object provides a convenient API for the retry functionality:
- * 
- * Example usage:
- * ```typescript
- * // Simple retry with default options
- * const result = await retry.execute(async () => {
- *   return await fetchDataFromApi();
- * });
- * 
- * // Create a retryable version of a function
- * const retryableFetch = retry.create(fetchDataFromApi, { maxRetries: 5 });
- * const result = await retryableFetch();
- * 
- * // Custom retry with logging
- * const result = await retry.execute(
- *   async () => await connectToDatabase(),
- *   {
- *     maxRetries: 5,
- *     initialDelayMs: 2000,
- *     onRetry: (error, attempt, delay) => {
- *       logger.warn(`Database connection failed (attempt ${attempt}): ${error.message}. Retrying in ${delay}ms...`);
- *     }
- *   }
- * );
- * 
- * // Get detailed retry information
- * const { result, attempts, totalDelayMs } = await retry.executeDetailed(
- *   async () => await fetchDataFromApi()
- * );
- * ```
+ * @param options - The retry options
+ * @returns A method decorator that adds retry logic
  */
-export const retry = {
-  /**
-   * Executes a function with retry logic
-   */
-  execute: withRetry,
+export function retryable(options: Partial<RetryOptions> = {}) {
+  return function (target: any, propertyKey: string, descriptor: PropertyDescriptor) {
+    const originalMethod = descriptor.value;
+    
+    descriptor.value = async function (...args: any[]) {
+      const result = await withRetry(() => originalMethod.apply(this, args), options);
+      
+      if (!result.success) {
+        throw result.error;
+      }
+      
+      return result.result;
+    };
+    
+    return descriptor;
+  };
+}
+
+/**
+ * Executes a function with retry logic and custom error handling
+ * 
+ * @param fn - The function to execute
+ * @param errorHandler - Custom error handler function
+ * @param options - The retry options
+ * @returns A promise that resolves with the function result or the error handler result
+ */
+export async function withRetryOrElse<T, E>(
+  fn: () => Promise<T>,
+  errorHandler: (error: Error, attempts: number) => Promise<E>,
+  options: Partial<RetryOptions> = {}
+): Promise<T | E> {
+  const result = await withRetry(fn, options);
   
-  /**
-   * Executes a function with retry logic and returns detailed metadata
-   */
-  executeDetailed: withRetryDetailed,
+  if (result.success) {
+    return result.result as T;
+  }
   
-  /**
-   * Creates a retryable version of a function
-   */
-  create: createRetryableFunction,
+  return errorHandler(result.error as Error, result.attempts);
+}
+
+/**
+ * Executes a function with retry logic and fallback value
+ * 
+ * @param fn - The function to execute
+ * @param fallbackValue - Value to return if all retries fail
+ * @param options - The retry options
+ * @returns A promise that resolves with the function result or the fallback value
+ */
+export async function withRetryOrDefault<T>(
+  fn: () => Promise<T>,
+  fallbackValue: T,
+  options: Partial<RetryOptions> = {}
+): Promise<T> {
+  const result = await withRetry(fn, options);
   
-  /**
-   * Creates a retryable version of a function that returns detailed metadata
-   */
-  createDetailed: createDetailedRetryableFunction,
+  if (result.success) {
+    return result.result as T;
+  }
   
-  /**
-   * Checks if an error is retryable
-   */
-  isRetryable: isRetryableError,
-  
-  /**
-   * Calculates backoff delay with jitter
-   */
-  calculateDelay: calculateBackoffDelay,
-  
-  /**
-   * Predefined retry configurations
-   */
-  options: {
-    default: DEFAULT_RETRY_OPTIONS,
-    aggressive: AGGRESSIVE_RETRY_OPTIONS,
-    conservative: CONSERVATIVE_RETRY_OPTIONS,
+  return fallbackValue;
+}
+
+/**
+ * Specialized retry options for IMAP connections
+ */
+export const IMAP_RETRY_OPTIONS: RetryOptions = {
+  maxRetries: 5,
+  initialDelayMs: 2000, // 2 seconds
+  maxDelayMs: 60000, // 60 seconds
+  backoffFactor: 2,
+  jitterFactor: 0.2,
+  isRetryable: (error: Error) => {
+    // IMAP-specific retry logic
+    return (
+      error.message.includes('IMAP connection') ||
+      error.message.includes('imap failure') ||
+      error.message.includes('connection closed') ||
+      error.message.includes('connection dropped') ||
+      error.message.includes('socket hang up') ||
+      error.message.includes('ECONNRESET') ||
+      error.message.includes('ETIMEDOUT')
+    );
   },
 };
 
-export default retry;
+/**
+ * Specialized retry options for RabbitMQ connections
+ */
+export const RABBITMQ_RETRY_OPTIONS: RetryOptions = {
+  maxRetries: 10,
+  initialDelayMs: 1000, // 1 second
+  maxDelayMs: 30000, // 30 seconds
+  backoffFactor: 1.5,
+  jitterFactor: 0.25,
+  isRetryable: (error: Error) => {
+    // RabbitMQ-specific retry logic
+    return (
+      error.message.includes('AMQP connection') ||
+      error.message.includes('channel closed') ||
+      error.message.includes('connection closed') ||
+      error.message.includes('socket hang up') ||
+      error.message.includes('ECONNREFUSED') ||
+      error.message.includes('ECONNRESET') ||
+      error.message.includes('ETIMEDOUT')
+    );
+  },
+};
+
+/**
+ * Specialized retry options for S3 storage operations
+ */
+export const S3_RETRY_OPTIONS: RetryOptions = {
+  maxRetries: 5,
+  initialDelayMs: 1000, // 1 second
+  maxDelayMs: 15000, // 15 seconds
+  backoffFactor: 2,
+  jitterFactor: 0.3,
+  isRetryable: (error: Error) => {
+    // S3-specific retry logic
+    return (
+      error.message.includes('SlowDown') ||
+      error.message.includes('RequestTimeout') ||
+      error.message.includes('RequestTimeTooSkewed') ||
+      error.message.includes('OperationAborted') ||
+      error.message.includes('InternalError') ||
+      error.message.includes('ServiceUnavailable') ||
+      error.message.includes('ECONNRESET') ||
+      error.message.includes('ETIMEDOUT') ||
+      error.message.includes('EPIPE')
+    );
+  },
+};
