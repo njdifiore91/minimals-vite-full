@@ -2,124 +2,135 @@
 # -*- coding: utf-8 -*-
 
 """
-Main entry point for the Document Service microservice.
+Document Service Main Entry Point
 
-This module initializes the application, sets up error handling, connects to required services
-(RabbitMQ, S3), loads ML models, and starts the document classification process. It acts as the
-orchestrator for the entire service and handles graceful shutdown when the process is terminated.
+This module serves as the main entry point for the Document Service microservice.
+It initializes the application, sets up error handling, connects to required services
+(RabbitMQ, S3), loads ML models, and starts the document classification process.
+
+The Document Service is responsible for classifying incoming documents with 99% accuracy
+using scikit-learn models (SVM and Random Forest) and routing them to appropriate OCR processors.
 """
 
-import asyncio
-import logging
 import os
-import signal
 import sys
+import logging
 import traceback
-from typing import Optional
+import signal
+import time
+from typing import NoReturn
 
-# Import the Application class from app.py
-from app import get_app, Application
+# Import the application instance from app.py
+from app import app_instance
 
 # Import configuration modules
-from config import logging_config
-from utils.logging_utils import log_with_context
+from config import app_config
 
-# Set up the logger
-logger = logging.getLogger(__name__)
+# Set up root logger
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+
+# Create logger for this module
+logger = logging.getLogger("document_service.main")
 
 
-def handle_exception(exc_type, exc_value, exc_traceback):
+def setup_global_exception_handler() -> None:
     """
-    Global exception handler for uncaught exceptions.
+    Set up a global exception handler for uncaught exceptions.
     
-    Args:
-        exc_type: The exception type
-        exc_value: The exception value
-        exc_traceback: The exception traceback
+    This ensures that all uncaught exceptions are properly logged before the application exits.
     """
-    if issubclass(exc_type, KeyboardInterrupt):
-        # Don't log keyboard interrupt (ctrl+c) as an error
-        sys.__excepthook__(exc_type, exc_value, exc_traceback)
-        return
-    
-    # Format the exception
-    exception_details = ''.join(traceback.format_exception(exc_type, exc_value, exc_traceback))
-    
-    # Log the exception
-    logger.critical(f"Uncaught exception: {exception_details}")
-    
-    # Exit with error code
-    sys.exit(1)
+    def handle_exception(exc_type, exc_value, exc_traceback):
+        if issubclass(exc_type, KeyboardInterrupt):
+            # Don't log keyboard interrupt (Ctrl+C) as an error
+            sys.__excepthook__(exc_type, exc_value, exc_traceback)
+            return
+            
+        logger.critical("Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback))
+        logger.critical("Application will now exit due to an unhandled exception")
+        
+    # Set the excepthook to our handler
+    sys.excepthook = handle_exception
 
 
-async def main():
+def validate_environment() -> bool:
+    """
+    Validate that all required environment variables are set.
+    
+    Returns:
+        bool: True if all required environment variables are set, False otherwise
+    """
+    required_vars = [
+        "RABBITMQ_HOST",
+        "RABBITMQ_PORT",
+        "RABBITMQ_USER",
+        "RABBITMQ_PASSWORD",
+        "S3_ENDPOINT",
+        "S3_ACCESS_KEY",
+        "S3_SECRET_KEY",
+        "S3_BUCKET_NAME",
+        "MODEL_PATH"
+    ]
+    
+    missing_vars = [var for var in required_vars if not os.environ.get(var)]
+    
+    if missing_vars:
+        logger.error(f"Missing required environment variables: {', '.join(missing_vars)}")
+        return False
+        
+    return True
+
+
+def main() -> NoReturn:
     """
     Main entry point for the Document Service.
     
-    Initializes the application, starts all services, and handles graceful shutdown.
+    This function initializes the application, connects to required services,
+    loads ML models, and starts the document classification process.
     """
-    # Get the application instance
-    app: Application = get_app()
-    
     try:
-        # Set up signal handlers for graceful shutdown
-        app.setup_signal_handlers()
+        # Set up global exception handler
+        setup_global_exception_handler()
+        
+        # Log startup information
+        logger.info("Starting Document Service")
+        logger.info(f"Python version: {sys.version}")
+        logger.info(f"Environment: {os.environ.get('ENVIRONMENT', 'development')}")
+        
+        # Validate environment variables
+        if not validate_environment():
+            logger.error("Environment validation failed. Exiting.")
+            sys.exit(1)
+        
+        # Load configuration
+        logger.info("Loading configuration")
+        config = app_config.load_config()
+        logger.info(f"Configuration loaded for environment: {config.environment}")
         
         # Start the application
-        await app.start()
+        logger.info("Starting Document Service application")
+        app_instance.start()
         
-        # Keep the application running
-        logger.info("Document Service is running. Press Ctrl+C to exit.")
-        
-        # Run forever until interrupted
-        while True:
-            await asyncio.sleep(1)
+        # Keep the main thread alive while the application is running
+        logger.info("Document Service is running. Press CTRL+C to exit.")
+        while app_instance.is_running:
+            time.sleep(1)
             
     except KeyboardInterrupt:
-        logger.info("Keyboard interrupt received, shutting down...")
+        logger.info("Received keyboard interrupt. Shutting down...")
+        app_instance.stop()
+        sys.exit(0)
     except Exception as e:
-        logger.error(f"Error in main loop: {str(e)}")
-        traceback.print_exc()
-    finally:
-        # Ensure the application is stopped properly
-        await app.stop()
-        logger.info("Document Service shutdown complete")
-
-
-def run_service():
-    """
-    Run the Document Service in an asyncio event loop.
-    """
-    # Set up global exception handler
-    sys.excepthook = handle_exception
-    
-    # Get or create the event loop
-    try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        # If no event loop exists, create a new one
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-    
-    try:
-        # Run the main function
-        loop.run_until_complete(main())
-    except KeyboardInterrupt:
-        logger.info("Keyboard interrupt received in event loop, shutting down...")
-    finally:
-        # Close the event loop
-        loop.close()
-        logger.info("Event loop closed")
+        logger.critical(f"Fatal error in main thread: {str(e)}")
+        logger.critical(traceback.format_exc())
+        app_instance.stop()
+        sys.exit(1)
 
 
 if __name__ == "__main__":
-    # Initialize logging before anything else
-    logging_config.configure_logging()
-    
-    # Log startup information
-    logger.info("Starting Document Service")
-    logger.info(f"Python version: {sys.version}")
-    logger.info(f"Running in directory: {os.getcwd()}")
-    
-    # Run the service
-    run_service()
+    main()
