@@ -1,0 +1,410 @@
+# Redis Operator for MCA Application Processing System
+# This manifest defines the Redis operator Custom Resource Definition (CRD) that enables
+# declarative management of Redis clusters in Kubernetes. It provides the foundation for
+# deploying and managing Redis 7.0 cache instances required for distributed caching and
+# session management in the MCA Application Processing System.
+---
+# Redis Operator Custom Resource Definition
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: redisclusters.cache.dollarfunding.com
+  labels:
+    app.kubernetes.io/name: redis-operator
+    app.kubernetes.io/part-of: mca-application-system
+    app.kubernetes.io/managed-by: kubernetes
+    app.kubernetes.io/version: "v1.0.0"
+    app.kubernetes.io/component: "database"
+spec:
+  group: cache.dollarfunding.com
+  names:
+    kind: RedisCluster
+    listKind: RedisClusterList
+    plural: redisclusters
+    singular: rediscluster
+    shortNames:
+      - rdc
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required:
+                - masters
+                - replicasPerMaster
+              properties:
+                version:
+                  type: string
+                  description: "Redis version to deploy"
+                  default: "7.0"
+                masters:
+                  type: integer
+                  description: "Number of Redis master nodes"
+                  minimum: 1
+                  default: 3
+                replicasPerMaster:
+                  type: integer
+                  description: "Number of replicas per master"
+                  minimum: 1
+                  default: 1
+                clusterMode:
+                  type: boolean
+                  description: "Enable Redis cluster mode"
+                  default: true
+                sentinelEnabled:
+                  type: boolean
+                  description: "Enable Redis Sentinel for automatic failover"
+                  default: true
+                sentinelReplicas:
+                  type: integer
+                  description: "Number of Sentinel replicas"
+                  minimum: 3
+                  default: 3
+                persistenceEnabled:
+                  type: boolean
+                  description: "Enable Redis persistence"
+                  default: true
+                persistenceStorageClass:
+                  type: string
+                  description: "Storage class for Redis persistence"
+                  default: "standard"
+                persistenceSize:
+                  type: string
+                  description: "Size of persistent volume"
+                  default: "10Gi"
+                resources:
+                  type: object
+                  description: "Resource requirements for Redis pods"
+                  properties:
+                    requests:
+                      type: object
+                      properties:
+                        cpu:
+                          type: string
+                          default: "100m"
+                        memory:
+                          type: string
+                          default: "256Mi"
+                    limits:
+                      type: object
+                      properties:
+                        cpu:
+                          type: string
+                          default: "500m"
+                        memory:
+                          type: string
+                          default: "1Gi"
+                redisConfig:
+                  type: object
+                  description: "Redis configuration options"
+                  properties:
+                    maxmemory:
+                      type: string
+                      description: "Maximum memory Redis can use"
+                      default: "0"
+                    maxmemoryPolicy:
+                      type: string
+                      description: "Eviction policy when max memory is reached"
+                      default: "allkeys-lru"
+                      enum: ["noeviction", "allkeys-lru", "volatile-lru", "allkeys-random", "volatile-random", "volatile-ttl"]
+                    dataTTL:
+                      type: integer
+                      description: "Default TTL for data in seconds (15 minutes)"
+                      default: 900
+                    sessionTTL:
+                      type: integer
+                      description: "Default TTL for sessions in seconds (24 hours)"
+                      default: 86400
+                    appendonly:
+                      type: string
+                      description: "Enable AOF persistence"
+                      default: "yes"
+                    appendfsync:
+                      type: string
+                      description: "AOF fsync policy"
+                      default: "everysec"
+                      enum: ["always", "everysec", "no"]
+                    rdbCompression:
+                      type: string
+                      description: "Enable RDB compression"
+                      default: "yes"
+                    rdbChecksum:
+                      type: string
+                      description: "Enable RDB checksum"
+                      default: "yes"
+                    databases:
+                      type: integer
+                      description: "Number of Redis databases"
+                      default: 16
+                monitoring:
+                  type: object
+                  description: "Monitoring configuration"
+                  properties:
+                    enabled:
+                      type: boolean
+                      description: "Enable Redis metrics exporter"
+                      default: true
+                    image:
+                      type: string
+                      description: "Redis exporter image"
+                      default: "oliver006/redis_exporter:v1.44.0"
+                    resources:
+                      type: object
+                      properties:
+                        requests:
+                          type: object
+                          properties:
+                            cpu:
+                              type: string
+                              default: "50m"
+                            memory:
+                              type: string
+                              default: "64Mi"
+                        limits:
+                          type: object
+                          properties:
+                            cpu:
+                              type: string
+                              default: "100m"
+                            memory:
+                              type: string
+                              default: "128Mi"
+                    annotations:
+                      type: object
+                      description: "Prometheus annotations for service discovery"
+                      additionalProperties:
+                        type: string
+                      default:
+                        prometheus.io/scrape: "true"
+                        prometheus.io/port: "9121"
+                securityContext:
+                  type: object
+                  description: "Security context for Redis pods"
+                  properties:
+                    runAsUser:
+                      type: integer
+                      default: 999
+                    fsGroup:
+                      type: integer
+                      default: 999
+                    runAsNonRoot:
+                      type: boolean
+                      default: true
+                nodeSelector:
+                  type: object
+                  description: "Node selector for Redis pods"
+                  additionalProperties:
+                    type: string
+                tolerations:
+                  type: array
+                  description: "Tolerations for Redis pods"
+                  items:
+                    type: object
+                affinity:
+                  type: object
+                  description: "Affinity for Redis pods"
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  description: "Current phase of the Redis cluster"
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                masters:
+                  type: integer
+                  description: "Current number of master nodes"
+                replicas:
+                  type: integer
+                  description: "Current number of replica nodes"
+                sentinels:
+                  type: integer
+                  description: "Current number of sentinel nodes"
+      additionalPrinterColumns:
+        - name: Version
+          type: string
+          jsonPath: .spec.version
+        - name: Masters
+          type: integer
+          jsonPath: .spec.masters
+        - name: Replicas
+          type: integer
+          jsonPath: .spec.replicasPerMaster
+        - name: Status
+          type: string
+          jsonPath: .status.phase
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      subresources:
+        status: {}
+---
+# Redis Operator Service Account
+# Service account used by the Redis operator to manage Redis resources
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: redis-operator
+  namespace: default
+  labels:
+    app.kubernetes.io/name: redis-operator
+    app.kubernetes.io/part-of: mca-application-system
+    app.kubernetes.io/managed-by: kubernetes
+    app.kubernetes.io/version: "v1.0.0"
+    app.kubernetes.io/component: "database"
+---
+# Redis Operator Cluster Role
+# Defines permissions required by the Redis operator to manage Redis resources
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: redis-operator
+  labels:
+    app.kubernetes.io/name: redis-operator
+    app.kubernetes.io/part-of: mca-application-system
+    app.kubernetes.io/managed-by: kubernetes
+    app.kubernetes.io/version: "v1.0.0"
+    app.kubernetes.io/component: "database"
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "services", "endpoints", "persistentvolumeclaims", "events", "configmaps", "secrets"]
+    verbs: ["*"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets"]
+    verbs: ["*"]
+  - apiGroups: ["policy"]
+    resources: ["poddisruptionbudgets"]
+    verbs: ["*"]
+  - apiGroups: ["cache.dollarfunding.com"]
+    resources: ["redisclusters", "redisclusters/status", "redisclusters/finalizers"]
+    verbs: ["*"]
+  - apiGroups: ["monitoring.coreos.com"]
+    resources: ["servicemonitors"]
+    verbs: ["get", "create"]
+---
+# Redis Operator Cluster Role Binding
+# Binds the Redis operator service account to the cluster role
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: redis-operator
+  labels:
+    app.kubernetes.io/name: redis-operator
+    app.kubernetes.io/part-of: mca-application-system
+    app.kubernetes.io/managed-by: kubernetes
+    app.kubernetes.io/version: "v1.0.0"
+    app.kubernetes.io/component: "database"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: redis-operator
+subjects:
+  - kind: ServiceAccount
+    name: redis-operator
+    namespace: default
+---
+# Redis Operator Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis-operator
+  namespace: default
+  labels:
+    app.kubernetes.io/name: redis-operator
+    app.kubernetes.io/part-of: mca-application-system
+    app.kubernetes.io/managed-by: kubernetes
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: redis-operator
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: redis-operator
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+    spec:
+      serviceAccountName: redis-operator
+      containers:
+        - name: redis-operator
+          image: dollarfunding/redis-operator:v1.0.0
+          imagePullPolicy: IfNotPresent
+          resources:
+            limits:
+              cpu: 200m
+              memory: 256Mi
+            requests:
+              cpu: 100m
+              memory: 128Mi
+          ports:
+            - name: metrics
+              containerPort: 8080
+              protocol: TCP
+            - name: healthz
+              containerPort: 8081
+              protocol: TCP
+          env:
+            - name: WATCH_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: OPERATOR_NAME
+              value: "redis-operator"
+            - name: REDIS_IMAGE
+              value: "redis:7.0-alpine"
+            - name: SENTINEL_IMAGE
+              value: "redis:7.0-alpine"
+            - name: EXPORTER_IMAGE
+              value: "oliver006/redis_exporter:v1.44.0"
+            - name: ENABLE_METRICS
+              value: "true"
+            - name: DEFAULT_DATA_TTL
+              value: "900"  # 15 minutes in seconds
+            - name: DEFAULT_SESSION_TTL
+              value: "86400"  # 24 hours in seconds
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8081
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 1000
+            capabilities:
+              drop: ["ALL"]
