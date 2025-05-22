@@ -1,0 +1,886 @@
+[
+  {
+    "id": "doc_001",
+    "application_id": "app_001",
+    "type": "loan_application",
+    "storage_path": "s3://mca-documents-staging/applications/app_001/loan_application.pdf",
+    "classification": {
+      "document_type": "loan_application",
+      "confidence": 0.98,
+      "alternative_classifications": [
+        { "document_type": "business_plan", "confidence": 0.02 }
+      ]
+    },
+    "uploaded_at": "2025-05-01T10:15:30Z",
+    "metadata": {
+      "file_size": 1245678,
+      "page_count": 4,
+      "mime_type": "application/pdf",
+      "encryption": "AES-256",
+      "ocr_status": "completed",
+      "ocr_confidence": 0.97,
+      "extracted_fields": {
+        "business_name": { "value": "Acme Corporation", "confidence": 0.99 },
+        "application_date": { "value": "2025-05-01", "confidence": 0.98 },
+        "requested_amount": { "value": "50000", "confidence": 0.97 },
+        "business_address": { "value": "123 Main St, Anytown, CA 94103", "confidence": 0.95 }
+      }
+    }
+  },
+  {
+    "id": "doc_002",
+    "application_id": "app_001",
+    "type": "bank_statement",
+    "storage_path": "s3://mca-documents-staging/applications/app_001/bank_statement_march.pdf",
+    "classification": {
+      "document_type": "bank_statement",
+      "confidence": 0.99,
+      "alternative_classifications": [
+        { "document_type": "financial_statement", "confidence": 0.01 }
+      ]
+    },
+    "uploaded_at": "2025-05-01T10:16:45Z",
+    "metadata": {
+      "file_size": 2345678,
+      "page_count": 8,
+      "mime_type": "application/pdf",
+      "encryption": "AES-256",
+      "ocr_status": "completed",
+      "ocr_confidence": 0.96,
+      "extracted_fields": {
+        "bank_name": { "value": "First National Bank", "confidence": 0.99 },
+        "account_number": { "value": "XXXX-XXXX-7890", "confidence": 0.98 },
+        "statement_period": { "value": "March 1-31, 2025", "confidence": 0.97 },
+        "ending_balance": { "value": "78523.45", "confidence": 0.96 },
+        "average_daily_balance": { "value": "65432.10", "confidence": 0.95 }
+      }
+    }
+  },
+  {
+    "id": "doc_003",
+    "application_id": "app_001",
+    "type": "tax_return",
+    "storage_path": "s3://mca-documents-staging/applications/app_001/tax_return_2024.pdf",
+    "classification": {
+      "document_type": "tax_return",
+      "confidence": 0.97,
+      "alternative_classifications": [
+        { "document_type": "financial_statement", "confidence": 0.02 },
+        { "document_type": "tax_form", "confidence": 0.01 }
+      ]
+    },
+    "uploaded_at": "2025-05-01T10:18:22Z",
+    "metadata": {
+      "file_size": 3456789,
+      "page_count": 25,
+      "mime_type": "application/pdf",
+      "encryption": "AES-256",
+      "ocr_status": "completed",
+      "ocr_confidence": 0.95,
+      "extracted_fields": {
+        "tax_year": { "value": "2024", "confidence": 0.99 },
+        "business_ein": { "value": "12-3456789", "confidence": 0.98 },
+        "gross_revenue": { "value": "1250000", "confidence": 0.97 },
+        "net_income": { "value": "325000", "confidence": 0.96 },
+        "filing_status": { "value": "S-Corporation", "confidence": 0.95 }
+      }
+    }
+  },
+  {
+    "id": "doc_004",
+    "application_id": "app_001",
+    "type": "business_license",
+    "storage_path": "s3://mca-documents-staging/applications/app_001/business_license.pdf",
+    "classification": {
+      "document_type": "business_license",
+      "confidence": 0.96,
+      "alternative_classifications": [
+        { "document_type": "legal_document", "confidence": 0.03 },
+        { "document_type": "certificate", "confidence": 0.01 }
+      ]
+    },
+    "uploaded_at": "2025-05-01T10:20:15Z",
+    "metadata": {
+      "file_size": 1234567,
+      "page_count": 2,
+      "mime_type": "application/pdf",
+      "encryption": "AES-256",
+      "ocr_status": "completed",
+      "ocr_confidence": 0.94,
+      "extracted_fields": {
+        "license_number": { "value": "BL-12345-2025", "confidence": 0.99 },
+        "issue_date": { "value": "2025-01-15", "confidence": 0.98 },
+        "expiration_date": { "value": "2026-01-14", "confidence": 0.97 },
+        "business_type": { "value": "Retail", "confidence": 0.95 },
+        "issuing_authority": { "value": "City of Anytown", "confidence": 0.96 }
+      }
+    }
+  },
+  {
+    "id": "doc_005",
+    "application_id": "app_001",
+    "type": "identity_document",
+    "storage_path": "s3://mca-documents-staging/applications/app_001/drivers_license.jpg",
+    "classification": {
+      "document_type": "identity_document",
+      "confidence": 0.98,
+      "alternative_classifications": [
+        { "document_type": "drivers_license", "confidence": 0.02 }
+      ]
+    },
+    "uploaded_at": "2025-05-01T10:22:05Z",
+    "metadata": {
+      "file_size": 2345678,
+      "page_count": 1,
+      "mime_type": "image/jpeg",
+      "encryption": "AES-256",
+      "ocr_status": "completed",
+      "ocr_confidence": 0.96,
+      "extracted_fields": {
+        "id_type": { "value": "drivers_license", "confidence": 0.99 },
+        "id_number": { "value": "DL12345678", "confidence": 0.97 },
+        "name": { "value": "John A. Smith", "confidence": 0.98 },
+        "address": { "value": "123 Main St, Anytown, CA 94103", "confidence": 0.95 },
+        "expiration_date": { "value": "2028-05-15", "confidence": 0.96 }
+      }
+    }
+  },
+  {
+    "id": "doc_006",
+    "application_id": "app_002",
+    "type": "loan_application",
+    "storage_path": "s3://mca-documents-staging/applications/app_002/loan_application.pdf",
+    "classification": {
+      "document_type": "loan_application",
+      "confidence": 0.97,
+      "alternative_classifications": [
+        { "document_type": "business_plan", "confidence": 0.02 },
+        { "document_type": "financial_statement", "confidence": 0.01 }
+      ]
+    },
+    "uploaded_at": "2025-05-02T09:10:30Z",
+    "metadata": {
+      "file_size": 1345678,
+      "page_count": 5,
+      "mime_type": "application/pdf",
+      "encryption": "AES-256",
+      "ocr_status": "completed",
+      "ocr_confidence": 0.95,
+      "extracted_fields": {
+        "business_name": { "value": "XYZ Enterprises", "confidence": 0.98 },
+        "application_date": { "value": "2025-05-02", "confidence": 0.97 },
+        "requested_amount": { "value": "75000", "confidence": 0.96 },
+        "business_address": { "value": "456 Oak Ave, Othertown, NY 10001", "confidence": 0.94 }
+      }
+    }
+  },
+  {
+    "id": "doc_007",
+    "application_id": "app_002",
+    "type": "bank_statement",
+    "storage_path": "s3://mca-documents-staging/applications/app_002/bank_statement_april.pdf",
+    "classification": {
+      "document_type": "bank_statement",
+      "confidence": 0.98,
+      "alternative_classifications": [
+        { "document_type": "financial_statement", "confidence": 0.02 }
+      ]
+    },
+    "uploaded_at": "2025-05-02T09:12:45Z",
+    "metadata": {
+      "file_size": 2456789,
+      "page_count": 10,
+      "mime_type": "application/pdf",
+      "encryption": "AES-256",
+      "ocr_status": "completed",
+      "ocr_confidence": 0.94,
+      "extracted_fields": {
+        "bank_name": { "value": "Commerce Bank", "confidence": 0.98 },
+        "account_number": { "value": "XXXX-XXXX-1234", "confidence": 0.97 },
+        "statement_period": { "value": "April 1-30, 2025", "confidence": 0.96 },
+        "ending_balance": { "value": "102345.67", "confidence": 0.95 },
+        "average_daily_balance": { "value": "98765.43", "confidence": 0.94 }
+      }
+    }
+  },
+  {
+    "id": "doc_008",
+    "application_id": "app_002",
+    "type": "profit_loss_statement",
+    "storage_path": "s3://mca-documents-staging/applications/app_002/profit_loss_q1_2025.pdf",
+    "classification": {
+      "document_type": "profit_loss_statement",
+      "confidence": 0.96,
+      "alternative_classifications": [
+        { "document_type": "financial_statement", "confidence": 0.03 },
+        { "document_type": "tax_document", "confidence": 0.01 }
+      ]
+    },
+    "uploaded_at": "2025-05-02T09:15:22Z",
+    "metadata": {
+      "file_size": 1567890,
+      "page_count": 6,
+      "mime_type": "application/pdf",
+      "encryption": "AES-256",
+      "ocr_status": "completed",
+      "ocr_confidence": 0.93,
+      "extracted_fields": {
+        "period": { "value": "Q1 2025", "confidence": 0.98 },
+        "total_revenue": { "value": "450000", "confidence": 0.97 },
+        "total_expenses": { "value": "325000", "confidence": 0.96 },
+        "net_profit": { "value": "125000", "confidence": 0.95 },
+        "profit_margin": { "value": "27.8%", "confidence": 0.94 }
+      }
+    }
+  },
+  {
+    "id": "doc_009",
+    "application_id": "app_003",
+    "type": "loan_application",
+    "storage_path": "s3://mca-documents-staging/applications/app_003/loan_application.pdf",
+    "classification": {
+      "document_type": "loan_application",
+      "confidence": 0.99,
+      "alternative_classifications": [
+        { "document_type": "business_plan", "confidence": 0.01 }
+      ]
+    },
+    "uploaded_at": "2025-05-03T14:30:15Z",
+    "metadata": {
+      "file_size": 1678901,
+      "page_count": 4,
+      "mime_type": "application/pdf",
+      "encryption": "AES-256",
+      "ocr_status": "completed",
+      "ocr_confidence": 0.98,
+      "extracted_fields": {
+        "business_name": { "value": "Global Innovations LLC", "confidence": 0.99 },
+        "application_date": { "value": "2025-05-03", "confidence": 0.98 },
+        "requested_amount": { "value": "100000", "confidence": 0.97 },
+        "business_address": { "value": "789 Tech Blvd, Innovation City, CA 95123", "confidence": 0.96 }
+      }
+    }
+  },
+  {
+    "id": "doc_010",
+    "application_id": "app_003",
+    "type": "bank_statement",
+    "storage_path": "s3://mca-documents-staging/applications/app_003/bank_statement_feb.pdf",
+    "classification": {
+      "document_type": "bank_statement",
+      "confidence": 0.97,
+      "alternative_classifications": [
+        { "document_type": "financial_statement", "confidence": 0.03 }
+      ]
+    },
+    "uploaded_at": "2025-05-03T14:32:45Z",
+    "metadata": {
+      "file_size": 2789012,
+      "page_count": 12,
+      "mime_type": "application/pdf",
+      "encryption": "AES-256",
+      "ocr_status": "completed",
+      "ocr_confidence": 0.96,
+      "extracted_fields": {
+        "bank_name": { "value": "Tech Credit Union", "confidence": 0.98 },
+        "account_number": { "value": "XXXX-XXXX-5678", "confidence": 0.97 },
+        "statement_period": { "value": "February 1-28, 2025", "confidence": 0.96 },
+        "ending_balance": { "value": "234567.89", "confidence": 0.95 },
+        "average_daily_balance": { "value": "215678.90", "confidence": 0.94 }
+      }
+    }
+  },
+  {
+    "id": "doc_011",
+    "application_id": "app_003",
+    "type": "bank_statement",
+    "storage_path": "s3://mca-documents-staging/applications/app_003/bank_statement_mar.pdf",
+    "classification": {
+      "document_type": "bank_statement",
+      "confidence": 0.98,
+      "alternative_classifications": [
+        { "document_type": "financial_statement", "confidence": 0.02 }
+      ]
+    },
+    "uploaded_at": "2025-05-03T14:35:22Z",
+    "metadata": {
+      "file_size": 2890123,
+      "page_count": 14,
+      "mime_type": "application/pdf",
+      "encryption": "AES-256",
+      "ocr_status": "completed",
+      "ocr_confidence": 0.97,
+      "extracted_fields": {
+        "bank_name": { "value": "Tech Credit Union", "confidence": 0.99 },
+        "account_number": { "value": "XXXX-XXXX-5678", "confidence": 0.98 },
+        "statement_period": { "value": "March 1-31, 2025", "confidence": 0.97 },
+        "ending_balance": { "value": "256789.01", "confidence": 0.96 },
+        "average_daily_balance": { "value": "245678.90", "confidence": 0.95 }
+      }
+    }
+  },
+  {
+    "id": "doc_012",
+    "application_id": "app_003",
+    "type": "bank_statement",
+    "storage_path": "s3://mca-documents-staging/applications/app_003/bank_statement_apr.pdf",
+    "classification": {
+      "document_type": "bank_statement",
+      "confidence": 0.99,
+      "alternative_classifications": [
+        { "document_type": "financial_statement", "confidence": 0.01 }
+      ]
+    },
+    "uploaded_at": "2025-05-03T14:38:15Z",
+    "metadata": {
+      "file_size": 3012345,
+      "page_count": 15,
+      "mime_type": "application/pdf",
+      "encryption": "AES-256",
+      "ocr_status": "completed",
+      "ocr_confidence": 0.98,
+      "extracted_fields": {
+        "bank_name": { "value": "Tech Credit Union", "confidence": 0.99 },
+        "account_number": { "value": "XXXX-XXXX-5678", "confidence": 0.98 },
+        "statement_period": { "value": "April 1-30, 2025", "confidence": 0.97 },
+        "ending_balance": { "value": "278901.23", "confidence": 0.96 },
+        "average_daily_balance": { "value": "267890.12", "confidence": 0.95 }
+      }
+    }
+  },
+  {
+    "id": "doc_013",
+    "application_id": "app_003",
+    "type": "tax_return",
+    "storage_path": "s3://mca-documents-staging/applications/app_003/tax_return_2024.pdf",
+    "classification": {
+      "document_type": "tax_return",
+      "confidence": 0.96,
+      "alternative_classifications": [
+        { "document_type": "financial_statement", "confidence": 0.03 },
+        { "document_type": "tax_form", "confidence": 0.01 }
+      ]
+    },
+    "uploaded_at": "2025-05-03T14:40:30Z",
+    "metadata": {
+      "file_size": 4567890,
+      "page_count": 32,
+      "mime_type": "application/pdf",
+      "encryption": "AES-256",
+      "ocr_status": "completed",
+      "ocr_confidence": 0.94,
+      "extracted_fields": {
+        "tax_year": { "value": "2024", "confidence": 0.98 },
+        "business_ein": { "value": "98-7654321", "confidence": 0.97 },
+        "gross_revenue": { "value": "2750000", "confidence": 0.96 },
+        "net_income": { "value": "875000", "confidence": 0.95 },
+        "filing_status": { "value": "LLC", "confidence": 0.94 }
+      }
+    }
+  },
+  {
+    "id": "doc_014",
+    "application_id": "app_004",
+    "type": "loan_application",
+    "storage_path": "s3://mca-documents-staging/applications/app_004/loan_application.pdf",
+    "classification": {
+      "document_type": "loan_application",
+      "confidence": 0.95,
+      "alternative_classifications": [
+        { "document_type": "business_plan", "confidence": 0.03 },
+        { "document_type": "financial_statement", "confidence": 0.02 }
+      ]
+    },
+    "uploaded_at": "2025-05-04T11:20:15Z",
+    "metadata": {
+      "file_size": 1234567,
+      "page_count": 3,
+      "mime_type": "application/pdf",
+      "encryption": "AES-256",
+      "ocr_status": "completed",
+      "ocr_confidence": 0.92,
+      "extracted_fields": {
+        "business_name": { "value": "Main Street Bakery", "confidence": 0.97 },
+        "application_date": { "value": "2025-05-04", "confidence": 0.96 },
+        "requested_amount": { "value": "25000", "confidence": 0.95 },
+        "business_address": { "value": "567 Main St, Bakerytown, IL 60601", "confidence": 0.93 }
+      }
+    }
+  },
+  {
+    "id": "doc_015",
+    "application_id": "app_004",
+    "type": "bank_statement",
+    "storage_path": "s3://mca-documents-staging/applications/app_004/bank_statement_mar.pdf",
+    "classification": {
+      "document_type": "bank_statement",
+      "confidence": 0.94,
+      "alternative_classifications": [
+        { "document_type": "financial_statement", "confidence": 0.04 },
+        { "document_type": "invoice", "confidence": 0.02 }
+      ]
+    },
+    "uploaded_at": "2025-05-04T11:22:45Z",
+    "metadata": {
+      "file_size": 1345678,
+      "page_count": 5,
+      "mime_type": "application/pdf",
+      "encryption": "AES-256",
+      "ocr_status": "completed",
+      "ocr_confidence": 0.91,
+      "extracted_fields": {
+        "bank_name": { "value": "Community Bank", "confidence": 0.96 },
+        "account_number": { "value": "XXXX-XXXX-9012", "confidence": 0.95 },
+        "statement_period": { "value": "March 1-31, 2025", "confidence": 0.94 },
+        "ending_balance": { "value": "34567.89", "confidence": 0.93 },
+        "average_daily_balance": { "value": "32109.87", "confidence": 0.92 }
+      }
+    }
+  },
+  {
+    "id": "doc_016",
+    "application_id": "app_004",
+    "type": "identity_document",
+    "storage_path": "s3://mca-documents-staging/applications/app_004/passport.jpg",
+    "classification": {
+      "document_type": "identity_document",
+      "confidence": 0.97,
+      "alternative_classifications": [
+        { "document_type": "passport", "confidence": 0.03 }
+      ]
+    },
+    "uploaded_at": "2025-05-04T11:25:30Z",
+    "metadata": {
+      "file_size": 3456789,
+      "page_count": 1,
+      "mime_type": "image/jpeg",
+      "encryption": "AES-256",
+      "ocr_status": "completed",
+      "ocr_confidence": 0.95,
+      "extracted_fields": {
+        "id_type": { "value": "passport", "confidence": 0.98 },
+        "id_number": { "value": "P12345678", "confidence": 0.96 },
+        "name": { "value": "Jane B. Doe", "confidence": 0.97 },
+        "issue_date": { "value": "2022-06-15", "confidence": 0.95 },
+        "expiration_date": { "value": "2032-06-14", "confidence": 0.94 }
+      }
+    }
+  },
+  {
+    "id": "doc_017",
+    "application_id": "app_005",
+    "type": "loan_application",
+    "storage_path": "s3://mca-documents-production/applications/app_005/loan_application.pdf",
+    "classification": {
+      "document_type": "loan_application",
+      "confidence": 0.98,
+      "alternative_classifications": [
+        { "document_type": "business_plan", "confidence": 0.02 }
+      ]
+    },
+    "uploaded_at": "2025-05-05T09:05:15Z",
+    "metadata": {
+      "file_size": 2345678,
+      "page_count": 6,
+      "mime_type": "application/pdf",
+      "encryption": "AES-256",
+      "ocr_status": "completed",
+      "ocr_confidence": 0.97,
+      "extracted_fields": {
+        "business_name": { "value": "Tech Solutions Inc", "confidence": 0.99 },
+        "application_date": { "value": "2025-05-05", "confidence": 0.98 },
+        "requested_amount": { "value": "150000", "confidence": 0.97 },
+        "business_address": { "value": "123 Tech Park, Silicon Valley, CA 94025", "confidence": 0.96 }
+      }
+    }
+  },
+  {
+    "id": "doc_018",
+    "application_id": "app_005",
+    "type": "bank_statement",
+    "storage_path": "s3://mca-documents-production/applications/app_005/bank_statement_feb.pdf",
+    "classification": {
+      "document_type": "bank_statement",
+      "confidence": 0.99,
+      "alternative_classifications": [
+        { "document_type": "financial_statement", "confidence": 0.01 }
+      ]
+    },
+    "uploaded_at": "2025-05-05T09:08:30Z",
+    "metadata": {
+      "file_size": 3456789,
+      "page_count": 18,
+      "mime_type": "application/pdf",
+      "encryption": "AES-256",
+      "ocr_status": "completed",
+      "ocr_confidence": 0.98,
+      "extracted_fields": {
+        "bank_name": { "value": "Silicon Valley Bank", "confidence": 0.99 },
+        "account_number": { "value": "XXXX-XXXX-3456", "confidence": 0.98 },
+        "statement_period": { "value": "February 1-28, 2025", "confidence": 0.97 },
+        "ending_balance": { "value": "456789.01", "confidence": 0.96 },
+        "average_daily_balance": { "value": "432109.87", "confidence": 0.95 }
+      }
+    }
+  },
+  {
+    "id": "doc_019",
+    "application_id": "app_005",
+    "type": "bank_statement",
+    "storage_path": "s3://mca-documents-production/applications/app_005/bank_statement_mar.pdf",
+    "classification": {
+      "document_type": "bank_statement",
+      "confidence": 0.98,
+      "alternative_classifications": [
+        { "document_type": "financial_statement", "confidence": 0.02 }
+      ]
+    },
+    "uploaded_at": "2025-05-05T09:10:45Z",
+    "metadata": {
+      "file_size": 3567890,
+      "page_count": 20,
+      "mime_type": "application/pdf",
+      "encryption": "AES-256",
+      "ocr_status": "completed",
+      "ocr_confidence": 0.97,
+      "extracted_fields": {
+        "bank_name": { "value": "Silicon Valley Bank", "confidence": 0.99 },
+        "account_number": { "value": "XXXX-XXXX-3456", "confidence": 0.98 },
+        "statement_period": { "value": "March 1-31, 2025", "confidence": 0.97 },
+        "ending_balance": { "value": "478901.23", "confidence": 0.96 },
+        "average_daily_balance": { "value": "465432.10", "confidence": 0.95 }
+      }
+    }
+  },
+  {
+    "id": "doc_020",
+    "application_id": "app_005",
+    "type": "tax_return",
+    "storage_path": "s3://mca-documents-production/applications/app_005/tax_return_2024.pdf",
+    "classification": {
+      "document_type": "tax_return",
+      "confidence": 0.97,
+      "alternative_classifications": [
+        { "document_type": "financial_statement", "confidence": 0.02 },
+        { "document_type": "tax_form", "confidence": 0.01 }
+      ]
+    },
+    "uploaded_at": "2025-05-05T09:15:30Z",
+    "metadata": {
+      "file_size": 5678901,
+      "page_count": 45,
+      "mime_type": "application/pdf",
+      "encryption": "AES-256",
+      "ocr_status": "completed",
+      "ocr_confidence": 0.96,
+      "extracted_fields": {
+        "tax_year": { "value": "2024", "confidence": 0.98 },
+        "business_ein": { "value": "45-6789012", "confidence": 0.97 },
+        "gross_revenue": { "value": "3500000", "confidence": 0.96 },
+        "net_income": { "value": "1250000", "confidence": 0.95 },
+        "filing_status": { "value": "C-Corporation", "confidence": 0.94 }
+      }
+    }
+  },
+  {
+    "id": "doc_021",
+    "application_id": "app_005",
+    "type": "business_license",
+    "storage_path": "s3://mca-documents-production/applications/app_005/business_license.pdf",
+    "classification": {
+      "document_type": "business_license",
+      "confidence": 0.96,
+      "alternative_classifications": [
+        { "document_type": "legal_document", "confidence": 0.03 },
+        { "document_type": "certificate", "confidence": 0.01 }
+      ]
+    },
+    "uploaded_at": "2025-05-05T09:18:15Z",
+    "metadata": {
+      "file_size": 1234567,
+      "page_count": 2,
+      "mime_type": "application/pdf",
+      "encryption": "AES-256",
+      "ocr_status": "completed",
+      "ocr_confidence": 0.95,
+      "extracted_fields": {
+        "license_number": { "value": "BL-67890-2025", "confidence": 0.98 },
+        "issue_date": { "value": "2025-01-10", "confidence": 0.97 },
+        "expiration_date": { "value": "2026-01-09", "confidence": 0.96 },
+        "business_type": { "value": "Technology Services", "confidence": 0.95 },
+        "issuing_authority": { "value": "State of California", "confidence": 0.94 }
+      }
+    }
+  },
+  {
+    "id": "doc_022",
+    "application_id": "app_005",
+    "type": "identity_document",
+    "storage_path": "s3://mca-documents-production/applications/app_005/drivers_license.jpg",
+    "classification": {
+      "document_type": "identity_document",
+      "confidence": 0.98,
+      "alternative_classifications": [
+        { "document_type": "drivers_license", "confidence": 0.02 }
+      ]
+    },
+    "uploaded_at": "2025-05-05T09:20:45Z",
+    "metadata": {
+      "file_size": 2345678,
+      "page_count": 1,
+      "mime_type": "image/jpeg",
+      "encryption": "AES-256",
+      "ocr_status": "completed",
+      "ocr_confidence": 0.97,
+      "extracted_fields": {
+        "id_type": { "value": "drivers_license", "confidence": 0.99 },
+        "id_number": { "value": "DL98765432", "confidence": 0.98 },
+        "name": { "value": "Robert C. Johnson", "confidence": 0.97 },
+        "address": { "value": "456 Tech Lane, Silicon Valley, CA 94025", "confidence": 0.96 },
+        "expiration_date": { "value": "2029-08-20", "confidence": 0.95 }
+      }
+    }
+  },
+  {
+    "id": "doc_023",
+    "application_id": "app_006",
+    "type": "loan_application",
+    "storage_path": "s3://mca-documents-production/applications/app_006/loan_application.pdf",
+    "classification": {
+      "document_type": "loan_application",
+      "confidence": 0.93,
+      "alternative_classifications": [
+        { "document_type": "business_plan", "confidence": 0.04 },
+        { "document_type": "financial_statement", "confidence": 0.03 }
+      ]
+    },
+    "uploaded_at": "2025-05-06T15:10:30Z",
+    "metadata": {
+      "file_size": 1456789,
+      "page_count": 4,
+      "mime_type": "application/pdf",
+      "encryption": "AES-256",
+      "ocr_status": "completed",
+      "ocr_confidence": 0.90,
+      "extracted_fields": {
+        "business_name": { "value": "Healthy Foods Market", "confidence": 0.95 },
+        "application_date": { "value": "2025-05-06", "confidence": 0.94 },
+        "requested_amount": { "value": "35000", "confidence": 0.93 },
+        "business_address": { "value": "789 Organic Lane, Foodville, OR 97401", "confidence": 0.91 }
+      }
+    }
+  },
+  {
+    "id": "doc_024",
+    "application_id": "app_006",
+    "type": "bank_statement",
+    "storage_path": "s3://mca-documents-production/applications/app_006/bank_statement_apr.pdf",
+    "classification": {
+      "document_type": "bank_statement",
+      "confidence": 0.92,
+      "alternative_classifications": [
+        { "document_type": "financial_statement", "confidence": 0.05 },
+        { "document_type": "invoice", "confidence": 0.03 }
+      ]
+    },
+    "uploaded_at": "2025-05-06T15:12:45Z",
+    "metadata": {
+      "file_size": 1567890,
+      "page_count": 6,
+      "mime_type": "application/pdf",
+      "encryption": "AES-256",
+      "ocr_status": "completed",
+      "ocr_confidence": 0.89,
+      "extracted_fields": {
+        "bank_name": { "value": "Oregon Community Bank", "confidence": 0.94 },
+        "account_number": { "value": "XXXX-XXXX-6789", "confidence": 0.93 },
+        "statement_period": { "value": "April 1-30, 2025", "confidence": 0.92 },
+        "ending_balance": { "value": "45678.90", "confidence": 0.91 },
+        "average_daily_balance": { "value": "42345.67", "confidence": 0.90 }
+      }
+    }
+  },
+  {
+    "id": "doc_025",
+    "application_id": "app_006",
+    "type": "profit_loss_statement",
+    "storage_path": "s3://mca-documents-production/applications/app_006/profit_loss_q1_2025.pdf",
+    "classification": {
+      "document_type": "profit_loss_statement",
+      "confidence": 0.91,
+      "alternative_classifications": [
+        { "document_type": "financial_statement", "confidence": 0.06 },
+        { "document_type": "tax_document", "confidence": 0.03 }
+      ]
+    },
+    "uploaded_at": "2025-05-06T15:15:30Z",
+    "metadata": {
+      "file_size": 1678901,
+      "page_count": 5,
+      "mime_type": "application/pdf",
+      "encryption": "AES-256",
+      "ocr_status": "completed",
+      "ocr_confidence": 0.88,
+      "extracted_fields": {
+        "period": { "value": "Q1 2025", "confidence": 0.93 },
+        "total_revenue": { "value": "175000", "confidence": 0.92 },
+        "total_expenses": { "value": "145000", "confidence": 0.91 },
+        "net_profit": { "value": "30000", "confidence": 0.90 },
+        "profit_margin": { "value": "17.1%", "confidence": 0.89 }
+      }
+    }
+  },
+  {
+    "id": "doc_026",
+    "application_id": "app_007",
+    "type": "loan_application",
+    "storage_path": "s3://mca-documents-production/applications/app_007/loan_application.pdf",
+    "classification": {
+      "document_type": "loan_application",
+      "confidence": 0.75,
+      "alternative_classifications": [
+        { "document_type": "business_plan", "confidence": 0.15 },
+        { "document_type": "financial_statement", "confidence": 0.10 }
+      ]
+    },
+    "uploaded_at": "2025-05-07T10:05:15Z",
+    "metadata": {
+      "file_size": 1789012,
+      "page_count": 5,
+      "mime_type": "application/pdf",
+      "encryption": "AES-256",
+      "ocr_status": "completed",
+      "ocr_confidence": 0.72,
+      "extracted_fields": {
+        "business_name": { "value": "Creative Designs Studio", "confidence": 0.80 },
+        "application_date": { "value": "2025-05-07", "confidence": 0.78 },
+        "requested_amount": { "value": "40000", "confidence": 0.76 },
+        "business_address": { "value": "321 Art Avenue, Designville, NY 10023", "confidence": 0.74 }
+      },
+      "human_review_required": true,
+      "human_review_reason": "Low classification confidence"
+    }
+  },
+  {
+    "id": "doc_027",
+    "application_id": "app_007",
+    "type": "bank_statement",
+    "storage_path": "s3://mca-documents-production/applications/app_007/bank_statement_mar.pdf",
+    "classification": {
+      "document_type": "bank_statement",
+      "confidence": 0.73,
+      "alternative_classifications": [
+        { "document_type": "financial_statement", "confidence": 0.17 },
+        { "document_type": "invoice", "confidence": 0.10 }
+      ]
+    },
+    "uploaded_at": "2025-05-07T10:08:30Z",
+    "metadata": {
+      "file_size": 1890123,
+      "page_count": 7,
+      "mime_type": "application/pdf",
+      "encryption": "AES-256",
+      "ocr_status": "completed",
+      "ocr_confidence": 0.70,
+      "extracted_fields": {
+        "bank_name": { "value": "Creative Credit Union", "confidence": 0.78 },
+        "account_number": { "value": "XXXX-XXXX-8901", "confidence": 0.76 },
+        "statement_period": { "value": "March 1-31, 2025", "confidence": 0.74 },
+        "ending_balance": { "value": "28901.23", "confidence": 0.72 },
+        "average_daily_balance": { "value": "26789.01", "confidence": 0.70 }
+      },
+      "human_review_required": true,
+      "human_review_reason": "Low classification confidence"
+    }
+  },
+  {
+    "id": "doc_028",
+    "application_id": "app_007",
+    "type": "identity_document",
+    "storage_path": "s3://mca-documents-production/applications/app_007/drivers_license.jpg",
+    "classification": {
+      "document_type": "identity_document",
+      "confidence": 0.74,
+      "alternative_classifications": [
+        { "document_type": "drivers_license", "confidence": 0.16 },
+        { "document_type": "passport", "confidence": 0.10 }
+      ]
+    },
+    "uploaded_at": "2025-05-07T10:10:45Z",
+    "metadata": {
+      "file_size": 2901234,
+      "page_count": 1,
+      "mime_type": "image/jpeg",
+      "encryption": "AES-256",
+      "ocr_status": "completed",
+      "ocr_confidence": 0.71,
+      "extracted_fields": {
+        "id_type": { "value": "drivers_license", "confidence": 0.79 },
+        "id_number": { "value": "DL45678901", "confidence": 0.77 },
+        "name": { "value": "Emily D. Wilson", "confidence": 0.75 },
+        "address": { "value": "321 Art Avenue, Designville, NY 10023", "confidence": 0.73 },
+        "expiration_date": { "value": "2027-11-30", "confidence": 0.71 }
+      },
+      "human_review_required": true,
+      "human_review_reason": "Low classification confidence"
+    }
+  },
+  {
+    "id": "doc_029",
+    "application_id": "app_008",
+    "type": "loan_application",
+    "storage_path": "s3://mca-documents-production/applications/app_008/loan_application.pdf",
+    "classification": {
+      "document_type": "loan_application",
+      "confidence": 0.97,
+      "alternative_classifications": [
+        { "document_type": "business_plan", "confidence": 0.02 },
+        { "document_type": "financial_statement", "confidence": 0.01 }
+      ]
+    },
+    "uploaded_at": "2025-05-08T14:30:15Z",
+    "metadata": {
+      "file_size": 1901234,
+      "page_count": 5,
+      "mime_type": "application/pdf",
+      "encryption": "AES-256",
+      "ocr_status": "completed",
+      "ocr_confidence": 0.96,
+      "extracted_fields": {
+        "business_name": { "value": "Construction Experts LLC", "confidence": 0.98 },
+        "application_date": { "value": "2025-05-08", "confidence": 0.97 },
+        "requested_amount": { "value": "200000", "confidence": 0.96 },
+        "business_address": { "value": "456 Builder Road, Construction City, TX 75001", "confidence": 0.95 }
+      }
+    }
+  },
+  {
+    "id": "doc_030",
+    "application_id": "app_008",
+    "type": "bank_statement",
+    "storage_path": "s3://mca-documents-production/applications/app_008/bank_statement_feb.pdf",
+    "classification": {
+      "document_type": "bank_statement",
+      "confidence": 0.98,
+      "alternative_classifications": [
+        { "document_type": "financial_statement", "confidence": 0.02 }
+      ]
+    },
+    "uploaded_at": "2025-05-08T14:32:45Z",
+    "metadata": {
+      "file_size": 2012345,
+      "page_count": 10,
+      "mime_type": "application/pdf",
+      "encryption": "AES-256",
+      "ocr_status": "completed",
+      "ocr_confidence": 0.97,
+      "extracted_fields": {
+        "bank_name": { "value": "Texas Builder's Bank", "confidence": 0.99 },
+        "account_number": { "value": "XXXX-XXXX-2345", "confidence": 0.98 },
+        "statement_period": { "value": "February 1-28, 2025", "confidence": 0.97 },
+        "ending_balance": { "value": "345678.90", "confidence": 0.96 },
+        "average_daily_balance": { "value": "321098.76", "confidence": 0.95 }
+      }
+    }
+  }
+]
