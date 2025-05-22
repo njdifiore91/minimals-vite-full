@@ -1,0 +1,103 @@
+{{- /*
+OCR Service Deployment Template
+
+This template extends the common deployment template with OCR Service specific configurations.
+It includes settings for Python/TensorFlow container image, GPU resources, environment variables,
+resource limits, probes, and security context.
+
+Key features:
+- Configures Python container with TensorFlow image and tag
+- Sets up GPU resources with NVIDIA runtime and resource limits (minimum 8GB VRAM)
+- Configures resource limits and requests based on OCR Service requirements
+- Sets up environment variables from ConfigMaps and Secrets
+- Configures liveness and readiness probes for health monitoring
+- Implements security context with non-root user
+*/}}
+
+{{- /* Define OCR Service specific values before including the common template */}}
+{{- $_ := set .Values "serviceType" "python" }}
+
+{{- /* Ensure GPU resources are properly configured for TensorFlow OCR processing */}}
+{{- if not .Values.resources.limits.gpu }}
+  {{- $_ := set .Values.resources.limits "gpu" 1 }}
+{{- end }}
+{{- if not .Values.resources.requests.gpu }}
+  {{- $_ := set .Values.resources.requests "gpu" 1 }}
+{{- end }}
+
+{{- /* Ensure proper memory allocation for TensorFlow (minimum 8GB VRAM required) */}}
+{{- if not .Values.resources.limits.memory }}
+  {{- $_ := set .Values.resources.limits "memory" "8Gi" }}
+{{- end }}
+{{- if not .Values.resources.requests.memory }}
+  {{- $_ := set .Values.resources.requests "memory" "4Gi" }}
+{{- end }}
+
+{{- /* Ensure proper node selector for GPU nodes using standard Kubernetes NFD labels */}}
+{{- if not .Values.nodeSelector }}
+  {{- $_ := set .Values "nodeSelector" (dict "feature.node.kubernetes.io/pci-10de.present" "true") }}
+{{- end }}
+
+{{- /* Ensure proper tolerations for GPU nodes */}}
+{{- if not .Values.tolerations }}
+  {{- $_ := set .Values "tolerations" (list 
+      (dict "key" "nvidia.com/gpu" "operator" "Exists" "effect" "NoSchedule")
+      (dict "key" "accelerator" "operator" "Equal" "value" "gpu" "effect" "NoSchedule")
+    ) }}
+{{- end }}
+
+{{- /* Configure TensorFlow-specific environment variables if not already set */}}
+{{- if not .Values.env.TF_FORCE_GPU_ALLOW_GROWTH }}
+  {{- $_ := set .Values.env "TF_FORCE_GPU_ALLOW_GROWTH" "true" }}
+{{- end }}
+{{- if not .Values.env.CUDA_VISIBLE_DEVICES }}
+  {{- $_ := set .Values.env "CUDA_VISIBLE_DEVICES" "all" }}
+{{- end }}
+{{- if not .Values.env.TF_GPU_MEMORY_LIMIT }}
+  {{- $_ := set .Values.env "TF_GPU_MEMORY_LIMIT" "0.8" }}
+{{- end }}
+{{- if not .Values.env.TF_CPP_MIN_LOG_LEVEL }}
+  {{- $_ := set .Values.env "TF_CPP_MIN_LOG_LEVEL" "2" }}
+{{- end }}
+{{- if not .Values.env.PYTHONUNBUFFERED }}
+  {{- $_ := set .Values.env "PYTHONUNBUFFERED" "1" }}
+{{- end }}
+
+{{- /* Configure OCR-specific probes with appropriate paths and timing */}}
+{{- if not .Values.livenessProbe }}
+  {{- $_ := set .Values "livenessProbe" (dict "enabled" true "path" "/health/live" "initialDelaySeconds" 60 "periodSeconds" 10 "timeoutSeconds" 5 "successThreshold" 1 "failureThreshold" 3) }}
+{{- end }}
+{{- if not .Values.readinessProbe }}
+  {{- $_ := set .Values "readinessProbe" (dict "enabled" true "path" "/health/ready" "initialDelaySeconds" 30 "periodSeconds" 10 "timeoutSeconds" 5 "successThreshold" 1 "failureThreshold" 3) }}
+{{- end }}
+{{- if not .Values.startupProbe }}
+  {{- $_ := set .Values "startupProbe" (dict "enabled" true "probe" (dict "httpGet" (dict "path" "/health/live" "port" "http") "initialDelaySeconds" 20 "periodSeconds" 10 "timeoutSeconds" 5 "failureThreshold" 12)) }}
+{{- end }}
+
+{{- /* Configure security context for non-root user */}}
+{{- if not .Values.securityContext }}
+  {{- $_ := set .Values "securityContext" (dict "runAsUser" 1000 "runAsGroup" 1000 "allowPrivilegeEscalation" false "capabilities" (dict "drop" (list "ALL")) "readOnlyRootFilesystem" true) }}
+{{- end }}
+
+{{- /* Configure pod security context */}}
+{{- if not .Values.podSecurityContext }}
+  {{- $_ := set .Values "podSecurityContext" (dict "runAsNonRoot" true "fsGroup" 1000) }}
+{{- end }}
+
+{{- /* Configure pod annotations for GPU monitoring */}}
+{{- if not .Values.podAnnotations }}
+  {{- $_ := set .Values "podAnnotations" (dict "prometheus.io/scrape" "true" "prometheus.io/port" "9090" "prometheus.io/path" "/metrics") }}
+{{- end }}
+
+{{- /* Configure deployment strategy for GPU workloads */}}
+{{- if not .Values.deployment.strategy }}
+  {{- $_ := set .Values.deployment "strategy" (dict "type" "Recreate") }}
+{{- end }}
+
+{{- /* Configure termination grace period to allow for proper model unloading */}}
+{{- if not .Values.terminationGracePeriodSeconds }}
+  {{- $_ := set .Values "terminationGracePeriodSeconds" 60 }}
+{{- end }}
+
+{{- /* Include the common deployment template with OCR-specific values */}}
+{{- template "common.deployment" . }}
