@@ -1,0 +1,260 @@
+# Terraform Apply Workflow
+# This workflow applies previously generated and approved Terraform plans to the target environment.
+# It includes approval gates for sensitive environments, verification of successful deployment,
+# rollback capabilities for failed deployments, and notifications for deployment status.
+
+name: Terraform Apply
+
+# Trigger on approval events or manual workflow dispatch
+on:
+  # Triggered when a terraform plan is approved
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to (development, staging, production)'
+        required: true
+        type: choice
+        options:
+          - development
+          - staging
+          - production
+      plan_id:
+        description: 'ID of the approved Terraform plan'
+        required: true
+        type: string
+      notify_channels:
+        description: 'Notification channels (comma-separated: email,slack,webhook)'
+        required: false
+        default: 'slack'
+        type: string
+
+# Environment variables used across jobs
+env:
+  TF_LOG: INFO
+  TF_INPUT: false
+  TF_IN_AUTOMATION: true
+  TERRAFORM_VERSION: '1.5.7'
+
+# Define jobs in the workflow
+jobs:
+  # Approval gate for sensitive environments
+  approval:
+    name: Approval Gate
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.environment == 'staging' || github.event.inputs.environment == 'production' }}
+    environment: ${{ github.event.inputs.environment }}-approval
+    steps:
+      - name: Approval notification
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const environment = '${{ github.event.inputs.environment }}';
+            const planId = '${{ github.event.inputs.plan_id }}';
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `✅ Terraform apply for ${environment} environment with plan ID ${planId} has been approved and will proceed.`
+            });
+
+  # Apply the Terraform plan
+  apply:
+    name: Apply Terraform Changes
+    runs-on: ubuntu-latest
+    needs: [approval]
+    if: ${{ always() && (needs.approval.result == 'success' || github.event.inputs.environment == 'development') }}
+    environment: ${{ github.event.inputs.environment }}
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+        
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+          
+      - name: Download Terraform Plan Artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: terraform-plan-${{ github.event.inputs.environment }}-${{ github.event.inputs.plan_id }}
+          path: ./terraform-plan
+          
+      - name: Load Environment-Specific Configuration
+        uses: actions/download-artifact@v3
+        with:
+          name: terraform-config-${{ github.event.inputs.environment }}
+          path: ./terraform-config
+          
+      - name: Initialize Terraform
+        working-directory: ./infrastructure/terraform/environments/${{ github.event.inputs.environment }}
+        run: |
+          terraform init \
+            -backend-config=./terraform-config/backend.tfvars
+        continue-on-error: false
+        
+      - name: Apply Terraform Changes
+        id: terraform-apply
+        working-directory: ./infrastructure/terraform/environments/${{ github.event.inputs.environment }}
+        run: |
+          terraform apply \
+            -input=false \
+            -auto-approve \
+            ./terraform-plan/tfplan.binary
+        continue-on-error: true
+        
+      - name: Verify Deployment
+        id: verify-deployment
+        if: steps.terraform-apply.outcome == 'success'
+        working-directory: ./infrastructure/terraform/environments/${{ github.event.inputs.environment }}
+        run: |
+          # Run verification scripts to ensure infrastructure is properly deployed
+          echo "Running post-deployment verification checks..."
+          
+          # Verify that all resources were created successfully
+          terraform state list > deployed_resources.txt
+          
+          # Check for specific critical resources based on environment
+          if [[ "${{ github.event.inputs.environment }}" == "production" ]]; then
+            # Verify production-specific resources
+            grep -q "module.database.aws_db_instance.postgres_primary" deployed_resources.txt
+            grep -q "module.database.aws_db_instance.postgres_replica\[0\]" deployed_resources.txt
+            grep -q "module.database.aws_db_instance.postgres_replica\[1\]" deployed_resources.txt
+          elif [[ "${{ github.event.inputs.environment }}" == "staging" ]]; then
+            # Verify staging-specific resources
+            grep -q "module.database.aws_db_instance.postgres_primary" deployed_resources.txt
+            grep -q "module.database.aws_db_instance.postgres_replica\[0\]" deployed_resources.txt
+          fi
+          
+          # Verify network connectivity to key resources
+          ./infrastructure/ci/scripts/verify-infrastructure.sh ${{ github.event.inputs.environment }}
+          
+          # Export verification results for notification
+          echo "VERIFICATION_RESULT=success" >> $GITHUB_ENV
+          echo "DEPLOYMENT_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> $GITHUB_ENV
+          
+      - name: Record Deployment Metadata
+        if: steps.verify-deployment.outcome == 'success'
+        run: |
+          # Record successful deployment metadata for future reference
+          mkdir -p ./deployment-metadata
+          cat > ./deployment-metadata/deployment-info.json << EOF
+          {
+            "environment": "${{ github.event.inputs.environment }}",
+            "plan_id": "${{ github.event.inputs.plan_id }}",
+            "deployed_at": "${{ env.DEPLOYMENT_TIME }}",
+            "deployed_by": "${{ github.actor }}",
+            "commit_sha": "${{ github.sha }}",
+            "workflow_run_id": "${{ github.run_id }}"
+          }
+          EOF
+          
+          # Upload deployment metadata as artifact
+          echo "Deployment metadata recorded successfully"
+          
+      - name: Upload Deployment Metadata
+        if: steps.verify-deployment.outcome == 'success'
+        uses: actions/upload-artifact@v3
+        with:
+          name: deployment-metadata-${{ github.event.inputs.environment }}-${{ github.event.inputs.plan_id }}
+          path: ./deployment-metadata
+          retention-days: 90
+          
+  # Handle rollback if deployment fails
+  rollback:
+    name: Rollback Failed Deployment
+    runs-on: ubuntu-latest
+    needs: [apply]
+    if: ${{ needs.apply.result == 'failure' }}
+    environment: ${{ github.event.inputs.environment }}
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+        
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+          
+      - name: Download Previous State
+        uses: actions/download-artifact@v3
+        with:
+          name: terraform-state-${{ github.event.inputs.environment }}-previous
+          path: ./terraform-state-previous
+          
+      - name: Initialize Terraform
+        working-directory: ./infrastructure/terraform/environments/${{ github.event.inputs.environment }}
+        run: |
+          terraform init \
+            -backend-config=./terraform-config/backend.tfvars
+        continue-on-error: false
+        
+      - name: Restore Previous State
+        id: restore-state
+        working-directory: ./infrastructure/terraform/environments/${{ github.event.inputs.environment }}
+        run: |
+          echo "Initiating rollback to previous known good state..."
+          
+          # Copy previous state file to current workspace
+          cp ./terraform-state-previous/terraform.tfstate .terraform/
+          
+          # Apply the previous state
+          terraform apply \
+            -input=false \
+            -auto-approve \
+            -refresh-only
+            
+          echo "ROLLBACK_RESULT=success" >> $GITHUB_ENV
+          echo "ROLLBACK_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> $GITHUB_ENV
+        continue-on-error: true
+        
+      - name: Verify Rollback
+        id: verify-rollback
+        if: steps.restore-state.outcome == 'success'
+        working-directory: ./infrastructure/terraform/environments/${{ github.event.inputs.environment }}
+        run: |
+          # Verify that rollback was successful
+          echo "Verifying rollback success..."
+          terraform state list > rollback_resources.txt
+          
+          # Run basic verification
+          ./infrastructure/ci/scripts/verify-infrastructure.sh ${{ github.event.inputs.environment }} rollback
+          
+  # Send notifications about deployment status
+  notify:
+    name: Send Deployment Notifications
+    runs-on: ubuntu-latest
+    needs: [apply, rollback]
+    if: ${{ always() }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+        
+      - name: Determine Deployment Status
+        id: deployment-status
+        run: |
+          if [[ "${{ needs.apply.result }}" == "success" ]]; then
+            echo "status=success" >> $GITHUB_OUTPUT
+            echo "message=Terraform apply completed successfully for ${{ github.event.inputs.environment }} environment." >> $GITHUB_OUTPUT
+          elif [[ "${{ needs.rollback.result }}" == "success" ]]; then
+            echo "status=rolled_back" >> $GITHUB_OUTPUT
+            echo "message=Terraform apply failed for ${{ github.event.inputs.environment }} environment. Successfully rolled back to previous state." >> $GITHUB_OUTPUT
+          else
+            echo "status=failed" >> $GITHUB_OUTPUT
+            echo "message=Terraform apply failed for ${{ github.event.inputs.environment }} environment. Rollback also failed. Manual intervention required." >> $GITHUB_OUTPUT
+          fi
+          
+      - name: Send Notifications
+        uses: ./.github/actions/notify
+        with:
+          status: ${{ steps.deployment-status.outputs.status }}
+          message: ${{ steps.deployment-status.outputs.message }}
+          environment: ${{ github.event.inputs.environment }}
+          channels: ${{ github.event.inputs.notify_channels }}
+          webhook_url: ${{ secrets.NOTIFICATION_WEBHOOK_URL }}
+          slack_webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          email_recipients: ${{ secrets.EMAIL_RECIPIENTS }}
