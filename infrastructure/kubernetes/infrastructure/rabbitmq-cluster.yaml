@@ -1,0 +1,519 @@
+---
+# RabbitMQ Cluster for MCA Application Processing System
+# This manifest defines the RabbitMQ cluster using the RabbitMQ Cluster Operator CRD
+# It configures the message queue with exchanges and queues required for asynchronous
+# communication between microservices in the MCA Application Processing System
+
+apiVersion: rabbitmq.com/v1beta1
+kind: RabbitmqCluster
+metadata:
+  name: mca-rabbitmq-cluster
+  namespace: mca-infrastructure
+  labels:
+    app: mca-rabbitmq
+    component: messaging
+    part-of: mca-application
+  annotations:
+    kubernetes.io/description: "RabbitMQ cluster for MCA Application Processing System"
+    rabbitmq.com/topology-version: "1"
+spec:
+  # RabbitMQ 3.11.20 version as specified in the technical requirements
+  image: rabbitmq:3.11.20-management
+  imagePullSecrets: []
+  replicas: 3
+  
+  # Service configuration
+  service:
+    type: ClusterIP
+    annotations:
+      service.kubernetes.io/topology-aware-routing: "true"
+  
+  # Resource requirements
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+  
+  # Persistent storage configuration
+  persistence:
+    storageClassName: rabbitmq-storage
+    storage: "10Gi"
+  
+  # High availability configuration with pod anti-affinity
+  # to distribute nodes across availability zones
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+            - key: app
+              operator: In
+              values:
+              - mca-rabbitmq
+          topologyKey: topology.kubernetes.io/zone
+  
+  # TLS configuration for secure connections
+  tls:
+    secretName: rabbitmq-tls-secret
+    caSecretName: rabbitmq-ca-secret
+    disableNonTLSListeners: true
+  
+  # RabbitMQ plugins required for the MCA Application Processing System
+  rabbitmq:
+    additionalPlugins:
+      - rabbitmq_management
+      - rabbitmq_peer_discovery_k8s
+      - rabbitmq_federation
+      - rabbitmq_federation_management
+      - rabbitmq_shovel
+      - rabbitmq_shovel_management
+      - rabbitmq_prometheus
+      - rabbitmq_consistent_hash_exchange
+    
+    # RabbitMQ configuration with mirrored queues and message persistence
+    additionalConfig: |
+      # Cluster configuration
+      cluster_formation.peer_discovery_backend = rabbit_peer_discovery_k8s
+      cluster_formation.k8s.host = kubernetes.default.svc.cluster.local
+      cluster_formation.k8s.address_type = hostname
+      cluster_formation.node_cleanup.interval = 30
+      cluster_formation.node_cleanup.only_log_warning = true
+      cluster_partition_handling = autoheal
+      
+      # Queue mirroring for high availability
+      queue.default_ha_mode = all
+      queue.default_ha_sync_mode = automatic
+      
+      # Message persistence
+      queue.default_lazy_mode = true
+      queue.default_durable = true
+      
+      # Performance tuning
+      vm_memory_high_watermark.relative = 0.7
+      vm_memory_high_watermark_paging_ratio = 0.8
+      disk_free_limit.relative = 2.0
+      
+      # Connection and channel limits
+      connection_max = 10000
+      channel_max = 5000
+      
+      # Security settings
+      loopback_users = none
+      
+      # TLS configuration
+      ssl_options.verify = verify_peer
+      ssl_options.fail_if_no_peer_cert = false
+      
+      # Message TTL (7 days in milliseconds)
+      queue.default_message_ttl = 604800000
+      
+      # Dead letter exchange
+      queue.default_dead_letter_exchange = amq.direct
+      
+      # Lazy queues for large messages to optimize memory usage
+      queue.default_queue_mode = lazy
+    
+    # RabbitMQ advanced configuration
+    advancedConfig: |
+      [
+        {rabbit, [
+          {tcp_listen_options, [
+            {backlog, 4096},
+            {nodelay, true},
+            {linger, {true, 0}},
+            {exit_on_close, false}
+          ]}
+        ]},
+        {ra, [
+          {wal_data_dir, '/var/lib/rabbitmq/mnesia/rabbit@$(HOSTNAME)/quorum/wal'},
+          {segment_max_entries, 32768}
+        ]}
+      ].
+    
+    # RabbitMQ operator policies
+    operatorPolicies:
+      # High availability policy for all queues
+      ha-policy:
+        pattern: ".*"
+        priority: 1
+        applyTo: "queues"
+        definition:
+          ha-mode: "all"
+          ha-sync-mode: "automatic"
+          queue-mode: "lazy"
+          message-ttl: 604800000
+          ha-sync-batch-size: 1000
+      
+      # Dead letter exchange policy
+      dlx-policy:
+        pattern: ".*"
+        priority: 2
+        applyTo: "queues"
+        definition:
+          dead-letter-exchange: "dlx.mca"
+          dead-letter-routing-key: "dlx"
+    
+    # RabbitMQ exchanges
+    exchanges:
+      # Main exchange for document processing
+      mca.documents:
+        type: "fanout"
+        durable: true
+        auto_delete: false
+    
+    # RabbitMQ queues
+    queues:
+      # Document processing queue
+      document-processing:
+        durable: true
+        auto_delete: false
+        arguments:
+          x-queue-mode: "lazy"
+          x-ha-policy: "all"
+          x-ha-sync-mode: "automatic"
+          x-message-ttl: 604800000
+          x-dead-letter-exchange: "dlx.mca"
+          x-dead-letter-routing-key: "dlx.document-processing"
+      
+      # Data extraction queue
+      data-extraction:
+        durable: true
+        auto_delete: false
+        arguments:
+          x-queue-mode: "lazy"
+          x-ha-policy: "all"
+          x-ha-sync-mode: "automatic"
+          x-message-ttl: 604800000
+          x-dead-letter-exchange: "dlx.mca"
+          x-dead-letter-routing-key: "dlx.data-extraction"
+      
+      # Notification queue
+      notification:
+        durable: true
+        auto_delete: false
+        arguments:
+          x-queue-mode: "lazy"
+          x-ha-policy: "all"
+          x-ha-sync-mode: "automatic"
+          x-message-ttl: 604800000
+          x-dead-letter-exchange: "dlx.mca"
+          x-dead-letter-routing-key: "dlx.notification"
+      
+      # Dead letter queues
+      dlx.document-processing:
+        durable: true
+        auto_delete: false
+        arguments:
+          x-queue-mode: "lazy"
+          x-ha-policy: "all"
+          x-ha-sync-mode: "automatic"
+      
+      dlx.data-extraction:
+        durable: true
+        auto_delete: false
+        arguments:
+          x-queue-mode: "lazy"
+          x-ha-policy: "all"
+          x-ha-sync-mode: "automatic"
+      
+      dlx.notification:
+        durable: true
+        auto_delete: false
+        arguments:
+          x-queue-mode: "lazy"
+          x-ha-policy: "all"
+          x-ha-sync-mode: "automatic"
+    
+    # RabbitMQ bindings
+    bindings:
+      # Bind document processing queue to the exchange
+      - source: "mca.documents"
+        destination: "document-processing"
+        destinationType: "queue"
+        routingKey: "#"
+      
+      # Bind data extraction queue to the exchange
+      - source: "mca.documents"
+        destination: "data-extraction"
+        destinationType: "queue"
+        routingKey: "#"
+      
+      # Bind notification queue to the exchange
+      - source: "mca.documents"
+        destination: "notification"
+        destinationType: "queue"
+        routingKey: "#"
+      
+      # Bind dead letter queues to the dead letter exchange
+      - source: "dlx.mca"
+        destination: "dlx.document-processing"
+        destinationType: "queue"
+        routingKey: "dlx.document-processing"
+      
+      - source: "dlx.mca"
+        destination: "dlx.data-extraction"
+        destinationType: "queue"
+        routingKey: "dlx.data-extraction"
+      
+      - source: "dlx.mca"
+        destination: "dlx.notification"
+        destinationType: "queue"
+        routingKey: "dlx.notification"
+
+  # Prometheus metrics configuration
+  metrics:
+    enabled: true
+    prometheusPort: 15692
+
+  # Termination grace period to ensure proper shutdown
+  terminationGracePeriodSeconds: 60
+
+---
+# Dead Letter Exchange for MCA Application Processing System
+apiVersion: rabbitmq.com/v1beta1
+kind: Exchange
+metadata:
+  name: mca-dlx
+  namespace: mca-infrastructure
+  labels:
+    app: mca-rabbitmq
+    component: messaging
+    part-of: mca-application
+spec:
+  name: dlx.mca
+  vhost: /
+  type: direct
+  durable: true
+  autoDelete: false
+  rabbitmqClusterReference:
+    name: mca-rabbitmq-cluster
+
+---
+# ConfigMap for RabbitMQ initialization scripts
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rabbitmq-init-scripts
+  namespace: mca-infrastructure
+  labels:
+    app: mca-rabbitmq
+    component: messaging
+    part-of: mca-application
+data:
+  init-rabbitmq.sh: |
+    #!/bin/sh
+    # Wait for RabbitMQ cluster to be ready
+    until rabbitmqctl ping; do
+      echo "Waiting for RabbitMQ to be ready..."
+      sleep 5
+    done
+    
+    echo "RabbitMQ is ready, configuring exchanges and queues..."
+    
+    # Create the main exchange for document processing
+    rabbitmqadmin declare exchange name=mca.documents type=fanout durable=true
+    
+    # Create document processing queue
+    rabbitmqadmin declare queue name=document-processing durable=true \
+      arguments='{"x-queue-mode":"lazy","x-ha-policy":"all","x-ha-sync-mode":"automatic","x-message-ttl":604800000,"x-dead-letter-exchange":"dlx.mca","x-dead-letter-routing-key":"dlx.document-processing"}'
+    
+    # Create data extraction queue
+    rabbitmqadmin declare queue name=data-extraction durable=true \
+      arguments='{"x-queue-mode":"lazy","x-ha-policy":"all","x-ha-sync-mode":"automatic","x-message-ttl":604800000,"x-dead-letter-exchange":"dlx.mca","x-dead-letter-routing-key":"dlx.data-extraction"}'
+    
+    # Create notification queue
+    rabbitmqadmin declare queue name=notification durable=true \
+      arguments='{"x-queue-mode":"lazy","x-ha-policy":"all","x-ha-sync-mode":"automatic","x-message-ttl":604800000,"x-dead-letter-exchange":"dlx.mca","x-dead-letter-routing-key":"dlx.notification"}'
+    
+    # Create dead letter exchange
+    rabbitmqadmin declare exchange name=dlx.mca type=direct durable=true
+    
+    # Create dead letter queues
+    rabbitmqadmin declare queue name=dlx.document-processing durable=true \
+      arguments='{"x-queue-mode":"lazy","x-ha-policy":"all","x-ha-sync-mode":"automatic"}'
+    
+    rabbitmqadmin declare queue name=dlx.data-extraction durable=true \
+      arguments='{"x-queue-mode":"lazy","x-ha-policy":"all","x-ha-sync-mode":"automatic"}'
+    
+    rabbitmqadmin declare queue name=dlx.notification durable=true \
+      arguments='{"x-queue-mode":"lazy","x-ha-policy":"all","x-ha-sync-mode":"automatic"}'
+    
+    # Bind queues to exchanges
+    rabbitmqadmin declare binding source=mca.documents destination=document-processing destination_type=queue routing_key="#"
+    rabbitmqadmin declare binding source=mca.documents destination=data-extraction destination_type=queue routing_key="#"
+    rabbitmqadmin declare binding source=mca.documents destination=notification destination_type=queue routing_key="#"
+    
+    # Bind dead letter queues to dead letter exchange
+    rabbitmqadmin declare binding source=dlx.mca destination=dlx.document-processing destination_type=queue routing_key="dlx.document-processing"
+    rabbitmqadmin declare binding source=dlx.mca destination=dlx.data-extraction destination_type=queue routing_key="dlx.data-extraction"
+    rabbitmqadmin declare binding source=dlx.mca destination=dlx.notification destination_type=queue routing_key="dlx.notification"
+    
+    # Set up policies
+    rabbitmqctl set_policy ha-policy ".*" '{"ha-mode":"all","ha-sync-mode":"automatic","queue-mode":"lazy","message-ttl":604800000,"ha-sync-batch-size":1000}' --priority 1 --apply-to queues
+    rabbitmqctl set_policy dlx-policy ".*" '{"dead-letter-exchange":"dlx.mca","dead-letter-routing-key":"dlx"}' --priority 2 --apply-to queues
+    
+    echo "RabbitMQ configuration completed successfully"
+
+---
+# Job to initialize RabbitMQ configurations
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: rabbitmq-init-job
+  namespace: mca-infrastructure
+  labels:
+    app: mca-rabbitmq
+    component: messaging
+    part-of: mca-application
+spec:
+  ttlSecondsAfterFinished: 100
+  template:
+    spec:
+      containers:
+      - name: rabbitmq-init
+        image: rabbitmq:3.11.20-management
+        command: ["sh", "/scripts/init-rabbitmq.sh"]
+        env:
+        - name: RABBITMQ_HOST
+          value: "mca-rabbitmq-cluster"
+        - name: RABBITMQ_PORT
+          value: "5672"
+        - name: RABBITMQ_DEFAULT_USER
+          valueFrom:
+            secretKeyRef:
+              name: mca-rabbitmq-admin-credentials
+              key: username
+        - name: RABBITMQ_DEFAULT_PASS
+          valueFrom:
+            secretKeyRef:
+              name: mca-rabbitmq-admin-credentials
+              key: password
+        volumeMounts:
+        - name: init-scripts
+          mountPath: /scripts
+      restartPolicy: OnFailure
+      volumes:
+      - name: init-scripts
+        configMap:
+          name: rabbitmq-init-scripts
+          defaultMode: 0755
+
+---
+# Service Monitor for RabbitMQ Prometheus metrics
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: mca-rabbitmq-monitor
+  namespace: mca-infrastructure
+  labels:
+    app: mca-rabbitmq
+    component: messaging
+    part-of: mca-application
+    prometheus: kube-prometheus
+spec:
+  selector:
+    matchLabels:
+      app: mca-rabbitmq
+      component: messaging
+  namespaceSelector:
+    matchNames:
+      - mca-infrastructure
+  endpoints:
+  - port: prometheus
+    interval: 15s
+    path: /metrics
+    honorLabels: true
+    relabelings:
+    - sourceLabels: [__meta_kubernetes_pod_name]
+      action: replace
+      targetLabel: pod
+    - sourceLabels: [__meta_kubernetes_namespace]
+      action: replace
+      targetLabel: namespace
+
+---
+# Prometheus Rules for RabbitMQ alerting
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: mca-rabbitmq-alerts
+  namespace: mca-infrastructure
+  labels:
+    app: mca-rabbitmq
+    component: messaging
+    part-of: mca-application
+    prometheus: kube-prometheus
+spec:
+  groups:
+  - name: rabbitmq.rules
+    rules:
+    # Alert for RabbitMQ node down
+    - alert: RabbitmqNodeDown
+      expr: rabbitmq_up == 0
+      for: 1m
+      labels:
+        severity: critical
+        service: rabbitmq
+      annotations:
+        summary: "RabbitMQ node down"
+        description: "RabbitMQ node {{ $labels.node }} is down"
+    
+    # Alert for high queue depth
+    - alert: RabbitmqHighQueueDepth
+      expr: rabbitmq_queue_messages > 10000
+      for: 5m
+      labels:
+        severity: warning
+        service: rabbitmq
+      annotations:
+        summary: "RabbitMQ high queue depth"
+        description: "Queue {{ $labels.queue }} has {{ $value }} messages, which is above the threshold of 10000"
+    
+    # Alert for high memory usage
+    - alert: RabbitmqHighMemoryUsage
+      expr: rabbitmq_node_mem_used / rabbitmq_node_mem_limit > 0.8
+      for: 5m
+      labels:
+        severity: warning
+        service: rabbitmq
+      annotations:
+        summary: "RabbitMQ high memory usage"
+        description: "RabbitMQ node {{ $labels.node }} is using {{ $value | humanizePercentage }} of its memory limit"
+    
+    # Alert for high disk usage
+    - alert: RabbitmqHighDiskUsage
+      expr: rabbitmq_node_disk_free / rabbitmq_node_disk_free_limit < 2
+      for: 5m
+      labels:
+        severity: warning
+        service: rabbitmq
+      annotations:
+        summary: "RabbitMQ high disk usage"
+        description: "RabbitMQ node {{ $labels.node }} is using high disk space. Free disk space is {{ $value }} times the disk free limit"
+    
+    # Alert for no consumers on queue
+    - alert: RabbitmqNoQueueConsumers
+      expr: rabbitmq_queue_consumers == 0 and rabbitmq_queue_messages > 0
+      for: 10m
+      labels:
+        severity: warning
+        service: rabbitmq
+      annotations:
+        summary: "RabbitMQ queue has no consumers"
+        description: "Queue {{ $labels.queue }} has {{ $value }} messages but no consumers"
+    
+    # Alert for unroutable messages
+    - alert: RabbitmqUnroutableMessages
+      expr: rate(rabbitmq_channel_messages_unroutable_returned_total[5m]) > 0
+      for: 5m
+      labels:
+        severity: warning
+        service: rabbitmq
+      annotations:
+        summary: "RabbitMQ unroutable messages"
+        description: "RabbitMQ is experiencing unroutable messages"
