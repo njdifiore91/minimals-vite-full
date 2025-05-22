@@ -1,142 +1,126 @@
 /**
- * Configuration type definitions for the Email Service
+ * Configuration Type Definitions
  * 
- * This file defines TypeScript interfaces for Email Service configuration,
- * environment variables, and application settings. It provides type definitions
- * for service configuration, ensuring consistent and type-safe access to
- * configuration values throughout the codebase.
+ * This file defines TypeScript interfaces for Email Service configuration, environment variables,
+ * and application settings. It provides type definitions for service configuration, ensuring
+ * consistent and type-safe access to configuration values throughout the codebase.
+ * 
+ * The configuration system supports different environment configurations (development, staging, production)
+ * and provides validation for environment variables to ensure required values are present.
  */
 
 import { ILogLevel } from './common';
 
 // ----------------------------------------------------------------------
-// Environment Configuration
-// ----------------------------------------------------------------------
 
 /**
- * Environment names supported by the application
+ * Supported deployment environments
  */
 export type Environment = 'development' | 'staging' | 'production';
 
 /**
- * Environment variable schema for validation
- */
-export interface IEnvSchema {
-  /** Variable name */
-  name: string;
-  /** Whether the variable is required */
-  required: boolean;
-  /** Default value if not provided (for non-required variables) */
-  default?: string;
-  /** Validation function */
-  validate?: (value: string) => boolean;
-  /** Error message if validation fails */
-  errorMessage?: string;
-}
-
-/**
- * Environment variable validation result
- */
-export interface IEnvValidationResult {
-  /** Whether validation was successful */
-  isValid: boolean;
-  /** Error messages if validation failed */
-  errors: string[];
-  /** Validated environment variables */
-  env: Record<string, string>;
-}
-
-// ----------------------------------------------------------------------
-// Application Configuration
-// ----------------------------------------------------------------------
-
-/**
- * Application configuration settings
+ * Application-wide configuration settings
  */
 export interface IAppConfig {
-  /** Service name */
+  /** Service name for identification in logs and metrics */
   serviceName: string;
-  /** Service version */
+  /** Service version for tracking and compatibility */
   version: string;
-  /** HTTP port for the service */
+  /** HTTP port the service listens on */
   port: number;
-  /** Current environment */
+  /** Current deployment environment */
   environment: Environment;
-  /** Node environment (development, production) */
+  /** Node environment (development, production, test) */
   nodeEnv: string;
-  /** Whether the service is running in debug mode */
+  /** Debug mode flag */
   debug: boolean;
 }
 
-// ----------------------------------------------------------------------
-// IMAP Configuration
-// ----------------------------------------------------------------------
+/**
+ * S3 storage configuration
+ */
+export interface IS3Config {
+  /** S3 endpoint URL */
+  endpoint: string;
+  /** Whether to use path style URLs */
+  forcePathStyle: boolean;
+  /** AWS region */
+  region: string;
+  /** S3 access key */
+  accessKey: string;
+  /** S3 secret key */
+  secretKey: string;
+  /** Production environment bucket name */
+  productionBucket: string;
+  /** Staging environment bucket name */
+  stagingBucket: string;
+  /** Development environment bucket name */
+  developmentBucket: string;
+  /** Whether to use SSL for S3 connections */
+  sslEnabled: boolean;
+  /** Connection timeout in milliseconds */
+  connectionTimeout: number;
+  /** Maximum number of retry attempts */
+  maxRetries: number;
+  /** Whether to use server-side encryption */
+  useEncryption: boolean;
+}
 
 /**
- * TLS options for IMAP connection
+ * TLS configuration options
  */
-export interface IImapTlsOptions {
-  /** Whether to require TLS */
+export interface ITlsOptions {
+  /** Whether TLS is required */
   required: boolean;
   /** Minimum TLS version */
   minVersion: string;
   /** Whether to reject unauthorized certificates */
   rejectUnauthorized: boolean;
-  /** Path to CA certificate file */
-  ca?: string;
-  /** Path to client certificate file */
-  cert?: string;
-  /** Path to client key file */
-  key?: string;
 }
 
 /**
- * IMAP connection configuration
+ * IMAP email server configuration
  */
 export interface IImapConfig {
-  /** IMAP server host */
+  /** IMAP server hostname */
   host: string;
   /** IMAP server port */
   port: number;
   /** Whether to use TLS */
   tls: boolean;
-  /** TLS options */
-  tlsOptions: IImapTlsOptions;
-  /** Authentication username */
+  /** TLS configuration options */
+  tlsOptions: ITlsOptions;
+  /** IMAP username */
   user: string;
-  /** Authentication password */
+  /** IMAP password */
   password: string;
-  /** Mailbox to monitor */
+  /** Mailbox to monitor (default: INBOX) */
   mailbox: string;
-  /** Polling interval in milliseconds */
+  /** Email polling interval in milliseconds */
   pollingInterval: number;
   /** Connection timeout in milliseconds */
   connectionTimeout: number;
-  /** Idle timeout in milliseconds */
+  /** IDLE command timeout in milliseconds */
   idleTimeout: number;
-  /** Maximum connection retries */
+  /** Maximum number of retry attempts */
   maxRetries: number;
-  /** Retry delay in milliseconds */
+  /** Initial delay between retries in milliseconds */
   retryDelay: number;
 }
-
-// ----------------------------------------------------------------------
-// RabbitMQ Configuration
-// ----------------------------------------------------------------------
 
 /**
  * RabbitMQ connection configuration
  */
 export interface IRabbitMQConfig {
-  /** RabbitMQ server host */
+  /** RabbitMQ server hostname */
   host: string;
   /** RabbitMQ server port */
   port: number;
-  /** Virtual host */
+  /** RabbitMQ virtual host */
   vhost: string;
-  /** Authentication username */
+  /** RabbitMQ username */
   username: string;
-  /** Authentication password */
+  /** RabbitMQ password */
   password: string;
   /** Whether to use TLS */
   useTls: boolean;
@@ -144,9 +128,9 @@ export interface IRabbitMQConfig {
   connectionTimeout: number;
   /** Heartbeat interval in seconds */
   heartbeat: number;
-  /** Maximum connection retries */
+  /** Maximum number of retry attempts */
   maxRetries: number;
-  /** Retry delay in milliseconds */
+  /** Initial delay between retries in milliseconds */
   retryDelay: number;
 }
 
@@ -156,11 +140,11 @@ export interface IRabbitMQConfig {
 export interface IExchangeConfig {
   /** Exchange name */
   name: string;
-  /** Exchange type */
+  /** Exchange type (direct, fanout, topic, headers) */
   type: 'direct' | 'fanout' | 'topic' | 'headers';
   /** Whether the exchange is durable */
   durable: boolean;
-  /** Whether the exchange auto-deletes when no longer used */
+  /** Whether the exchange is automatically deleted when no longer used */
   autoDelete: boolean;
 }
 
@@ -168,57 +152,17 @@ export interface IExchangeConfig {
  * RabbitMQ message configuration
  */
 export interface IMessageConfig {
-  /** Content type */
+  /** Message content type */
   contentType: string;
-  /** Content encoding */
+  /** Message content encoding */
   contentEncoding: string;
-  /** Delivery mode (1 = non-persistent, 2 = persistent) */
+  /** Message delivery mode (1 = non-persistent, 2 = persistent) */
   deliveryMode: 1 | 2;
   /** Message priority */
   priority: number;
-  /** Message expiration in milliseconds */
-  expiration?: number;
   /** Whether to use publisher confirms */
   usePublisherConfirms: boolean;
 }
-
-// ----------------------------------------------------------------------
-// S3 Storage Configuration
-// ----------------------------------------------------------------------
-
-/**
- * S3 storage configuration
- */
-export interface IS3Config {
-  /** S3 endpoint */
-  endpoint: string;
-  /** Whether to force path style */
-  forcePathStyle: boolean;
-  /** S3 region */
-  region: string;
-  /** S3 access key */
-  accessKey: string;
-  /** S3 secret key */
-  secretKey: string;
-  /** Production bucket name */
-  productionBucket: string;
-  /** Staging bucket name */
-  stagingBucket: string;
-  /** Development bucket name */
-  developmentBucket: string;
-  /** Whether to use SSL */
-  sslEnabled: boolean;
-  /** Connection timeout in milliseconds */
-  connectionTimeout: number;
-  /** Maximum retries */
-  maxRetries: number;
-  /** Whether to use AES-256 encryption */
-  useEncryption: boolean;
-}
-
-// ----------------------------------------------------------------------
-// Logging Configuration
-// ----------------------------------------------------------------------
 
 /**
  * Logging configuration
@@ -226,25 +170,21 @@ export interface IS3Config {
 export interface ILoggingConfig {
   /** Log level */
   level: ILogLevel;
-  /** Whether to pretty print logs */
+  /** Whether to use pretty printing for logs */
   prettyPrint: boolean;
-  /** Whether to include timestamps */
+  /** Whether to include timestamps in logs */
   timestamp: boolean;
-  /** Whether to colorize logs */
+  /** Whether to colorize log output */
   colorize: boolean;
-  /** Whether to log to file */
+  /** Whether to log to a file */
   logToFile: boolean;
-  /** Log file path */
+  /** Path to log file */
   logFilePath?: string;
   /** Maximum log file size in bytes */
-  maxLogFileSize?: number;
+  maxLogFileSize: number;
   /** Maximum number of log files to keep */
-  maxLogFiles?: number;
+  maxLogFiles: number;
 }
-
-// ----------------------------------------------------------------------
-// Environment-specific Configuration
-// ----------------------------------------------------------------------
 
 /**
  * Environment-specific configuration
@@ -264,12 +204,8 @@ export interface IEnvironmentConfig {
   logging: ILoggingConfig;
 }
 
-// ----------------------------------------------------------------------
-// Service Configuration
-// ----------------------------------------------------------------------
-
 /**
- * Complete service configuration
+ * Combined service configuration
  */
 export interface IServiceConfig {
   /** Application configuration */
@@ -279,13 +215,29 @@ export interface IServiceConfig {
 }
 
 /**
- * Configuration loading options
+ * Environment variable schema definition
  */
-export interface IConfigLoadOptions {
-  /** Path to .env file */
-  envPath?: string;
-  /** Whether to validate environment variables */
-  validate?: boolean;
-  /** Whether to throw on validation error */
-  throwOnError?: boolean;
+export interface IEnvSchema {
+  /** Environment variable name */
+  name: string;
+  /** Whether the environment variable is required */
+  required: boolean;
+  /** Default value if not provided */
+  default?: string;
+  /** Validation function */
+  validate?: (value: string) => boolean;
+  /** Error message if validation fails */
+  errorMessage?: string;
+}
+
+/**
+ * Environment variable validation result
+ */
+export interface IEnvValidationResult {
+  /** Whether validation was successful */
+  isValid: boolean;
+  /** Validation error messages */
+  errors: string[];
+  /** Validated environment variables */
+  env: Record<string, string>;
 }
