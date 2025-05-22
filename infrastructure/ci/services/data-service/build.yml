@@ -1,0 +1,226 @@
+# Data Service Build Pipeline Configuration
+# This file defines the CI/CD build pipeline for the Data Service Java Spring Boot application
+
+name: Data Service Build
+
+# Trigger on push to main branch or any pull request
+on:
+  push:
+    branches: [main, development]
+    paths:
+      - 'data-service/**'
+      - 'infrastructure/ci/services/data-service/**'
+  pull_request:
+    paths:
+      - 'data-service/**'
+      - 'infrastructure/ci/services/data-service/**'
+  workflow_dispatch: # Allow manual triggering
+
+env:
+  JAVA_VERSION: '17'
+  MAVEN_VERSION: '3.9.5'
+  DOCKER_REGISTRY: ${DOCKER_REGISTRY}
+  SERVICE_NAME: data-service
+  TRIVY_SEVERITY: 'HIGH,CRITICAL'
+
+jobs:
+  build:
+    name: Build and Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Fetch all history for proper versioning
+
+      - name: Set up JDK
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'temurin' # Eclipse Temurin distribution
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: 'maven'
+
+      - name: Cache Maven packages
+        uses: actions/cache@v3
+        with:
+          path: ~/.m2
+          key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
+          restore-keys: ${{ runner.os }}-m2
+
+      - name: Build with Maven
+        working-directory: ./data-service
+        run: |
+          mvn -B clean package -DskipTests
+          echo "Build completed successfully"
+
+      - name: Run Unit Tests
+        working-directory: ./data-service
+        run: |
+          mvn -B test
+          echo "Unit tests completed successfully"
+
+      - name: Run Integration Tests
+        working-directory: ./data-service
+        run: |
+          mvn -B verify -P integration-test
+          echo "Integration tests completed successfully"
+
+      - name: Run CheckStyle
+        working-directory: ./data-service
+        run: |
+          mvn -B checkstyle:check
+          echo "CheckStyle validation completed successfully"
+
+      - name: Run SpotBugs
+        working-directory: ./data-service
+        run: |
+          mvn -B spotbugs:check
+          echo "SpotBugs analysis completed successfully"
+
+      - name: Generate Code Coverage Report
+        working-directory: ./data-service
+        run: |
+          mvn -B jacoco:report
+          echo "Code coverage report generated successfully"
+
+      - name: Upload Test Results
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: test-results
+          path: ./data-service/target/surefire-reports
+
+      - name: Upload Coverage Results
+        uses: actions/upload-artifact@v3
+        with:
+          name: coverage-report
+          path: ./data-service/target/site/jacoco
+
+  package:
+    name: Package and Publish
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'temurin'
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: 'maven'
+
+      - name: Generate Version
+        id: version
+        run: |
+          # Extract version from pom.xml
+          POM_VERSION=$(grep -m 1 "<version>.*</version>" ./data-service/pom.xml | sed 's/.*<version>\(.*\)<\/version>.*/\1/')
+          # Get short commit hash
+          SHORT_COMMIT=$(git rev-parse --short HEAD)
+          # Combine for final version
+          VERSION="${POM_VERSION}-${SHORT_COMMIT}"
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Package JAR
+        working-directory: ./data-service
+        run: |
+          mvn -B package -DskipTests
+          echo "JAR packaging completed successfully"
+
+      - name: Upload JAR Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: data-service-jar
+          path: ./data-service/target/*.jar
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Login to Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ${{ env.DOCKER_REGISTRY }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      - name: Build and Push Docker Image
+        uses: docker/build-push-action@v4
+        with:
+          context: ./data-service
+          file: ./data-service/Dockerfile
+          push: true
+          tags: |
+            ${{ env.DOCKER_REGISTRY }}/${{ env.SERVICE_NAME }}:${{ steps.version.outputs.version }}
+            ${{ env.DOCKER_REGISTRY }}/${{ env.SERVICE_NAME }}:latest
+          build-args: |
+            JAR_FILE=target/*.jar
+            JAVA_VERSION=${{ env.JAVA_VERSION }}
+          cache-from: type=registry,ref=${{ env.DOCKER_REGISTRY }}/${{ env.SERVICE_NAME }}:buildcache
+          cache-to: type=registry,ref=${{ env.DOCKER_REGISTRY }}/${{ env.SERVICE_NAME }}:buildcache,mode=max
+
+  security-scan:
+    name: Security Scan
+    needs: package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Run Trivy Vulnerability Scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.DOCKER_REGISTRY }}/${{ env.SERVICE_NAME }}:${{ needs.package.outputs.version }}
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: ${{ env.TRIVY_SEVERITY }}
+
+      - name: Upload Trivy Scan Results
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+      - name: Fail on Critical Vulnerabilities
+        run: |
+          # Check if there are any critical vulnerabilities
+          if grep -q '"Severity":"CRITICAL"' trivy-results.sarif; then
+            echo "Critical vulnerabilities found in the container image!"
+            exit 1
+          fi
+
+# This section defines the Docker build configuration for the Data Service
+# It uses a multi-stage build to minimize the final image size
+# The Dockerfile should be located at ./data-service/Dockerfile with the following content:
+#
+# FROM eclipse-temurin:17-jdk AS builder
+# WORKDIR /app
+# COPY pom.xml .
+# COPY src ./src
+# RUN ./mvnw package -DskipTests
+#
+# FROM eclipse-temurin:17-jre
+# WORKDIR /app
+# COPY --from=builder /app/target/*.jar app.jar
+# 
+# # Add environment variables for database, messaging, and cache connections
+# ENV SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/mca
+# ENV SPRING_DATASOURCE_USERNAME=postgres
+# ENV SPRING_DATASOURCE_PASSWORD=postgres
+# ENV SPRING_RABBITMQ_HOST=rabbitmq
+# ENV SPRING_RABBITMQ_PORT=5672
+# ENV SPRING_RABBITMQ_USERNAME=guest
+# ENV SPRING_RABBITMQ_PASSWORD=guest
+# ENV SPRING_REDIS_HOST=redis
+# ENV SPRING_REDIS_PORT=6379
+#
+# EXPOSE 8080
+# ENTRYPOINT ["java", "-jar", "/app/app.jar"]
+#
+# The build pipeline includes the following stages:
+# 1. Build and Test: Compiles the Java code, runs unit and integration tests, and performs code quality checks
+# 2. Package and Publish: Creates a JAR file, builds a Docker image, and pushes it to the container registry
+# 3. Security Scan: Scans the Docker image for vulnerabilities using Trivy
+#
+# The pipeline uses caching for Maven dependencies and Docker layers to improve build speed
+# It also generates a version based on the semantic version from pom.xml and the Git commit hash 
