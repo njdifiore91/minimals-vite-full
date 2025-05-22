@@ -1,0 +1,427 @@
+# Data Service Deployment Workflow
+# This workflow deploys the Data Service to Kubernetes environments using Helm charts
+# It includes environment-specific configurations, database connections, message queue integration,
+# caching, and security settings
+
+name: Deploy Data Service
+
+# Trigger on workflow dispatch or completion of build workflow
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment Environment'
+        required: true
+        default: 'development'
+        type: choice
+        options:
+          - development
+          - staging
+          - production
+      version:
+        description: 'Version to deploy (defaults to latest)'
+        required: false
+        type: string
+  
+  workflow_run:
+    workflows: ['Build Data Service']
+    types:
+      - completed
+
+# Environment variables used across jobs
+env:
+  SERVICE_NAME: data-service
+  CHART_PATH: infrastructure/kubernetes/charts/data-service
+  REGISTRY: dollarfunding
+  DEFAULT_VERSION: latest
+
+# Permissions required for the workflow
+permissions:
+  contents: read
+  id-token: write # Required for authentication to cloud providers
+
+jobs:
+  # Prepare deployment configuration
+  prepare:
+    name: Prepare Deployment
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.set-env.outputs.environment }}
+      version: ${{ steps.set-version.outputs.version }}
+      
+    steps:
+      - name: Set Environment
+        id: set-env
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "environment=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
+          else
+            # Default to development for automated builds
+            echo "environment=development" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Set Version
+        id: set-version
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ -n "${{ github.event.inputs.version }}" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${{ env.DEFAULT_VERSION }}" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Summary
+        run: |
+          echo "Preparing deployment for ${{ steps.set-env.outputs.environment }} environment"
+          echo "Version: ${{ steps.set-version.outputs.version }}"
+
+  # Deploy to the selected environment
+  deploy:
+    name: Deploy to ${{ needs.prepare.outputs.environment }}
+    needs: prepare
+    runs-on: ubuntu-latest
+    environment: ${{ needs.prepare.outputs.environment }}
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: 'v3.12.3'
+      
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'v1.28.3'
+      
+      - name: Configure Kubernetes Context
+        uses: azure/k8s-set-context@v3
+        with:
+          method: kubeconfig
+          kubeconfig: ${{ secrets[format('KUBECONFIG_{0}', needs.prepare.outputs.environment)] }}
+      
+      - name: Login to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+      
+      - name: Get Deployment Values
+        id: values
+        run: |
+          # Set environment-specific values
+          case "${{ needs.prepare.outputs.environment }}" in
+            production)
+              NAMESPACE="mca-production"
+              REPLICAS=3
+              DB_HOST="postgresql-primary"
+              DB_READ_HOST="postgresql-readonly"
+              REDIS_HOST="redis-master"
+              REDIS_SENTINEL="true"
+              RABBITMQ_HOST="rabbitmq"
+              S3_BUCKET="mca-documents-production"
+              RESOURCE_CPU="1000m"
+              RESOURCE_MEMORY="2Gi"
+              ;;
+            staging)
+              NAMESPACE="mca-staging"
+              REPLICAS=2
+              DB_HOST="postgresql-primary"
+              DB_READ_HOST="postgresql-readonly"
+              REDIS_HOST="redis-master"
+              REDIS_SENTINEL="true"
+              RABBITMQ_HOST="rabbitmq"
+              S3_BUCKET="mca-documents-staging"
+              RESOURCE_CPU="500m"
+              RESOURCE_MEMORY="1Gi"
+              ;;
+            development)
+              NAMESPACE="mca-development"
+              REPLICAS=1
+              DB_HOST="postgresql"
+              DB_READ_HOST=""
+              REDIS_HOST="redis-master"
+              REDIS_SENTINEL="false"
+              RABBITMQ_HOST="rabbitmq"
+              S3_BUCKET="mca-documents-development"
+              RESOURCE_CPU="250m"
+              RESOURCE_MEMORY="512Mi"
+              ;;
+          esac
+          
+          # Export values for later steps
+          echo "namespace=${NAMESPACE}" >> $GITHUB_OUTPUT
+          echo "replicas=${REPLICAS}" >> $GITHUB_OUTPUT
+          echo "db_host=${DB_HOST}" >> $GITHUB_OUTPUT
+          echo "db_read_host=${DB_READ_HOST}" >> $GITHUB_OUTPUT
+          echo "redis_host=${REDIS_HOST}" >> $GITHUB_OUTPUT
+          echo "redis_sentinel=${REDIS_SENTINEL}" >> $GITHUB_OUTPUT
+          echo "rabbitmq_host=${RABBITMQ_HOST}" >> $GITHUB_OUTPUT
+          echo "s3_bucket=${S3_BUCKET}" >> $GITHUB_OUTPUT
+          echo "resource_cpu=${RESOURCE_CPU}" >> $GITHUB_OUTPUT
+          echo "resource_memory=${RESOURCE_MEMORY}" >> $GITHUB_OUTPUT
+      
+      - name: Check Namespace
+        run: |
+          if ! kubectl get namespace ${{ steps.values.outputs.namespace }} > /dev/null 2>&1; then
+            echo "Creating namespace ${{ steps.values.outputs.namespace }}"
+            kubectl create namespace ${{ steps.values.outputs.namespace }}
+          fi
+      
+      - name: Verify Secrets Exist
+        run: |
+          # Check if required secrets exist in the namespace
+          REQUIRED_SECRETS=(
+            "postgresql-credentials"
+            "rabbitmq-credentials"
+            "redis-credentials"
+            "s3-credentials"
+            "jwt-keys"
+            "encryption-keys"
+          )
+          
+          for SECRET in "${REQUIRED_SECRETS[@]}"; do
+            if ! kubectl get secret $SECRET -n ${{ steps.values.outputs.namespace }} > /dev/null 2>&1; then
+              echo "Error: Required secret $SECRET does not exist in namespace ${{ steps.values.outputs.namespace }}"
+              exit 1
+            fi
+          done
+      
+      - name: Deploy with Helm
+        id: deploy
+        run: |
+          # Set image tag
+          IMAGE_TAG="${{ needs.prepare.outputs.version }}"
+          
+          # Create values override file
+          cat > values-override.yaml << EOF
+          global:
+            image:
+              repository: ${{ env.REGISTRY }}/${{ env.SERVICE_NAME }}
+              tag: "${IMAGE_TAG}"
+          
+          environment: "${{ needs.prepare.outputs.environment }}"
+          
+          deployment:
+            replicaCount: ${{ steps.values.outputs.replicas }}
+          
+          resources:
+            requests:
+              cpu: "${{ steps.values.outputs.resource_cpu }}"
+              memory: "${{ steps.values.outputs.resource_memory }}"
+            limits:
+              cpu: "${{ steps.values.outputs.resource_cpu }}"
+              memory: "${{ steps.values.outputs.resource_memory }}"
+          
+          database:
+            host: "${{ steps.values.outputs.db_host }}"
+            readHost: "${{ steps.values.outputs.db_read_host }}"
+          
+          redis:
+            host: "${{ steps.values.outputs.redis_host }}"
+            sentinel:
+              enabled: ${{ steps.values.outputs.redis_sentinel }}
+          
+          rabbitmq:
+            host: "${{ steps.values.outputs.rabbitmq_host }}"
+          
+          storage:
+            s3:
+              bucket: "${{ steps.values.outputs.s3_bucket }}"
+          
+          # Enable Flyway migrations
+          migrations:
+            enabled: true
+            initContainers: true
+          EOF
+          
+          # Deploy with Helm
+          helm upgrade --install ${{ env.SERVICE_NAME }} ${{ env.CHART_PATH }} 
+            --namespace ${{ steps.values.outputs.namespace }} 
+            -f values-override.yaml 
+            --timeout 10m 
+            --wait 
+            --atomic 
+            --history-max 10
+          
+          # Store release name for potential rollback
+          echo "release=${{ env.SERVICE_NAME }}" >> $GITHUB_OUTPUT
+          echo "namespace=${{ steps.values.outputs.namespace }}" >> $GITHUB_OUTPUT
+      
+      - name: Verify Deployment
+        id: verify
+        run: |
+          # Wait for deployment to be ready
+          kubectl rollout status deployment/${{ env.SERVICE_NAME }} -n ${{ steps.values.outputs.namespace }} --timeout=300s
+          
+          # Get deployment status
+          READY=$(kubectl get deployment/${{ env.SERVICE_NAME }} -n ${{ steps.values.outputs.namespace }} -o jsonpath='{.status.readyReplicas}')
+          DESIRED=$(kubectl get deployment/${{ env.SERVICE_NAME }} -n ${{ steps.values.outputs.namespace }} -o jsonpath='{.spec.replicas}')
+          
+          if [ "$READY" -eq "$DESIRED" ]; then
+            echo "Deployment successful: $READY/$DESIRED pods ready"
+            echo "status=success" >> $GITHUB_OUTPUT
+          else
+            echo "Deployment failed: $READY/$DESIRED pods ready"
+            echo "status=failure" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+      
+      - name: Perform Health Checks
+        if: steps.verify.outputs.status == 'success'
+        run: |
+          # Get service endpoint
+          SERVICE_IP=$(kubectl get svc ${{ env.SERVICE_NAME }} -n ${{ steps.values.outputs.namespace }} -o jsonpath='{.spec.clusterIP}')
+          
+          # Check liveness endpoint
+          echo "Checking liveness endpoint..."
+          kubectl run curl-health-check --image=curlimages/curl:7.88.1 -n ${{ steps.values.outputs.namespace }} --rm --restart=Never -i --timeout=120s -- 
+            curl -s -o /dev/null -w "%{http_code}" http://${SERVICE_IP}:8081/actuator/health/liveness | grep 200
+          
+          # Check readiness endpoint
+          echo "Checking readiness endpoint..."
+          kubectl run curl-health-check --image=curlimages/curl:7.88.1 -n ${{ steps.values.outputs.namespace }} --rm --restart=Never -i --timeout=120s -- 
+            curl -s -o /dev/null -w "%{http_code}" http://${SERVICE_IP}:8081/actuator/health/readiness | grep 200
+          
+          # Check database connection
+          echo "Checking database connection..."
+          kubectl run curl-health-check --image=curlimages/curl:7.88.1 -n ${{ steps.values.outputs.namespace }} --rm --restart=Never -i --timeout=120s -- 
+            curl -s http://${SERVICE_IP}:8081/actuator/health/db | grep -q '"status":"UP"'
+          
+          # Check RabbitMQ connection
+          echo "Checking RabbitMQ connection..."
+          kubectl run curl-health-check --image=curlimages/curl:7.88.1 -n ${{ steps.values.outputs.namespace }} --rm --restart=Never -i --timeout=120s -- 
+            curl -s http://${SERVICE_IP}:8081/actuator/health/rabbit | grep -q '"status":"UP"'
+          
+          # Check Redis connection
+          echo "Checking Redis connection..."
+          kubectl run curl-health-check --image=curlimages/curl:7.88.1 -n ${{ steps.values.outputs.namespace }} --rm --restart=Never -i --timeout=120s -- 
+            curl -s http://${SERVICE_IP}:8081/actuator/health/redis | grep -q '"status":"UP"'
+          
+          echo "All health checks passed!"
+      
+      - name: Verify Database Migrations
+        if: steps.verify.outputs.status == 'success'
+        run: |
+          # Check if Flyway migrations were successful
+          echo "Checking Flyway migration status..."
+          
+          # Get pod name
+          POD_NAME=$(kubectl get pods -n ${{ steps.values.outputs.namespace }} -l app.kubernetes.io/name=${{ env.SERVICE_NAME }} -o jsonpath='{.items[0].metadata.name}')
+          
+          # Check migration status through actuator endpoint
+          kubectl exec $POD_NAME -n ${{ steps.values.outputs.namespace }} -- curl -s http://localhost:8081/actuator/flyway | grep -q '"success":true'
+          
+          echo "Database migrations verified successfully!"
+      
+      - name: Rollback on Failure
+        if: failure() && steps.deploy.outputs.release != ''
+        run: |
+          echo "Deployment failed, rolling back..."
+          helm rollback ${{ steps.deploy.outputs.release }} -n ${{ steps.deploy.outputs.namespace }}
+          echo "Rolled back to previous release"
+      
+      - name: Deployment Summary
+        run: |
+          echo "Deployment Status: ${{ steps.verify.outputs.status == 'success' && 'SUCCESS' || 'FAILED' }}"
+          echo "Environment: ${{ needs.prepare.outputs.environment }}"
+          echo "Version: ${{ needs.prepare.outputs.version }}"
+          echo "Namespace: ${{ steps.values.outputs.namespace }}"
+          
+          # Get deployment details
+          kubectl get deployment/${{ env.SERVICE_NAME }} -n ${{ steps.values.outputs.namespace }} -o wide
+          
+          # Get pods
+          kubectl get pods -n ${{ steps.values.outputs.namespace }} -l app.kubernetes.io/name=${{ env.SERVICE_NAME }} -o wide
+
+  # Notify about deployment status
+  notify:
+    name: Send Notifications
+    needs: [prepare, deploy]
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+      - name: Determine Status
+        id: status
+        run: |
+          if [ "${{ needs.deploy.result }}" == "success" ]; then
+            echo "status=success" >> $GITHUB_OUTPUT
+            echo "message=✅ Data Service deployed successfully to ${{ needs.prepare.outputs.environment }}" >> $GITHUB_OUTPUT
+          else
+            echo "status=failure" >> $GITHUB_OUTPUT
+            echo "message=❌ Data Service deployment to ${{ needs.prepare.outputs.environment }} failed" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Send Slack Notification
+        uses: slackapi/slack-github-action@v1.24.0
+        with:
+          payload: |
+            {
+              "text": "${{ steps.status.outputs.message }}",
+              "blocks": [
+                {
+                  "type": "header",
+                  "text": {
+                    "type": "plain_text",
+                    "text": "${{ steps.status.outputs.message }}"
+                  }
+                },
+                {
+                  "type": "section",
+                  "fields": [
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Environment:* ${{ needs.prepare.outputs.environment }}"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Version:* ${{ needs.prepare.outputs.version }}"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Status:* ${{ steps.status.outputs.status == 'success' && 'Success ✅' || 'Failed ❌' }}"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Deployed by:* ${{ github.actor }}"
+                    }
+                  ]
+                },
+                {
+                  "type": "actions",
+                  "elements": [
+                    {
+                      "type": "button",
+                      "text": {
+                        "type": "plain_text",
+                        "text": "View Workflow"
+                      },
+                      "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                    }
+                  ]
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+      
+      - name: Update Datadog Deployment Marker
+        if: steps.status.outputs.status == 'success'
+        run: |
+          # Send deployment marker to Datadog
+          curl -X POST "https://api.datadoghq.com/api/v1/events" 
+            -H "Content-Type: application/json" 
+            -H "DD-API-KEY: ${{ secrets.DATADOG_API_KEY }}" 
+            -d @- << EOF
+          {
+            "title": "Deployment: Data Service to ${{ needs.prepare.outputs.environment }}",
+            "text": "Version ${{ needs.prepare.outputs.version }} deployed to ${{ needs.prepare.outputs.environment }}",
+            "tags": ["service:data-service", "environment:${{ needs.prepare.outputs.environment }}", "version:${{ needs.prepare.outputs.version }}"],
+            "alert_type": "info",
+            "source_type_name": "deployment"
+          }
+          EOF
