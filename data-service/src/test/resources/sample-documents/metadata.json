@@ -1,0 +1,420 @@
+{
+  "version": "1.0",
+  "description": "Metadata for sample documents used in testing the MCA Application Processing System",
+  "last_updated": "2025-05-22",
+  "documents": [
+    {
+      "id": "app_form_001",
+      "path": "application_forms/mca_application_standard.pdf",
+      "type": "application_form",
+      "subtype": "mca_application",
+      "format": "pdf",
+      "quality": "high",
+      "content_type": "typed",
+      "expected_classification": {
+        "type": "application_form",
+        "confidence": 0.98
+      },
+      "expected_extraction": {
+        "confidence": 0.99,
+        "fields": {
+          "business_name": "Acme Retail Solutions LLC",
+          "dba_name": "Acme Retail",
+          "business_address": "123 Commerce St, Portland, OR 97205",
+          "business_phone": "503-555-1234",
+          "business_email": "info@acmeretail.com",
+          "business_website": "www.acmeretail.com",
+          "business_type": "LLC",
+          "industry": "Retail",
+          "time_in_business": "5 years",
+          "ein": "12-3456789",
+          "monthly_revenue": "45000",
+          "monthly_card_sales": "32000",
+          "requested_amount": "75000",
+          "purpose_of_funds": "Inventory expansion",
+          "owner_first_name": "John",
+          "owner_last_name": "Smith",
+          "owner_address": "456 Residential Ave, Portland, OR 97215",
+          "owner_phone": "503-555-5678",
+          "owner_email": "john@acmeretail.com",
+          "owner_ssn_last4": "1234",
+          "owner_dob": "1975-06-15",
+          "owner_credit_score": "720",
+          "signature": true,
+          "signature_date": "2025-05-01"
+        }
+      }
+    },
+    {
+      "id": "app_form_002",
+      "path": "application_forms/mca_application_handwritten.pdf",
+      "type": "application_form",
+      "subtype": "mca_application",
+      "format": "pdf",
+      "quality": "medium",
+      "content_type": "handwritten",
+      "expected_classification": {
+        "type": "application_form",
+        "confidence": 0.95
+      },
+      "expected_extraction": {
+        "confidence": 0.92,
+        "fields": {
+          "business_name": "City Cafe & Bakery",
+          "dba_name": "City Cafe",
+          "business_address": "789 Main St, Seattle, WA 98101",
+          "business_phone": "206-555-9876",
+          "business_email": "contact@citycafe.com",
+          "business_website": "www.citycafe.com",
+          "business_type": "Sole Proprietorship",
+          "industry": "Food & Beverage",
+          "time_in_business": "3 years",
+          "ein": "98-7654321",
+          "monthly_revenue": "28000",
+          "monthly_card_sales": "22000",
+          "requested_amount": "40000",
+          "purpose_of_funds": "Equipment purchase",
+          "owner_first_name": "Maria",
+          "owner_last_name": "Garcia",
+          "owner_address": "321 Residential Blvd, Seattle, WA 98115",
+          "owner_phone": "206-555-4321",
+          "owner_email": "maria@citycafe.com",
+          "owner_ssn_last4": "5678",
+          "owner_dob": "1982-09-23",
+          "owner_credit_score": "685",
+          "signature": true,
+          "signature_date": "2025-05-05"
+        }
+      }
+    },
+    {
+      "id": "business_doc_001",
+      "path": "business_documents/business_license_acme.pdf",
+      "type": "business_document",
+      "subtype": "business_license",
+      "format": "pdf",
+      "quality": "high",
+      "content_type": "typed",
+      "expected_classification": {
+        "type": "business_document",
+        "subtype": "business_license",
+        "confidence": 0.97
+      },
+      "expected_extraction": {
+        "confidence": 0.98,
+        "fields": {
+          "business_name": "Acme Retail Solutions LLC",
+          "license_number": "BL-12345-OR",
+          "license_type": "Retail Business License",
+          "issue_date": "2020-06-01",
+          "expiration_date": "2025-05-31",
+          "issuing_authority": "City of Portland",
+          "business_address": "123 Commerce St, Portland, OR 97205",
+          "business_type": "Limited Liability Company",
+          "owner_name": "John Smith"
+        }
+      }
+    },
+    {
+      "id": "business_doc_002",
+      "path": "business_documents/incorporation_certificate_acme.pdf",
+      "type": "business_document",
+      "subtype": "incorporation_certificate",
+      "format": "pdf",
+      "quality": "high",
+      "content_type": "typed",
+      "expected_classification": {
+        "type": "business_document",
+        "subtype": "incorporation_certificate",
+        "confidence": 0.99
+      },
+      "expected_extraction": {
+        "confidence": 0.99,
+        "fields": {
+          "business_name": "Acme Retail Solutions LLC",
+          "entity_number": "LLC-987654",
+          "incorporation_date": "2020-01-15",
+          "state_of_incorporation": "Oregon",
+          "registered_agent": "Legal Services Inc.",
+          "registered_address": "789 Legal Ave, Portland, OR 97204",
+          "business_purpose": "Retail sales of consumer goods",
+          "owner_names": ["John Smith", "Sarah Johnson"],
+          "filing_number": "OR20200115-LLC-987654"
+        }
+      }
+    },
+    {
+      "id": "business_doc_003",
+      "path": "business_documents/tax_return_business_acme.pdf",
+      "type": "business_document",
+      "subtype": "tax_return",
+      "format": "pdf",
+      "quality": "high",
+      "content_type": "typed",
+      "expected_classification": {
+        "type": "business_document",
+        "subtype": "tax_return",
+        "confidence": 0.96
+      },
+      "expected_extraction": {
+        "confidence": 0.97,
+        "fields": {
+          "business_name": "Acme Retail Solutions LLC",
+          "ein": "12-3456789",
+          "tax_year": "2024",
+          "filing_type": "1065",
+          "gross_receipts": "540000",
+          "total_income": "540000",
+          "total_deductions": "425000",
+          "ordinary_business_income": "115000",
+          "filing_date": "2025-03-15",
+          "preparer_name": "Michael Johnson, CPA",
+          "preparer_ptin": "P12345678"
+        }
+      }
+    },
+    {
+      "id": "financial_doc_001",
+      "path": "financial_documents/bank_statement_acme_april.pdf",
+      "type": "financial_document",
+      "subtype": "bank_statement",
+      "format": "pdf",
+      "quality": "high",
+      "content_type": "typed",
+      "expected_classification": {
+        "type": "financial_document",
+        "subtype": "bank_statement",
+        "confidence": 0.99
+      },
+      "expected_extraction": {
+        "confidence": 0.98,
+        "fields": {
+          "business_name": "Acme Retail Solutions LLC",
+          "account_number_last4": "5678",
+          "statement_period": "April 1-30, 2025",
+          "beginning_balance": "42567.89",
+          "ending_balance": "48932.45",
+          "total_deposits": "65432.10",
+          "total_withdrawals": "59067.54",
+          "bank_name": "First National Bank",
+          "average_daily_balance": "45750.22",
+          "num_deposits": "28",
+          "num_withdrawals": "42",
+          "largest_deposit": "12500.00",
+          "largest_withdrawal": "8750.00"
+        }
+      }
+    },
+    {
+      "id": "financial_doc_002",
+      "path": "financial_documents/bank_statement_acme_march.pdf",
+      "type": "financial_document",
+      "subtype": "bank_statement",
+      "format": "pdf",
+      "quality": "high",
+      "content_type": "typed",
+      "expected_classification": {
+        "type": "financial_document",
+        "subtype": "bank_statement",
+        "confidence": 0.99
+      },
+      "expected_extraction": {
+        "confidence": 0.98,
+        "fields": {
+          "business_name": "Acme Retail Solutions LLC",
+          "account_number_last4": "5678",
+          "statement_period": "March 1-31, 2025",
+          "beginning_balance": "38921.34",
+          "ending_balance": "42567.89",
+          "total_deposits": "62345.67",
+          "total_withdrawals": "58699.12",
+          "bank_name": "First National Bank",
+          "average_daily_balance": "40744.62",
+          "num_deposits": "25",
+          "num_withdrawals": "38",
+          "largest_deposit": "11750.00",
+          "largest_withdrawal": "9250.00"
+        }
+      }
+    },
+    {
+      "id": "financial_doc_003",
+      "path": "financial_documents/credit_card_statement_acme_april.pdf",
+      "type": "financial_document",
+      "subtype": "credit_card_statement",
+      "format": "pdf",
+      "quality": "high",
+      "content_type": "typed",
+      "expected_classification": {
+        "type": "financial_document",
+        "subtype": "credit_card_statement",
+        "confidence": 0.97
+      },
+      "expected_extraction": {
+        "confidence": 0.96,
+        "fields": {
+          "business_name": "Acme Retail Solutions LLC",
+          "card_number_last4": "1234",
+          "statement_period": "April 1-30, 2025",
+          "total_sales": "32456.78",
+          "total_transactions": "487",
+          "average_transaction": "66.65",
+          "processor_name": "Global Payments",
+          "merchant_id": "MID12345678",
+          "processing_fees": "876.34",
+          "net_deposits": "31580.44"
+        }
+      }
+    },
+    {
+      "id": "financial_doc_004",
+      "path": "financial_documents/credit_card_statement_acme_march.pdf",
+      "type": "financial_document",
+      "subtype": "credit_card_statement",
+      "format": "pdf",
+      "quality": "high",
+      "content_type": "typed",
+      "expected_classification": {
+        "type": "financial_document",
+        "subtype": "credit_card_statement",
+        "confidence": 0.97
+      },
+      "expected_extraction": {
+        "confidence": 0.96,
+        "fields": {
+          "business_name": "Acme Retail Solutions LLC",
+          "card_number_last4": "1234",
+          "statement_period": "March 1-31, 2025",
+          "total_sales": "30123.45",
+          "total_transactions": "452",
+          "average_transaction": "66.64",
+          "processor_name": "Global Payments",
+          "merchant_id": "MID12345678",
+          "processing_fees": "813.33",
+          "net_deposits": "29310.12"
+        }
+      }
+    },
+    {
+      "id": "financial_doc_005",
+      "path": "financial_documents/profit_loss_acme_q1.pdf",
+      "type": "financial_document",
+      "subtype": "profit_loss_statement",
+      "format": "pdf",
+      "quality": "high",
+      "content_type": "typed",
+      "expected_classification": {
+        "type": "financial_document",
+        "subtype": "profit_loss_statement",
+        "confidence": 0.98
+      },
+      "expected_extraction": {
+        "confidence": 0.97,
+        "fields": {
+          "business_name": "Acme Retail Solutions LLC",
+          "period": "Q1 2025",
+          "total_revenue": "135000.00",
+          "cost_of_goods_sold": "67500.00",
+          "gross_profit": "67500.00",
+          "operating_expenses": "45000.00",
+          "net_income": "22500.00",
+          "gross_margin": "50.00",
+          "net_margin": "16.67",
+          "prepared_by": "Michael Johnson, CPA",
+          "preparation_date": "2025-04-15"
+        }
+      }
+    },
+    {
+      "id": "identity_doc_001",
+      "path": "identity_documents/drivers_license_smith.jpg",
+      "type": "identity_document",
+      "subtype": "drivers_license",
+      "format": "jpg",
+      "quality": "high",
+      "content_type": "mixed",
+      "expected_classification": {
+        "type": "identity_document",
+        "subtype": "drivers_license",
+        "confidence": 0.99
+      },
+      "expected_extraction": {
+        "confidence": 0.97,
+        "fields": {
+          "document_type": "Driver's License",
+          "issuing_state": "Oregon",
+          "license_number": "1234567",
+          "full_name": "John A Smith",
+          "address": "456 Residential Ave, Portland, OR 97215",
+          "dob": "1975-06-15",
+          "issue_date": "2022-05-10",
+          "expiration_date": "2030-06-15",
+          "gender": "M",
+          "height": "5-11",
+          "eye_color": "BRN",
+          "restrictions": "NONE"
+        }
+      }
+    },
+    {
+      "id": "identity_doc_002",
+      "path": "identity_documents/passport_smith.jpg",
+      "type": "identity_document",
+      "subtype": "passport",
+      "format": "jpg",
+      "quality": "high",
+      "content_type": "mixed",
+      "expected_classification": {
+        "type": "identity_document",
+        "subtype": "passport",
+        "confidence": 0.98
+      },
+      "expected_extraction": {
+        "confidence": 0.96,
+        "fields": {
+          "document_type": "Passport",
+          "issuing_country": "United States of America",
+          "passport_number": "123456789",
+          "full_name": "John Andrew Smith",
+          "nationality": "United States of America",
+          "dob": "1975-06-15",
+          "gender": "M",
+          "issue_date": "2020-08-15",
+          "expiration_date": "2030-08-14",
+          "place_of_birth": "Portland, OR USA"
+        }
+      }
+    },
+    {
+      "id": "identity_doc_003",
+      "path": "identity_documents/drivers_license_garcia.jpg",
+      "type": "identity_document",
+      "subtype": "drivers_license",
+      "format": "jpg",
+      "quality": "medium",
+      "content_type": "mixed",
+      "expected_classification": {
+        "type": "identity_document",
+        "subtype": "drivers_license",
+        "confidence": 0.97
+      },
+      "expected_extraction": {
+        "confidence": 0.95,
+        "fields": {
+          "document_type": "Driver's License",
+          "issuing_state": "Washington",
+          "license_number": "GARCIM123AB",
+          "full_name": "Maria L Garcia",
+          "address": "321 Residential Blvd, Seattle, WA 98115",
+          "dob": "1982-09-23",
+          "issue_date": "2023-10-05",
+          "expiration_date": "2028-09-23",
+          "gender": "F",
+          "height": "5-4",
+          "eye_color": "BRN",
+          "restrictions": "NONE"
+        }
+      }
+    }
+  ]
+}
