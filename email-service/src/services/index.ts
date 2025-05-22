@@ -1,21 +1,22 @@
 /**
  * Email Service - Services Barrel File
  * 
- * This file serves as the central entry point for all service implementations
- * in the Email Service. It re-exports all service modules to provide a unified
- * API surface, simplifying imports throughout the application and enabling
- * tree-shaking for optimized builds.
+ * This file serves as the central export point for all service implementations
+ * in the Email Service. It provides a unified API surface for importing services
+ * throughout the application while enabling tree-shaking for optimized builds.
  */
 
-// Core email monitoring service
+// Core email monitoring functionality
 export * from './email-monitor.service';
 
-// Email attachment processing
+// Attachment processing functionality
 export * from './attachment-processor.service';
 
-// Security scanning
+// Virus scanning functionality
 export * from './virus-scanner.service';
 
-// Storage and messaging services
+// Storage functionality for email attachments
 export * from './storage.service';
+
+// Message queue functionality for service communication
 export * from './message-queue.service';
