@@ -1,4 +1,4 @@
-# Python cache files and bytecode
+# Python bytecode and cache files
 __pycache__/
 *.py[cod]
 *$py.class
@@ -17,12 +17,21 @@ env/
 .venv/
 ENV/
 
+# Unit test / coverage reports
+.coverage
+.coverage.*
+.pytest_cache/
+htmlcov/
+.tox/
+nosetests.xml
+coverage.xml
+*.cover
+
 # Environment variables and local configuration
 .env
 *.env
 *.local
-.env.*
-config.local.py
+.local
 
 # IDE specific files
 .idea/
@@ -31,78 +40,67 @@ config.local.py
 *.swo
 .DS_Store
 
-# Test and coverage reports
-.coverage
-.coverage.*
-htmlcov/
-.pytest_cache/
-.tox/
-nosetests.xml
-coverage.xml
-*.cover
-
 # TensorFlow model files and checkpoints
 *.h5
 *.pb
 *.ckpt
 *.ckpt.*
 checkpoint
-model_weights/
+model_checkpoints/
 saved_models/
 
-# Large data files
+# Large data files and datasets
+*.csv
+*.json
+*.xlsx
+*.xls
+*.parquet
+*.feather
+*.pickle
+*.pkl
 *.npy
 *.npz
-*.pkl
-*.joblib
+data/
+datasets/
 
-# Log files
+# Exclude large model files from version control
+models/*.h5
+models/*.pb
+models/*.ckpt*
+models/saved_model/
+
+# Logs and temporary files
 logs/
 *.log
-
-# Temporary files
+*.tmp
 tmp/
 temp/
 
-# S3 credentials and configuration
-.aws/
-credentials
-
-# RabbitMQ certificates
-*.pem
-*.crt
-*.key
-
-# Generated documentation
-docs/_build/
-site/
-
-# Jupyter Notebooks
-.ipynb_checkpoints/
-*.ipynb
-
-# Profiling data
-*.prof
-*.lprof
-
-# Docker related
-.dockerignore
-
-# Ignore GPU-specific cache
+# CUDA and GPU-related files
 .nv/
-.cuda-*
 
-# Ignore any local development scripts
-local_*.py
-dev_*.py
+# Jupyter Notebook
+.ipynb_checkpoints
 
-# Ignore large test data files but keep directory structure
-# Tests should download these files as needed or use smaller samples
-tests/test_data/**/*.jpg
-tests/test_data/**/*.png
-tests/test_data/**/*.pdf
-tests/test_data/**/*.tiff
-tests/test_data/**/*.tif
-# Keep metadata files
-!tests/test_data/**/metadata.json
-!tests/test_data/**/*.md
+# Documentation build
+docs/_build/
+
+# Sensitive configuration
+config/secrets.yaml
+config/credentials.json
+config/*.key
+
+# Ignore all local configuration files except example ones
+config/*.yaml
+!config/*.example.yaml
+
+# Ignore profiling data
+profile_results/
+*.prof
+
+# Ignore generated test data
+tests/test_data/generated/
+
+# Ignore OCR output files in development
+ocr_output/
+extracted_data/
