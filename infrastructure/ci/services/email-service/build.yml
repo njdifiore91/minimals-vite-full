@@ -1,0 +1,221 @@
+# Email Service Build Pipeline
+# This workflow builds, tests, and publishes the Email Service container image
+# It includes dependency installation, code quality checks, unit testing, TypeScript compilation,
+# Docker image creation, security scanning, and image publishing to the container registry.
+#
+# The Email Service is a Node.js microservice that monitors submissions inbox using IMAP protocol
+# and processes incoming emails with attachments. It's built with TypeScript and uses Nodemailer
+# for email operations.
+#
+# Key features of this build pipeline:
+# - Uses Node.js v22.x LTS as specified in the technical requirements
+# - Implements standardized build processes with npm scripts
+# - Enforces code quality through ESLint and TypeScript type checking
+# - Creates optimized container images using multi-stage Docker builds
+# - Scans container images for vulnerabilities using Trivy
+# - Supports matrix builds for testing across different Node.js versions
+
+name: Email Service Build
+
+on:
+  push:
+    branches: [main, development]
+    paths:
+      - 'email-service/**'
+      - 'infrastructure/ci/services/email-service/**'
+  pull_request:
+    branches: [main, development]
+    paths:
+      - 'email-service/**'
+      - 'infrastructure/ci/services/email-service/**'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to build for'
+        required: true
+        default: 'development'
+        type: choice
+        options:
+          - development
+          - staging
+          - production
+
+env:
+  SERVICE_NAME: email-service
+  DOCKER_REGISTRY: ${{ secrets.DOCKER_REGISTRY }}
+  NODE_VERSION: 22.x
+
+jobs:
+  # Build job: Installs dependencies, runs linting, type checking, tests, and builds the TypeScript code
+  # This job ensures code quality and correctness before proceeding to container creation
+  build:
+    name: Build and Test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # Matrix strategy allows testing across multiple Node.js versions if needed
+        # Currently using Node.js v22.x LTS as specified in technical requirements
+        node-version: [22.x]
+      fail-fast: true
+
+    steps:
+      # Checkout the repository with full history for proper versioning
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Set up Node.js environment with caching for faster builds
+      - name: Set up Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+          cache-dependency-path: 'email-service/package-lock.json'
+
+      # Install dependencies using clean install to ensure reproducible builds
+      - name: Install dependencies
+        working-directory: email-service
+        run: npm ci
+
+      # Run ESLint to enforce code quality standards
+      - name: Lint code
+        working-directory: email-service
+        run: npm run lint
+        
+      # Run TypeScript compiler in type-check mode to verify type safety
+      - name: Type check
+        working-directory: email-service
+        run: npm run type-check
+
+      # Run Jest tests with coverage reporting
+      - name: Run unit tests
+        working-directory: email-service
+        run: npm run test:coverage
+
+      # Upload test coverage reports as artifacts for later analysis
+      - name: Upload test coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: email-service/coverage
+          retention-days: 7
+
+      # Build TypeScript code into JavaScript for production
+      - name: Build TypeScript
+        working-directory: email-service
+        run: npm run build
+
+  # Docker job: Builds the container image, scans it for vulnerabilities, and publishes it to the registry
+  # This job creates a production-ready container image using multi-stage builds to minimize size
+  # It also performs security scanning with Trivy to detect vulnerabilities before deployment
+  docker:
+    name: Build and Publish Docker Image
+    needs: build
+    runs-on: ubuntu-latest
+    # Only run on pushes to main/development branches, not on pull requests
+    if: github.event_name != 'pull_request'
+    
+    steps:
+      # Checkout the repository for Docker build context
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Set up Docker Buildx for efficient multi-platform builds
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Authenticate with the container registry
+      - name: Login to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.DOCKER_REGISTRY }}
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      # Extract metadata for Docker image tagging
+      # This creates tags based on branch name, PR number, and commit SHA
+      - name: Extract metadata for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKER_REGISTRY }}/${{ env.SERVICE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,format=short
+
+      # Build Docker image but don't push yet (for vulnerability scanning)
+      - name: Build Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./email-service
+          push: false
+          load: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Scan the built image for security vulnerabilities using Trivy
+      # Fails the build if critical or high severity issues are found
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ steps.meta.outputs.tags }}
+          format: 'table'
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH'
+
+      # Push the Docker image to the registry if vulnerability scan passes
+      - name: Push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./email-service
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Send notification about successful image build and push
+      - name: Notify build completion
+        uses: ./.github/actions/notify
+        with:
+          status: success
+          service: ${{ env.SERVICE_NAME }}
+          message: 'Docker image built and published successfully'
+          webhook-url: ${{ secrets.NOTIFICATION_WEBHOOK }}
+
+  # Notify job: Sends notifications about build status to configured channels
+  # This job runs regardless of whether previous jobs succeeded or failed
+  # It uses the notification templates defined in infrastructure/ci/templates
+  notify:
+    name: Notify Build Status
+    needs: [build, docker]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Check build status
+        id: status
+        run: |
+          if [[ "${{ needs.build.result }}" == "failure" || "${{ needs.docker.result }}" == "failure" ]]; then
+            echo "status=failure" >> $GITHUB_OUTPUT
+          else
+            echo "status=success" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Checkout repository for notification templates
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: infrastructure/ci/templates
+
+      - name: Send notification
+        uses: ./.github/actions/notify
+        with:
+          status: ${{ steps.status.outputs.status }}
+          service: ${{ env.SERVICE_NAME }}
+          message: 'Email Service build ${{ steps.status.outputs.status == "success" && "completed successfully" || "failed" }}'
+          webhook-url: ${{ secrets.NOTIFICATION_WEBHOOK }} 
