@@ -1,0 +1,26 @@
+apiVersion: v2
+name: data-service
+version: 0.1.0
+appVersion: "0.1.0"
+description: Helm chart for the MCA Data Service - a Java/Spring Boot microservice that manages application data and business logic
+type: application
+maintainers:
+  - name: Dollar Funding DevOps Team
+    email: devops@dollarfunding.com
+keywords:
+  - mca
+  - data-service
+  - spring-boot
+  - java
+dependencies:
+  - name: common
+    version: "0.1.0"
+    repository: "file://../common"
+  - name: postgresql
+    version: "~12.1.0"
+    repository: "https://charts.bitnami.com/bitnami"
+    condition: postgresql.enabled
+  - name: redis
+    version: "~17.0.0"
+    repository: "https://charts.bitnami.com/bitnami"
+    condition: redis.enabled
