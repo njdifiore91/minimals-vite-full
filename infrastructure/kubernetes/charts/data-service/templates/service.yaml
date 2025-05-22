@@ -1,0 +1,87 @@
+{{- /*
+Data Service - Kubernetes Service Template
+
+This template defines the Kubernetes Service resource for the Data Service microservice.
+It exposes the Data Service within the cluster, making it accessible to other services
+and the API Gateway. The service provides internal service discovery and load balancing.
+
+Key features:
+- Configurable service type (ClusterIP, NodePort, LoadBalancer)
+- Support for multiple ports (HTTP, management, etc.)
+- Prometheus monitoring integration
+- Session affinity configuration
+- Custom annotations support
+*/}}
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "data-service.fullname" . }}
+  labels:
+    {{- include "data-service.labels" . | nindent 4 }}
+    app.kubernetes.io/component: "api"
+    app.kubernetes.io/part-of: "mca-application-system"
+    {{- if .Values.service.labels }}
+    {{- toYaml .Values.service.labels | nindent 4 }}
+    {{- end }}
+  annotations:
+    # Enable Prometheus metrics scraping for monitoring
+    prometheus.io/scrape: "true"
+    prometheus.io/path: "/actuator/prometheus"
+    prometheus.io/port: "{{ .Values.service.port }}"
+    # Service discovery annotations
+    service.kubernetes.io/description: "Data Service for MCA Application Processing"
+    service.kubernetes.io/service-type: "Spring Boot REST API"
+    {{- if .Values.service.annotations }}
+    {{- toYaml .Values.service.annotations | nindent 4 }}
+    {{- end }}
+spec:
+  # Service type - typically ClusterIP for internal microservices
+  type: {{ .Values.service.type | default "ClusterIP" }}
+  # External traffic policy (if applicable)
+  {{- if and (or (eq .Values.service.type "LoadBalancer") (eq .Values.service.type "NodePort")) .Values.service.externalTrafficPolicy }}
+  externalTrafficPolicy: {{ .Values.service.externalTrafficPolicy }}
+  {{- end }}
+  # Main HTTP port
+  ports:
+    - port: {{ .Values.service.port | default 8080 }}
+      targetPort: http
+      protocol: TCP
+      name: http
+      # Optional nodePort if service type is NodePort
+      {{- if and (eq .Values.service.type "NodePort") .Values.service.nodePort }}
+      nodePort: {{ .Values.service.nodePort }}
+      {{- end }}
+  # Optional additional ports (e.g., management port)
+  {{- with .Values.service.additionalPorts }}
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  # Pod selector - routes traffic to pods with matching labels
+  selector:
+    {{- include "data-service.selectorLabels" . | nindent 4 }}
+  # Session affinity configuration (if needed)
+  {{- with .Values.service.sessionAffinity }}
+  sessionAffinity: {{ . }}
+  {{- end }}
+  {{- with .Values.service.sessionAffinityConfig }}
+  sessionAffinityConfig:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  # IP family policy (if dual-stack is needed)
+  {{- with .Values.service.ipFamilyPolicy }}
+  ipFamilyPolicy: {{ . }}
+  {{- end }}
+  {{- with .Values.service.ipFamilies }}
+  ipFamilies:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  # Load balancer configuration (if applicable)
+  {{- if eq .Values.service.type "LoadBalancer" }}
+  {{- with .Values.service.loadBalancerIP }}
+  loadBalancerIP: {{ . }}
+  {{- end }}
+  {{- with .Values.service.loadBalancerSourceRanges }}
+  loadBalancerSourceRanges:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- end }}
