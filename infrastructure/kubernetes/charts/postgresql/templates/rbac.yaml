@@ -1,0 +1,81 @@
+{{- if .Values.rbac.create -}}
+# Role for PostgreSQL pods
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "postgresql.fullname" . }}
+  labels:
+    {{- include "postgresql.labels" . | nindent 4 }}
+    {{- with .Values.global.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    {{- with .Values.global.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+rules:
+  # Allow PostgreSQL pods to manage pods and execute commands in pods
+  # This is needed for replica management and failover operations
+  - apiGroups: [""] 
+    resources: ["pods", "pods/exec"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  
+  # Allow PostgreSQL pods to access ConfigMaps for configuration
+  # This is needed to read configuration data and update status
+  - apiGroups: [""] 
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch"]
+  
+  # Allow PostgreSQL pods to access Secrets for credentials
+  # This is needed for authentication and secure operations
+  - apiGroups: [""] 
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch"]
+  
+  # Allow PostgreSQL pods to manage endpoints for service discovery
+  # This is needed for primary-replica coordination
+  - apiGroups: [""] 
+    resources: ["endpoints"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  
+  # Allow PostgreSQL pods to manage persistent volume claims
+  # This is needed for storage operations
+  - apiGroups: [""] 
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch"]
+  
+  {{- if .Values.backup.enabled }}
+  # Allow PostgreSQL pods to create and manage jobs for backups
+  # This is needed for backup operations
+  - apiGroups: ["batch"] 
+    resources: ["jobs", "cronjobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  {{- end }}
+---
+# RoleBinding for PostgreSQL pods
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "postgresql.fullname" . }}
+  labels:
+    {{- include "postgresql.labels" . | nindent 4 }}
+    {{- with .Values.global.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    {{- with .Values.global.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "postgresql.fullname" . }}
+subjects:
+- kind: ServiceAccount
+  name: {{ .Values.rbac.serviceAccountName | default (include "postgresql.fullname" .) }}
+  namespace: {{ .Release.Namespace }}
+{{- end }}
