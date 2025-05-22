@@ -1,340 +1,239 @@
-/**
- * Axios Configuration for MCA Application Processing System
- * 
- * This file configures the Axios HTTP client with:
- * - Base configuration (baseURL, timeout, headers)
- * - API endpoints for MCA-specific features
- * - JWT authentication interceptor
- * - Error handling and normalization
- * - Token refresh mechanism
- */
-
 import axios, { AxiosError, AxiosInstance, AxiosRequestConfig, AxiosResponse } from 'axios';
-import { API_CONFIG, AUTH_CONFIG, ENV_CONFIG } from '../global-config';
 
-// =============================================================================
-// Error Handling Types and Utilities
-// =============================================================================
+// Base API URL - should be configured from environment variables in production
+const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
 
-/**
- * Normalized error structure for consistent error handling
- */
+// Token storage keys
+const ACCESS_TOKEN_KEY = 'mca_access_token';
+const REFRESH_TOKEN_KEY = 'mca_refresh_token';
+
+// Token expiration times (in milliseconds)
+const ACCESS_TOKEN_EXPIRY = 60 * 60 * 1000; // 60 minutes
+const REFRESH_TOKEN_EXPIRY = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+// API endpoints
+export const API_ENDPOINTS = {
+  // Authentication endpoints
+  auth: {
+    login: '/api/v1/auth/login',
+    refresh: '/api/v1/auth/refresh',
+    logout: '/api/v1/auth/logout',
+  },
+  // Application endpoints
+  applications: {
+    base: '/api/v1/applications',
+    list: '/api/v1/applications',
+    details: (id: string) => `/api/v1/applications/${id}`,
+    status: (id: string) => `/api/v1/applications/${id}/status`,
+    bulkActions: '/api/v1/applications/bulk',
+  },
+  // Document endpoints
+  documents: {
+    base: '/api/v1/documents',
+    list: '/api/v1/documents',
+    details: (id: string) => `/api/v1/documents/${id}`,
+    download: (id: string) => `/api/v1/documents/${id}/download`,
+  },
+  // Webhook endpoints
+  webhooks: {
+    base: '/api/v1/webhooks',
+    list: '/api/v1/webhooks',
+    create: '/api/v1/webhooks',
+    test: '/api/v1/webhooks/test',
+    logs: '/api/v1/webhooks/logs',
+  },
+};
+
+// Token management functions
+export const getAccessToken = (): string | null => {
+  return sessionStorage.getItem(ACCESS_TOKEN_KEY);
+};
+
+export const getRefreshToken = (): string | null => {
+  return sessionStorage.getItem(REFRESH_TOKEN_KEY);
+};
+
+export const setTokens = (accessToken: string, refreshToken: string): void => {
+  sessionStorage.setItem(ACCESS_TOKEN_KEY, accessToken);
+  sessionStorage.setItem(REFRESH_TOKEN_KEY, refreshToken);
+};
+
+export const clearTokens = (): void => {
+  sessionStorage.removeItem(ACCESS_TOKEN_KEY);
+  sessionStorage.removeItem(REFRESH_TOKEN_KEY);
+};
+
+export const isAuthenticated = (): boolean => {
+  return !!getAccessToken();
+};
+
+// Error normalization function
 export interface NormalizedError {
   status: number;
   message: string;
-  code?: string;
   errors?: Record<string, string[]>;
   originalError?: any;
 }
 
-/**
- * Normalizes different error types into a consistent structure
- */
-const normalizeError = (error: any): NormalizedError => {
-  // Handle Axios response errors
-  if (error.response) {
-    const { status, data } = error.response;
-    return {
-      status,
-      message: data.message || 'An error occurred with the server response',
-      code: data.code,
-      errors: data.errors,
-      originalError: error,
-    };
-  }
+export const normalizeError = (error: AxiosError): NormalizedError => {
+  const status = error.response?.status || 500;
+  const message = 
+    (error.response?.data as any)?.message || 
+    error.message || 
+    'An unexpected error occurred';
   
-  // Handle network errors
-  if (error.request) {
-    return {
-      status: 0,
-      message: 'Network error. Please check your connection.',
-      originalError: error,
-    };
-  }
+  const errors = (error.response?.data as any)?.errors || {};
   
-  // Handle other errors
   return {
-    status: 500,
-    message: error.message || 'An unexpected error occurred',
+    status,
+    message,
+    errors,
     originalError: error,
   };
 };
 
-/**
- * Gets a user-friendly error message
- */
-export const getErrorMessage = (error: NormalizedError): string => {
-  // Return specific field validation errors if available
-  if (error.errors && Object.keys(error.errors).length > 0) {
-    const firstField = Object.keys(error.errors)[0];
-    return error.errors[firstField][0] || error.message;
-  }
-  
-  // Return appropriate message based on status code
-  switch (error.status) {
-    case 400:
-      return error.message || 'Invalid request. Please check your data.';
-    case 401:
-      return 'Authentication required. Please log in again.';
-    case 403:
-      return 'You do not have permission to perform this action.';
-    case 404:
-      return 'The requested resource was not found.';
-    case 422:
-      return error.message || 'Validation error. Please check your data.';
-    case 429:
-      return 'Too many requests. Please try again later.';
-    case 500:
-    case 502:
-    case 503:
-    case 504:
-      return 'Server error. Please try again later.';
-    case 0:
-      return 'Network error. Please check your connection.';
-    default:
-      return error.message || 'An unexpected error occurred.';
-  }
-};
+// Create Axios instance
+const createAxiosInstance = (): AxiosInstance => {
+  const instance = axios.create({
+    baseURL: API_URL,
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+    },
+    timeout: 30000, // 30 seconds timeout
+  });
 
-// =============================================================================
-// Token Management
-// =============================================================================
+  // Flag to prevent multiple refresh token requests
+  let isRefreshing = false;
+  // Queue of failed requests to retry after token refresh
+  let failedRequestsQueue: Array<{
+    resolve: (value: unknown) => void;
+    reject: (reason?: any) => void;
+    config: AxiosRequestConfig;
+  }> = [];
 
-/**
- * JWT token structure
- */
-interface JwtTokens {
-  accessToken: string;
-  refreshToken: string;
-  expiresAt: number; // Timestamp in milliseconds
-}
-
-/**
- * Gets JWT tokens from sessionStorage
- */
-const getTokens = (): JwtTokens | null => {
-  const tokensStr = sessionStorage.getItem('mca_auth_tokens');
-  if (!tokensStr) return null;
-  
-  try {
-    return JSON.parse(tokensStr) as JwtTokens;
-  } catch (error) {
-    console.error('Failed to parse auth tokens:', error);
-    return null;
-  }
-};
-
-/**
- * Saves JWT tokens to sessionStorage
- */
-const saveTokens = (tokens: JwtTokens): void => {
-  sessionStorage.setItem('mca_auth_tokens', JSON.stringify(tokens));
-};
-
-/**
- * Clears JWT tokens from sessionStorage
- */
-const clearTokens = (): void => {
-  sessionStorage.removeItem('mca_auth_tokens');
-};
-
-/**
- * Checks if access token is expired
- */
-const isTokenExpired = (): boolean => {
-  const tokens = getTokens();
-  if (!tokens) return true;
-  
-  // Add a 30-second buffer to handle potential timing issues
-  return Date.now() >= tokens.expiresAt - 30000;
-};
-
-/**
- * Refreshes the access token using the refresh token
- */
-const refreshAccessToken = async (): Promise<boolean> => {
-  const tokens = getTokens();
-  if (!tokens || !tokens.refreshToken) return false;
-  
-  try {
-    // Create a new axios instance to avoid interceptors loop
-    const refreshResponse = await axios.post<{ accessToken: string; expiresAt: number }>(
-      `${API_CONFIG.baseUrl}/auth/refresh`,
-      { refreshToken: tokens.refreshToken }
-    );
-    
-    // Update tokens in storage
-    saveTokens({
-      accessToken: refreshResponse.data.accessToken,
-      refreshToken: tokens.refreshToken, // Keep the same refresh token
-      expiresAt: refreshResponse.data.expiresAt,
+  // Process the queue of failed requests
+  const processQueue = (error: AxiosError | null, token: string | null = null) => {
+    failedRequestsQueue.forEach(request => {
+      if (error) {
+        request.reject(error);
+      } else if (token) {
+        // Retry the request with the new token
+        request.config.headers = {
+          ...request.config.headers,
+          Authorization: `Bearer ${token}`,
+        };
+        request.resolve(instance(request.config));
+      }
     });
     
-    return true;
-  } catch (error) {
-    console.error('Failed to refresh token:', error);
-    // Clear tokens on refresh failure
-    clearTokens();
-    return false;
-  }
-};
+    // Clear the queue
+    failedRequestsQueue = [];
+  };
 
-// =============================================================================
-// Axios Instance Configuration
-// =============================================================================
-
-/**
- * Base Axios configuration
- */
-const axiosConfig: AxiosRequestConfig = {
-  baseURL: ENV_CONFIG.apiBaseUrl,
-  timeout: API_CONFIG.timeout,
-  headers: {
-    'Content-Type': 'application/json',
-    'Accept': 'application/json',
-  },
-};
-
-/**
- * Create Axios instance
- */
-const axiosInstance: AxiosInstance = axios.create(axiosConfig);
-
-// =============================================================================
-// Request Interceptor
-// =============================================================================
-
-axiosInstance.interceptors.request.use(
-  async (config) => {
-    // Only add auth header for API endpoints
-    if (config.url?.startsWith('/api/v1/')) {
-      // Check if token is expired and needs refresh
-      if (isTokenExpired()) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          // Redirect to login if refresh failed
-          window.location.href = '/auth/login';
-          return Promise.reject(new Error('Authentication required'));
-        }
+  // Request interceptor - Add JWT token to requests
+  instance.interceptors.request.use(
+    (config) => {
+      const token = getAccessToken();
+      
+      // Only add token to /api/v1/* endpoints
+      if (token && config.url?.startsWith('/api/v1/')) {
+        config.headers.Authorization = `Bearer ${token}`;
       }
       
-      // Add authorization header with token
-      const tokens = getTokens();
-      if (tokens?.accessToken) {
-        config.headers.Authorization = `Bearer ${tokens.accessToken}`;
-      }
+      return config;
+    },
+    (error) => {
+      return Promise.reject(error);
     }
-    
-    return config;
-  },
-  (error) => {
-    return Promise.reject(error);
-  }
-);
+  );
 
-// =============================================================================
-// Response Interceptor
-// =============================================================================
-
-axiosInstance.interceptors.response.use(
-  (response) => response,
-  async (error: AxiosError) => {
-    const originalRequest = error.config as AxiosRequestConfig & { _retry?: boolean };
-    
-    // Handle 401 Unauthorized error - attempt token refresh
-    if (error.response?.status === 401 && !originalRequest._retry && originalRequest.url !== '/api/v1/auth/refresh') {
-      originalRequest._retry = true;
+  // Response interceptor - Handle token refresh and errors
+  instance.interceptors.response.use(
+    (response) => response,
+    async (error: AxiosError) => {
+      const originalRequest = error.config as AxiosRequestConfig & { _retry?: boolean };
       
-      try {
-        const refreshed = await refreshAccessToken();
-        if (refreshed) {
-          // Retry the original request with new token
-          const tokens = getTokens();
-          if (tokens?.accessToken && originalRequest.headers) {
-            originalRequest.headers.Authorization = `Bearer ${tokens.accessToken}`;
+      // Only handle 401 errors for API endpoints and prevent infinite retry loops
+      if (
+        error.response?.status === 401 && 
+        originalRequest && 
+        !originalRequest._retry &&
+        originalRequest.url?.startsWith('/api/v1/') &&
+        // Don't try to refresh on auth endpoints
+        originalRequest.url !== API_ENDPOINTS.auth.refresh &&
+        originalRequest.url !== API_ENDPOINTS.auth.login
+      ) {
+        // Mark this request as retried to prevent loops
+        originalRequest._retry = true;
+        
+        // If already refreshing, add to queue
+        if (isRefreshing) {
+          return new Promise((resolve, reject) => {
+            failedRequestsQueue.push({ resolve, reject, config: originalRequest });
+          });
+        }
+        
+        isRefreshing = true;
+        
+        try {
+          const refreshToken = getRefreshToken();
+          
+          if (!refreshToken) {
+            // No refresh token available, clear tokens and reject
+            clearTokens();
+            processQueue(error);
+            return Promise.reject(error);
           }
-          return axiosInstance(originalRequest);
+          
+          // Attempt to refresh the token
+          const response = await axios.post(
+            `${API_URL}${API_ENDPOINTS.auth.refresh}`,
+            { refreshToken },
+            { headers: { 'Content-Type': 'application/json' } }
+          );
+          
+          const { accessToken, refreshToken: newRefreshToken } = response.data;
+          
+          // Store the new tokens
+          setTokens(accessToken, newRefreshToken);
+          
+          // Update authorization header for the original request
+          originalRequest.headers = {
+            ...originalRequest.headers,
+            Authorization: `Bearer ${accessToken}`,
+          };
+          
+          // Process the queue with the new token
+          processQueue(null, accessToken);
+          
+          // Retry the original request
+          return instance(originalRequest);
+        } catch (refreshError) {
+          // Token refresh failed, clear tokens and reject all queued requests
+          clearTokens();
+          processQueue(error);
+          return Promise.reject(refreshError);
+        } finally {
+          isRefreshing = false;
         }
-      } catch (refreshError) {
-        console.error('Token refresh failed:', refreshError);
       }
       
-      // Redirect to login if refresh failed
-      clearTokens();
-      window.location.href = '/auth/login';
+      // Handle 403 errors (Forbidden) - usually means the user doesn't have permission
+      if (error.response?.status === 403) {
+        // You might want to redirect to an access denied page or show a notification
+        console.error('Access denied:', error.response.data);
+      }
+      
+      // Normalize the error for consistent handling
+      const normalizedError = normalizeError(error);
+      return Promise.reject(normalizedError);
     }
-    
-    // Handle 403 Forbidden - user doesn't have permission
-    if (error.response?.status === 403) {
-      // No need to clear tokens, just notify the user
-      console.error('Permission denied:', error.response.data);
-    }
-    
-    // Normalize the error for consistent handling
-    const normalizedError = normalizeError(error);
-    return Promise.reject(normalizedError);
-  }
-);
+  );
 
-// =============================================================================
-// API Endpoints
-// =============================================================================
-
-/**
- * MCA Application endpoints
- */
-export const applicationEndpoints = {
-  list: (params?: Record<string, any>) => axiosInstance.get(API_CONFIG.endpoints.applications, { params }),
-  getById: (id: string) => axiosInstance.get(`${API_CONFIG.endpoints.applications}/${id}`),
-  create: (data: any) => axiosInstance.post(API_CONFIG.endpoints.applications, data),
-  update: (id: string, data: any) => axiosInstance.put(`${API_CONFIG.endpoints.applications}/${id}`, data),
-  updateStatus: (id: string, status: string) => 
-    axiosInstance.patch(`${API_CONFIG.endpoints.applications}/${id}/status`, { status }),
-  bulkAction: (ids: string[], action: string) => 
-    axiosInstance.post(`${API_CONFIG.endpoints.applications}/bulk`, { ids, action }),
+  return instance;
 };
 
-/**
- * Document endpoints
- */
-export const documentEndpoints = {
-  list: (applicationId?: string, params?: Record<string, any>) => 
-    axiosInstance.get(API_CONFIG.endpoints.documents, { 
-      params: { ...params, application_id: applicationId } 
-    }),
-  getById: (id: string) => axiosInstance.get(`${API_CONFIG.endpoints.documents}/${id}`),
-  upload: (applicationId: string, file: File, metadata?: any) => {
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('application_id', applicationId);
-    if (metadata) {
-      formData.append('metadata', JSON.stringify(metadata));
-    }
-    return axiosInstance.post(API_CONFIG.endpoints.documents, formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data',
-      },
-    });
-  },
-  download: (id: string) => axiosInstance.get(`${API_CONFIG.endpoints.documents}/${id}/download`, {
-    responseType: 'blob',
-  }),
-};
-
-/**
- * Webhook endpoints
- */
-export const webhookEndpoints = {
-  list: (params?: Record<string, any>) => axiosInstance.get(API_CONFIG.endpoints.webhooks, { params }),
-  getById: (id: string) => axiosInstance.get(`${API_CONFIG.endpoints.webhooks}/${id}`),
-  create: (data: any) => axiosInstance.post(API_CONFIG.endpoints.webhooks, data),
-  update: (id: string, data: any) => axiosInstance.put(`${API_CONFIG.endpoints.webhooks}/${id}`, data),
-  delete: (id: string) => axiosInstance.delete(`${API_CONFIG.endpoints.webhooks}/${id}`),
-  test: (id: string, eventType: string) => 
-    axiosInstance.post(`${API_CONFIG.endpoints.webhooks}/${id}/test`, { eventType }),
-  logs: (id: string, params?: Record<string, any>) => 
-    axiosInstance.get(`${API_CONFIG.endpoints.webhooks}/${id}/logs`, { params }),
-};
-
-// Export the configured axios instance as default
+// Create and export the axios instance
+const axiosInstance = createAxiosInstance();
 export default axiosInstance;
