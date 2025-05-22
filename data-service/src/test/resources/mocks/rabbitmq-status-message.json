@@ -1,0 +1,128 @@
+{
+  "message": {
+    "applicationId": "app-12345-67890",
+    "previousStatus": "in_review",
+    "newStatus": "approved",
+    "reason": "All required documents verified and business criteria met",
+    "timestamp": "2025-05-22T14:30:45.123Z",
+    "userId": "ops-user-789",
+    "userName": "Jane Smith",
+    "userRole": "Operations Staff",
+    "metadata": {
+      "confidenceScore": 0.95,
+      "automationLevel": "full",
+      "processingTimeMs": 4267,
+      "documentCount": 5,
+      "fundingAmount": 25000.00,
+      "termMonths": 12
+    },
+    "statusHistory": [
+      {
+        "status": "pending",
+        "timestamp": "2025-05-22T10:15:30.456Z",
+        "userId": "system",
+        "reason": "Application received via email"
+      },
+      {
+        "status": "in_review",
+        "timestamp": "2025-05-22T12:45:22.789Z",
+        "userId": "ops-user-456",
+        "reason": "Documents classified and data extracted"
+      }
+    ]
+  },
+  "properties": {
+    "contentType": "application/json",
+    "contentEncoding": "utf-8",
+    "deliveryMode": 2,
+    "priority": 1,
+    "correlationId": "corr-id-98765-43210",
+    "replyTo": "amq.direct",
+    "expiration": "60000",
+    "messageId": "msg-id-abcdef-123456",
+    "timestamp": 1716390645123,
+    "userId": "mca-data-service",
+    "appId": "mca-data-service",
+    "clusterId": "mca-cluster-1",
+    "headers": {
+      "x-first-death-exchange": "",
+      "x-first-death-queue": "",
+      "x-first-death-reason": "",
+      "x-death": []
+    }
+  },
+  "routing": {
+    "exchange": "mca.notifications",
+    "routingKey": "application.status.change",
+    "mandatory": true,
+    "immediate": false
+  },
+  "testCases": {
+    "statusTypes": [
+      {
+        "status": "pending",
+        "description": "Initial status when application is first received"
+      },
+      {
+        "status": "in_review",
+        "description": "Application is being reviewed by operations staff"
+      },
+      {
+        "status": "approved",
+        "description": "Application has been approved for funding"
+      },
+      {
+        "status": "rejected",
+        "description": "Application has been rejected due to not meeting criteria"
+      },
+      {
+        "status": "exception",
+        "description": "Application requires manual intervention due to validation errors"
+      },
+      {
+        "status": "completed",
+        "description": "Application processing has been completed"
+      },
+      {
+        "status": "cancelled",
+        "description": "Application was cancelled by the merchant or operations staff"
+      }
+    ],
+    "errorScenarios": [
+      {
+        "scenario": "message_delivery_failure",
+        "mockHeaders": {
+          "x-first-death-exchange": "mca.notifications",
+          "x-first-death-queue": "notification-service",
+          "x-first-death-reason": "rejected",
+          "x-death": [
+            {
+              "count": 1,
+              "reason": "rejected",
+              "queue": "notification-service",
+              "time": "2025-05-22T14:30:46.123Z",
+              "exchange": "mca.notifications",
+              "routing-keys": ["application.status.change"]
+            }
+          ]
+        }
+      },
+      {
+        "scenario": "retry_after_failure",
+        "mockHeaders": {
+          "x-death": [
+            {
+              "count": 3,
+              "reason": "rejected",
+              "queue": "notification-service",
+              "time": "2025-05-22T14:35:46.123Z",
+              "exchange": "mca.notifications",
+              "routing-keys": ["application.status.change"]
+            }
+          ],
+          "x-retry-count": 3
+        }
+      }
+    ]
+  }
+}
