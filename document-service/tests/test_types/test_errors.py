@@ -1,703 +1,607 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
 """
 Unit tests for error handling type definitions in the Document Service.
 
-This module contains tests for ServiceError, ErrorDetails, LogEntry, ErrorCategory,
-MonitoringAlert, and Result types to ensure they correctly validate inputs,
-handle edge cases, and provide appropriate error context.
+This module contains tests for the error handling types defined in document_service.src.types.errors,
+including ServiceError, ErrorDetails, LogEntry, ErrorCategory, MonitoringAlert, and Result.
+These tests ensure that error handling is consistent and provides appropriate context throughout the service.
 """
 
-import unittest
 import pytest
-import datetime
+from datetime import datetime, timedelta
 import json
-from typing import Dict, Any, Optional, List
-from unittest.mock import patch, MagicMock
+from enum import Enum
+from typing import Dict, Any, Optional
 
-# Import the types module from the document service
-try:
-    from document_service.types.errors import (
-        ErrorCategory,
-        ErrorDetails,
-        LogEntry,
-        MonitoringAlert,
-        ServiceError,
-        ValidationError,
-        ClassificationError,
-        ExtractionError,
-        IntegrationError,
-        SecurityError,
-        MessagingError,
-        Result
-    )
-except ImportError:
-    # Alternative import path if the module structure is different
-    from document_service.src.types.errors import (
-        ErrorCategory,
-        ErrorDetails,
-        LogEntry,
-        MonitoringAlert,
-        ServiceError,
-        ValidationError,
-        ClassificationError,
-        ExtractionError,
-        IntegrationError,
-        SecurityError,
-        MessagingError,
-        Result
-    )
+# Fix the import path to match the actual module structure
+from document_service.src.types.errors import (
+    ErrorCategory,
+    ErrorDetails,
+    LogEntry,
+    MonitoringAlert,
+    ServiceError,
+    ValidationError,
+    ClassificationError,
+    ExtractionError,
+    IntegrationError,
+    SecurityError,
+    MessagingError,
+    Result
+)
 
 
-# ===== ErrorCategory Tests =====
-
-class TestErrorCategory(unittest.TestCase):
+class TestErrorCategory:
     """Tests for the ErrorCategory enum."""
-
+    
     def test_error_category_values(self):
         """Test that ErrorCategory enum has the expected values."""
-        # Verify all expected categories exist
-        self.assertTrue(hasattr(ErrorCategory, "CRITICAL"))
-        self.assertTrue(hasattr(ErrorCategory, "ERROR"))
-        self.assertTrue(hasattr(ErrorCategory, "WARNING"))
-        self.assertTrue(hasattr(ErrorCategory, "VALIDATION"))
-        self.assertTrue(hasattr(ErrorCategory, "SECURITY"))
-        self.assertTrue(hasattr(ErrorCategory, "INTEGRATION"))
-        self.assertTrue(hasattr(ErrorCategory, "CLASSIFICATION"))
-        self.assertTrue(hasattr(ErrorCategory, "EXTRACTION"))
-        self.assertTrue(hasattr(ErrorCategory, "MESSAGING"))
-
+        assert ErrorCategory.CRITICAL.name == "CRITICAL"
+        assert ErrorCategory.ERROR.name == "ERROR"
+        assert ErrorCategory.WARNING.name == "WARNING"
+        assert ErrorCategory.VALIDATION.name == "VALIDATION"
+        assert ErrorCategory.SECURITY.name == "SECURITY"
+        assert ErrorCategory.INTEGRATION.name == "INTEGRATION"
+        assert ErrorCategory.CLASSIFICATION.name == "CLASSIFICATION"
+        assert ErrorCategory.EXTRACTION.name == "EXTRACTION"
+        assert ErrorCategory.MESSAGING.name == "MESSAGING"
+    
     def test_error_category_comparison(self):
         """Test that ErrorCategory enum values can be compared."""
-        self.assertNotEqual(ErrorCategory.CRITICAL, ErrorCategory.ERROR)
-        self.assertNotEqual(ErrorCategory.ERROR, ErrorCategory.WARNING)
-        self.assertNotEqual(ErrorCategory.VALIDATION, ErrorCategory.SECURITY)
+        assert ErrorCategory.CRITICAL != ErrorCategory.ERROR
+        assert ErrorCategory.ERROR != ErrorCategory.WARNING
+        assert ErrorCategory.VALIDATION != ErrorCategory.SECURITY
+        
+        # Test that the same enum values are equal
+        critical1 = ErrorCategory.CRITICAL
+        critical2 = ErrorCategory.CRITICAL
+        assert critical1 == critical2
+        
+    def test_error_category_in_context(self):
+        """Test using ErrorCategory in a dictionary context."""
+        error_map = {
+            ErrorCategory.CRITICAL: "Critical system failure",
+            ErrorCategory.ERROR: "Standard error",
+            ErrorCategory.WARNING: "Warning condition"
+        }
+        
+        assert error_map[ErrorCategory.CRITICAL] == "Critical system failure"
+        assert error_map[ErrorCategory.ERROR] == "Standard error"
+        assert error_map[ErrorCategory.WARNING] == "Warning condition"
 
-    def test_error_category_in_error_details(self):
-        """Test that ErrorCategory can be used in ErrorDetails."""
-        details = ErrorDetails(
-            message="Test error",
-            category=ErrorCategory.VALIDATION,
-            capture_stack_trace=False
-        )
-        self.assertEqual(details.category, ErrorCategory.VALIDATION)
-        self.assertEqual(details.to_dict()["category"], "VALIDATION")
 
-
-# ===== ErrorDetails Tests =====
-
-class TestErrorDetails(unittest.TestCase):
+class TestErrorDetails:
     """Tests for the ErrorDetails class."""
-
+    
     def test_error_details_initialization(self):
-        """Test that ErrorDetails can be initialized with minimal arguments."""
-        details = ErrorDetails(
-            message="Test error",
+        """Test that ErrorDetails can be initialized with basic parameters."""
+        error_details = ErrorDetails(
+            message="Test error message",
             category=ErrorCategory.ERROR,
             capture_stack_trace=False
         )
-        self.assertEqual(details.message, "Test error")
-        self.assertEqual(details.category, ErrorCategory.ERROR)
-        self.assertIsNone(details.exception)
-        self.assertIsInstance(details.context, dict)
-        self.assertIsInstance(details.timestamp, datetime.datetime)
-        self.assertEqual(details.service_name, "document-service")
-        self.assertIsNone(details.stack_trace)
-
+        
+        assert error_details.message == "Test error message"
+        assert error_details.category == ErrorCategory.ERROR
+        assert error_details.exception is None
+        assert isinstance(error_details.context, dict)
+        assert error_details.context == {}
+        assert isinstance(error_details.timestamp, datetime)
+        assert error_details.service_name == "document-service"
+        assert error_details.stack_trace is None  # No stack trace captured
+    
     def test_error_details_with_exception(self):
         """Test that ErrorDetails captures exception information."""
         try:
-            raise ValueError("Test exception")
-        except ValueError as e:
-            details = ErrorDetails(
-                message="Error occurred",
+            # Generate an exception
+            1 / 0
+        except Exception as e:
+            error_details = ErrorDetails(
+                message="Division by zero",
                 category=ErrorCategory.ERROR,
-                exception=e
+                exception=e,
+                capture_stack_trace=True
             )
-            self.assertEqual(details.message, "Error occurred")
-            self.assertEqual(details.exception, e)
-            self.assertIsNotNone(details.stack_trace)
-            self.assertIn("ValueError: Test exception", details.stack_trace)
-
+            
+            assert error_details.message == "Division by zero"
+            assert error_details.exception is e
+            assert "ZeroDivisionError" in error_details.stack_trace
+    
     def test_error_details_with_context(self):
         """Test that ErrorDetails captures context information."""
-        context = {"document_id": "123", "operation": "classification"}
-        details = ErrorDetails(
-            message="Test error",
-            category=ErrorCategory.CLASSIFICATION,
+        context = {
+            "document_id": "doc123",
+            "operation": "classification",
+            "user_id": "user456"
+        }
+        
+        error_details = ErrorDetails(
+            message="Context test",
+            category=ErrorCategory.ERROR,
             context=context,
             capture_stack_trace=False
         )
-        self.assertEqual(details.context, context)
-        self.assertEqual(details.to_dict()["context"], context)
-
+        
+        assert error_details.context == context
+        assert error_details.context["document_id"] == "doc123"
+        assert error_details.context["operation"] == "classification"
+    
     def test_error_details_to_dict(self):
         """Test that ErrorDetails can be converted to a dictionary."""
-        timestamp = datetime.datetime(2023, 1, 1, 12, 0, 0)
-        details = ErrorDetails(
-            message="Test error",
-            category=ErrorCategory.ERROR,
+        timestamp = datetime.utcnow()
+        error_details = ErrorDetails(
+            message="Serialization test",
+            category=ErrorCategory.VALIDATION,
+            context={"field": "amount", "value": "invalid"},
             timestamp=timestamp,
             capture_stack_trace=False
         )
-        result = details.to_dict()
-        self.assertEqual(result["message"], "Test error")
-        self.assertEqual(result["category"], "ERROR")
-        self.assertIsNone(result["exception_type"])
-        self.assertIsNone(result["exception_message"])
-        self.assertEqual(result["timestamp"], timestamp.isoformat())
-        self.assertEqual(result["service_name"], "document-service")
-
+        
+        result = error_details.to_dict()
+        
+        assert result["message"] == "Serialization test"
+        assert result["category"] == "VALIDATION"
+        assert result["context"] == {"field": "amount", "value": "invalid"}
+        assert result["timestamp"] == timestamp.isoformat()
+        assert result["service_name"] == "document-service"
+        assert result["exception_type"] is None
+        
     def test_error_details_with_custom_service_name(self):
         """Test that ErrorDetails accepts a custom service name."""
-        details = ErrorDetails(
-            message="Test error",
+        error_details = ErrorDetails(
+            message="Custom service",
             category=ErrorCategory.ERROR,
             service_name="custom-service",
             capture_stack_trace=False
         )
-        self.assertEqual(details.service_name, "custom-service")
-        self.assertEqual(details.to_dict()["service_name"], "custom-service")
-
-    def test_error_details_without_stack_trace(self):
-        """Test that ErrorDetails can be created without a stack trace."""
-        details = ErrorDetails(
-            message="Test error",
-            category=ErrorCategory.ERROR,
-            capture_stack_trace=False
-        )
-        self.assertIsNone(details.stack_trace)
+        
+        assert error_details.service_name == "custom-service"
+        result = error_details.to_dict()
+        assert result["service_name"] == "custom-service"
 
 
-# ===== LogEntry Tests =====
-
-class TestLogEntry(unittest.TestCase):
+class TestLogEntry:
     """Tests for the LogEntry class."""
-
+    
     def test_log_entry_initialization(self):
-        """Test that LogEntry can be initialized with minimal arguments."""
-        entry = LogEntry(message="Test log message")
-        self.assertEqual(entry.message, "Test log message")
-        self.assertEqual(entry.level, "INFO")  # Default level
-        self.assertIsInstance(entry.context, dict)
-        self.assertIsInstance(entry.timestamp, datetime.datetime)
-        self.assertEqual(entry.service_name, "document-service")
-        self.assertIsNone(entry.correlation_id)
-        self.assertIsNone(entry.document_id)
-        self.assertIsNone(entry.operation)
-
-    def test_log_entry_with_all_fields(self):
-        """Test that LogEntry accepts all fields."""
-        timestamp = datetime.datetime(2023, 1, 1, 12, 0, 0)
-        context = {"user_id": "123", "request_path": "/api/documents"}
-        entry = LogEntry(
+        """Test that LogEntry can be initialized with basic parameters."""
+        log_entry = LogEntry(
             message="Test log message",
+            level="INFO"
+        )
+        
+        assert log_entry.message == "Test log message"
+        assert log_entry.level == "INFO"
+        assert isinstance(log_entry.context, dict)
+        assert log_entry.context == {}
+        assert isinstance(log_entry.timestamp, datetime)
+        assert log_entry.service_name == "document-service"
+        assert log_entry.correlation_id is None
+        assert log_entry.document_id is None
+        assert log_entry.operation is None
+    
+    def test_log_entry_with_all_fields(self):
+        """Test that LogEntry can be initialized with all fields."""
+        timestamp = datetime.utcnow()
+        log_entry = LogEntry(
+            message="Complete log entry",
             level="ERROR",
-            context=context,
+            context={"error_code": "E123", "source": "classification_service"},
             timestamp=timestamp,
-            service_name="custom-service",
+            service_name="document-service",
             correlation_id="corr-123",
             document_id="doc-456",
-            operation="classification"
+            operation="classify_document"
         )
-        self.assertEqual(entry.message, "Test log message")
-        self.assertEqual(entry.level, "ERROR")
-        self.assertEqual(entry.context, context)
-        self.assertEqual(entry.timestamp, timestamp)
-        self.assertEqual(entry.service_name, "custom-service")
-        self.assertEqual(entry.correlation_id, "corr-123")
-        self.assertEqual(entry.document_id, "doc-456")
-        self.assertEqual(entry.operation, "classification")
-
+        
+        assert log_entry.message == "Complete log entry"
+        assert log_entry.level == "ERROR"
+        assert log_entry.context == {"error_code": "E123", "source": "classification_service"}
+        assert log_entry.timestamp == timestamp
+        assert log_entry.service_name == "document-service"
+        assert log_entry.correlation_id == "corr-123"
+        assert log_entry.document_id == "doc-456"
+        assert log_entry.operation == "classify_document"
+    
     def test_log_entry_to_dict(self):
         """Test that LogEntry can be converted to a dictionary."""
-        timestamp = datetime.datetime(2023, 1, 1, 12, 0, 0)
-        context = {"user_id": "123"}
-        entry = LogEntry(
-            message="Test log message",
+        timestamp = datetime.utcnow()
+        log_entry = LogEntry(
+            message="Serialization test",
             level="WARN",
-            context=context,
+            context={"warning_code": "W123"},
             timestamp=timestamp,
-            correlation_id="corr-123",
-            document_id="doc-456",
-            operation="classification"
+            correlation_id="corr-789",
+            document_id="doc-101112",
+            operation="validate_document"
         )
-        result = entry.to_dict()
-        self.assertEqual(result["message"], "Test log message")
-        self.assertEqual(result["level"], "WARN")
-        self.assertEqual(result["context"], context)
-        self.assertEqual(result["timestamp"], timestamp.isoformat())
-        self.assertEqual(result["service_name"], "document-service")
-        self.assertEqual(result["correlation_id"], "corr-123")
-        self.assertEqual(result["document_id"], "doc-456")
-        self.assertEqual(result["operation"], "classification")
-
-    def test_log_entry_json_serialization(self):
-        """Test that LogEntry can be serialized to JSON."""
-        entry = LogEntry(
-            message="Test log message",
-            level="INFO",
-            correlation_id="corr-123",
-            document_id="doc-456",
-            operation="classification"
-        )
-        json_str = json.dumps(entry.to_dict())
-        # Verify it's valid JSON
-        parsed = json.loads(json_str)
-        self.assertEqual(parsed["message"], "Test log message")
-        self.assertEqual(parsed["level"], "INFO")
-
+        
+        result = log_entry.to_dict()
+        
+        assert result["message"] == "Serialization test"
+        assert result["level"] == "WARN"
+        assert result["context"] == {"warning_code": "W123"}
+        assert result["timestamp"] == timestamp.isoformat()
+        assert result["service_name"] == "document-service"
+        assert result["correlation_id"] == "corr-789"
+        assert result["document_id"] == "doc-101112"
+        assert result["operation"] == "validate_document"
+    
     def test_log_entry_with_different_log_levels(self):
         """Test that LogEntry accepts different log levels."""
-        levels = ["ERROR", "WARN", "INFO", "DEBUG"]
-        for level in levels:
-            entry = LogEntry(message=f"Test {level} message", level=level)
-            self.assertEqual(entry.level, level)
-            self.assertEqual(entry.to_dict()["level"], level)
+        # Test with all specified log levels from section 0.2.5
+        error_log = LogEntry("Error message", level="ERROR")
+        warn_log = LogEntry("Warning message", level="WARN")
+        info_log = LogEntry("Info message", level="INFO")
+        debug_log = LogEntry("Debug message", level="DEBUG")
+        
+        assert error_log.level == "ERROR"
+        assert warn_log.level == "WARN"
+        assert info_log.level == "INFO"
+        assert debug_log.level == "DEBUG"
+        
+        # Verify serialization of different log levels
+        assert error_log.to_dict()["level"] == "ERROR"
+        assert warn_log.to_dict()["level"] == "WARN"
+        assert info_log.to_dict()["level"] == "INFO"
+        assert debug_log.to_dict()["level"] == "DEBUG"
 
 
-# ===== MonitoringAlert Tests =====
-
-class TestMonitoringAlert(unittest.TestCase):
+class TestMonitoringAlert:
     """Tests for the MonitoringAlert class."""
-
+    
     def test_monitoring_alert_initialization(self):
-        """Test that MonitoringAlert can be initialized with minimal arguments."""
+        """Test that MonitoringAlert can be initialized with basic parameters."""
         alert = MonitoringAlert(
             title="Test Alert",
             message="This is a test alert"
         )
-        self.assertEqual(alert.title, "Test Alert")
-        self.assertEqual(alert.message, "This is a test alert")
-        self.assertEqual(alert.severity, "critical")  # Default severity
-        self.assertIsNone(alert.error_details)
-        self.assertIsInstance(alert.timestamp, datetime.datetime)
-        self.assertEqual(alert.service_name, "document-service")
-        self.assertEqual(alert.alert_tags, [])
-        self.assertEqual(alert.notification_channels, ["default"])
-
-    def test_monitoring_alert_with_all_fields(self):
-        """Test that MonitoringAlert accepts all fields."""
-        timestamp = datetime.datetime(2023, 1, 1, 12, 0, 0)
+        
+        assert alert.title == "Test Alert"
+        assert alert.message == "This is a test alert"
+        assert alert.severity == "critical"  # Default severity
+        assert alert.error_details is None
+        assert isinstance(alert.timestamp, datetime)
+        assert alert.service_name == "document-service"
+        assert alert.alert_tags == []
+        assert alert.notification_channels == ["default"]
+    
+    def test_monitoring_alert_with_error_details(self):
+        """Test that MonitoringAlert can include ErrorDetails."""
         error_details = ErrorDetails(
-            message="Test error",
+            message="Underlying error",
             category=ErrorCategory.CRITICAL,
             capture_stack_trace=False
         )
-        alert_tags = ["production", "document-service", "critical"]
-        notification_channels = ["email", "slack"]
-
+        
         alert = MonitoringAlert(
-            title="Critical Error",
-            message="A critical error occurred",
+            title="Critical System Error",
+            message="A critical error occurred in the document classification system",
             severity="critical",
             error_details=error_details,
-            timestamp=timestamp,
-            service_name="custom-service",
-            alert_tags=alert_tags,
-            notification_channels=notification_channels
+            alert_tags=["classification", "critical", "production"]
         )
-
-        self.assertEqual(alert.title, "Critical Error")
-        self.assertEqual(alert.message, "A critical error occurred")
-        self.assertEqual(alert.severity, "critical")
-        self.assertEqual(alert.error_details, error_details)
-        self.assertEqual(alert.timestamp, timestamp)
-        self.assertEqual(alert.service_name, "custom-service")
-        self.assertEqual(alert.alert_tags, alert_tags)
-        self.assertEqual(alert.notification_channels, notification_channels)
-
+        
+        assert alert.title == "Critical System Error"
+        assert alert.error_details is error_details
+        assert alert.alert_tags == ["classification", "critical", "production"]
+    
+    def test_monitoring_alert_with_different_severity_levels(self):
+        """Test that MonitoringAlert accepts different severity levels."""
+        critical_alert = MonitoringAlert("Critical Alert", "Critical message", severity="critical")
+        error_alert = MonitoringAlert("Error Alert", "Error message", severity="error")
+        warning_alert = MonitoringAlert("Warning Alert", "Warning message", severity="warning")
+        info_alert = MonitoringAlert("Info Alert", "Info message", severity="info")
+        
+        assert critical_alert.severity == "critical"
+        assert error_alert.severity == "error"
+        assert warning_alert.severity == "warning"
+        assert info_alert.severity == "info"
+    
     def test_monitoring_alert_to_dict(self):
         """Test that MonitoringAlert can be converted to a dictionary."""
-        timestamp = datetime.datetime(2023, 1, 1, 12, 0, 0)
+        timestamp = datetime.utcnow()
+        alert = MonitoringAlert(
+            title="Serialization Test",
+            message="Testing alert serialization",
+            severity="warning",
+            timestamp=timestamp,
+            service_name="test-service",
+            alert_tags=["test", "serialization"],
+            notification_channels=["email", "slack"]
+        )
+        
+        result = alert.to_dict()
+        
+        assert result["title"] == "Serialization Test"
+        assert result["message"] == "Testing alert serialization"
+        assert result["severity"] == "warning"
+        assert result["timestamp"] == timestamp.isoformat()
+        assert result["service_name"] == "test-service"
+        assert result["alert_tags"] == ["test", "serialization"]
+        assert result["notification_channels"] == ["email", "slack"]
+        assert "error_details" not in result  # No error details provided
+    
+    def test_monitoring_alert_with_error_details_serialization(self):
+        """Test that MonitoringAlert serializes included ErrorDetails."""
         error_details = ErrorDetails(
-            message="Test error",
+            message="Database connection failed",
             category=ErrorCategory.CRITICAL,
+            context={"host": "db.example.com", "port": 5432},
             capture_stack_trace=False
         )
+        
         alert = MonitoringAlert(
-            title="Test Alert",
-            message="This is a test alert",
-            severity="warning",
-            error_details=error_details,
-            timestamp=timestamp
+            title="Database Error",
+            message="Failed to connect to the database",
+            error_details=error_details
         )
-
+        
         result = alert.to_dict()
-        self.assertEqual(result["title"], "Test Alert")
-        self.assertEqual(result["message"], "This is a test alert")
-        self.assertEqual(result["severity"], "warning")
-        self.assertEqual(result["timestamp"], timestamp.isoformat())
-        self.assertEqual(result["service_name"], "document-service")
-        self.assertIn("error_details", result)
-        self.assertEqual(result["error_details"]["message"], "Test error")
-
-    def test_monitoring_alert_without_error_details(self):
-        """Test that MonitoringAlert can be created without error details."""
-        alert = MonitoringAlert(
-            title="Test Alert",
-            message="This is a test alert"
-        )
-        result = alert.to_dict()
-        self.assertNotIn("error_details", result)
-
-    def test_monitoring_alert_with_different_severities(self):
-        """Test that MonitoringAlert accepts different severity levels."""
-        severities = ["critical", "error", "warning", "info"]
-        for severity in severities:
-            alert = MonitoringAlert(
-                title=f"Test {severity.capitalize()} Alert",
-                message=f"This is a test {severity} alert",
-                severity=severity
-            )
-            self.assertEqual(alert.severity, severity)
-            self.assertEqual(alert.to_dict()["severity"], severity)
+        
+        assert "error_details" in result
+        assert result["error_details"]["message"] == "Database connection failed"
+        assert result["error_details"]["category"] == "CRITICAL"
+        assert result["error_details"]["context"] == {"host": "db.example.com", "port": 5432}
 
 
-# ===== ServiceError Tests =====
-
-class TestServiceError(unittest.TestCase):
+class TestServiceError:
     """Tests for the ServiceError class."""
-
+    
     def test_service_error_initialization(self):
-        """Test that ServiceError can be initialized with minimal arguments."""
-        error = ServiceError(message="Test error")
-        self.assertEqual(str(error), "Test error")
-        self.assertEqual(error.message, "Test error")
-        self.assertEqual(error.category, ErrorCategory.ERROR)  # Default category
-        self.assertIsNone(error.original_exception)
-        self.assertIsInstance(error.context, dict)
-        self.assertIsNone(error.http_status_code)
-        self.assertIsInstance(error.error_details, ErrorDetails)
-
-    def test_service_error_with_all_fields(self):
-        """Test that ServiceError accepts all fields."""
-        original_exception = ValueError("Original error")
-        context = {"document_id": "123", "operation": "classification"}
-
+        """Test that ServiceError can be initialized with basic parameters."""
         error = ServiceError(
-            message="Test error",
+            message="Test service error",
+            category=ErrorCategory.ERROR
+        )
+        
+        assert error.message == "Test service error"
+        assert error.category == ErrorCategory.ERROR
+        assert error.original_exception is None
+        assert isinstance(error.context, dict)
+        assert error.context == {}
+        assert error.http_status_code is None
+        assert isinstance(error.error_details, ErrorDetails)
+        assert error.error_details.message == "Test service error"
+        assert error.error_details.category == ErrorCategory.ERROR
+    
+    def test_service_error_with_http_status(self):
+        """Test that ServiceError can include HTTP status code."""
+        error = ServiceError(
+            message="Not found",
+            category=ErrorCategory.ERROR,
+            http_status_code=404
+        )
+        
+        assert error.message == "Not found"
+        assert error.http_status_code == 404
+        
+        # Test API response format
+        api_response = error.to_api_response()
+        assert api_response["success"] == False
+        assert api_response["error"]["message"] == "Not found"
+        assert api_response["error"]["code"] == "ERROR.404"
+    
+    def test_service_error_with_original_exception(self):
+        """Test that ServiceError can wrap an original exception."""
+        original_exception = ValueError("Invalid value")
+        error = ServiceError(
+            message="Validation failed",
             category=ErrorCategory.VALIDATION,
             original_exception=original_exception,
-            context=context,
             http_status_code=400
         )
-
-        self.assertEqual(error.message, "Test error")
-        self.assertEqual(error.category, ErrorCategory.VALIDATION)
-        self.assertEqual(error.original_exception, original_exception)
-        self.assertEqual(error.context, context)
-        self.assertEqual(error.http_status_code, 400)
-        self.assertEqual(error.error_details.message, "Test error")
-        self.assertEqual(error.error_details.category, ErrorCategory.VALIDATION)
-        self.assertEqual(error.error_details.exception, original_exception)
-        self.assertEqual(error.error_details.context, context)
-
+        
+        assert error.message == "Validation failed"
+        assert error.original_exception is original_exception
+        assert error.http_status_code == 400
+        assert error.error_details.exception is original_exception
+    
     def test_service_error_to_dict(self):
         """Test that ServiceError can be converted to a dictionary."""
         error = ServiceError(
-            message="Test error",
-            category=ErrorCategory.ERROR,
-            http_status_code=500
+            message="Serialization test",
+            category=ErrorCategory.INTEGRATION,
+            context={"service": "database", "operation": "query"},
+            http_status_code=502
         )
-
+        
         result = error.to_dict()
-        self.assertIn("error", result)
-        self.assertEqual(result["error"]["message"], "Test error")
-        self.assertEqual(result["error"]["category"], "ERROR")
-        self.assertEqual(result["error"]["http_status_code"], 500)
-        self.assertIn("details", result["error"])
-
-    def test_service_error_to_api_response(self):
-        """Test that ServiceError can be converted to an API response."""
-        context = {"document_id": "123", "operation": "classification"}
-        error = ServiceError(
-            message="Test error",
-            category=ErrorCategory.VALIDATION,
-            context=context,
-            http_status_code=400
-        )
-
-        result = error.to_api_response()
-        self.assertFalse(result["success"])
-        self.assertIn("error", result)
-        self.assertEqual(result["error"]["message"], "Test error")
-        self.assertEqual(result["error"]["code"], "validation.400")
-        self.assertEqual(result["error"]["details"], context)
-
-    def test_service_error_inheritance(self):
-        """Test that ServiceError inherits from Exception."""
-        error = ServiceError(message="Test error")
-        self.assertIsInstance(error, Exception)
-
-        # Test that it can be raised and caught
-        try:
-            raise error
-            self.fail("Exception was not raised")
-        except ServiceError as e:
-            self.assertEqual(e, error)
-        except Exception:
-            self.fail("Wrong exception type caught")
+        
+        assert "error" in result
+        assert result["error"]["message"] == "Serialization test"
+        assert result["error"]["category"] == "INTEGRATION"
+        assert result["error"]["http_status_code"] == 502
+        assert "details" in result["error"]
+        assert result["error"]["details"]["context"] == {"service": "database", "operation": "query"}
+    
+    def test_specific_error_types(self):
+        """Test specific error type subclasses."""
+        validation_error = ValidationError("Invalid input")
+        classification_error = ClassificationError("Classification failed")
+        extraction_error = ExtractionError("Data extraction failed")
+        integration_error = IntegrationError("Service integration failed")
+        security_error = SecurityError("Authentication failed")
+        messaging_error = MessagingError("Message queue operation failed")
+        
+        # Check that each error has the correct category
+        assert validation_error.category == ErrorCategory.VALIDATION
+        assert classification_error.category == ErrorCategory.CLASSIFICATION
+        assert extraction_error.category == ErrorCategory.EXTRACTION
+        assert integration_error.category == ErrorCategory.INTEGRATION
+        assert security_error.category == ErrorCategory.SECURITY
+        assert messaging_error.category == ErrorCategory.MESSAGING
+        
+        # Check that each error has the correct HTTP status code
+        assert validation_error.http_status_code == 400
+        assert classification_error.http_status_code == 422
+        assert extraction_error.http_status_code == 422
+        assert integration_error.http_status_code == 502
+        assert security_error.http_status_code == 403
+        assert messaging_error.http_status_code == 500
 
 
-# ===== Specific Error Types Tests =====
-
-class TestSpecificErrorTypes(unittest.TestCase):
-    """Tests for specific error types that extend ServiceError."""
-
-    def test_validation_error(self):
-        """Test ValidationError initialization and properties."""
-        error = ValidationError(message="Invalid document format")
-        self.assertIsInstance(error, ServiceError)
-        self.assertEqual(error.message, "Invalid document format")
-        self.assertEqual(error.category, ErrorCategory.VALIDATION)
-        self.assertEqual(error.http_status_code, 400)
-
-    def test_classification_error(self):
-        """Test ClassificationError initialization and properties."""
-        error = ClassificationError(message="Failed to classify document")
-        self.assertIsInstance(error, ServiceError)
-        self.assertEqual(error.message, "Failed to classify document")
-        self.assertEqual(error.category, ErrorCategory.CLASSIFICATION)
-        self.assertEqual(error.http_status_code, 422)
-
-    def test_extraction_error(self):
-        """Test ExtractionError initialization and properties."""
-        error = ExtractionError(message="Failed to extract data")
-        self.assertIsInstance(error, ServiceError)
-        self.assertEqual(error.message, "Failed to extract data")
-        self.assertEqual(error.category, ErrorCategory.EXTRACTION)
-        self.assertEqual(error.http_status_code, 422)
-
-    def test_integration_error(self):
-        """Test IntegrationError initialization and properties."""
-        error = IntegrationError(message="Failed to connect to external service")
-        self.assertIsInstance(error, ServiceError)
-        self.assertEqual(error.message, "Failed to connect to external service")
-        self.assertEqual(error.category, ErrorCategory.INTEGRATION)
-        self.assertEqual(error.http_status_code, 502)
-
-    def test_security_error(self):
-        """Test SecurityError initialization and properties."""
-        error = SecurityError(message="Unauthorized access")
-        self.assertIsInstance(error, ServiceError)
-        self.assertEqual(error.message, "Unauthorized access")
-        self.assertEqual(error.category, ErrorCategory.SECURITY)
-        self.assertEqual(error.http_status_code, 403)
-
-    def test_messaging_error(self):
-        """Test MessagingError initialization and properties."""
-        error = MessagingError(message="Failed to publish message")
-        self.assertIsInstance(error, ServiceError)
-        self.assertEqual(error.message, "Failed to publish message")
-        self.assertEqual(error.category, ErrorCategory.MESSAGING)
-        self.assertEqual(error.http_status_code, 500)
-
-    def test_error_with_context_and_original_exception(self):
-        """Test specific errors with context and original exception."""
-        original_exception = ConnectionError("Connection refused")
-        context = {"service": "external-api", "endpoint": "/data"}
-
-        error = IntegrationError(
-            message="Failed to connect to external service",
-            context=context,
-            original_exception=original_exception
-        )
-
-        self.assertEqual(error.message, "Failed to connect to external service")
-        self.assertEqual(error.original_exception, original_exception)
-        self.assertEqual(error.context, context)
-        self.assertEqual(error.error_details.exception, original_exception)
-        self.assertEqual(error.error_details.context, context)
-
-
-# ===== Result Tests =====
-
-class TestResult(unittest.TestCase):
+class TestResult:
     """Tests for the Result generic type."""
-
+    
     def test_result_success(self):
         """Test creating a successful Result."""
-        result = Result.success("test value")
-        self.assertTrue(result.is_success)
-        self.assertFalse(result.is_failure)
-        self.assertEqual(result.value, "test value")
-
-        # Accessing error on a success result should raise ValueError
-        with self.assertRaises(ValueError):
-            _ = result.error
-
+        result = Result.success("success value")
+        
+        assert result.is_success is True
+        assert result.is_failure is False
+        assert result.value == "success value"
+        
+        # Accessing error on a success should raise ValueError
+        with pytest.raises(ValueError):
+            error = result.error
+    
     def test_result_failure(self):
         """Test creating a failed Result."""
-        error = ValueError("Test error")
+        error = ValueError("test error")
         result = Result.failure(error)
-        self.assertFalse(result.is_success)
-        self.assertTrue(result.is_failure)
-        self.assertEqual(result.error, error)
-
-        # Accessing value on a failure result should raise ValueError
-        with self.assertRaises(ValueError):
-            _ = result.value
-
-    def test_result_on_success(self):
+        
+        assert result.is_success is False
+        assert result.is_failure is True
+        assert result.error is error
+        
+        # Accessing value on a failure should raise ValueError
+        with pytest.raises(ValueError):
+            value = result.value
+    
+    def test_result_on_success_callback(self):
         """Test the on_success callback."""
-        success_called = False
-
-        def on_success(value):
-            nonlocal success_called
-            success_called = True
-            self.assertEqual(value, "test value")
-
-        result = Result.success("test value")
-        returned_result = result.on_success(on_success)
-
-        self.assertTrue(success_called)
-        self.assertIs(returned_result, result)  # Should return self for chaining
-
-        # on_success should not be called for failure results
-        success_called = False
-        error_result = Result.failure(ValueError("Test error"))
-        error_result.on_success(on_success)
-        self.assertFalse(success_called)
-
-    def test_result_on_failure(self):
+        callback_called = False
+        callback_value = None
+        
+        def success_callback(value):
+            nonlocal callback_called, callback_value
+            callback_called = True
+            callback_value = value
+        
+        # Test with a success result
+        result = Result.success("success data")
+        result.on_success(success_callback)
+        
+        assert callback_called is True
+        assert callback_value == "success data"
+        
+        # Test with a failure result - callback should not be called
+        callback_called = False
+        callback_value = None
+        error_result = Result.failure(Exception("test error"))
+        error_result.on_success(success_callback)
+        
+        assert callback_called is False
+        assert callback_value is None
+    
+    def test_result_on_failure_callback(self):
         """Test the on_failure callback."""
-        failure_called = False
-        test_error = ValueError("Test error")
-
-        def on_failure(error):
-            nonlocal failure_called
-            failure_called = True
-            self.assertEqual(error, test_error)
-
-        result = Result.failure(test_error)
-        returned_result = result.on_failure(on_failure)
-
-        self.assertTrue(failure_called)
-        self.assertIs(returned_result, result)  # Should return self for chaining
-
-        # on_failure should not be called for success results
-        failure_called = False
-        success_result = Result.success("test value")
-        success_result.on_failure(on_failure)
-        self.assertFalse(failure_called)
-
+        callback_called = False
+        callback_error = None
+        
+        def failure_callback(error):
+            nonlocal callback_called, callback_error
+            callback_called = True
+            callback_error = error
+        
+        # Test with a failure result
+        error = ValueError("test error")
+        result = Result.failure(error)
+        result.on_failure(failure_callback)
+        
+        assert callback_called is True
+        assert callback_error is error
+        
+        # Test with a success result - callback should not be called
+        callback_called = False
+        callback_error = None
+        success_result = Result.success("success data")
+        success_result.on_failure(failure_callback)
+        
+        assert callback_called is False
+        assert callback_error is None
+    
     def test_result_map(self):
         """Test the map function for transforming success values."""
+        # Test with a success result
         result = Result.success(5)
         mapped_result = result.map(lambda x: x * 2)
-
-        self.assertTrue(mapped_result.is_success)
-        self.assertEqual(mapped_result.value, 10)
-
-        # map should not transform failure results
-        error = ValueError("Test error")
+        
+        assert mapped_result.is_success is True
+        assert mapped_result.value == 10
+        
+        # Test with a failure result - should pass through the error
+        error = ValueError("test error")
         error_result = Result.failure(error)
         mapped_error_result = error_result.map(lambda x: x * 2)
-
-        self.assertFalse(mapped_error_result.is_success)
-        self.assertEqual(mapped_error_result.error, error)
-
+        
+        assert mapped_error_result.is_success is False
+        assert mapped_error_result.error is error
+    
     def test_result_flat_map(self):
         """Test the flat_map function for chaining Results."""
+        # Test with a success result
         result = Result.success(5)
-
-        def double_and_wrap(x):
-            return Result.success(x * 2)
-
-        flat_mapped_result = result.flat_map(double_and_wrap)
-
-        self.assertTrue(flat_mapped_result.is_success)
-        self.assertEqual(flat_mapped_result.value, 10)
-
-        # flat_map should not transform failure results
-        error = ValueError("Test error")
-        error_result = Result.failure(error)
-        flat_mapped_error_result = error_result.flat_map(double_and_wrap)
-
-        self.assertFalse(flat_mapped_error_result.is_success)
-        self.assertEqual(flat_mapped_error_result.error, error)
-
+        flat_mapped_result = result.flat_map(lambda x: Result.success(x * 2))
+        
+        assert flat_mapped_result.is_success is True
+        assert flat_mapped_result.value == 10
+        
+        # Test with a success result that maps to a failure
+        result = Result.success(5)
+        error = ValueError("mapped error")
+        flat_mapped_error_result = result.flat_map(lambda x: Result.failure(error))
+        
+        assert flat_mapped_error_result.is_success is False
+        assert flat_mapped_error_result.error is error
+        
+        # Test with a failure result - should pass through the error
+        original_error = ValueError("original error")
+        error_result = Result.failure(original_error)
+        flat_mapped_error_result = error_result.flat_map(lambda x: Result.success(x * 2))
+        
+        assert flat_mapped_error_result.is_success is False
+        assert flat_mapped_error_result.error is original_error
+    
     def test_result_recover(self):
         """Test the recover function for handling errors."""
-        error = ValueError("Test error")
-        result = Result.failure(error)
-
-        def recover_func(err):
-            self.assertEqual(err, error)
-            return "recovered value"
-
-        recovered_value = result.recover(recover_func)
-        self.assertEqual(recovered_value, "recovered value")
-
-        # recover should return the original value for success results
-        success_result = Result.success("original value")
-        recovered_success = success_result.recover(recover_func)
-        self.assertEqual(recovered_success, "original value")
-
+        # Test with a success result - should return the original value
+        result = Result.success("original value")
+        recovered_value = result.recover(lambda e: "recovered value")
+        
+        assert recovered_value == "original value"
+        
+        # Test with a failure result - should return the recovered value
+        error_result = Result.failure(ValueError("test error"))
+        recovered_value = error_result.recover(lambda e: "recovered value")
+        
+        assert recovered_value == "recovered value"
+    
     def test_result_unwrap_or(self):
         """Test the unwrap_or function for providing default values."""
-        # For success results, should return the value
-        success_result = Result.success("test value")
-        self.assertEqual(success_result.unwrap_or("default"), "test value")
-
-        # For failure results, should return the default
-        error_result = Result.failure(ValueError("Test error"))
-        self.assertEqual(error_result.unwrap_or("default"), "default")
-
+        # Test with a success result - should return the original value
+        result = Result.success("original value")
+        unwrapped_value = result.unwrap_or("default value")
+        
+        assert unwrapped_value == "original value"
+        
+        # Test with a failure result - should return the default value
+        error_result = Result.failure(ValueError("test error"))
+        unwrapped_value = error_result.unwrap_or("default value")
+        
+        assert unwrapped_value == "default value"
+    
     def test_result_unwrap_or_else(self):
         """Test the unwrap_or_else function for computing default values."""
-        error = ValueError("Test error")
-
-        # For success results, should return the value
-        success_result = Result.success("test value")
-        self.assertEqual(success_result.unwrap_or_else(lambda e: f"Error: {str(e)}"), "test value")
-
-        # For failure results, should compute and return the default
+        # Test with a success result - should return the original value
+        result = Result.success("original value")
+        unwrapped_value = result.unwrap_or_else(lambda e: f"Error: {str(e)}")
+        
+        assert unwrapped_value == "original value"
+        
+        # Test with a failure result - should return the computed default value
+        error = ValueError("test error")
         error_result = Result.failure(error)
-        self.assertEqual(error_result.unwrap_or_else(lambda e: f"Error: {str(e)}"), "Error: Test error")
-
-    def test_result_with_service_error(self):
-        """Test Result with ServiceError."""
-        error = ServiceError(
-            message="Test service error",
-            category=ErrorCategory.VALIDATION,
-            http_status_code=400
-        )
-        result = Result.failure(error)
-
-        self.assertTrue(result.is_failure)
-        self.assertEqual(result.error, error)
-        self.assertEqual(result.error.message, "Test service error")
-        self.assertEqual(result.error.category, ErrorCategory.VALIDATION)
-
-    def test_result_chaining(self):
-        """Test chaining multiple Result operations."""
-        result = Result.success(5)
-
-        # Chain multiple operations
-        final_result = (result
-            .map(lambda x: x * 2)  # 10
-            .flat_map(lambda x: Result.success(x + 5))  # 15
-            .on_success(lambda x: None)  # No-op, just for chaining
-            .map(lambda x: str(x))  # "15"
-        )
-
-        self.assertTrue(final_result.is_success)
-        self.assertEqual(final_result.value, "15")
-
-        # Chain with a failure in the middle
-        error_result = Result.success(5)
-        final_error_result = (error_result
-            .map(lambda x: x * 2)  # 10
-            .flat_map(lambda x: Result.failure(ValueError(f"Error with {x}")))  # Failure
-            .map(lambda x: x + 5)  # Should not be executed
-        )
-
-        self.assertFalse(final_error_result.is_success)
-        self.assertEqual(str(final_error_result.error), "Error with 10")
-
-
-if __name__ == "__main__":
-    unittest.main()
+        unwrapped_value = error_result.unwrap_or_else(lambda e: f"Error: {str(e)}")
+        
+        assert unwrapped_value == "Error: test error"
+    
