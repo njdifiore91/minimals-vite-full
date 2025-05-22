@@ -4,11 +4,12 @@
 """
 Document Service Configuration Package
 
-This package provides a centralized configuration system for the Document Service microservice.
-It imports and re-exports all configuration components to present a single, cohesive API surface,
-simplifying configuration imports throughout the service and ensuring consistent configuration usage.
+This package serves as the central entry point for all configuration components
+of the Document Service. It imports and re-exports all configuration modules to
+present a single, cohesive API surface, simplifying configuration imports throughout
+the service and ensuring consistent configuration usage.
 
-Imported modules:
+Imported Modules:
     - app_config: Core application configuration
     - rabbitmq_config: RabbitMQ connection and messaging settings
     - s3_config: S3-compatible storage client configuration
@@ -17,45 +18,90 @@ Imported modules:
 
 Usage:
     from config import app_config
-    from config import rabbitmq_client
-    from config import s3_client
+    from config import rabbitmq_config
+    from config import s3_config
     from config import model_config
-    from config import configure_logging
+    from config import logging_config
+    
+    # Or import specific components
+    from config import create_s3_client, get_logger
 """
 
-# Import configuration modules
-from .app_config import app_config, get_app_config, AppConfig, Environment
-from .rabbitmq_config import rabbitmq_client, get_rabbitmq_client, consume_messages, RabbitMQClient
-from .s3_config import s3_client, get_s3_client, upload_document, download_document
-from .model_config import model_config, get_model_config, load_model
-from .logging_config import configure_logging, get_logger
+# Import and re-export app_config module
+from .app_config import (
+    AppConfig,
+    get_app_config,
+    validate_config,
+    ENV,
+    SERVICE_NAME,
+    SERVICE_VERSION
+)
 
-# Re-export all configuration components
+# Import and re-export rabbitmq_config module
+from .rabbitmq_config import (
+    create_rabbitmq_connection,
+    create_channel,
+    setup_exchanges_and_queues,
+    publish_message,
+    start_consuming,
+    EXCHANGE_NAME,
+    QUEUE_NAME,
+    ROUTING_KEY
+)
+
+# Import and re-export s3_config module
+from .s3_config import (
+    create_s3_client,
+    create_s3_resource,
+    upload_file_with_encryption,
+    download_file,
+    check_bucket_exists,
+    create_bucket_if_not_exists,
+    get_bucket_name,
+    s3_client,
+    s3_resource
+)
+
+# Import and re-export model_config module
+from .model_config import (
+    MODEL_TYPES,
+    MODEL_HYPERPARAMETERS,
+    FEATURE_EXTRACTION_PARAMS,
+    CLASSIFICATION_THRESHOLDS,
+    MODEL_PATHS,
+    get_model_path,
+    get_model_hyperparameters
+)
+
+# Import and re-export logging_config module
+from .logging_config import (
+    configure_logging,
+    get_logger,
+    LoggingContext,
+    DEFAULT_LOG_LEVEL,
+    SERVICE_NAME as LOGGING_SERVICE_NAME
+)
+
+# Initialize logging when this package is imported
+configure_logging()
+
 __all__ = [
-    # App configuration
-    'app_config',
-    'get_app_config',
-    'AppConfig',
-    'Environment',
+    # app_config exports
+    'AppConfig', 'get_app_config', 'validate_config', 'ENV', 'SERVICE_NAME', 'SERVICE_VERSION',
     
-    # RabbitMQ configuration
-    'rabbitmq_client',
-    'get_rabbitmq_client',
-    'consume_messages',
-    'RabbitMQClient',
+    # rabbitmq_config exports
+    'create_rabbitmq_connection', 'create_channel', 'setup_exchanges_and_queues',
+    'publish_message', 'start_consuming', 'EXCHANGE_NAME', 'QUEUE_NAME', 'ROUTING_KEY',
     
-    # S3 configuration
-    's3_client',
-    'get_s3_client',
-    'upload_document',
-    'download_document',
+    # s3_config exports
+    'create_s3_client', 'create_s3_resource', 'upload_file_with_encryption',
+    'download_file', 'check_bucket_exists', 'create_bucket_if_not_exists',
+    'get_bucket_name', 's3_client', 's3_resource',
     
-    # Model configuration
-    'model_config',
-    'get_model_config',
-    'load_model',
+    # model_config exports
+    'MODEL_TYPES', 'MODEL_HYPERPARAMETERS', 'FEATURE_EXTRACTION_PARAMS',
+    'CLASSIFICATION_THRESHOLDS', 'MODEL_PATHS', 'get_model_path', 'get_model_hyperparameters',
     
-    # Logging configuration
-    'configure_logging',
-    'get_logger'
+    # logging_config exports
+    'configure_logging', 'get_logger', 'LoggingContext', 'DEFAULT_LOG_LEVEL', 'LOGGING_SERVICE_NAME'
 ]
