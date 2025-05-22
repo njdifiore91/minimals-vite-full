@@ -1,0 +1,122 @@
+{{- /*
+RabbitMQ Management UI Ingress Resource
+
+This template creates an Ingress resource to expose the RabbitMQ management UI
+outside the Kubernetes cluster. It includes security configurations such as:
+- TLS for secure access
+- Basic authentication for management UI access
+- Rate limiting to prevent abuse
+- Security headers for enhanced protection
+
+The Ingress is only created if .Values.ingress.enabled is set to true.
+
+NOTE: This requires a Secret named <release-name>-auth to be created with
+basic auth credentials. This secret can be created manually or through the
+values.yaml configuration.
+*/}}
+
+{{- if .Values.ingress.enabled -}}
+{{- /* Create basic auth secret for management UI if enabled */}}
+{{- if not .Values.ingress.existingAuthSecret }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "common.names.fullname" . }}-auth
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "common.labels.standard" . | nindent 4 }}
+    app.kubernetes.io/component: rabbitmq
+    app.kubernetes.io/part-of: mca-processing-system
+type: Opaque
+data:
+  # The auth field must be in the format of an htpasswd file
+  # This is a simplified approach for Helm templating
+  # In production, you should create a proper htpasswd file and use it as the secret source
+  # Example: kubectl create secret generic basic-auth --from-file=auth=./auth
+  # where auth is generated with: htpasswd -c auth username
+  auth: {{ .Values.ingress.authContent | default (printf "%s:{PLAIN}%s" .Values.auth.username .Values.auth.password | b64enc) | quote }}
+---
+{{- end }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "common.names.fullname" . }}
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "common.labels.standard" . | nindent 4 }}
+    app.kubernetes.io/component: rabbitmq
+    app.kubernetes.io/part-of: mca-processing-system
+  annotations:
+    {{- if .Values.ingress.annotations }}
+    {{- include "common.tplvalues.render" (dict "value" .Values.ingress.annotations "context" $) | nindent 4 }}
+    {{- end }}
+    
+    {{- /* Security annotations */}}
+    # Security headers
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      more_set_headers "X-Frame-Options: DENY";
+      more_set_headers "X-Content-Type-Options: nosniff";
+      more_set_headers "X-XSS-Protection: 1; mode=block";
+    
+    # Rate limiting to prevent abuse
+    nginx.ingress.kubernetes.io/limit-rps: "10"
+    nginx.ingress.kubernetes.io/limit-connections: "5"
+    
+    {{- if .Values.ingress.tls }}
+    # TLS configuration
+    kubernetes.io/tls-acme: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+    
+    # Enforce TLS 1.3 as per requirements
+    nginx.ingress.kubernetes.io/ssl-protocols: "TLSv1.3"
+    {{- end }}
+    
+    # Authentication for management UI
+    nginx.ingress.kubernetes.io/auth-type: basic
+    nginx.ingress.kubernetes.io/auth-secret: {{ .Values.ingress.existingAuthSecret | default (printf "%s-auth" (include "common.names.fullname" .)) }}
+    nginx.ingress.kubernetes.io/auth-realm: "Authentication Required for RabbitMQ Management UI"
+    
+    # Whitelist source IP ranges if specified
+    {{- if .Values.ingress.whitelist }}
+    nginx.ingress.kubernetes.io/whitelist-source-range: {{ .Values.ingress.whitelist }}
+    {{- end }}
+    
+    # Annotations for other ingress controllers
+    {{- if eq .Values.ingress.ingressClassName "alb" }}
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+    {{- end }}
+    
+    {{- if eq .Values.ingress.ingressClassName "traefik" }}
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+    {{- end }}
+spec:
+  {{- if .Values.ingress.ingressClassName }}
+  ingressClassName: {{ .Values.ingress.ingressClassName }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.hostname }}
+      http:
+        paths:
+          - path: {{ .Values.ingress.path }}
+            pathType: {{ .Values.ingress.pathType }}
+            backend:
+              service:
+                name: {{ include "common.names.fullname" . }}
+                port:
+                  name: manager
+  {{- if .Values.ingress.tls }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.hostname }}
+      {{- if .Values.ingress.tlsSecretName }}
+      secretName: {{ .Values.ingress.tlsSecretName }}
+      {{- else }}
+      secretName: {{ include "common.names.fullname" . }}-tls
+      {{- end }}
+  {{- end }}
+{{- end }}
