@@ -1,0 +1,741 @@
+# Data Service Helm Chart Values for MCA Application Processing System
+# Default configuration values for the Data Service deployment
+# This file configures the Java Spring Boot service with appropriate settings for the MCA application
+
+## Global settings
+global:
+  # Image configuration
+  image:
+    repository: dollarfunding/data-service
+    tag: "1.0.0" # Initial version
+    pullPolicy: IfNotPresent
+  
+  # Common labels to be applied to all resources
+  labels: 
+    app.kubernetes.io/part-of: "mca-application-system"
+    app.kubernetes.io/component: "data-service"
+  
+  # Common annotations to be applied to all resources
+  annotations: 
+    "dollarfunding.com/system": "mca-application-processing"
+  
+  # Security context settings
+  securityContext:
+    enabled: true
+    fsGroup: 1000
+    runAsUser: 1000
+    runAsNonRoot: true
+
+## Environment-specific settings
+## These settings control environment-specific configurations
+## The environment variable controls replica counts, resource allocations, and other settings
+environment: "staging" # Options: production, staging, development
+
+## Service configuration
+service:
+  # Service type: ClusterIP, NodePort, LoadBalancer
+  type: ClusterIP
+  
+  # Service port
+  port: 8080
+  
+  # Additional annotations for the service
+  annotations: {}
+
+## Deployment configuration
+deployment:
+  # Number of replicas
+  replicaCount: 2
+  
+  # Update strategy
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  
+  # Pod annotations
+  podAnnotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/path: "/actuator/prometheus"
+    prometheus.io/port: "8080"
+  
+  # Pod labels
+  podLabels:
+    app.kubernetes.io/name: "data-service"
+  
+  # Environment-specific replica counts
+  production:
+    replicaCount: 3
+  staging:
+    replicaCount: 2
+  development:
+    replicaCount: 1
+
+## Container configuration
+container:
+  # Port configuration
+  ports:
+    - name: http
+      containerPort: 8080
+      protocol: TCP
+    - name: management
+      containerPort: 8081
+      protocol: TCP
+  
+  # Liveness probe for container health monitoring
+  livenessProbe:
+    enabled: true
+    initialDelaySeconds: 60
+    periodSeconds: 20
+    timeoutSeconds: 5
+    failureThreshold: 6
+    successThreshold: 1
+    httpGet:
+      path: /actuator/health/liveness
+      port: management
+  
+  # Readiness probe for container readiness monitoring
+  readinessProbe:
+    enabled: true
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+    successThreshold: 1
+    httpGet:
+      path: /actuator/health/readiness
+      port: management
+  
+  # Startup probe for container startup monitoring
+  startupProbe:
+    enabled: true
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 30
+    successThreshold: 1
+    httpGet:
+      path: /actuator/health
+      port: management
+  
+  # Security context for the container
+  securityContext:
+    enabled: true
+    runAsUser: 1000
+    runAsNonRoot: true
+    readOnlyRootFilesystem: true
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+
+## Resource allocation
+## Resources are allocated based on environment
+resources:
+  # Default resources - for staging/development
+  requests:
+    cpu: "500m" # 0.5 CPU core
+    memory: "1Gi" # 1GB memory
+  limits:
+    cpu: "1000m" # 1 CPU core
+    memory: "2Gi" # 2GB memory
+  
+  # Production environment resources - enhanced for production workloads
+  production:
+    requests:
+      cpu: "1000m" # 1 CPU core
+      memory: "2Gi" # 2GB memory
+    limits:
+      cpu: "2000m" # 2 CPU cores
+      memory: "4Gi" # 4GB memory
+  
+  # Staging environment resources - explicitly defined
+  staging:
+    requests:
+      cpu: "500m" # 0.5 CPU core
+      memory: "1Gi" # 1GB memory
+    limits:
+      cpu: "1000m" # 1 CPU core
+      memory: "2Gi" # 2GB memory
+  
+  # Development environment resources - minimal for development
+  development:
+    requests:
+      cpu: "250m" # 0.25 CPU core
+      memory: "512Mi" # 512MB memory
+    limits:
+      cpu: "500m" # 0.5 CPU core
+      memory: "1Gi" # 1GB memory
+
+## Java-specific settings
+java:
+  # JVM options
+  opts:
+    # Memory settings
+    memory: "-Xms512m -Xmx1g -XX:MaxMetaspaceSize=256m"
+    # Garbage collection settings
+    gc: "-XX:+UseG1GC -XX:MaxGCPauseMillis=200"
+    # Other JVM options
+    other: "-Djava.security.egd=file:/dev/./urandom -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/tmp"
+  
+  # Environment-specific JVM settings
+  production:
+    opts:
+      memory: "-Xms1g -Xmx2g -XX:MaxMetaspaceSize=512m"
+      gc: "-XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:+UseStringDeduplication"
+  staging:
+    opts:
+      memory: "-Xms512m -Xmx1g -XX:MaxMetaspaceSize=256m"
+  development:
+    opts:
+      memory: "-Xms256m -Xmx512m -XX:MaxMetaspaceSize=128m"
+
+## Database configuration
+## PostgreSQL connection settings
+database:
+  # Database type
+  type: "postgresql"
+  
+  # Connection settings
+  host: "postgresql"
+  port: 5432
+  name: "mca_application_db"
+  username: "postgres"
+  # Password will be stored in a secret
+  existingSecret: "postgresql-credentials"
+  existingSecretKey: "password"
+  
+  # Connection pool settings
+  pool:
+    initialSize: 10
+    minIdle: 10
+    maxActive: 50
+    maxWait: 30000
+  
+  # Environment-specific database settings
+  production:
+    host: "postgresql-primary"
+    readHost: "postgresql-readonly"
+    pool:
+      initialSize: 20
+      minIdle: 20
+      maxActive: 100
+  staging:
+    host: "postgresql-primary"
+    readHost: "postgresql-readonly"
+  development:
+    host: "postgresql"
+
+## RabbitMQ configuration
+## Message queue settings for service communication
+rabbitmq:
+  # Connection settings
+  host: "rabbitmq"
+  port: 5672
+  username: "admin"
+  # Password will be stored in a secret
+  existingSecret: "rabbitmq-credentials"
+  existingSecretKey: "password"
+  
+  # Virtual host
+  vhost: "/"
+  
+  # SSL/TLS settings
+  ssl:
+    enabled: true
+    validateServerCertificate: true
+    verifyHostname: true
+  
+  # Exchange and queue configuration
+  exchange:
+    name: "mca.documents"
+    type: "fanout"
+    durable: true
+    autoDelete: false
+  
+  # Queues that this service interacts with
+  queues:
+    - name: "document-processing"
+      durable: true
+      autoDelete: false
+    - name: "data-extraction"
+      durable: true
+      autoDelete: false
+    - name: "notification"
+      durable: true
+      autoDelete: false
+  
+  # Consumer settings
+  consumer:
+    concurrency: 3-10
+    prefetchCount: 10
+    requeueRejected: true
+    defaultRequeueRejected: true
+  
+  # Environment-specific RabbitMQ settings
+  production:
+    consumer:
+      concurrency: 5-20
+      prefetchCount: 20
+  staging:
+    consumer:
+      concurrency: 3-10
+      prefetchCount: 10
+  development:
+    consumer:
+      concurrency: 1-5
+      prefetchCount: 5
+
+## Redis configuration
+## Caching settings
+redis:
+  # Connection settings
+  host: "redis-master"
+  port: 6379
+  # Password will be stored in a secret
+  existingSecret: "redis-credentials"
+  existingSecretKey: "password"
+  
+  # SSL/TLS settings
+  ssl:
+    enabled: true
+  
+  # Cache configuration
+  cache:
+    # TTL settings as specified in section 0.2.5 and 3.5.1
+    # 15 minutes for application data
+    # 24 hours for sessions
+    applicationTtl: 900 # 15 minutes in seconds
+    sessionTtl: 86400 # 24 hours in seconds
+  
+  # Session cache configuration
+  session:
+    host: "redis-session-cache"
+    port: 6380
+  
+  # Environment-specific Redis settings
+  production:
+    host: "redis-master"
+    sentinel:
+      enabled: true
+      master: "mca-master"
+      nodes: "redis-node-0:26379,redis-node-1:26379,redis-node-2:26379"
+  staging:
+    host: "redis-master"
+    sentinel:
+      enabled: true
+      master: "mca-master"
+      nodes: "redis-node-0:26379,redis-node-1:26379"
+  development:
+    host: "redis-master"
+
+## Storage configuration
+## S3-compatible storage settings for document storage
+storage:
+  # S3 configuration
+  s3:
+    enabled: true
+    endpoint: "s3.amazonaws.com"
+    region: "us-east-1"
+    bucket: "mca-documents-staging"
+    # Credentials will be stored in a secret
+    existingSecret: "s3-credentials"
+    accessKeyExistingSecretKey: "access-key"
+    secretKeyExistingSecretKey: "secret-key"
+    
+    # Security settings
+    encryption: "AES256"
+    
+    # Environment-specific S3 settings
+    production:
+      bucket: "mca-documents-production"
+    staging:
+      bucket: "mca-documents-staging"
+    development:
+      bucket: "mca-documents-development"
+
+## Security configuration
+security:
+  # JWT authentication configuration
+  jwt:
+    # JWT settings as specified in section 0.1.3
+    algorithm: "RS256"
+    tokenExpiry: 3600 # 60 minutes in seconds
+    refreshTokenExpiry: 604800 # 7 days in seconds
+    # Keys will be stored in a secret
+    existingSecret: "jwt-keys"
+    publicKeyExistingSecretKey: "public-key"
+    privateKeyExistingSecretKey: "private-key"
+  
+  # Field-level encryption for PII
+  encryption:
+    enabled: true
+    algorithm: "AES-256"
+    # Key will be stored in a secret
+    existingSecret: "encryption-keys"
+    keyExistingSecretKey: "encryption-key"
+    # Fields to encrypt
+    fields:
+      - table: "merchant_details"
+        columns: ["legal_name", "ein", "address"]
+      - table: "applications"
+        columns: ["metadata"]
+
+## Configuration maps and secrets
+configMaps:
+  # Application configuration
+  application:
+    enabled: true
+    data:
+      # Application properties
+      "application.yml": |
+        spring:
+          application:
+            name: data-service
+          profiles:
+            active: ${SPRING_PROFILES_ACTIVE:staging}
+          jackson:
+            date-format: com.fasterxml.jackson.databind.util.ISO8601DateFormat
+            default-property-inclusion: non_null
+          jpa:
+            hibernate:
+              ddl-auto: validate
+            properties:
+              hibernate:
+                dialect: org.hibernate.dialect.PostgreSQLDialect
+                jdbc.lob.non_contextual_creation: true
+                format_sql: true
+                default_schema: public
+          datasource:
+            url: jdbc:postgresql://${DATABASE_HOST}:${DATABASE_PORT}/${DATABASE_NAME}
+            username: ${DATABASE_USERNAME}
+            password: ${DATABASE_PASSWORD}
+            driver-class-name: org.postgresql.Driver
+            hikari:
+              minimum-idle: ${DATABASE_POOL_MIN_IDLE}
+              maximum-pool-size: ${DATABASE_POOL_MAX_ACTIVE}
+              idle-timeout: 30000
+              pool-name: DataServiceHikariCP
+              max-lifetime: 2000000
+              connection-timeout: ${DATABASE_POOL_MAX_WAIT}
+          rabbitmq:
+            host: ${RABBITMQ_HOST}
+            port: ${RABBITMQ_PORT}
+            username: ${RABBITMQ_USERNAME}
+            password: ${RABBITMQ_PASSWORD}
+            virtual-host: ${RABBITMQ_VHOST}
+            ssl:
+              enabled: ${RABBITMQ_SSL_ENABLED}
+              validate-server-certificate: ${RABBITMQ_SSL_VALIDATE_SERVER_CERTIFICATE}
+              verify-hostname: ${RABBITMQ_SSL_VERIFY_HOSTNAME}
+            listener:
+              simple:
+                concurrency: ${RABBITMQ_CONSUMER_CONCURRENCY}
+                max-concurrency: ${RABBITMQ_CONSUMER_MAX_CONCURRENCY}
+                prefetch: ${RABBITMQ_CONSUMER_PREFETCH_COUNT}
+                default-requeue-rejected: ${RABBITMQ_CONSUMER_DEFAULT_REQUEUE_REJECTED}
+          redis:
+            host: ${REDIS_HOST}
+            port: ${REDIS_PORT}
+            password: ${REDIS_PASSWORD}
+            ssl: ${REDIS_SSL_ENABLED}
+            timeout: 2000
+            connect-timeout: 2000
+          cache:
+            type: redis
+            redis:
+              time-to-live: ${REDIS_CACHE_APPLICATION_TTL}000 # Convert seconds to milliseconds
+              cache-null-values: false
+          session:
+            store-type: redis
+            redis:
+              namespace: mca:session
+              flush-mode: on-save
+              repository-type: default
+        
+        server:
+          port: 8080
+          servlet:
+            context-path: /
+          compression:
+            enabled: true
+            mime-types: application/json,application/xml,text/html,text/xml,text/plain
+            min-response-size: 1024
+        
+        management:
+          server:
+            port: 8081
+          endpoints:
+            web:
+              exposure:
+                include: health,info,prometheus,metrics
+          endpoint:
+            health:
+              show-details: always
+              probes:
+                enabled: true
+              group:
+                readiness:
+                  include: db,rabbit,redis
+        
+        logging:
+          level:
+            root: INFO
+            com.dollarfunding.mca: INFO
+            org.springframework: INFO
+            org.hibernate: INFO
+        
+        aws:
+          s3:
+            endpoint: ${S3_ENDPOINT}
+            region: ${S3_REGION}
+            bucket: ${S3_BUCKET}
+            access-key: ${S3_ACCESS_KEY}
+            secret-key: ${S3_SECRET_KEY}
+            encryption: ${S3_ENCRYPTION}
+        
+        security:
+          jwt:
+            algorithm: ${JWT_ALGORITHM}
+            token-expiry: ${JWT_TOKEN_EXPIRY}
+            refresh-token-expiry: ${JWT_REFRESH_TOKEN_EXPIRY}
+            public-key: ${JWT_PUBLIC_KEY}
+            private-key: ${JWT_PRIVATE_KEY}
+          encryption:
+            enabled: ${ENCRYPTION_ENABLED}
+            algorithm: ${ENCRYPTION_ALGORITHM}
+            key: ${ENCRYPTION_KEY}
+
+## Environment variables
+env:
+  # Common environment variables
+  common:
+    - name: SPRING_PROFILES_ACTIVE
+      value: "{{ .Values.environment }}"
+    - name: JAVA_OPTS
+      value: "{{ .Values.java.opts.memory }} {{ .Values.java.opts.gc }} {{ .Values.java.opts.other }}"
+    
+    # Database configuration
+    - name: DATABASE_HOST
+      value: "{{ .Values.database.host }}"
+    - name: DATABASE_PORT
+      value: "{{ .Values.database.port }}"
+    - name: DATABASE_NAME
+      value: "{{ .Values.database.name }}"
+    - name: DATABASE_USERNAME
+      value: "{{ .Values.database.username }}"
+    - name: DATABASE_PASSWORD
+      valueFrom:
+        secretKeyRef:
+          name: "{{ .Values.database.existingSecret }}"
+          key: "{{ .Values.database.existingSecretKey }}"
+    - name: DATABASE_POOL_MIN_IDLE
+      value: "{{ .Values.database.pool.minIdle }}"
+    - name: DATABASE_POOL_MAX_ACTIVE
+      value: "{{ .Values.database.pool.maxActive }}"
+    - name: DATABASE_POOL_MAX_WAIT
+      value: "{{ .Values.database.pool.maxWait }}"
+    
+    # RabbitMQ configuration
+    - name: RABBITMQ_HOST
+      value: "{{ .Values.rabbitmq.host }}"
+    - name: RABBITMQ_PORT
+      value: "{{ .Values.rabbitmq.port }}"
+    - name: RABBITMQ_USERNAME
+      value: "{{ .Values.rabbitmq.username }}"
+    - name: RABBITMQ_PASSWORD
+      valueFrom:
+        secretKeyRef:
+          name: "{{ .Values.rabbitmq.existingSecret }}"
+          key: "{{ .Values.rabbitmq.existingSecretKey }}"
+    - name: RABBITMQ_VHOST
+      value: "{{ .Values.rabbitmq.vhost }}"
+    - name: RABBITMQ_SSL_ENABLED
+      value: "{{ .Values.rabbitmq.ssl.enabled }}"
+    - name: RABBITMQ_SSL_VALIDATE_SERVER_CERTIFICATE
+      value: "{{ .Values.rabbitmq.ssl.validateServerCertificate }}"
+    - name: RABBITMQ_SSL_VERIFY_HOSTNAME
+      value: "{{ .Values.rabbitmq.ssl.verifyHostname }}"
+    - name: RABBITMQ_CONSUMER_CONCURRENCY
+      value: "{{ .Values.rabbitmq.consumer.concurrency | split "-" | first }}"
+    - name: RABBITMQ_CONSUMER_MAX_CONCURRENCY
+      value: "{{ .Values.rabbitmq.consumer.concurrency | split "-" | last }}"
+    - name: RABBITMQ_CONSUMER_PREFETCH_COUNT
+      value: "{{ .Values.rabbitmq.consumer.prefetchCount }}"
+    - name: RABBITMQ_CONSUMER_DEFAULT_REQUEUE_REJECTED
+      value: "{{ .Values.rabbitmq.consumer.defaultRequeueRejected }}"
+    
+    # Redis configuration
+    - name: REDIS_HOST
+      value: "{{ .Values.redis.host }}"
+    - name: REDIS_PORT
+      value: "{{ .Values.redis.port }}"
+    - name: REDIS_PASSWORD
+      valueFrom:
+        secretKeyRef:
+          name: "{{ .Values.redis.existingSecret }}"
+          key: "{{ .Values.redis.existingSecretKey }}"
+    - name: REDIS_SSL_ENABLED
+      value: "{{ .Values.redis.ssl.enabled }}"
+    - name: REDIS_CACHE_APPLICATION_TTL
+      value: "{{ .Values.redis.cache.applicationTtl }}"
+    - name: REDIS_CACHE_SESSION_TTL
+      value: "{{ .Values.redis.cache.sessionTtl }}"
+    
+    # S3 configuration
+    - name: S3_ENDPOINT
+      value: "{{ .Values.storage.s3.endpoint }}"
+    - name: S3_REGION
+      value: "{{ .Values.storage.s3.region }}"
+    - name: S3_BUCKET
+      value: "{{ .Values.storage.s3.bucket }}"
+    - name: S3_ACCESS_KEY
+      valueFrom:
+        secretKeyRef:
+          name: "{{ .Values.storage.s3.existingSecret }}"
+          key: "{{ .Values.storage.s3.accessKeyExistingSecretKey }}"
+    - name: S3_SECRET_KEY
+      valueFrom:
+        secretKeyRef:
+          name: "{{ .Values.storage.s3.existingSecret }}"
+          key: "{{ .Values.storage.s3.secretKeyExistingSecretKey }}"
+    - name: S3_ENCRYPTION
+      value: "{{ .Values.storage.s3.encryption }}"
+    
+    # JWT configuration
+    - name: JWT_ALGORITHM
+      value: "{{ .Values.security.jwt.algorithm }}"
+    - name: JWT_TOKEN_EXPIRY
+      value: "{{ .Values.security.jwt.tokenExpiry }}"
+    - name: JWT_REFRESH_TOKEN_EXPIRY
+      value: "{{ .Values.security.jwt.refreshTokenExpiry }}"
+    - name: JWT_PUBLIC_KEY
+      valueFrom:
+        secretKeyRef:
+          name: "{{ .Values.security.jwt.existingSecret }}"
+          key: "{{ .Values.security.jwt.publicKeyExistingSecretKey }}"
+    - name: JWT_PRIVATE_KEY
+      valueFrom:
+        secretKeyRef:
+          name: "{{ .Values.security.jwt.existingSecret }}"
+          key: "{{ .Values.security.jwt.privateKeyExistingSecretKey }}"
+    
+    # Encryption configuration
+    - name: ENCRYPTION_ENABLED
+      value: "{{ .Values.security.encryption.enabled }}"
+    - name: ENCRYPTION_ALGORITHM
+      value: "{{ .Values.security.encryption.algorithm }}"
+    - name: ENCRYPTION_KEY
+      valueFrom:
+        secretKeyRef:
+          name: "{{ .Values.security.encryption.existingSecret }}"
+          key: "{{ .Values.security.encryption.keyExistingSecretKey }}"
+
+## Pod disruption budget
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+  # Production-specific settings
+  production:
+    minAvailable: 2
+
+## Horizontal Pod Autoscaler
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: 80
+  # Production-specific settings
+  production:
+    minReplicas: 3
+    maxReplicas: 10
+  # Staging-specific settings
+  staging:
+    minReplicas: 2
+    maxReplicas: 5
+  # Development-specific settings
+  development:
+    minReplicas: 1
+    maxReplicas: 3
+
+## Affinity and tolerations
+## Pod scheduling configuration
+affinity:
+  # Node affinity
+  nodeAffinity: {}
+  # Pod anti-affinity
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: "data-service"
+          topologyKey: "kubernetes.io/hostname"
+
+# Tolerations for node taints
+tolerations: []
+
+# Node selector for pod scheduling
+nodeSelector: {}
+
+## Monitoring and logging configuration
+monitoring:
+  # Prometheus metrics
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+      interval: "15s"
+      scrapeTimeout: "10s"
+      # Labels for ServiceMonitor
+      labels:
+        release: "prometheus"
+  
+  # Datadog integration
+  datadog:
+    enabled: true
+    # Metrics collection
+    metrics:
+      enabled: true
+      interval: 15
+    # APM tracing
+    apm:
+      enabled: true
+    # Log collection
+    logs:
+      enabled: true
+    # Alerts
+    alerts:
+      cpuUtilization:
+        threshold: 80
+        duration: "5m"
+      memoryUtilization:
+        threshold: 80
+        duration: "5m"
+      responseTime:
+        threshold: 1000
+        duration: "5m"
+      errorRate:
+        threshold: 5
+        duration: "5m"
+
+## Additional custom values
+## Custom values for specific deployments
+custom:
+  # Production-specific custom values
+  production:
+    # Additional production-specific settings
+    additionalSettings: {}
+  
+  # Staging-specific custom values
+  staging:
+    # Additional staging-specific settings
+    additionalSettings: {}
+  
+  # Development-specific custom values
+  development:
+    # Additional development-specific settings
+    additionalSettings: {}
