@@ -1,494 +1,339 @@
 """
-RabbitMQ Configuration for Document Service
+RabbitMQ configuration for the Document Service.
 
-This module provides configuration for RabbitMQ connections and messaging settings
-for the Document Service. It defines connection parameters, exchange and queue
-configurations, message consumption options, and security settings.
+This module provides configuration for RabbitMQ connection, exchanges, queues,
+and message handling for the Document Service. It enables the service to consume
+messages from the Email Service and publish classification results to the OCR Service.
 
-The configuration enables the service to:
-- Consume messages from the Email Service
-- Publish classification results to the OCR Service
-- Implement secure TLS connections with client certificate authentication
-- Handle connection errors and recovery
-- Ensure consistent message serialization in JSON format
+Key features:
+- TLS/SSL connection with client certificate authentication
+- Fanout exchange 'mca.documents' for document processing
+- Durable queues with dead-letter exchanges for error handling
+- Connection recovery with exponential backoff
+- JSON message serialization for consistent data format
+- Prefetch count configuration for optimal throughput
+
+As specified in the technical specification, this configuration implements:
+- Asynchronous messaging between services with guaranteed delivery
+- Dead letter exchanges for failed message handling
+- Consumer configuration with prefetch counts
+- Connection error handling and recovery strategies
 """
 
 import os
 import ssl
 import json
-import logging
-import time
-from typing import Dict, Any, Optional, Callable, List, Union
+from pathlib import Path
+from typing import Dict, Optional, Any, cast, Callable
 
-import pika
-from pika.adapters.blocking_connection import BlockingConnection
-from pika.connection import ConnectionParameters, SSLOptions
-from pika.credentials import ExternalCredentials
-from pika.exceptions import (
-    AMQPConnectionError,
-    ConnectionClosed,
-    ConnectionClosedByBroker,
-    ConnectionBlockedTimeout,
-    ChannelClosed,
-    ChannelClosedByBroker
-)
+from ..types.config import RabbitMQConfig, validate_config
 
-# Configure logger
-logger = logging.getLogger(__name__)
-
-# RabbitMQ Connection Settings
-RABBITMQ_HOST = os.environ.get('RABBITMQ_HOST', 'localhost')
-RABBITMQ_PORT = int(os.environ.get('RABBITMQ_PORT', '5671'))
-RABBITMQ_VHOST = os.environ.get('RABBITMQ_VHOST', '/')
-RABBITMQ_HEARTBEAT = int(os.environ.get('RABBITMQ_HEARTBEAT', '60'))
-RABBITMQ_CONNECTION_TIMEOUT = int(os.environ.get('RABBITMQ_CONNECTION_TIMEOUT', '30'))
-RABBITMQ_BLOCKED_CONNECTION_TIMEOUT = int(os.environ.get('RABBITMQ_BLOCKED_CONNECTION_TIMEOUT', '300'))
-
-# TLS Certificate Paths
-CA_CERT_PATH = os.environ.get('RABBITMQ_CA_CERT', '/etc/rabbitmq/certs/ca_certificate.pem')
-CLIENT_CERT_PATH = os.environ.get('RABBITMQ_CLIENT_CERT', '/etc/rabbitmq/certs/client_certificate.pem')
-CLIENT_KEY_PATH = os.environ.get('RABBITMQ_CLIENT_KEY', '/etc/rabbitmq/certs/client_key.pem')
-
-# Exchange and Queue Settings
-EXCHANGE_NAME = 'mca.documents'
-EXCHANGE_TYPE = 'fanout'
-QUEUE_NAME = 'document-processing'
-DEAD_LETTER_EXCHANGE = 'mca.dead-letter'
-DEAD_LETTER_QUEUE = 'document-processing-dead-letter'
-
-# Retry Settings
-MAX_RETRIES = int(os.environ.get('RABBITMQ_MAX_RETRIES', '5'))
-INITIAL_RETRY_DELAY = float(os.environ.get('RABBITMQ_INITIAL_RETRY_DELAY', '0.5'))
-MAX_RETRY_DELAY = float(os.environ.get('RABBITMQ_MAX_RETRY_DELAY', '30.0'))
-
-# Message Settings
-CONTENT_TYPE = 'application/json'
-DELIVERY_MODE = 2  # Persistent
-
-# Prefetch Settings
-PREFETCH_COUNT = int(os.environ.get('RABBITMQ_PREFETCH_COUNT', '10'))
+# Default RabbitMQ configuration based on technical specification requirements
+# See section 0.2.3 for exchange and queue names
+# See section 3.2.3 for security requirements (TLS with client certificate auth)
+DEFAULT_RABBITMQ_CONFIG: RabbitMQConfig = {
+    # Connection parameters
+    "host": os.environ.get("RABBITMQ_HOST", "localhost"),
+    "port": int(os.environ.get("RABBITMQ_PORT", "5671")),  # Default to TLS port
+    "username": os.environ.get("RABBITMQ_USERNAME", "guest"),
+    "password": os.environ.get("RABBITMQ_PASSWORD", "guest"),
+    "vhost": os.environ.get("RABBITMQ_VHOST", "/"),
+    
+    # Exchange and queue configuration as specified in section 0.2.3
+    "exchange": os.environ.get("RABBITMQ_EXCHANGE", "mca.documents"),  # Fanout exchange
+    "queue_document_processing": os.environ.get("RABBITMQ_QUEUE_DOCUMENT_PROCESSING", "document-processing"),
+    "queue_data_extraction": os.environ.get("RABBITMQ_QUEUE_DATA_EXTRACTION", "data-extraction"),
+    "routing_key": os.environ.get("RABBITMQ_ROUTING_KEY", "document.new"),
+    
+    # TLS/SSL configuration as required by section 3.2.3
+    "ssl": os.environ.get("RABBITMQ_SSL", "True").lower() in ("true", "1", "t"),  # Default to enabled
+    "ssl_cert_path": os.environ.get("RABBITMQ_SSL_CERT_PATH"),  # Client certificate
+    "ssl_key_path": os.environ.get("RABBITMQ_SSL_KEY_PATH"),    # Client key
+    "ssl_ca_certs": os.environ.get("RABBITMQ_SSL_CA_CERTS"),    # CA certificate
+    
+    # Connection tuning parameters
+    "heartbeat": int(os.environ.get("RABBITMQ_HEARTBEAT", "60")),  # Heartbeat interval in seconds
+    "connection_timeout": int(os.environ.get("RABBITMQ_CONNECTION_TIMEOUT", "30")),  # Connection timeout in seconds
+    "prefetch_count": int(os.environ.get("RABBITMQ_PREFETCH_COUNT", "10")),  # Number of unacknowledged messages
+}
 
 
-def create_ssl_context() -> ssl.SSLContext:
-    """
-    Create an SSL context for RabbitMQ connection with client certificate authentication.
+def get_rabbitmq_config() -> RabbitMQConfig:
+    """Get the RabbitMQ configuration with environment variable overrides.
+    
+    Loads the RabbitMQ configuration from environment variables with defaults,
+    and validates the configuration to ensure it meets the requirements
+    specified in the technical specification (section 3.2.3).
     
     Returns:
-        ssl.SSLContext: Configured SSL context for TLS connection
-        
+        RabbitMQ configuration dictionary with validated settings.
+    
     Raises:
-        FileNotFoundError: If certificate files cannot be found
-        ssl.SSLError: If there are issues with the certificates
+        ValueError: If the configuration is invalid, particularly if SSL is
+                   enabled but certificate paths are not properly configured.
     """
-    try:
-        # Create SSL context with TLS 1.2
-        context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
-        
-        # Require certificate verification
-        context.verify_mode = ssl.CERT_REQUIRED
-        
-        # Load CA certificate for server verification
-        context.load_verify_locations(cafile=CA_CERT_PATH)
-        
-        # Load client certificate and key for client authentication
-        context.load_cert_chain(certfile=CLIENT_CERT_PATH, keyfile=CLIENT_KEY_PATH)
-        
-        # Set TLS version to 1.2 minimum
-        context.minimum_version = ssl.TLSVersion.TLSv1_2
-        
-        # Disable insecure cipher suites
-        context.set_ciphers('HIGH:!aNULL:!MD5:!RC4')
-        
-        return context
-    except (FileNotFoundError, ssl.SSLError) as e:
-        logger.error(f"Failed to load certificate files: {str(e)}")
-        raise
+    config = DEFAULT_RABBITMQ_CONFIG.copy()
+    
+    # Validate the configuration
+    # This is a partial validation since we're only validating the RabbitMQ config
+    # The full validation happens in app_config.py
+    if config["ssl"] and not all([config["ssl_cert_path"], config["ssl_key_path"], config["ssl_ca_certs"]]):
+        raise ValueError("SSL is enabled but certificate paths are not properly configured")
+    
+    return config
 
 
-def get_connection_parameters() -> ConnectionParameters:
-    """
-    Create connection parameters for RabbitMQ with TLS configuration.
+def get_rabbitmq_connection_parameters(config: RabbitMQConfig) -> Dict[str, Any]:
+    """Get connection parameters for RabbitMQ.
     
-    Returns:
-        pika.ConnectionParameters: Configured connection parameters
-    """
-    # Create SSL context
-    ssl_context = create_ssl_context()
+    Configures the RabbitMQ connection with TLS/SSL and client certificate
+    authentication as required by the technical specification (section 3.2.3).
     
-    # Create SSL options with the context and server hostname
-    ssl_options = SSLOptions(ssl_context, RABBITMQ_HOST)
-    
-    # Use external credentials for client certificate authentication
-    credentials = ExternalCredentials()
-    
-    # Create and return connection parameters
-    return ConnectionParameters(
-        host=RABBITMQ_HOST,
-        port=RABBITMQ_PORT,
-        virtual_host=RABBITMQ_VHOST,
-        credentials=credentials,
-        ssl_options=ssl_options,
-        heartbeat=RABBITMQ_HEARTBEAT,
-        blocked_connection_timeout=RABBITMQ_BLOCKED_CONNECTION_TIMEOUT,
-        connection_attempts=3,
-        retry_delay=1.0,
-        socket_timeout=RABBITMQ_CONNECTION_TIMEOUT
-    )
-
-
-def create_rabbitmq_connection() -> BlockingConnection:
-    """
-    Create a connection to RabbitMQ with error handling and retry logic.
-    
-    Returns:
-        pika.BlockingConnection: Established connection to RabbitMQ
-        
-    Raises:
-        AMQPConnectionError: If connection cannot be established after retries
-    """
-    retry_count = 0
-    retry_delay = INITIAL_RETRY_DELAY
-    
-    while retry_count <= MAX_RETRIES:
-        try:
-            # Get connection parameters
-            parameters = get_connection_parameters()
-            
-            # Establish connection
-            logger.info(f"Connecting to RabbitMQ at {RABBITMQ_HOST}:{RABBITMQ_PORT}")
-            connection = BlockingConnection(parameters)
-            logger.info("Successfully connected to RabbitMQ")
-            
-            return connection
-            
-        except AMQPConnectionError as e:
-            retry_count += 1
-            if retry_count > MAX_RETRIES:
-                logger.error(f"Failed to connect to RabbitMQ after {MAX_RETRIES} attempts: {str(e)}")
-                raise
-            
-            logger.warning(f"Connection attempt {retry_count} failed: {str(e)}. Retrying in {retry_delay} seconds...")
-            time.sleep(retry_delay)
-            
-            # Implement exponential backoff with a maximum delay
-            retry_delay = min(retry_delay * 2, MAX_RETRY_DELAY)
-
-
-def setup_rabbitmq_channel(connection: BlockingConnection) -> pika.channel.Channel:
-    """
-    Set up a RabbitMQ channel with the required exchanges and queues.
+    The SSL context is configured with:
+    - Client certificate authentication
+    - Certificate verification
+    - Hostname verification
     
     Args:
-        connection: Established RabbitMQ connection
+        config: RabbitMQ configuration.
         
     Returns:
-        pika.channel.Channel: Configured RabbitMQ channel
-        
-    Raises:
-        ChannelClosed: If channel setup fails
+        Dictionary of connection parameters for pika, including SSL context
+        if SSL is enabled.
     """
-    try:
-        # Create channel
-        channel = connection.channel()
-        
-        # Set QoS prefetch count
-        channel.basic_qos(prefetch_count=PREFETCH_COUNT)
-        
-        # Declare dead letter exchange
-        channel.exchange_declare(
-            exchange=DEAD_LETTER_EXCHANGE,
-            exchange_type='direct',
-            durable=True
+    params = {
+        "host": config["host"],
+        "port": config["port"],
+        "virtual_host": config["vhost"],
+        "credentials": {
+            "username": config["username"],
+            "password": config["password"],
+        },
+        "heartbeat": config["heartbeat"],
+        "connection_timeout": config["connection_timeout"],
+        "client_properties": {
+            "connection_name": "document-service",
+            "product": "MCA Document Service",
+        },
+    }
+    
+    # Add SSL context if SSL is enabled
+    if config["ssl"]:
+        ssl_context = ssl.create_default_context(cafile=config["ssl_ca_certs"])
+        ssl_context.load_cert_chain(
+            certfile=cast(str, config["ssl_cert_path"]),
+            keyfile=cast(str, config["ssl_key_path"]),
         )
+        ssl_context.check_hostname = True
+        ssl_context.verify_mode = ssl.CERT_REQUIRED
         
-        # Declare dead letter queue
-        channel.queue_declare(
-            queue=DEAD_LETTER_QUEUE,
-            durable=True
-        )
-        
-        # Bind dead letter queue to dead letter exchange
-        channel.queue_bind(
-            queue=DEAD_LETTER_QUEUE,
-            exchange=DEAD_LETTER_EXCHANGE,
-            routing_key=QUEUE_NAME
-        )
-        
-        # Declare main exchange
-        channel.exchange_declare(
-            exchange=EXCHANGE_NAME,
-            exchange_type=EXCHANGE_TYPE,
-            durable=True
-        )
-        
-        # Declare main queue with dead letter configuration
-        channel.queue_declare(
-            queue=QUEUE_NAME,
-            durable=True,
-            arguments={
-                'x-dead-letter-exchange': DEAD_LETTER_EXCHANGE,
-                'x-dead-letter-routing-key': QUEUE_NAME,
-                'x-message-ttl': 1000 * 60 * 60 * 24  # 24 hours in milliseconds
-            }
-        )
-        
-        # Bind main queue to main exchange
-        channel.queue_bind(
-            queue=QUEUE_NAME,
-            exchange=EXCHANGE_NAME
-        )
-        
-        logger.info(f"Successfully set up RabbitMQ channel with exchange '{EXCHANGE_NAME}' and queue '{QUEUE_NAME}'")
-        return channel
-        
-    except (ChannelClosed, ChannelClosedByBroker) as e:
-        logger.error(f"Failed to set up RabbitMQ channel: {str(e)}")
-        raise
+        params["ssl_options"] = {
+            "context": ssl_context,
+        }
+    
+    return params
 
 
-def serialize_message(message: Dict[str, Any]) -> bytes:
-    """
-    Serialize a message to JSON format.
+def get_rabbitmq_exchange_config(config: RabbitMQConfig) -> Dict[str, Any]:
+    """Get exchange configuration for RabbitMQ.
+    
+    Configures the 'mca.documents' fanout exchange as specified in the technical
+    specification (section 0.2.3). This exchange is used for document processing
+    messages between services.
     
     Args:
-        message: Dictionary containing message data
+        config: RabbitMQ configuration.
         
     Returns:
-        bytes: JSON-serialized message as bytes
+        Dictionary of exchange configuration with the following keys:
+        - exchange: Exchange name ('mca.documents')
+        - exchange_type: Exchange type ('fanout')
+        - durable: Whether the exchange survives broker restarts
+        - auto_delete: Whether the exchange is deleted when no queues are bound
     """
-    try:
-        return json.dumps(message, ensure_ascii=False).encode('utf-8')
-    except (TypeError, ValueError) as e:
-        logger.error(f"Failed to serialize message: {str(e)}")
-        raise
+    return {
+        "exchange": config["exchange"],
+        "exchange_type": "fanout",  # Using fanout as specified in the technical spec
+        "durable": True,  # Survive broker restarts
+        "auto_delete": False,  # Don't delete when no queues are bound
+    }
 
 
-def deserialize_message(body: bytes) -> Dict[str, Any]:
-    """
-    Deserialize a JSON message from bytes.
+def get_rabbitmq_queue_config(config: RabbitMQConfig) -> Dict[str, Any]:
+    """Get queue configuration for RabbitMQ.
+    
+    Configures the document processing queues as specified in the technical
+    specification (section 0.2.3). The Document Service consumes from the
+    'document-processing' queue and publishes to the 'data-extraction' queue.
+    
+    Both queues are configured with:
+    - Durability to survive broker restarts
+    - Dead-letter exchanges for failed message handling
+    - Message TTL to prevent queue overflow
     
     Args:
-        body: Byte string containing JSON data
+        config: RabbitMQ configuration.
         
     Returns:
-        Dict[str, Any]: Deserialized message as dictionary
-        
-    Raises:
-        ValueError: If message cannot be deserialized
+        Dictionary of queue configurations for 'document-processing' and
+        'data-extraction' queues.
     """
-    try:
-        return json.loads(body.decode('utf-8'))
-    except (json.JSONDecodeError, UnicodeDecodeError) as e:
-        logger.error(f"Failed to deserialize message: {str(e)}")
-        raise ValueError(f"Invalid message format: {str(e)}")
+    return {
+        "document_processing": {
+            "queue": config["queue_document_processing"],
+            "durable": True,  # Survive broker restarts
+            "exclusive": False,  # Allow multiple consumers
+            "auto_delete": False,  # Don't delete when no consumers
+            "arguments": {
+                "x-dead-letter-exchange": f"{config['exchange']}.dlx",  # Dead letter exchange
+                "x-message-ttl": 1000 * 60 * 60 * 24,  # 24 hours in milliseconds
+            },
+        },
+        "data_extraction": {
+            "queue": config["queue_data_extraction"],
+            "durable": True,
+            "exclusive": False,
+            "auto_delete": False,
+            "arguments": {
+                "x-dead-letter-exchange": f"{config['exchange']}.dlx",
+                "x-message-ttl": 1000 * 60 * 60 * 24,  # 24 hours in milliseconds
+            },
+        },
+    }
 
 
-def publish_message(channel: pika.channel.Channel, message: Dict[str, Any], routing_key: str = '') -> None:
-    """
-    Publish a message to the RabbitMQ exchange with error handling.
+def get_rabbitmq_consumer_config(config: RabbitMQConfig) -> Dict[str, Any]:
+    """Get consumer configuration for RabbitMQ.
+    
+    Configures the RabbitMQ consumer with:
+    - Prefetch count to limit the number of unacknowledged messages
+    - Explicit acknowledgement requirement for reliable processing
+    
+    This ensures that the Document Service processes messages from the
+    'document-processing' queue reliably and efficiently, as specified in
+    the technical specification (section 4.1.7).
     
     Args:
-        channel: RabbitMQ channel
-        message: Dictionary containing message data
-        routing_key: Optional routing key (default is empty string for fanout exchange)
+        config: RabbitMQ configuration.
         
-    Raises:
-        ConnectionClosed: If connection is lost during publishing
+    Returns:
+        Dictionary of consumer configuration for reliable message processing.
     """
-    try:
-        # Serialize message
-        body = serialize_message(message)
-        
-        # Publish message with persistent delivery mode
-        channel.basic_publish(
-            exchange=EXCHANGE_NAME,
-            routing_key=routing_key,
-            body=body,
-            properties=pika.BasicProperties(
-                content_type=CONTENT_TYPE,
-                delivery_mode=DELIVERY_MODE,
-                timestamp=int(time.time()),
-                message_id=str(time.time()),
-                app_id='document-service'
-            )
-        )
-        logger.debug(f"Published message to exchange '{EXCHANGE_NAME}' with routing key '{routing_key}'")
-        
-    except (ConnectionClosed, ConnectionClosedByBroker) as e:
-        logger.error(f"Failed to publish message: {str(e)}")
-        raise
+    return {
+        "prefetch_count": config["prefetch_count"],
+        "no_ack": False,  # Require explicit acknowledgement
+    }
 
 
-class RabbitMQClient:
-    """
-    Client for RabbitMQ operations with connection management and error handling.
-    """
+def get_rabbitmq_publisher_config(config: RabbitMQConfig) -> Dict[str, Any]:
+    """Get publisher configuration for RabbitMQ.
     
-    def __init__(self):
-        """
-        Initialize the RabbitMQ client.
-        """
-        self.connection = None
-        self.channel = None
+    Configures the RabbitMQ publisher with:
+    - Mandatory flag to ensure messages are routed
+    - Persistent delivery mode for message durability
+    - JSON content type for consistent message serialization
     
-    def connect(self) -> None:
-        """
-        Establish connection to RabbitMQ and set up channel.
+    This ensures that messages from the Document Service to the OCR Service
+    are delivered reliably and in a consistent format, as specified in the
+    technical specification (section 3.2.3).
+    
+    Args:
+        config: RabbitMQ configuration.
         
-        Raises:
-            AMQPConnectionError: If connection cannot be established
-            ChannelClosed: If channel setup fails
-        """
-        if self.connection is None or self.connection.is_closed:
-            self.connection = create_rabbitmq_connection()
-            self.channel = setup_rabbitmq_channel(self.connection)
+    Returns:
+        Dictionary of publisher configuration for reliable message delivery.
+    """
+    return {
+        "mandatory": True,  # Raise exception if message cannot be routed
+        "properties": {
+            "delivery_mode": 2,  # Persistent
+            "content_type": "application/json",  # JSON serialization
+        },
+    }
+
+
+def get_rabbitmq_retry_config() -> Dict[str, Any]:
+    """Get retry configuration for RabbitMQ connection.
     
-    def close(self) -> None:
-        """
-        Close the RabbitMQ connection and channel safely.
-        """
-        if self.connection and self.connection.is_open:
-            try:
-                if self.channel and self.channel.is_open:
-                    self.channel.close()
-                self.connection.close()
-                logger.info("RabbitMQ connection closed")
-            except Exception as e:
-                logger.warning(f"Error while closing RabbitMQ connection: {str(e)}")
+    This implements an exponential backoff strategy for connection retries,
+    as specified in the technical specification. The retry mechanism helps
+    ensure resilience against temporary RabbitMQ unavailability.
     
-    def publish(self, message: Dict[str, Any], routing_key: str = '') -> None:
-        """
-        Publish a message to RabbitMQ with automatic reconnection.
+    Returns:
+        Dictionary of retry configuration with the following keys:
+        - max_retries: Maximum number of retry attempts
+        - initial_delay: Initial delay between retries in seconds
+        - max_delay: Maximum delay between retries in seconds
+        - backoff_factor: Multiplicative factor for exponential backoff
+    """
+    return {
+        "max_retries": int(os.environ.get("RABBITMQ_MAX_RETRIES", "5")),
+        "initial_delay": float(os.environ.get("RABBITMQ_INITIAL_DELAY", "1.0")),  # seconds
+        "max_delay": float(os.environ.get("RABBITMQ_MAX_DELAY", "30.0")),  # seconds
+        "backoff_factor": float(os.environ.get("RABBITMQ_BACKOFF_FACTOR", "2.0")),
+    }
+
+
+def get_message_serializer() -> Callable[[Any], bytes]:
+    """Get a message serializer function for RabbitMQ messages.
+    
+    Returns a function that serializes Python objects to JSON bytes for
+    publishing to RabbitMQ. This ensures consistent message format across
+    all services, as specified in the technical specification (section 3.2.3).
+    
+    Returns:
+        A function that takes a Python object and returns JSON bytes.
+    """
+    def serialize_message(message: Any) -> bytes:
+        """Serialize a message to JSON bytes.
         
         Args:
-            message: Dictionary containing message data
-            routing_key: Optional routing key
+            message: The message to serialize.
             
-        Raises:
-            AMQPConnectionError: If connection cannot be re-established after retries
+        Returns:
+            JSON bytes representation of the message.
         """
-        try:
-            # Ensure connection is established
-            self.connect()
-            
-            # Publish message
-            publish_message(self.channel, message, routing_key)
-            
-        except (ConnectionClosed, ConnectionClosedByBroker) as e:
-            logger.warning(f"Connection lost during publish: {str(e)}. Attempting to reconnect...")
-            
-            # Try to reconnect and publish again
-            self.connection = None  # Force reconnection
-            self.connect()
-            publish_message(self.channel, message, routing_key)
+        return json.dumps(message, ensure_ascii=False, default=str).encode('utf-8')
     
-    def consume(self, callback: Callable[[Dict[str, Any], pika.spec.Basic.Deliver, pika.spec.BasicProperties], None]) -> None:
-        """
-        Start consuming messages from the queue with the provided callback.
-        
-        Args:
-            callback: Function to call when a message is received. Should accept message content,
-                      delivery info, and properties as arguments.
-                      
-        Raises:
-            AMQPConnectionError: If connection cannot be established
-        """
-        def wrapped_callback(ch, method, properties, body):
-            """
-            Wrapper for the user callback that handles message deserialization and exceptions.
-            """
-            try:
-                # Deserialize message
-                message = deserialize_message(body)
-                
-                # Call user callback
-                callback(message, method, properties)
-                
-                # Acknowledge message
-                ch.basic_ack(delivery_tag=method.delivery_tag)
-                
-            except Exception as e:
-                logger.error(f"Error processing message: {str(e)}")
-                
-                # Reject message and requeue if it's not a deserialization error
-                if not isinstance(e, ValueError):
-                    ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
-                else:
-                    # For deserialization errors, don't requeue
-                    ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
-        
-        # Ensure connection is established
-        self.connect()
-        
-        # Start consuming
-        self.channel.basic_consume(
-            queue=QUEUE_NAME,
-            on_message_callback=wrapped_callback
-        )
-        
-        logger.info(f"Started consuming from queue '{QUEUE_NAME}'")
-        
-        try:
-            self.channel.start_consuming()
-        except KeyboardInterrupt:
-            self.channel.stop_consuming()
-            self.close()
-        except (ConnectionClosed, ConnectionClosedByBroker) as e:
-            logger.warning(f"Connection lost during consumption: {str(e)}")
-            raise
+    return serialize_message
 
 
-# Create a singleton instance for use throughout the application
-rabbitmq_client = RabbitMQClient()
-
-
-# Helper functions for simplified usage
-def get_rabbitmq_client() -> RabbitMQClient:
-    """
-    Get the RabbitMQ client singleton instance.
+def get_message_deserializer() -> Callable[[bytes], Any]:
+    """Get a message deserializer function for RabbitMQ messages.
+    
+    Returns a function that deserializes JSON bytes from RabbitMQ to Python
+    objects. This ensures consistent message parsing across all services,
+    as specified in the technical specification (section 3.2.3).
     
     Returns:
-        RabbitMQClient: Singleton instance of the RabbitMQ client
+        A function that takes JSON bytes and returns a Python object.
     """
-    return rabbitmq_client
+    def deserialize_message(message_bytes: bytes) -> Any:
+        """Deserialize JSON bytes to a Python object.
+        
+        Args:
+            message_bytes: The JSON bytes to deserialize.
+            
+        Returns:
+            Python object representation of the JSON bytes.
+            
+        Raises:
+            json.JSONDecodeError: If the message is not valid JSON.
+        """
+        return json.loads(message_bytes.decode('utf-8'))
+    
+    return deserialize_message
 
 
-def consume_messages(callback: Callable[[Dict[str, Any], pika.spec.Basic.Deliver, pika.spec.BasicProperties], None]) -> None:
-    """
-    Start consuming messages with automatic reconnection.
-    
-    Args:
-        callback: Function to call when a message is received
-    """
-    retry_count = 0
-    retry_delay = INITIAL_RETRY_DELAY
-    
-    while True:
-        try:
-            # Get client and start consuming
-            client = get_rabbitmq_client()
-            client.consume(callback)
-            
-            # Reset retry count on successful connection
-            retry_count = 0
-            retry_delay = INITIAL_RETRY_DELAY
-            
-        except (AMQPConnectionError, ConnectionClosed, ConnectionClosedByBroker) as e:
-            retry_count += 1
-            
-            logger.warning(f"Connection lost, retry attempt {retry_count}: {str(e)}")
-            time.sleep(retry_delay)
-            
-            # Implement exponential backoff with a maximum delay
-            retry_delay = min(retry_delay * 2, MAX_RETRY_DELAY)
-            
-            # Force reconnection
-            rabbitmq_client.connection = None
-        
-        except KeyboardInterrupt:
-            logger.info("Stopping consumer due to keyboard interrupt")
-            break
-        
-        except Exception as e:
-            logger.error(f"Unexpected error in consumer: {str(e)}")
-            raise
+# Export the configuration functions
+__all__ = [
+    "get_rabbitmq_config",
+    "get_rabbitmq_connection_parameters",
+    "get_rabbitmq_exchange_config",
+    "get_rabbitmq_queue_config",
+    "get_rabbitmq_consumer_config",
+    "get_rabbitmq_publisher_config",
+    "get_rabbitmq_retry_config",
+    "get_message_serializer",
+    "get_message_deserializer",
+]
