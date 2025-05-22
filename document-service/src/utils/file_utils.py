@@ -5,265 +5,136 @@
 File handling utilities for the Document Service.
 
 This module provides utility functions for file operations, MIME type detection,
-content type validation, file size formatting, and temporary file management.
-It's essential for processing documents and preparing them for classification and storage.
+and content type validation used in the Document Service. These utilities are
+essential for processing documents and preparing them for classification and storage.
+
+The module includes functions for:
+- MIME type detection and validation
+- File size calculation and formatting
+- Temporary file management
+- Buffer handling and conversion
+- Content type mapping for document formats
+- File hashing and unique filename generation
+
+Dependencies:
+- python-magic: Requires libmagic to be installed on the system
+  - On Linux: Install libmagic using the system package manager (e.g., apt-get install libmagic1)
+  - On macOS: Install libmagic using Homebrew (brew install libmagic)
+  - On Windows: Use python-magic-bin package or follow instructions at https://github.com/ahupp/python-magic
 """
 
 import os
-import re
 import tempfile
 import mimetypes
-import logging
 import hashlib
-import uuid
-import datetime
-from typing import Dict, List, Optional, Set, Tuple, Union, Any, BinaryIO, Iterator
-from pathlib import Path
-from functools import wraps
 import shutil
-import io
-import math
+import logging
+from pathlib import Path
+from typing import Dict, List, Optional, Union, BinaryIO, Tuple
+from contextlib import contextmanager
 
-# Import custom types
-from ..types.documents import DocumentMetadata, DocumentType, DocumentContent
-from ..types.errors import ServiceError
+# Try to import magic, with fallback for different package names
+try:
+    import magic
+except ImportError:
+    try:
+        # Try python-magic-bin as an alternative
+        import magic
+    except ImportError:
+        raise ImportError(
+            "Failed to import magic module. Please install python-magic or python-magic-bin. "
+            "See module docstring for installation instructions."
+        )
 
-# Configure logger
+# Set up logger
 logger = logging.getLogger(__name__)
 
-# Constants for file operations
-BUFFER_SIZE = 65536  # 64KB buffer size for file operations
+# Initialize mimetypes
+mimetypes.init()
 
-# Constants for MIME type detection
-DEFAULT_MIME_TYPE = 'application/octet-stream'
-
-# Supported MIME types and their corresponding file extensions
+# Define supported document types and their MIME types
 SUPPORTED_MIME_TYPES = {
     # PDF documents
-    'application/pdf': ['.pdf'],
+    'application/pdf': '.pdf',
     
-    # TIFF images
-    'image/tiff': ['.tiff', '.tif'],
+    # Image formats
+    'image/jpeg': '.jpg',
+    'image/png': '.png',
+    'image/tiff': '.tiff',
+    'image/tif': '.tif',
     
-    # JPEG images
-    'image/jpeg': ['.jpg', '.jpeg'],
+    # Microsoft Office formats
+    'application/msword': '.doc',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+    'application/vnd.ms-excel': '.xls',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
     
-    # PNG images
-    'image/png': ['.png']
+    # Plain text
+    'text/plain': '.txt',
+    
+    # Rich text format
+    'application/rtf': '.rtf',
+    
+    # Open document formats
+    'application/vnd.oasis.opendocument.text': '.odt',
+    'application/vnd.oasis.opendocument.spreadsheet': '.ods'
 }
 
-# Flat list of all supported file extensions
-SUPPORTED_EXTENSIONS = [ext for exts in SUPPORTED_MIME_TYPES.values() for ext in exts]
+# Maximum file size (100MB)
+MAX_FILE_SIZE = 100 * 1024 * 1024
 
-# Document type to MIME type mapping
-DOCUMENT_TYPE_MIME_MAPPING = {
-    DocumentType.APPLICATION.value: ['application/pdf'],
-    DocumentType.TAX_RETURN.value: ['application/pdf', 'image/tiff'],
-    DocumentType.BANK_STATEMENT.value: ['application/pdf', 'image/tiff', 'image/jpeg', 'image/png'],
-    DocumentType.PAY_STUB.value: ['application/pdf', 'image/tiff', 'image/jpeg', 'image/png'],
-    DocumentType.ID_DOCUMENT.value: ['application/pdf', 'image/tiff', 'image/jpeg', 'image/png'],
-    DocumentType.OTHER.value: list(SUPPORTED_MIME_TYPES.keys())
+# Document categories for classification
+DOCUMENT_CATEGORIES = {
+    'loan_application': ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+    'tax_return': ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
+    'bank_statement': ['application/pdf', 'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'image/jpeg', 'image/png'],
+    'pay_stub': ['application/pdf', 'image/jpeg', 'image/png', 'image/tiff'],
+    'identity_document': ['application/pdf', 'image/jpeg', 'image/png', 'image/tiff'],
+    'other': ['application/pdf', 'image/jpeg', 'image/png', 'text/plain']
 }
 
-# File size units for formatting
-SIZE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB']
 
-# Temporary file settings
-TEMP_DIR = tempfile.gettempdir()
-TEMP_PREFIX = 'mca_doc_'
-
-
-def file_operation_decorator(func):
+def get_mime_type(file_path_or_bytes: Union[str, bytes, BinaryIO]) -> str:
     """
-    Decorator for file operation functions to handle exceptions and log errors.
+    Detect MIME type of a file or bytes object using python-magic.
     
     Args:
-        func: The file operation function to decorate
-        
-    Returns:
-        Callable: Decorated function
-    """
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        try:
-            return func(*args, **kwargs)
-        except Exception as e:
-            logger.error(f"File operation error in {func.__name__}: {str(e)}")
-            raise ServiceError(f"File operation error: {str(e)}")
-    return wrapper
-
-
-@file_operation_decorator
-def get_file_size(file_path: str) -> int:
-    """
-    Get the size of a file in bytes.
-    
-    Args:
-        file_path: Path to the file
-        
-    Returns:
-        int: Size of the file in bytes
-    """
-    return os.path.getsize(file_path)
-
-
-@file_operation_decorator
-def get_file_size_from_buffer(buffer: bytes) -> int:
-    """
-    Get the size of a file buffer in bytes.
-    
-    Args:
-        buffer: File content as bytes
-        
-    Returns:
-        int: Size of the buffer in bytes
-    """
-    return len(buffer)
-
-
-def format_file_size(size_in_bytes: int, decimal_places: int = 2) -> str:
-    """
-    Format file size in human-readable format (e.g., KB, MB, GB).
-    
-    Args:
-        size_in_bytes: Size of the file in bytes
-        decimal_places: Number of decimal places to include in the formatted size
-        
-    Returns:
-        str: Human-readable file size
-    """
-    if size_in_bytes == 0:
-        return "0 B"
-    
-    # Calculate the appropriate unit index (0=B, 1=KB, 2=MB, etc.)
-    unit_index = min(int(math.log(size_in_bytes, 1024)), len(SIZE_UNITS) - 1)
-    
-    # Calculate the size in the appropriate unit
-    size_in_unit = size_in_bytes / (1024 ** unit_index)
-    
-    # Format the size with the specified number of decimal places
-    formatted_size = f"{size_in_unit:.{decimal_places}f}"
-    
-    # Remove trailing zeros and decimal point if not needed
-    if '.' in formatted_size:
-        formatted_size = formatted_size.rstrip('0').rstrip('.') if '.' in formatted_size else formatted_size
-    
-    return f"{formatted_size} {SIZE_UNITS[unit_index]}"
-
-
-def convert_size_to_bytes(size: float, unit: str) -> int:
-    """
-    Convert a file size from a specific unit to bytes.
-    
-    Args:
-        size: Size value to convert
-        unit: Unit to convert from (B, KB, MB, GB, etc.)
-        
-    Returns:
-        int: Size in bytes
-    """
-    unit = unit.upper()
-    if unit not in SIZE_UNITS:
-        raise ValueError(f"Invalid size unit: {unit}. Must be one of {SIZE_UNITS}")
-    
-    unit_index = SIZE_UNITS.index(unit)
-    return int(size * (1024 ** unit_index))
-
-
-@file_operation_decorator
-def get_mime_type(file_path: str) -> str:
-    """
-    Detect the MIME type of a file based on its extension and content.
-    
-    Args:
-        file_path: Path to the file
+        file_path_or_bytes: Path to file, bytes object, or file-like object
         
     Returns:
         str: Detected MIME type
+        
+    Raises:
+        ValueError: If the file cannot be read or MIME type cannot be detected
     """
-    # First try to detect MIME type using python-magic if available
     try:
-        import magic
-        mime = magic.Magic(mime=True)
-        detected_mime = mime.from_file(file_path)
-        if detected_mime:
-            return detected_mime
-    except ImportError:
-        logger.warning("python-magic not available, falling back to mimetypes module")
+        if isinstance(file_path_or_bytes, str):
+            # It's a file path
+            logger.debug(f"Detecting MIME type for file: {file_path_or_bytes}")
+            mime = magic.from_file(file_path_or_bytes, mime=True)
+        elif isinstance(file_path_or_bytes, bytes):
+            # It's a bytes object
+            logger.debug(f"Detecting MIME type from bytes object of length: {len(file_path_or_bytes)}")
+            mime = magic.from_buffer(file_path_or_bytes, mime=True)
+        else:
+            # Assume it's a file-like object
+            logger.debug("Detecting MIME type from file-like object")
+            position = file_path_or_bytes.tell()
+            file_path_or_bytes.seek(0)
+            content = file_path_or_bytes.read(2048)  # Read first 2KB for MIME detection
+            file_path_or_bytes.seek(position)  # Reset position
+            mime = magic.from_buffer(content, mime=True)
+            
+        logger.debug(f"Detected MIME type: {mime}")
+        return mime
     except Exception as e:
-        logger.warning(f"Error detecting MIME type with python-magic: {str(e)}")
-    
-    # Fall back to mimetypes module (less accurate, based on extension only)
-    mime_type, encoding = mimetypes.guess_type(file_path)
-    if mime_type:
-        return mime_type
-    
-    # If all else fails, try to determine based on file extension
-    ext = Path(file_path).suffix.lower()
-    for mime, extensions in SUPPORTED_MIME_TYPES.items():
-        if ext in extensions:
-            return mime
-    
-    # Default MIME type if detection fails
-    return DEFAULT_MIME_TYPE
-
-
-@file_operation_decorator
-def get_mime_type_from_buffer(buffer: bytes) -> str:
-    """
-    Detect the MIME type from a bytes buffer.
-    
-    Args:
-        buffer: File content as bytes
-        
-    Returns:
-        str: Detected MIME type
-    """
-    # Try to detect MIME type using python-magic if available
-    try:
-        import magic
-        mime = magic.Magic(mime=True)
-        detected_mime = mime.from_buffer(buffer)
-        if detected_mime:
-            return detected_mime
-    except ImportError:
-        logger.warning("python-magic not available for buffer MIME type detection")
-    except Exception as e:
-        logger.warning(f"Error detecting MIME type from buffer with python-magic: {str(e)}")
-    
-    # If python-magic is not available, we can't reliably detect MIME type from buffer
-    # Return default MIME type
-    return DEFAULT_MIME_TYPE
-
-
-@file_operation_decorator
-def get_mime_type_from_filename(filename: str) -> str:
-    """
-    Detect the MIME type based on filename or extension.
-    
-    Args:
-        filename: Filename or path
-        
-    Returns:
-        str: Detected MIME type
-    """
-    mime_type, encoding = mimetypes.guess_type(filename)
-    if mime_type:
-        return mime_type
-    
-    # Try to determine based on file extension
-    ext = Path(filename).suffix.lower()
-    for mime, extensions in SUPPORTED_MIME_TYPES.items():
-        if ext in extensions:
-            return mime
-    
-    # Default MIME type if detection fails
-    return DEFAULT_MIME_TYPE
+        logger.error(f"Failed to detect MIME type: {str(e)}")
+        raise ValueError(f"Failed to detect MIME type: {str(e)}")
 
 
 def is_supported_mime_type(mime_type: str) -> bool:
     """
-    Check if the MIME type is in the list of supported types.
+    Check if the MIME type is supported by the Document Service.
     
     Args:
         mime_type: MIME type to check
@@ -274,686 +145,357 @@ def is_supported_mime_type(mime_type: str) -> bool:
     return mime_type in SUPPORTED_MIME_TYPES
 
 
-def is_supported_file_extension(file_path: str) -> bool:
+def get_extension_for_mime_type(mime_type: str) -> Optional[str]:
     """
-    Check if the file has a supported extension.
-    
-    Args:
-        file_path: Path to the file
-        
-    Returns:
-        bool: True if the extension is supported, False otherwise
-    """
-    ext = Path(file_path).suffix.lower()
-    return ext in SUPPORTED_EXTENSIONS
-
-
-def get_file_extension(file_path: str) -> str:
-    """
-    Get the file extension from a file path.
-    
-    Args:
-        file_path: Path to the file
-        
-    Returns:
-        str: File extension (including the dot)
-    """
-    return Path(file_path).suffix.lower()
-
-
-def get_file_extension_from_mime_type(mime_type: str) -> Optional[str]:
-    """
-    Get the default file extension for a MIME type.
+    Get the file extension for a given MIME type.
     
     Args:
         mime_type: MIME type
         
     Returns:
-        Optional[str]: File extension (including the dot) or None if not found
+        Optional[str]: File extension including the dot, or None if not supported
     """
-    if mime_type in SUPPORTED_MIME_TYPES:
-        return SUPPORTED_MIME_TYPES[mime_type][0]  # Return the first extension in the list
+    return SUPPORTED_MIME_TYPES.get(mime_type)
+
+
+def get_mime_type_for_extension(extension: str) -> Optional[str]:
+    """
+    Get the MIME type for a given file extension.
     
-    # Try using mimetypes module as fallback
-    ext = mimetypes.guess_extension(mime_type)
-    if ext:
-        return ext
-    
+    Args:
+        extension: File extension (with or without the dot)
+        
+    Returns:
+        Optional[str]: MIME type or None if not found
+    """
+    if not extension.startswith('.'):
+        extension = f'.{extension}'
+        
+    for mime_type, ext in SUPPORTED_MIME_TYPES.items():
+        if ext == extension:
+            return mime_type
     return None
 
 
-@file_operation_decorator
-def create_temp_file(prefix: str = TEMP_PREFIX, suffix: str = '', dir: str = TEMP_DIR) -> Tuple[str, BinaryIO]:
+def validate_file_type(file_path_or_bytes: Union[str, bytes, BinaryIO]) -> Tuple[bool, str]:
     """
-    Create a temporary file and return its path and file object.
+    Validate if a file is of a supported type.
     
     Args:
-        prefix: Prefix for the temporary file name
-        suffix: Suffix for the temporary file name (e.g., file extension)
-        dir: Directory where the temporary file will be created
+        file_path_or_bytes: Path to file, bytes object, or file-like object
         
     Returns:
-        Tuple[str, BinaryIO]: Tuple containing the file path and file object
+        Tuple[bool, str]: (is_valid, mime_type)
     """
-    fd, path = tempfile.mkstemp(prefix=prefix, suffix=suffix, dir=dir)
-    return path, os.fdopen(fd, 'wb')
+    try:
+        mime_type = get_mime_type(file_path_or_bytes)
+        is_valid = is_supported_mime_type(mime_type)
+        
+        if is_valid:
+            logger.info(f"Validated file with MIME type: {mime_type}")
+        else:
+            logger.warning(f"Unsupported MIME type detected: {mime_type}")
+            
+        return is_valid, mime_type
+    except ValueError as e:
+        logger.error(f"File validation failed: {str(e)}")
+        return False, ""
 
 
-@file_operation_decorator
-def create_named_temp_file(prefix: str = TEMP_PREFIX, suffix: str = '', dir: str = TEMP_DIR, delete: bool = True) -> tempfile._TemporaryFileWrapper:
+def calculate_file_size(file_path_or_bytes: Union[str, bytes, BinaryIO]) -> int:
     """
-    Create a named temporary file using NamedTemporaryFile.
+    Calculate the size of a file in bytes.
     
     Args:
-        prefix: Prefix for the temporary file name
-        suffix: Suffix for the temporary file name (e.g., file extension)
-        dir: Directory where the temporary file will be created
-        delete: Whether to delete the file when closed (default: True)
+        file_path_or_bytes: Path to file, bytes object, or file-like object
         
     Returns:
-        tempfile._TemporaryFileWrapper: Temporary file object with a visible name
+        int: File size in bytes
+        
+    Raises:
+        ValueError: If the file size cannot be determined
     """
-    return tempfile.NamedTemporaryFile(mode='wb', prefix=prefix, suffix=suffix, dir=dir, delete=delete)
+    try:
+        if isinstance(file_path_or_bytes, str):
+            # It's a file path
+            size = os.path.getsize(file_path_or_bytes)
+            logger.debug(f"File size for {file_path_or_bytes}: {size} bytes")
+            return size
+        elif isinstance(file_path_or_bytes, bytes):
+            # It's a bytes object
+            size = len(file_path_or_bytes)
+            logger.debug(f"Bytes object size: {size} bytes")
+            return size
+        else:
+            # Assume it's a file-like object
+            position = file_path_or_bytes.tell()
+            file_path_or_bytes.seek(0, os.SEEK_END)
+            size = file_path_or_bytes.tell()
+            file_path_or_bytes.seek(position)  # Reset position
+            logger.debug(f"File-like object size: {size} bytes")
+            return size
+    except Exception as e:
+        logger.error(f"Failed to calculate file size: {str(e)}")
+        raise ValueError(f"Failed to calculate file size: {str(e)}")
 
 
-@file_operation_decorator
-def create_temp_directory(prefix: str = TEMP_PREFIX, dir: str = TEMP_DIR) -> str:
+def format_file_size(size_in_bytes: int) -> str:
     """
-    Create a temporary directory and return its path.
+    Format file size in a human-readable format.
     
     Args:
-        prefix: Prefix for the temporary directory name
-        dir: Parent directory where the temporary directory will be created
+        size_in_bytes: File size in bytes
         
     Returns:
-        str: Path to the created temporary directory
+        str: Formatted file size (e.g., "2.5 MB")
     """
-    return tempfile.mkdtemp(prefix=prefix, dir=dir)
+    if size_in_bytes == 0:
+        return "0 bytes"
+        
+    units = ['bytes', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB']
+    i = 0
+    while size_in_bytes >= 1024 and i < len(units) - 1:
+        size_in_bytes /= 1024.0
+        i += 1
+        
+    formatted = f"{size_in_bytes:.2f} {units[i]}"
+    return formatted
 
 
-@file_operation_decorator
-def write_buffer_to_file(buffer: bytes, file_path: str) -> None:
+def is_file_size_valid(file_path_or_bytes: Union[str, bytes, BinaryIO]) -> bool:
     """
-    Write a bytes buffer to a file.
+    Check if the file size is within the allowed limit.
     
     Args:
-        buffer: Bytes buffer to write
-        file_path: Path to the file to write to
+        file_path_or_bytes: Path to file, bytes object, or file-like object
         
     Returns:
-        None
+        bool: True if the file size is valid, False otherwise
     """
-    with open(file_path, 'wb') as f:
-        f.write(buffer)
+    try:
+        size = calculate_file_size(file_path_or_bytes)
+        is_valid = size <= MAX_FILE_SIZE
+        
+        if not is_valid:
+            formatted_size = format_file_size(size)
+            max_formatted = format_file_size(MAX_FILE_SIZE)
+            logger.warning(f"File size {formatted_size} exceeds maximum allowed size of {max_formatted}")
+            
+        return is_valid
+    except ValueError as e:
+        logger.error(f"Failed to validate file size: {str(e)}")
+        return False
 
 
-@file_operation_decorator
-def read_file_to_buffer(file_path: str) -> bytes:
+def calculate_file_hash(file_path_or_bytes: Union[str, bytes, BinaryIO], algorithm: str = 'sha256') -> str:
     """
-    Read a file into a bytes buffer.
+    Calculate a hash of the file contents.
     
     Args:
-        file_path: Path to the file to read
+        file_path_or_bytes: Path to file, bytes object, or file-like object
+        algorithm: Hash algorithm to use (default: sha256)
         
     Returns:
-        bytes: File content as bytes
+        str: Hexadecimal hash digest
+        
+    Raises:
+        ValueError: If the hash cannot be calculated
     """
-    with open(file_path, 'rb') as f:
-        return f.read()
+    try:
+        hash_obj = hashlib.new(algorithm)
+        
+        if isinstance(file_path_or_bytes, str):
+            # It's a file path
+            with open(file_path_or_bytes, 'rb') as f:
+                for chunk in iter(lambda: f.read(4096), b""):
+                    hash_obj.update(chunk)
+        elif isinstance(file_path_or_bytes, bytes):
+            # It's a bytes object
+            hash_obj.update(file_path_or_bytes)
+        else:
+            # Assume it's a file-like object
+            position = file_path_or_bytes.tell()
+            file_path_or_bytes.seek(0)
+            for chunk in iter(lambda: file_path_or_bytes.read(4096), b""):
+                hash_obj.update(chunk)
+            file_path_or_bytes.seek(position)  # Reset position
+            
+        return hash_obj.hexdigest()
+    except Exception as e:
+        raise ValueError(f"Failed to calculate file hash: {str(e)}")
 
 
-@file_operation_decorator
-def read_file_in_chunks(file_path: str, chunk_size: int = BUFFER_SIZE) -> Iterator[bytes]:
+@contextmanager
+def create_temp_file(content: Union[str, bytes], suffix: Optional[str] = None) -> str:
     """
-    Read a file in chunks to avoid loading large files into memory.
+    Create a temporary file with the given content.
     
     Args:
-        file_path: Path to the file to read
-        chunk_size: Size of each chunk in bytes
+        content: File content (string or bytes)
+        suffix: Optional file suffix/extension
         
-    Returns:
-        Iterator[bytes]: Iterator yielding file chunks
+    Yields:
+        str: Path to the temporary file
+        
+    Notes:
+        The temporary file is automatically deleted when the context is exited.
     """
-    with open(file_path, 'rb') as f:
-        while True:
-            chunk = f.read(chunk_size)
-            if not chunk:
-                break
-            yield chunk
+    temp_file = None
+    try:
+        # Create a temporary file
+        fd, temp_file = tempfile.mkstemp(suffix=suffix)
+        os.close(fd)
+        
+        logger.debug(f"Created temporary file: {temp_file}")
+        
+        # Write content to the file
+        mode = 'wb' if isinstance(content, bytes) else 'w'
+        with open(temp_file, mode) as f:
+            f.write(content)
+            
+        logger.debug(f"Wrote content to temporary file: {temp_file}")
+        yield temp_file
+    finally:
+        # Clean up the temporary file
+        if temp_file and os.path.exists(temp_file):
+            logger.debug(f"Cleaning up temporary file: {temp_file}")
+            os.unlink(temp_file)
 
 
-@file_operation_decorator
-def copy_file(source_path: str, dest_path: str) -> None:
+@contextmanager
+def create_temp_directory() -> str:
     """
-    Copy a file from source to destination.
+    Create a temporary directory for document processing.
     
-    Args:
-        source_path: Path to the source file
-        dest_path: Path to the destination file
+    Yields:
+        str: Path to the temporary directory
         
-    Returns:
-        None
+    Notes:
+        The temporary directory is automatically deleted when the context is exited.
     """
-    shutil.copy2(source_path, dest_path)
+    temp_dir = None
+    try:
+        temp_dir = tempfile.mkdtemp()
+        logger.debug(f"Created temporary directory: {temp_dir}")
+        yield temp_dir
+    finally:
+        # Clean up the temporary directory
+        if temp_dir and os.path.exists(temp_dir):
+            logger.debug(f"Cleaning up temporary directory: {temp_dir}")
+            shutil.rmtree(temp_dir)
 
 
-@file_operation_decorator
 def ensure_directory_exists(directory_path: str) -> None:
     """
     Ensure that a directory exists, creating it if necessary.
     
     Args:
         directory_path: Path to the directory
-        
-    Returns:
-        None
     """
     os.makedirs(directory_path, exist_ok=True)
 
 
-@file_operation_decorator
-def remove_file(file_path: str) -> None:
+def get_document_category_for_mime_type(mime_type: str) -> Optional[str]:
     """
-    Remove a file if it exists.
+    Get the potential document category based on MIME type.
     
     Args:
-        file_path: Path to the file to remove
+        mime_type: MIME type of the document
         
     Returns:
-        None
+        Optional[str]: Potential document category or None if not found
     """
-    if os.path.exists(file_path):
-        os.remove(file_path)
-
-
-@file_operation_decorator
-def remove_directory(directory_path: str, recursive: bool = True) -> None:
-    """
-    Remove a directory if it exists.
-    
-    Args:
-        directory_path: Path to the directory to remove
-        recursive: Whether to remove the directory recursively (default: True)
-        
-    Returns:
-        None
-    """
-    if os.path.exists(directory_path):
-        if recursive:
-            shutil.rmtree(directory_path)
-        else:
-            os.rmdir(directory_path)
-
-
-@file_operation_decorator
-def calculate_file_hash(file_path: str, algorithm: str = 'sha256', buffer_size: int = BUFFER_SIZE) -> str:
-    """
-    Calculate a hash for the given file.
-    
-    Args:
-        file_path: Path to the file
-        algorithm: Hash algorithm to use (default: sha256)
-        buffer_size: Size of the buffer for reading the file
-        
-    Returns:
-        str: Calculated hash value
-    """
-    if algorithm == 'md5':
-        hash_obj = hashlib.md5()
-    elif algorithm == 'sha1':
-        hash_obj = hashlib.sha1()
-    elif algorithm == 'sha256':
-        hash_obj = hashlib.sha256()
-    elif algorithm == 'sha512':
-        hash_obj = hashlib.sha512()
-    else:
-        raise ValueError(f"Unsupported hash algorithm: {algorithm}")
-    
-    with open(file_path, 'rb') as f:
-        while True:
-            data = f.read(buffer_size)
-            if not data:
-                break
-            hash_obj.update(data)
-    
-    return hash_obj.hexdigest()
-
-
-@file_operation_decorator
-def calculate_buffer_hash(buffer: bytes, algorithm: str = 'sha256') -> str:
-    """
-    Calculate a hash for the given buffer.
-    
-    Args:
-        buffer: Bytes buffer to hash
-        algorithm: Hash algorithm to use (default: sha256)
-        
-    Returns:
-        str: Calculated hash value
-    """
-    if algorithm == 'md5':
-        hash_obj = hashlib.md5()
-    elif algorithm == 'sha1':
-        hash_obj = hashlib.sha1()
-    elif algorithm == 'sha256':
-        hash_obj = hashlib.sha256()
-    elif algorithm == 'sha512':
-        hash_obj = hashlib.sha512()
-    else:
-        raise ValueError(f"Unsupported hash algorithm: {algorithm}")
-    
-    hash_obj.update(buffer)
-    return hash_obj.hexdigest()
-
-
-class TempFileManager:
-    """
-    Context manager for temporary file operations.
-    
-    This class provides a context manager for creating and managing temporary files,
-    ensuring they are properly cleaned up when operations are complete.
-    """
-    
-    def __init__(self, prefix: str = TEMP_PREFIX, suffix: str = '', dir: str = TEMP_DIR):
-        """
-        Initialize the TempFileManager.
-        
-        Args:
-            prefix: Prefix for the temporary file name
-            suffix: Suffix for the temporary file name (e.g., file extension)
-            dir: Directory where the temporary file will be created
-        """
-        self.prefix = prefix
-        self.suffix = suffix
-        self.dir = dir
-        self.temp_files = []
-        self.temp_dirs = []
-    
-    def create_temp_file(self, content: Optional[bytes] = None) -> str:
-        """
-        Create a temporary file and optionally write content to it.
-        
-        Args:
-            content: Optional bytes content to write to the file
+    for category, mime_types in DOCUMENT_CATEGORIES.items():
+        if mime_type in mime_types:
+            logger.debug(f"Document with MIME type {mime_type} categorized as: {category}")
+            return category
             
-        Returns:
-            str: Path to the created temporary file
-        """
-        fd, path = tempfile.mkstemp(prefix=self.prefix, suffix=self.suffix, dir=self.dir)
-        self.temp_files.append(path)
-        
-        if content is not None:
-            with os.fdopen(fd, 'wb') as f:
-                f.write(content)
-        else:
-            os.close(fd)
-        
-        return path
-    
-    def create_temp_directory(self) -> str:
-        """
-        Create a temporary directory.
-        
-        Returns:
-            str: Path to the created temporary directory
-        """
-        path = tempfile.mkdtemp(prefix=self.prefix, dir=self.dir)
-        self.temp_dirs.append(path)
-        return path
-    
-    def cleanup(self) -> None:
-        """
-        Clean up all temporary files and directories created by this manager.
-        """
-        # Clean up temporary files
-        for path in self.temp_files:
-            try:
-                if os.path.exists(path):
-                    os.remove(path)
-            except Exception as e:
-                logger.warning(f"Failed to remove temporary file {path}: {str(e)}")
-        
-        # Clean up temporary directories
-        for path in self.temp_dirs:
-            try:
-                if os.path.exists(path):
-                    shutil.rmtree(path)
-            except Exception as e:
-                logger.warning(f"Failed to remove temporary directory {path}: {str(e)}")
-        
-        # Clear the lists
-        self.temp_files = []
-        self.temp_dirs = []
-    
-    def __enter__(self) -> 'TempFileManager':
-        """
-        Enter the context manager.
-        
-        Returns:
-            TempFileManager: This instance
-        """
-        return self
-    
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
-        """
-        Exit the context manager and clean up temporary files and directories.
-        
-        Args:
-            exc_type: Exception type if an exception was raised
-            exc_val: Exception value if an exception was raised
-            exc_tb: Exception traceback if an exception was raised
-        """
-        self.cleanup()
-
-
-class SpooledTempFileManager:
-    """
-    Context manager for spooled temporary file operations.
-    
-    This class provides a context manager for creating and managing spooled temporary files,
-    which store data in memory until a size threshold is reached, then switch to disk storage.
-    """
-    
-    def __init__(self, max_size: int = 1024*1024, prefix: str = TEMP_PREFIX, suffix: str = '', dir: str = TEMP_DIR):
-        """
-        Initialize the SpooledTempFileManager.
-        
-        Args:
-            max_size: Maximum size in bytes before spooling to disk (default: 1MB)
-            prefix: Prefix for the temporary file name
-            suffix: Suffix for the temporary file name (e.g., file extension)
-            dir: Directory where the temporary file will be created if spooled to disk
-        """
-        self.max_size = max_size
-        self.prefix = prefix
-        self.suffix = suffix
-        self.dir = dir
-        self.temp_files = []
-    
-    def create_spooled_temp_file(self) -> tempfile.SpooledTemporaryFile:
-        """
-        Create a spooled temporary file.
-        
-        Returns:
-            tempfile.SpooledTemporaryFile: Spooled temporary file object
-        """
-        temp_file = tempfile.SpooledTemporaryFile(
-            max_size=self.max_size,
-            prefix=self.prefix,
-            suffix=self.suffix,
-            dir=self.dir,
-            mode='wb+'
-        )
-        self.temp_files.append(temp_file)
-        return temp_file
-    
-    def cleanup(self) -> None:
-        """
-        Clean up all spooled temporary files created by this manager.
-        """
-        for temp_file in self.temp_files:
-            try:
-                temp_file.close()
-            except Exception as e:
-                logger.warning(f"Failed to close spooled temporary file: {str(e)}")
-        
-        # Clear the list
-        self.temp_files = []
-    
-    def __enter__(self) -> 'SpooledTempFileManager':
-        """
-        Enter the context manager.
-        
-        Returns:
-            SpooledTempFileManager: This instance
-        """
-        return self
-    
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
-        """
-        Exit the context manager and clean up spooled temporary files.
-        
-        Args:
-            exc_type: Exception type if an exception was raised
-            exc_val: Exception value if an exception was raised
-            exc_tb: Exception traceback if an exception was raised
-        """
-        self.cleanup()
-
-
-@file_operation_decorator
-def buffer_to_stream(buffer: bytes) -> io.BytesIO:
-    """
-    Convert a bytes buffer to a BytesIO stream.
-    
-    Args:
-        buffer: Bytes buffer to convert
-        
-    Returns:
-        io.BytesIO: BytesIO stream containing the buffer data
-    """
-    return io.BytesIO(buffer)
-
-
-@file_operation_decorator
-def stream_to_buffer(stream: io.BytesIO) -> bytes:
-    """
-    Convert a BytesIO stream to a bytes buffer.
-    
-    Args:
-        stream: BytesIO stream to convert
-        
-    Returns:
-        bytes: Bytes buffer containing the stream data
-    """
-    # Save the current position
-    current_pos = stream.tell()
-    
-    # Seek to the beginning of the stream
-    stream.seek(0)
-    
-    # Read the entire stream into a buffer
-    buffer = stream.read()
-    
-    # Restore the original position
-    stream.seek(current_pos)
-    
-    return buffer
-
-
-@file_operation_decorator
-def get_file_metadata(file_path: str) -> Dict[str, Any]:
-    """
-    Get metadata for a file.
-    
-    Args:
-        file_path: Path to the file
-        
-    Returns:
-        Dict[str, Any]: Dictionary containing file metadata
-    """
-    stat_result = os.stat(file_path)
-    file_size = stat_result.st_size
-    mime_type = get_mime_type(file_path)
-    file_extension = get_file_extension(file_path)
-    file_name = os.path.basename(file_path)
-    
-    return {
-        'file_name': file_name,
-        'file_path': file_path,
-        'file_size': file_size,
-        'file_size_formatted': format_file_size(file_size),
-        'mime_type': mime_type,
-        'file_extension': file_extension,
-        'created_at': stat_result.st_ctime,
-        'modified_at': stat_result.st_mtime,
-        'accessed_at': stat_result.st_atime
-    }
-
-
-@file_operation_decorator
-def is_valid_document_for_type(file_path: str, document_type: str) -> bool:
-    """
-    Check if a file is valid for a specific document type.
-    
-    Args:
-        file_path: Path to the file
-        document_type: Document type to validate against
-        
-    Returns:
-        bool: True if the file is valid for the document type, False otherwise
-    """
-    # Check if the document type is valid
-    if document_type not in [dt.value for dt in DocumentType]:
-        logger.warning(f"Invalid document type: {document_type}")
-        return False
-    
-    # Get the MIME type of the file
-    mime_type = get_mime_type(file_path)
-    
-    # Check if the MIME type is supported for the document type
-    compatible_mime_types = DOCUMENT_TYPE_MIME_MAPPING.get(document_type, [])
-    if mime_type not in compatible_mime_types:
-        logger.warning(f"MIME type {mime_type} is not compatible with document type {document_type}")
-        return False
-    
-    return True
-
-
-@file_operation_decorator
-def create_document_metadata(file_path: str, document_type: Optional[str] = None) -> DocumentMetadata:
-    """
-    Create document metadata for a file.
-    
-    Args:
-        file_path: Path to the file
-        document_type: Optional document type
-        
-    Returns:
-        DocumentMetadata: Document metadata object
-    """
-    metadata = get_file_metadata(file_path)
-    
-    # Create DocumentMetadata object
-    document_metadata = {
-        'id': str(uuid.uuid4()),
-        'filename': metadata['file_name'],
-        'size': metadata['file_size'],
-        'mime_type': metadata['mime_type'],
-        'created_at': datetime.datetime.fromtimestamp(metadata['created_at']),
-        'updated_at': datetime.datetime.fromtimestamp(metadata['modified_at']),
-        'classification_confidence': None,
-        'ocr_confidence': None,
-        'application_id': None,
-        'storage_path': None,
-        'checksum': calculate_file_hash(file_path),
-        'page_count': None,
-        'tags': []
-    }
-    
-    return document_metadata
-
-
-@file_operation_decorator
-def get_document_page_count(file_path: str) -> Optional[int]:
-    """
-    Get the number of pages in a document.
-    
-    Args:
-        file_path: Path to the document file
-        
-    Returns:
-        Optional[int]: Number of pages in the document, or None if unable to determine
-    """
-    mime_type = get_mime_type(file_path)
-    
-    # For PDF documents, use PyPDF2 to count pages if available
-    if mime_type == 'application/pdf':
-        try:
-            from PyPDF2 import PdfReader
-            
-            with open(file_path, 'rb') as f:
-                pdf_reader = PdfReader(f)
-                return len(pdf_reader.pages)
-        except ImportError:
-            logger.warning("PyPDF2 not available for page count detection")
-        except Exception as e:
-            logger.warning(f"Error detecting PDF page count: {str(e)}")
-    
-    # For TIFF images, use PIL/Pillow to count pages if available
-    elif mime_type == 'image/tiff':
-        try:
-            from PIL import Image
-            
-            with Image.open(file_path) as img:
-                # Count frames in the TIFF file
-                page_count = 0
-                try:
-                    while True:
-                        page_count += 1
-                        img.seek(img.tell() + 1)
-                except EOFError:
-                    pass  # End of frames
-                
-                return page_count
-        except ImportError:
-            logger.warning("PIL/Pillow not available for TIFF page count detection")
-        except Exception as e:
-            logger.warning(f"Error detecting TIFF page count: {str(e)}")
-    
-    # For other image formats, assume single page
-    elif mime_type in ['image/jpeg', 'image/png']:
-        return 1
-    
-    # Unable to determine page count
+    logger.warning(f"No category found for MIME type: {mime_type}")
     return None
 
 
-@file_operation_decorator
-def split_pdf_into_pages(pdf_path: str, output_dir: str) -> List[str]:
+def bytes_to_file(content: bytes, file_path: str) -> None:
     """
-    Split a PDF document into individual pages.
+    Write bytes content to a file.
     
     Args:
-        pdf_path: Path to the PDF document
-        output_dir: Directory to save the individual pages
+        content: Bytes content to write
+        file_path: Path to the output file
+        
+    Raises:
+        IOError: If the file cannot be written
+    """
+    # Ensure the directory exists
+    directory = os.path.dirname(file_path)
+    if directory:
+        ensure_directory_exists(directory)
+        
+    # Write the content
+    with open(file_path, 'wb') as f:
+        f.write(content)
+
+
+def file_to_bytes(file_path: str) -> bytes:
+    """
+    Read a file into bytes.
+    
+    Args:
+        file_path: Path to the file
         
     Returns:
-        List[str]: List of paths to the individual page files
+        bytes: File content as bytes
+        
+    Raises:
+        IOError: If the file cannot be read
     """
-    try:
-        from PyPDF2 import PdfReader, PdfWriter
+    with open(file_path, 'rb') as f:
+        return f.read()
+
+
+def get_safe_filename(filename: str) -> str:
+    """
+    Convert a filename to a safe version that is filesystem-friendly.
+    
+    Args:
+        filename: Original filename
         
-        # Ensure the output directory exists
-        ensure_directory_exists(output_dir)
+    Returns:
+        str: Safe filename
+    """
+    # Replace problematic characters
+    safe_name = "".join([c if c.isalnum() or c in "._- " else "_" for c in filename])
+    
+    # Ensure the filename is not too long (max 255 characters)
+    if len(safe_name) > 255:
+        name, ext = os.path.splitext(safe_name)
+        safe_name = name[:255 - len(ext)] + ext
         
-        # Open the PDF file
-        with open(pdf_path, 'rb') as f:
-            pdf_reader = PdfReader(f)
-            page_count = len(pdf_reader.pages)
-            
-            # Create a list to store the paths to the individual page files
-            page_paths = []
-            
-            # Extract each page and save it as a separate PDF file
-            for page_num in range(page_count):
-                pdf_writer = PdfWriter()
-                pdf_writer.add_page(pdf_reader.pages[page_num])
-                
-                # Generate a filename for the page
-                page_filename = f"page_{page_num + 1}.pdf"
-                page_path = os.path.join(output_dir, page_filename)
-                
-                # Save the page to a file
-                with open(page_path, 'wb') as page_file:
-                    pdf_writer.write(page_file)
-                
-                page_paths.append(page_path)
-            
-            return page_paths
-    except ImportError:
-        logger.warning("PyPDF2 not available for PDF splitting")
-        raise ServiceError("PyPDF2 not available for PDF splitting")
-    except Exception as e:
-        logger.error(f"Error splitting PDF: {str(e)}")
-        raise ServiceError(f"Error splitting PDF: {str(e)}")
+    if safe_name != filename:
+        logger.debug(f"Converted filename '{filename}' to safe version '{safe_name}'")
+        
+    return safe_name
+
+
+def generate_unique_filename(original_filename: str, content: Union[str, bytes, BinaryIO]) -> str:
+    """
+    Generate a unique filename based on the original filename and content hash.
+    
+    Args:
+        original_filename: Original filename
+        content: File content for hash calculation
+        
+    Returns:
+        str: Unique filename
+    """
+    # Get a safe version of the original filename
+    safe_name = get_safe_filename(original_filename)
+    name, ext = os.path.splitext(safe_name)
+    
+    # Calculate a hash of the content
+    content_hash = calculate_file_hash(content)[:8]  # Use first 8 characters of hash
+    
+    # Combine name, hash, and extension
+    unique_name = f"{name}_{content_hash}{ext}"
+    logger.debug(f"Generated unique filename: {unique_name} from original: {original_filename}")
+    
+    return unique_name
