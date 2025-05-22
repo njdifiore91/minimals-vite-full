@@ -1,410 +1,251 @@
-# Infrastructure Monitoring Module
+# Monitoring Module
 
 ## Overview
 
-This Terraform module provisions and configures a comprehensive monitoring infrastructure for the Merchant Cash Advance (MCA) Application Processing System. It supports both Datadog and Prometheus/Grafana as monitoring solutions, providing complete observability across frontend applications, backend microservices, and infrastructure components.
+This Terraform module deploys a comprehensive monitoring solution for the MCA Application Processing System. It supports two monitoring options:
 
-The monitoring infrastructure combines metrics collection, log aggregation, distributed tracing, and alerting to ensure comprehensive visibility into system health, performance, and security.
+1. **Prometheus/Grafana Stack** - A self-hosted monitoring solution deployed on Kubernetes
+2. **Datadog** - A managed monitoring service (configured in datadog.tf)
 
-## Architecture
+The module provisions all necessary components for collecting metrics from the MCA application services and infrastructure components, visualizing them through dashboards, and setting up alerts for critical conditions.
 
-The monitoring module implements a multi-layered observability stack:
+## Features
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                      Visualization Layer                         │
-│                                                                 │
-│  ┌───────────────┐  ┌───────────────┐  ┌───────────────────┐    │
-│  │   Dashboards  │  │  Log Explorer │  │   Trace Viewer    │    │
-│  └───────────────┘  └───────────────┘  └───────────────────┘    │
-└─────────────────────────────────────────────────────────────────┘
-                              ▲
-                              │
-┌─────────────────────────────────────────────────────────────────┐
-│                        Storage Layer                            │
-│                                                                 │
-│  ┌───────────────┐  ┌───────────────┐  ┌───────────────────┐    │
-│  │  Time Series  │  │  Log Storage  │  │   Trace Storage   │    │
-│  │   Database    │  │               │  │                   │    │
-│  └───────────────┘  └───────────────┘  └───────────────────┘    │
-└─────────────────────────────────────────────────────────────────┘
-                              ▲
-                              │
-┌─────────────────────────────────────────────────────────────────┐
-│                     Instrumentation Layer                        │
-│                                                                 │
-│  ┌───────────────┐  ┌───────────────┐  ┌───────────────────┐    │
-│  │    Metrics    │  │      Log      │  │    Distributed    │    │
-│  │   Collection  │  │   Collection  │  │      Tracing      │    │
-│  └───────────────┘  └───────────────┘  └───────────────────┘    │
-└─────────────────────────────────────────────────────────────────┘
-                              ▲
-                              │
-┌─────────────────────────────────────────────────────────────────┐
-│                      Application Layer                          │
-│                                                                 │
-│  ┌───────────┐ ┌────────────┐ ┌───────────┐ ┌────────────┐      │
-│  │  Frontend │ │ Microservices │ Databases │ │ Message Queues │  │
-│  └───────────┘ └────────────┘ └───────────┘ └────────────┘      │
-└─────────────────────────────────────────────────────────────────┘
-```
+### Prometheus/Grafana Stack
 
-### Components
+- Deploys Prometheus Operator using the kube-prometheus-stack Helm chart
+- Configures Grafana with pre-built dashboards for MCA application monitoring
+- Sets up service monitors for all MCA microservices
+- Deploys exporters for infrastructure components:
+  - PostgreSQL exporter for database metrics
+  - RabbitMQ exporter for message queue metrics
+  - Redis exporter for cache metrics
+  - S3 exporter for object storage metrics
+- Configures node exporter for host-level metrics
+- Sets up persistent storage for metrics data
+- Configures AlertManager for alert notifications
 
-1. **Metrics Collection**
-   - Infrastructure metrics (CPU, memory, disk, network)
-   - Container metrics (resource usage, restart count)
-   - Application metrics (custom business metrics)
-   - Database metrics (query performance, connections)
-   - Message queue metrics (queue depth, consumer lag)
+### Common Features
 
-2. **Log Aggregation**
-   - Centralized logging pipeline
-   - Structured logging format
-   - Log correlation through trace IDs
-   - Log retention policies
-
-3. **Distributed Tracing**
-   - Request tracing across services
-   - Performance bottleneck identification
-   - Error correlation
-
-4. **Alerting Framework**
-   - Multi-level severity classification
-   - Multiple notification channels
-   - Alert deduplication and grouping
-   - Escalation policies
-
-## Prerequisites
-
-- Terraform >= 1.0.0
-- AWS provider >= 4.0.0 (if using AWS)
-- Kubernetes provider >= 2.10.0 (if using Kubernetes)
-- Datadog provider >= 3.20.0 (if using Datadog)
-- Helm provider >= 2.5.0 (if using Prometheus/Grafana)
+- Environment-specific configurations (development, staging, production)
+- Resource allocation based on environment
+- Retention policies based on environment
+- Integration with Kubernetes services
 
 ## Usage
 
-### Basic Usage with Datadog
-
 ```hcl
 module "monitoring" {
   source = "../modules/monitoring"
 
-  environment         = "production"
-  monitoring_solution = "datadog"
+  # Common variables
+  monitoring_type    = "prometheus"  # or "datadog"
+  environment        = "production"
+  cluster_name       = "mca-cluster"
+  monitoring_namespace = "monitoring"
+  app_namespace      = "mca"
   
-  datadog_api_key     = var.datadog_api_key
-  datadog_app_key     = var.datadog_app_key
+  # Prometheus-specific variables
+  prometheus_operator_version = "55.5.0"
+  grafana_admin_password     = var.grafana_admin_password
+  grafana_ingress_enabled    = true
+  grafana_hostname           = "grafana.example.com"
   
-  services = [
-    "email-service",
-    "document-service",
-    "ocr-service",
-    "data-service",
-    "notification-service"
-  ]
+  # Database monitoring
+  postgres_host              = module.database.postgres_host
+  postgres_port              = module.database.postgres_port
+  postgres_exporter_user     = var.postgres_exporter_user
+  postgres_exporter_password = var.postgres_exporter_password
   
-  infrastructure_components = [
-    "postgresql",
-    "rabbitmq",
-    "redis",
-    "s3"
-  ]
+  # Message queue monitoring
+  rabbitmq_url               = module.messaging.rabbitmq_url
+  rabbitmq_exporter_user     = var.rabbitmq_exporter_user
+  rabbitmq_exporter_password = var.rabbitmq_exporter_password
   
-  alert_notification_channels = {
-    email     = ["alerts@dollarfunding.com"],
-    slack     = ["#alerts-production"],
-    pagerduty = ["mca-oncall"],
-  }
+  # Cache monitoring
+  redis_url                  = module.cache.redis_url
+  
+  # Storage monitoring
+  s3_endpoint                = module.storage.s3_endpoint
+  s3_buckets                 = ["mca-documents-production"]
+  s3_credentials_secret      = "s3-credentials"
 }
 ```
 
-### Basic Usage with Prometheus/Grafana
-
-```hcl
-module "monitoring" {
-  source = "../modules/monitoring"
-
-  environment         = "staging"
-  monitoring_solution = "prometheus"
-  
-  prometheus_retention_days = 15
-  grafana_admin_password    = var.grafana_admin_password
-  
-  services = [
-    "email-service",
-    "document-service",
-    "ocr-service",
-    "data-service",
-    "notification-service"
-  ]
-  
-  infrastructure_components = [
-    "postgresql",
-    "rabbitmq",
-    "redis",
-    "s3"
-  ]
-  
-  alert_notification_channels = {
-    email = ["dev-alerts@dollarfunding.com"],
-    slack = ["#alerts-staging"],
-  }
-}
-```
-
-## Module Configuration
-
-### Input Variables
+## Inputs
 
 | Name | Description | Type | Default | Required |
 |------|-------------|------|---------|:--------:|
-| environment | Environment name (e.g., development, staging, production) | `string` | n/a | yes |
-| monitoring_solution | Monitoring solution to use ("datadog" or "prometheus") | `string` | `"datadog"` | no |
-| services | List of services to monitor | `list(string)` | `[]` | yes |
-| infrastructure_components | List of infrastructure components to monitor | `list(string)` | `[]` | yes |
-| alert_notification_channels | Map of notification channels and their targets | `map(list(string))` | `{}` | yes |
-| datadog_api_key | Datadog API key (required if using Datadog) | `string` | `""` | no |
-| datadog_app_key | Datadog application key (required if using Datadog) | `string` | `""` | no |
-| prometheus_retention_days | Number of days to retain Prometheus metrics | `number` | `15` | no |
-| grafana_admin_password | Grafana admin password (required if using Prometheus) | `string` | `""` | no |
-| log_retention_days | Number of days to retain logs | `number` | `30` | no |
-| enable_tracing | Whether to enable distributed tracing | `bool` | `true` | no |
-| metrics_scrape_interval | Interval for scraping metrics in seconds | `number` | `30` | no |
-| high_availability | Whether to deploy monitoring components in HA mode | `bool` | `false` | no |
-| namespace | Kubernetes namespace for monitoring components | `string` | `"monitoring"` | no |
+| monitoring_type | Type of monitoring solution to deploy (prometheus or datadog) | `string` | `"prometheus"` | no |
+| environment | Deployment environment (development, staging, production) | `string` | n/a | yes |
+| cluster_name | Name of the Kubernetes cluster | `string` | n/a | yes |
+| monitoring_namespace | Kubernetes namespace for monitoring resources | `string` | `"monitoring"` | no |
+| app_namespace | Kubernetes namespace where application services are deployed | `string` | `"mca"` | no |
+| storage_class_name | Storage class name for persistent volumes | `string` | `"standard"` | no |
+| prometheus_operator_version | Version of the Prometheus Operator Helm chart | `string` | `"55.5.0"` | no |
+| grafana_admin_password | Admin password for Grafana | `string` | n/a | yes |
+| grafana_dashboards_configmap | ConfigMap name containing Grafana dashboards | `string` | `"grafana-dashboards"` | no |
+| grafana_ingress_enabled | Enable Ingress for Grafana | `bool` | `true` | no |
+| grafana_hostname | Hostname for Grafana Ingress | `string` | `"grafana.example.com"` | no |
+| ingress_class | Ingress class for Grafana Ingress | `string` | `"nginx"` | no |
+| cert_issuer | Certificate issuer for Grafana Ingress TLS | `string` | `"letsencrypt-prod"` | no |
+| postgres_exporter_version | Version of the PostgreSQL exporter Helm chart | `string` | `"5.0.0"` | no |
+| postgres_host | PostgreSQL host address | `string` | n/a | yes |
+| postgres_port | PostgreSQL port | `number` | `5432` | no |
+| postgres_database | PostgreSQL database name | `string` | `"postgres"` | no |
+| postgres_exporter_user | PostgreSQL user for exporter | `string` | `"postgres_exporter"` | no |
+| postgres_exporter_password | PostgreSQL password for exporter | `string` | n/a | yes |
+| postgres_ssl_mode | PostgreSQL SSL mode | `string` | `"disable"` | no |
+| rabbitmq_exporter_version | Version of the RabbitMQ exporter Helm chart | `string` | `"1.7.0"` | no |
+| rabbitmq_url | RabbitMQ URL | `string` | n/a | yes |
+| rabbitmq_exporter_user | RabbitMQ user for exporter | `string` | `"monitoring"` | no |
+| rabbitmq_exporter_password | RabbitMQ password for exporter | `string` | n/a | yes |
+| redis_exporter_version | Version of the Redis exporter Helm chart | `string` | `"5.6.0"` | no |
+| redis_url | Redis URL including authentication if required | `string` | n/a | yes |
+| s3_exporter_image | S3 exporter container image | `string` | `"prometheuscommunity/s3-exporter"` | no |
+| s3_exporter_version | S3 exporter container image version | `string` | `"0.6.0"` | no |
+| s3_credentials_secret | Kubernetes secret containing S3 credentials | `string` | `"s3-credentials"` | no |
+| s3_endpoint | S3 endpoint URL | `string` | n/a | yes |
+| s3_buckets | List of S3 bucket names to monitor | `list(string)` | `["mca-documents-production", "mca-documents-staging"]` | no |
 
-### Output Values
+## Outputs
 
 | Name | Description |
 |------|-------------|
-| monitoring_dashboard_url | URL to access the monitoring dashboard |
-| alerting_webhook_url | Webhook URL for sending custom alerts |
-| metrics_endpoint | Endpoint for pushing custom metrics |
-| log_endpoint | Endpoint for sending logs |
-| trace_endpoint | Endpoint for sending traces |
+| prometheus_server_endpoint | Prometheus server endpoint URL |
+| prometheus_alertmanager_endpoint | Prometheus AlertManager endpoint URL |
+| grafana_endpoint | Grafana endpoint URL |
+| grafana_external_url | Grafana external URL (if Ingress is enabled) |
+| prometheus_operator_crds | List of CRDs created by Prometheus Operator |
+| monitoring_namespace | Kubernetes namespace where monitoring resources are deployed |
+| monitoring_type | Type of monitoring solution deployed |
+| monitoring_enabled | Whether monitoring is enabled |
+| monitoring_labels | Common labels used for monitoring resources |
 
-## Integration with Other Infrastructure Components
+## Integration with MCA Services
 
-### Database Monitoring Integration
+The monitoring module is designed to integrate with all MCA application services. Each service should expose a metrics endpoint that can be scraped by Prometheus. The module configures service monitors for the following services:
 
-This module automatically integrates with the PostgreSQL database module to collect metrics such as:
+- Email Service
+- Document Service
+- OCR Service
+- Data Service
+- Notification Service
+- API Gateway
 
-- Query performance
-- Connection pool usage
-- Replication lag
-- Transaction rates
-- Cache hit ratios
+## Metrics Collection
 
-Example integration with the database module:
+The module collects metrics from various sources:
 
-```hcl
-module "database" {
-  source = "../modules/database"
-  
-  # Database configuration
-  name     = "mca-db"
-  instance = "db.t3.large"
-  # ... other database configuration
-}
+1. **Infrastructure Metrics**:
+   - Host-level metrics (CPU, memory, disk, network)
+   - Kubernetes metrics (pods, nodes, deployments)
 
-module "monitoring" {
-  source = "../modules/monitoring"
-  
-  # Monitoring configuration
-  infrastructure_components = ["postgresql"]
-  
-  # Reference database module for integration
-  postgresql_host = module.database.host
-  postgresql_port = module.database.port
-  # ... other monitoring configuration
-}
-```
+2. **Database Metrics**:
+   - Connection pool usage
+   - Query performance
+   - Replication lag
+   - Transaction rates
 
-### Message Queue Monitoring Integration
+3. **Message Queue Metrics**:
+   - Queue depth
+   - Message rates
+   - Consumer lag
+   - Connection status
 
-Integration with RabbitMQ to monitor:
+4. **Cache Metrics**:
+   - Hit/miss rates
+   - Memory usage
+   - Eviction counts
+   - Connection counts
 
-- Queue depths
-- Message rates
-- Consumer lag
-- Connection status
-- Node health
+5. **Storage Metrics**:
+   - Bucket usage
+   - Object counts
+   - Request rates
+   - Error rates
 
-### Cache Monitoring Integration
+6. **Application Metrics**:
+   - Processing time
+   - OCR accuracy
+   - API response time
+   - Error rates
 
-Integration with Redis to monitor:
+## Alerting
 
-- Memory usage
-- Hit/miss rates
-- Eviction counts
-- Connection counts
-- Command latency
+The module configures alerts for critical conditions based on the collected metrics. Alerts are managed by AlertManager and can be sent to various notification channels:
 
-### Storage Monitoring Integration
+- PagerDuty for critical alerts (P1)
+- Slack for high and medium priority alerts (P2, P3)
+- Email for low priority alerts (P4)
 
-Integration with S3-compatible storage to monitor:
+## Dashboard Access
 
-- Bucket usage
-- Request rates
-- Error counts
-- Latency metrics
-- Bandwidth usage
+Grafana dashboards can be accessed through the Grafana UI. The module provides the following access methods:
 
-## Alerting Configuration
+1. **Cluster-internal access**: `http://prometheus-operator-grafana.monitoring.svc.cluster.local:80`
+2. **External access** (if Ingress is enabled): `https://grafana.example.com`
 
-The module configures alerts with different severity levels:
+Default credentials:
+- Username: `admin`
+- Password: Specified by the `grafana_admin_password` variable
 
-| Severity | Description | Response Time | Example Trigger |
-|----------|-------------|---------------|----------------|
-| P1 - Critical | Service outage or severe degradation | Immediate (24/7) | >20% error rate, service unavailable |
-| P2 - High | Partial service degradation | <30 minutes (24/7) | Performance degradation, approaching resource limits |
-| P3 - Medium | Non-critical component issue | Business hours | Elevated error rates, performance anomalies |
-| P4 - Low | Potential issue, no user impact | Next sprint | Slow degradation, maintenance needed |
+## Maintenance and Troubleshooting
 
-Example alert configuration:
+### Storage Management
 
-```hcl
-module "monitoring" {
-  source = "../modules/monitoring"
-  
-  # ... other configuration
-  
-  custom_alerts = [
-    {
-      name        = "high_api_error_rate"
-      query       = "sum:api.error_rate{*} by {service} > 0.05"
-      severity    = "P2"
-      message     = "API error rate exceeds 5% for service {{service}}"
-      notify      = ["slack", "email"]
-      evaluation_period = "5m"
-    },
-    {
-      name        = "database_connection_saturation"
-      query       = "avg:postgresql.connections.used{*} / avg:postgresql.connections.max{*} * 100 > 80"
-      severity    = "P3"
-      message     = "Database connection pool usage above 80%"
-      notify      = ["slack"]
-      evaluation_period = "10m"
-    }
-  ]
-}
-```
+The module configures persistent storage for Prometheus and Grafana. The storage size is determined based on the environment:
 
-## Dashboard Setup
+- **Development**: 10Gi for Prometheus, 5Gi for Grafana
+- **Staging**: 20Gi for Prometheus, 10Gi for Grafana
+- **Production**: 50Gi for Prometheus, 20Gi for Grafana
 
-The module creates several pre-configured dashboards:
+If storage needs to be expanded, update the corresponding variables and apply the changes.
 
-1. **Executive Summary Dashboard**
-   - High-level system health
-   - SLA compliance metrics
-   - Key business metrics
+### Retention Management
 
-2. **Service Overview Dashboards**
-   - One dashboard per service
-   - Error rates, latency, throughput
-   - Resource utilization
+Metrics retention is configured based on the environment:
 
-3. **Infrastructure Dashboards**
-   - Node status
-   - Resource usage
-   - Network metrics
+- **Development**: 7 days
+- **Staging**: 15 days
+- **Production**: 30 days
 
-4. **User Experience Dashboard**
-   - Web Vitals metrics
-   - User journey analytics
-   - Conversion rates
-
-Custom dashboards can be created by extending the module:
-
-```hcl
-module "monitoring" {
-  source = "../modules/monitoring"
-  
-  # ... other configuration
-  
-  custom_dashboards = [
-    {
-      name  = "document_processing_pipeline"
-      title = "Document Processing Pipeline"
-      description = "End-to-end view of the document processing pipeline"
-      widgets = [
-        # Widget definitions
-      ]
-    }
-  ]
-}
-```
-
-## Troubleshooting
+To modify retention periods, update the `prometheus_retention` local variable in the module.
 
 ### Common Issues
 
-#### Metrics Not Appearing
+1. **Prometheus not scraping metrics**: Check service monitor configurations and ensure that services expose metrics on the correct port and path.
 
-1. Verify that the service or component is properly labeled/tagged
-2. Check that the metrics agent is running on the target host
-3. Ensure firewall rules allow metrics traffic
-4. Verify service discovery is working correctly
+2. **Grafana dashboards not loading**: Verify that the dashboard ConfigMap exists and is properly formatted.
 
-#### Alert Notification Failures
+3. **Alerts not firing**: Check AlertManager configuration and ensure that notification channels are properly configured.
 
-1. Check notification channel configuration
-2. Verify API keys and credentials
-3. Ensure network connectivity to notification services
-4. Check for rate limiting on notification endpoints
-
-#### High Cardinality Issues
-
-1. Review metric labels and reduce high-cardinality dimensions
-2. Implement metric aggregation where appropriate
-3. Adjust retention policies for high-volume metrics
-
-### Debugging Tools
-
-- Use `kubectl logs` to check monitoring agent logs
-- Verify metrics endpoints with `curl` for Prometheus targets
-- Use the monitoring solution's API to check configuration
-
-## Best Practices
-
-### Metric Naming and Labeling
-
-- Use consistent naming conventions for metrics
-- Follow the pattern: `{component}.{subsystem}.{metric}`
-- Keep label cardinality under control
-- Use standard labels across all services
-
-### Alert Design
-
-- Create actionable alerts with clear remediation steps
-- Avoid alert fatigue by tuning thresholds appropriately
-- Include context in alert messages
-- Implement proper alert grouping
-
-### Dashboard Design
-
-- Focus on user needs and use cases
-- Provide context with thresholds and historical data
-- Enable drill-down capabilities
-- Keep dashboards focused and purpose-driven
-
-### Resource Optimization
-
-- Adjust retention periods based on metric importance
-- Implement downsampling for long-term storage
-- Use appropriate instance types for monitoring components
-- Scale monitoring infrastructure with the application
+4. **High resource usage**: Adjust resource requests and limits based on actual usage patterns.
 
 ## Security Considerations
 
-- Store API keys and credentials securely
-- Implement proper access controls for monitoring dashboards
-- Encrypt monitoring traffic with TLS
-- Regularly audit monitoring access logs
-- Ensure monitoring agents run with least privilege
+The module implements several security measures:
 
-## License
+1. **Authentication**: Grafana is protected with admin credentials.
 
-This module is licensed under the [LICENSE NAME] license. See LICENSE.md for full details.
+2. **TLS**: Ingress resources are configured with TLS when enabled.
+
+3. **RBAC**: Service accounts have minimal required permissions.
+
+4. **Secrets**: Sensitive information is stored in Kubernetes secrets.
+
+5. **Network Policies**: Access to monitoring services is restricted to necessary components.
+
+## Cost Optimization
+
+To optimize costs, consider the following:
+
+1. **Resource Allocation**: Adjust CPU and memory requests based on actual usage.
+
+2. **Retention Period**: Reduce retention periods for non-critical metrics.
+
+3. **Scrape Interval**: Increase scrape intervals for stable metrics.
+
+4. **Storage Class**: Use cost-effective storage classes for persistent volumes.
+
+5. **Environment Sizing**: Use minimal resources in development and staging environments.
