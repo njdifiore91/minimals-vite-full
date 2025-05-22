@@ -1,0 +1,376 @@
+---
+apiVersion: redis.redis.opstreelabs.in/v1beta1
+kind: RedisCluster
+metadata:
+  name: mca-redis-cluster
+  namespace: mca-infrastructure
+  labels:
+    app: mca-redis
+    component: cache
+    part-of: mca-application
+spec:
+  # Redis 7.0 version as specified in the technical requirements
+  kubernetesConfig:
+    image: redis:7.0-alpine
+    imagePullPolicy: IfNotPresent
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+    serviceType: ClusterIP
+  # Cluster mode configuration with 3 shards and 1 replica per shard for high availability
+  clusterSize: 3
+  clusterVersion: "7.0"
+  # Enable Redis Cluster mode for horizontal scaling
+  redisLeader:
+    replicas: 3
+    affinity:
+      podAntiAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchExpressions:
+              - key: app
+                operator: In
+                values:
+                - mca-redis
+            topologyKey: kubernetes.io/hostname
+  redisFollower:
+    replicas: 3
+    affinity:
+      podAntiAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchExpressions:
+              - key: app
+                operator: In
+                values:
+                - mca-redis
+            topologyKey: kubernetes.io/hostname
+  # Sentinel configuration for automatic failover (15-second failover time)
+  sentinel:
+    enabled: true
+    replicas: 3
+    downAfterMilliseconds: 15000
+    failoverTimeout: 180000
+    parallelSyncs: 1
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 200m
+        memory: 512Mi
+  # Storage configuration with persistence
+  storage:
+    volumeClaimTemplate:
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: "redis-storage"
+        resources:
+          requests:
+            storage: 10Gi
+  # Redis configuration with TTL settings and eviction policies
+  redisExporter:
+    enabled: true
+    image: oliver006/redis_exporter:v1.43.0
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
+  redisConfig:
+    # Memory optimization with appropriate eviction policies
+    maxmemory: "1536mb"
+    maxmemory-policy: "allkeys-lru"
+    # AOF persistence for data durability
+    appendonly: "yes"
+    appendfsync: "everysec"
+    # RDB snapshots every 60 minutes
+    save: "3600 1"
+    # Additional Redis configuration
+    timeout: "300"
+    tcp-keepalive: "60"
+    databases: "16"
+    # TLS configuration for secure connections
+    tls-port: "6380"
+    tls-cert-file: "/etc/redis/tls/tls.crt"
+    tls-key-file: "/etc/redis/tls/tls.key"
+    tls-ca-cert-file: "/etc/redis/tls/ca.crt"
+    tls-auth-clients: "optional"
+---
+# Application data cache instance with 15-minute TTL
+apiVersion: redis.redis.opstreelabs.in/v1beta1
+kind: RedisCluster
+metadata:
+  name: mca-app-data-cache
+  namespace: mca-infrastructure
+  labels:
+    app: mca-redis
+    component: app-data-cache
+    part-of: mca-application
+spec:
+  kubernetesConfig:
+    image: redis:7.0-alpine
+    imagePullPolicy: IfNotPresent
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+    serviceType: ClusterIP
+  clusterSize: 3
+  clusterVersion: "7.0"
+  redisLeader:
+    replicas: 3
+    affinity:
+      podAntiAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchExpressions:
+              - key: app
+                operator: In
+                values:
+                - mca-redis
+            topologyKey: kubernetes.io/hostname
+  redisFollower:
+    replicas: 3
+    affinity:
+      podAntiAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchExpressions:
+              - key: app
+                operator: In
+                values:
+                - mca-redis
+            topologyKey: kubernetes.io/hostname
+  sentinel:
+    enabled: true
+    replicas: 3
+    downAfterMilliseconds: 15000
+    failoverTimeout: 180000
+    parallelSyncs: 1
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 200m
+        memory: 512Mi
+  storage:
+    volumeClaimTemplate:
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: "redis-storage"
+        resources:
+          requests:
+            storage: 10Gi
+  redisExporter:
+    enabled: true
+    image: oliver006/redis_exporter:v1.43.0
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
+  redisConfig:
+    # Memory optimization with allkeys-lru eviction policy for caching
+    maxmemory: "1536mb"
+    maxmemory-policy: "allkeys-lru"
+    # 15-minute TTL for application data
+    maxmemory-samples: "5"
+    # Default TTL of 15 minutes (900 seconds) for application data
+    timeout: "300"
+    tcp-keepalive: "60"
+    databases: "16"
+    # AOF persistence for data durability
+    appendonly: "yes"
+    appendfsync: "everysec"
+    # RDB snapshots every 60 minutes
+    save: "3600 1"
+    # Default TTL of 15 minutes (900 seconds) for application data
+    # This is applied to keys that don't have an explicit expiry set
+    expire-default-ttl: "900"
+---
+# User session cache instance with 24-hour TTL
+apiVersion: redis.redis.opstreelabs.in/v1beta1
+kind: RedisCluster
+metadata:
+  name: mca-user-session-cache
+  namespace: mca-infrastructure
+  labels:
+    app: mca-redis
+    component: user-session-cache
+    part-of: mca-application
+spec:
+  kubernetesConfig:
+    image: redis:7.0-alpine
+    imagePullPolicy: IfNotPresent
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+    serviceType: ClusterIP
+  clusterSize: 3
+  clusterVersion: "7.0"
+  redisLeader:
+    replicas: 3
+    affinity:
+      podAntiAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchExpressions:
+              - key: app
+                operator: In
+                values:
+                - mca-redis
+            topologyKey: kubernetes.io/hostname
+  redisFollower:
+    replicas: 3
+    affinity:
+      podAntiAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchExpressions:
+              - key: app
+                operator: In
+                values:
+                - mca-redis
+            topologyKey: kubernetes.io/hostname
+  sentinel:
+    enabled: true
+    replicas: 3
+    downAfterMilliseconds: 15000
+    failoverTimeout: 180000
+    parallelSyncs: 1
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 200m
+        memory: 512Mi
+  storage:
+    volumeClaimTemplate:
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: "redis-storage"
+        resources:
+          requests:
+            storage: 10Gi
+  redisExporter:
+    enabled: true
+    image: oliver006/redis_exporter:v1.43.0
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
+  redisConfig:
+    # Memory optimization with noeviction policy for sessions
+    maxmemory: "1536mb"
+    maxmemory-policy: "noeviction"
+    # 24-hour TTL for user sessions
+    maxmemory-samples: "5"
+    timeout: "300"
+    tcp-keepalive: "60"
+    databases: "16"
+    # AOF persistence for data durability
+    appendonly: "yes"
+    appendfsync: "everysec"
+    # RDB snapshots every 60 minutes
+    save: "3600 1"
+    # Default TTL of 24 hours (86400 seconds) for user sessions
+    # This is applied to keys that don't have an explicit expiry set
+    expire-default-ttl: "86400"
+---
+# ConfigMap for Redis initialization scripts
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-init-scripts
+  namespace: mca-infrastructure
+data:
+  init-app-data-cache.sh: |
+    #!/bin/sh
+    # Set default TTL for application data cache to 15 minutes (900 seconds)
+    redis-cli -h mca-app-data-cache -p 6379 CONFIG SET expire-default-ttl 900
+    
+    # Configure memory and eviction policy
+    redis-cli -h mca-app-data-cache -p 6379 CONFIG SET maxmemory-policy allkeys-lru
+    redis-cli -h mca-app-data-cache -p 6379 CONFIG SET maxmemory-samples 5
+    
+    # Enable keyspace notifications for expiration events
+    redis-cli -h mca-app-data-cache -p 6379 CONFIG SET notify-keyspace-events Ex
+  
+  init-user-session-cache.sh: |
+    #!/bin/sh
+    # Set default TTL for user session cache to 24 hours (86400 seconds)
+    redis-cli -h mca-user-session-cache -p 6379 CONFIG SET expire-default-ttl 86400
+    
+    # Configure memory and eviction policy
+    redis-cli -h mca-user-session-cache -p 6379 CONFIG SET maxmemory-policy noeviction
+    redis-cli -h mca-user-session-cache -p 6379 CONFIG SET maxmemory-samples 5
+    
+    # Enable keyspace notifications for expiration events
+    redis-cli -h mca-user-session-cache -p 6379 CONFIG SET notify-keyspace-events Ex
+---
+# Job to initialize Redis configurations
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: redis-init-job
+  namespace: mca-infrastructure
+spec:
+  ttlSecondsAfterFinished: 100
+  template:
+    spec:
+      containers:
+      - name: redis-init
+        image: redis:7.0-alpine
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          # Wait for Redis clusters to be ready
+          sleep 30
+          
+          # Run initialization scripts
+          sh /scripts/init-app-data-cache.sh
+          sh /scripts/init-user-session-cache.sh
+          
+          echo "Redis initialization completed successfully"
+        volumeMounts:
+        - name: init-scripts
+          mountPath: /scripts
+      restartPolicy: OnFailure
+      volumes:
+      - name: init-scripts
+        configMap:
+          name: redis-init-scripts
+          defaultMode: 0755
