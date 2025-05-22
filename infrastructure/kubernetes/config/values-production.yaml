@@ -1,0 +1,393 @@
+# Production Environment Configuration for MCA Application Processing System
+# This file contains production-specific overrides for Kubernetes deployments
+
+# Global settings for all services
+global:
+  environment: production
+  domain: api.dollarfunding.com
+  replicaCount: 3  # Default replica count for production
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+  monitoring:
+    enabled: true
+    datadog:
+      enabled: true
+      apm:
+        enabled: true
+      logs:
+        enabled: true
+      metrics:
+        enabled: true
+      alerts:
+        enabled: true
+  security:
+    networkPolicies: true
+    podSecurityContext:
+      runAsNonRoot: true
+      runAsUser: 1000
+      fsGroup: 1000
+    containerSecurityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+  highAvailability:
+    enabled: true
+    podAntiAffinity: true
+    topologySpreadConstraints: true
+
+# Infrastructure Components
+infrastructure:
+  postgresql:
+    enabled: true
+    version: '14'
+    replicaCount: 3  # Primary + 2 read replicas
+    resources:
+      requests:
+        cpu: 2000m
+        memory: 4Gi
+      limits:
+        cpu: 4000m
+        memory: 8Gi
+    storage:
+      size: 100Gi
+      storageClass: premium-ssd
+    highAvailability:
+      enabled: true
+      automaticFailover: true
+    backup:
+      enabled: true
+      schedule: '0 0 * * *'  # Daily at midnight
+      retention: 30  # 30 days
+    monitoring:
+      enabled: true
+      detailedMetrics: true
+    connectionPooling:
+      pgBouncer:
+        enabled: true
+        maxConnections: 50
+        minConnections: 10
+        connectionTimeout: 30
+    
+  rabbitmq:
+    enabled: true
+    replicaCount: 3
+    resources:
+      requests:
+        cpu: 1000m
+        memory: 2Gi
+      limits:
+        cpu: 2000m
+        memory: 4Gi
+    persistence:
+      enabled: true
+      size: 50Gi
+    highAvailability:
+      enabled: true
+      mirroring: true
+    monitoring:
+      enabled: true
+      prometheusMetrics: true
+    exchanges:
+      - name: mca.documents
+        type: fanout
+        durable: true
+    queues:
+      - name: document-processing
+        durable: true
+      - name: data-extraction
+        durable: true
+      - name: notification
+        durable: true
+    
+  redis:
+    enabled: true
+    version: '7.0'
+    replicaCount: 3
+    resources:
+      requests:
+        cpu: 1000m
+        memory: 2Gi
+      limits:
+        cpu: 2000m
+        memory: 4Gi
+    persistence:
+      enabled: true
+      size: 20Gi
+    highAvailability:
+      enabled: true
+      sentinel: true
+    ttl:
+      applicationData: 900  # 15 minutes in seconds
+      userSessions: 86400  # 24 hours in seconds
+    monitoring:
+      enabled: true
+    
+  s3:
+    enabled: true
+    bucket: mca-documents-production
+    region: us-east-1
+    encryption:
+      enabled: true
+      type: AES256
+    versioning:
+      enabled: true
+    lifecycle:
+      enabled: true
+      rules:
+        - prefix: temp/
+          expireAfterDays: 1
+        - prefix: archive/
+          transitionToGlacierAfterDays: 90
+    monitoring:
+      enabled: true
+
+# Microservices Configuration
+services:
+  emailService:
+    enabled: true
+    image:
+      repository: dollarfunding/email-service
+      tag: latest
+      pullPolicy: Always
+    replicaCount: 3
+    resources:
+      requests:
+        cpu: 500m
+        memory: 512Mi
+      limits:
+        cpu: 1000m
+        memory: 1Gi
+    config:
+      emailPollingInterval: 60  # seconds
+      emailServer: imap.dollarfunding.com
+      emailAddress: submissions@dollarfunding.com
+      maxAttachmentSize: 25  # MB
+    monitoring:
+      enabled: true
+    
+  documentService:
+    enabled: true
+    image:
+      repository: dollarfunding/document-service
+      tag: latest
+      pullPolicy: Always
+    replicaCount: 4
+    resources:
+      requests:
+        cpu: 1000m
+        memory: 2Gi
+      limits:
+        cpu: 2000m
+        memory: 4Gi
+    config:
+      classificationAccuracyThreshold: 0.95
+      maxDocumentSize: 50  # MB
+      supportedFormats:
+        - pdf
+        - jpg
+        - png
+        - tiff
+    monitoring:
+      enabled: true
+    
+  ocrService:
+    enabled: true
+    image:
+      repository: dollarfunding/ocr-service
+      tag: latest
+      pullPolicy: Always
+    replicaCount: 5  # Higher count for OCR processing
+    resources:
+      requests:
+        cpu: 2000m
+        memory: 4Gi
+        nvidia.com/gpu: 1  # GPU resource for OCR service
+      limits:
+        cpu: 4000m
+        memory: 8Gi
+        nvidia.com/gpu: 1
+    nodeSelector:
+      accelerator: gpu
+    tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
+    config:
+      confidenceThreshold: 0.85
+      batchSize: 10
+      modelVersion: v2.0
+      enableGPU: true
+    monitoring:
+      enabled: true
+      customMetrics:
+        - name: ocr_accuracy
+          type: gauge
+        - name: processing_time
+          type: histogram
+    
+  dataService:
+    enabled: true
+    image:
+      repository: dollarfunding/data-service
+      tag: latest
+      pullPolicy: Always
+    replicaCount: 4
+    resources:
+      requests:
+        cpu: 1500m
+        memory: 3Gi
+      limits:
+        cpu: 3000m
+        memory: 6Gi
+    config:
+      javaOpts: '-Xms2g -Xmx4g -XX:+UseG1GC'
+      encryptionEnabled: true
+      validationLevel: strict
+      cacheEnabled: true
+    monitoring:
+      enabled: true
+    
+  notificationService:
+    enabled: true
+    image:
+      repository: dollarfunding/notification-service
+      tag: latest
+      pullPolicy: Always
+    replicaCount: 3
+    resources:
+      requests:
+        cpu: 500m
+        memory: 512Mi
+      limits:
+        cpu: 1000m
+        memory: 1Gi
+    config:
+      webhookRetryAttempts: 5
+      webhookRetryDelay: 60  # seconds
+      maxConcurrentDeliveries: 50
+    monitoring:
+      enabled: true
+    
+  apiGateway:
+    enabled: true
+    image:
+      repository: kong/kong-gateway
+      tag: 3.0
+      pullPolicy: Always
+    replicaCount: 5  # Higher count for API gateway
+    resources:
+      requests:
+        cpu: 1000m
+        memory: 2Gi
+      limits:
+        cpu: 2000m
+        memory: 4Gi
+    config:
+      logLevel: info
+      rateLimit:
+        enabled: true
+        requestsPerSecond: 100
+      cors:
+        enabled: true
+        allowedOrigins:
+          - https://app.dollarfunding.com
+      ssl:
+        enabled: true
+        certManager: true
+    routes:
+      - name: applications
+        path: /api/v1/applications
+        service: data-service
+        port: 8080
+      - name: documents
+        path: /api/v1/documents
+        service: document-service
+        port: 8000
+      - name: webhooks
+        path: /api/v1/webhooks
+        service: notification-service
+        port: 3000
+    monitoring:
+      enabled: true
+      prometheusPlugin: true
+
+# Horizontal Pod Autoscaler Configuration
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+# Network Configuration
+network:
+  ingress:
+    enabled: true
+    annotations:
+      kubernetes.io/ingress.class: nginx
+      cert-manager.io/cluster-issuer: letsencrypt-prod
+      nginx.ingress.kubernetes.io/ssl-redirect: 'true'
+    hosts:
+      - host: api.dollarfunding.com
+        paths:
+          - path: /
+            pathType: Prefix
+    tls:
+      - secretName: api-dollarfunding-tls
+        hosts:
+          - api.dollarfunding.com
+
+# Monitoring and Observability
+monitoring:
+  prometheus:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+  grafana:
+    enabled: true
+    dashboards:
+      - name: application-overview
+        configMapName: application-overview-dashboard
+      - name: infrastructure-metrics
+        configMapName: infrastructure-metrics-dashboard
+      - name: service-performance
+        configMapName: service-performance-dashboard
+  alerting:
+    enabled: true
+    rules:
+      - name: high-error-rate
+        expr: sum(rate(http_requests_total{status=~"5.."}[5m])) / sum(rate(http_requests_total[5m])) > 0.05
+        for: 5m
+        severity: critical
+      - name: service-down
+        expr: up == 0
+        for: 2m
+        severity: critical
+      - name: high-latency
+        expr: histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le)) > 2
+        for: 10m
+        severity: warning
+  logging:
+    enabled: true
+    elasticsearch:
+      enabled: true
+    kibana:
+      enabled: true
+    fluentd:
+      enabled: true
+      config:
+        logLevel: info
+        bufferLimit: 8MB
+
+# Disaster Recovery
+disasterRecovery:
+  enabled: true
+  backups:
+    enabled: true
+    schedule: '0 0 * * *'  # Daily at midnight
+    retention: 30  # 30 days
+  restoreTestingSchedule: '0 0 * * 0'  # Weekly on Sunday
