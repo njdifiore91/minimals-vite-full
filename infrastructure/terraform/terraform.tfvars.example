@@ -1,0 +1,68 @@
+# =============================================================================
+# MCA Application Processing System - Example Terraform Variables
+# =============================================================================
+# This file provides example values for the variables defined in variables.tf.
+# Copy this file to terraform.tfvars and modify the values as needed.
+# =============================================================================
+
+# General variables
+environment = "development"
+aws_region  = "us-east-1"
+cost_center = "MCA-Application"
+
+# Network variables
+vpc_cidr           = "10.0.0.0/16"
+availability_zones = ["us-east-1a", "us-east-1b", "us-east-1c"]
+
+# Database variables
+db_instance_class    = "db.t3.medium"
+db_allocated_storage = 20
+db_username          = "mca_admin"
+db_password          = "CHANGE_ME_TO_SECURE_PASSWORD"
+db_multi_az          = true
+db_backup_retention  = 30
+db_read_replica_count = 1  # 1 for development, 2 for production
+
+# RabbitMQ variables
+mq_instance_type = "mq.t3.micro"
+mq_cluster_size  = 3
+mq_username      = "mca_rabbitmq"
+mq_password      = "CHANGE_ME_TO_SECURE_PASSWORD"
+
+# Redis variables
+redis_node_type       = "cache.t3.small"
+redis_num_cache_nodes = 3
+
+# S3 variables
+s3_lifecycle_rules = [
+  {
+    id                       = "archive-after-30-days"
+    status                   = "Enabled"
+    prefix                   = ""
+    transition_days          = 30
+    transition_storage_class = "STANDARD_IA"
+    expiration_days          = 0
+  }
+]
+
+# Kubernetes variables
+k8s_cluster_version = "1.27"
+k8s_node_groups = {
+  standard = {
+    instance_types = ["t3.medium"]
+    min_size       = 2
+    max_size       = 5
+    desired_size   = 2
+    disk_size      = 50
+  },
+  gpu = {
+    instance_types = ["g4dn.xlarge"]
+    min_size       = 1
+    max_size       = 3
+    desired_size   = 1
+    disk_size      = 100
+  }
+}
+
+# Monitoring variables
+log_retention_days = 30
