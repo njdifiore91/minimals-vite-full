@@ -1,0 +1,14 @@
+apiVersion: v2
+name: api-gateway
+description: Kong API Gateway for the MCA Application Processing System
+type: application
+version: 1.0.0
+appVersion: "3.5.0"
+
+# Dependencies
+dependencies:
+  - name: redis
+    version: "17.x.x"
+    repository: "https://charts.bitnami.com/bitnami"
+    condition: redis.enabled
+    # Redis is used for rate limiting integration with Kong
