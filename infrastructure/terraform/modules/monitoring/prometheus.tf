@@ -1,652 +1,879 @@
-# Prometheus Terraform Configuration for MCA Application Processing System
-# This file provisions a self-hosted Prometheus and Grafana monitoring stack on Kubernetes
-# when selected as the monitoring solution.
+# infrastructure/terraform/modules/monitoring/prometheus.tf
 
-# Only deploy Prometheus resources if monitoring_type is "prometheus"
-locals {
-  prometheus_enabled = var.monitoring_type == "prometheus"
-  
-  # Common labels for all resources
-  common_labels = {
-    app         = "mca-monitoring"
-    environment = var.environment
-    managed_by  = "terraform"
-  }
-  
-  # Default storage sizes based on environment
-  prometheus_storage_size = {
-    development = "10Gi"
-    staging     = "20Gi"
-    production  = "50Gi"
-  }
-  
-  grafana_storage_size = {
-    development = "5Gi"
-    staging     = "10Gi"
-    production  = "20Gi"
-  }
-  
-  # Retention configuration based on environment
-  prometheus_retention = {
-    development = "7d"
-    staging     = "15d"
-    production  = "30d"
-  }
-}
+# This file contains Prometheus and Grafana resources and configurations
+# It is used when monitoring_type is set to "prometheus"
 
-# Deploy Prometheus Operator using Helm
-resource "helm_release" "prometheus_operator" {
-  count      = local.prometheus_enabled ? 1 : 0
-  name       = "prometheus-operator"
+# Deploy Prometheus using Helm chart
+resource "helm_release" "prometheus" {
+  count = local.use_prometheus ? 1 : 0
+  
+  name       = "prometheus"
   repository = "https://prometheus-community.github.io/helm-charts"
   chart      = "kube-prometheus-stack"
-  version    = var.prometheus_operator_version
-  namespace  = var.monitoring_namespace
+  version    = "45.0.0"
+  namespace  = var.kubernetes_namespace
   
   create_namespace = true
   
-  # Wait for CRDs to be applied before creating resources that use them
-  wait = true
+  set {
+    name  = "prometheus.prometheusSpec.retention"
+    value = "${var.prometheus_retention_days}d"
+  }
   
-  values = [
-    <<-EOT
-    # Global configuration
-    global:
-      evaluation_interval: "30s"
-      scrape_interval: "30s"
-      scrape_timeout: "10s"
-      external_labels:
-        environment: ${var.environment}
-        cluster: ${var.cluster_name}
-    
-    # Prometheus server configuration
-    prometheus:
-      prometheusSpec:
-        replicas: ${var.environment == "production" ? 2 : 1}
-        retention: ${lookup(local.prometheus_retention, var.environment, "15d")}
-        serviceMonitorSelector:
-          matchLabels:
-            app: "mca-monitoring"
-        podMonitorSelector:
-          matchLabels:
-            app: "mca-monitoring"
-        ruleSelector:
-          matchLabels:
-            app: "mca-monitoring"
-        storageSpec:
-          volumeClaimTemplate:
-            spec:
-              storageClassName: ${var.storage_class_name}
-              accessModes: ["ReadWriteOnce"]
-              resources:
-                requests:
-                  storage: ${lookup(local.prometheus_storage_size, var.environment, "20Gi")}
-        resources:
-          requests:
-            cpu: ${var.environment == "production" ? "500m" : "200m"}
-            memory: ${var.environment == "production" ? "2Gi" : "1Gi"}
-          limits:
-            cpu: ${var.environment == "production" ? "1000m" : "500m"}
-            memory: ${var.environment == "production" ? "4Gi" : "2Gi"}
-        securityContext:
-          fsGroup: 65534
-          runAsGroup: 65534
-          runAsNonRoot: true
-          runAsUser: 65534
-        additionalScrapeConfigs:
-          - job_name: 's3-exporter'
-            static_configs:
-              - targets: ['s3-exporter:9340']
-    
-    # Grafana configuration
-    grafana:
-      enabled: true
-      adminPassword: ${var.grafana_admin_password}
-      persistence:
-        enabled: true
-        storageClassName: ${var.storage_class_name}
-        size: ${lookup(local.grafana_storage_size, var.environment, "10Gi")}
-      resources:
-        requests:
-          cpu: ${var.environment == "production" ? "200m" : "100m"}
-          memory: ${var.environment == "production" ? "256Mi" : "128Mi"}
-        limits:
-          cpu: ${var.environment == "production" ? "500m" : "200m"}
-          memory: ${var.environment == "production" ? "512Mi" : "256Mi"}
-      plugins:
-        - grafana-piechart-panel
-        - grafana-worldmap-panel
-        - grafana-clock-panel
-      dashboardProviders:
-        dashboardproviders.yaml:
-          apiVersion: 1
-          providers:
-            - name: 'mca-dashboards'
-              orgId: 1
-              folder: 'MCA Application'
-              type: file
-              disableDeletion: false
-              editable: true
-              options:
-                path: /var/lib/grafana/dashboards/mca
-      dashboardsConfigMaps:
-        mca-dashboards: "${var.grafana_dashboards_configmap}"
-      sidecar:
-        dashboards:
-          enabled: true
-          label: grafana_dashboard
-          searchNamespace: ALL
-      ingress:
-        enabled: ${var.grafana_ingress_enabled}
-        annotations:
-          kubernetes.io/ingress.class: ${var.ingress_class}
-          cert-manager.io/cluster-issuer: ${var.cert_issuer}
-        hosts:
-          - ${var.grafana_hostname}
-        tls:
-          - secretName: grafana-tls
-            hosts:
-              - ${var.grafana_hostname}
-    
-    # Alert manager configuration
-    alertmanager:
-      enabled: true
-      alertmanagerSpec:
-        replicas: ${var.environment == "production" ? 2 : 1}
-        storage:
-          volumeClaimTemplate:
-            spec:
-              storageClassName: ${var.storage_class_name}
-              accessModes: ["ReadWriteOnce"]
-              resources:
-                requests:
-                  storage: ${var.environment == "production" ? "10Gi" : "5Gi"}
-        resources:
-          requests:
-            cpu: ${var.environment == "production" ? "100m" : "50m"}
-            memory: ${var.environment == "production" ? "256Mi" : "128Mi"}
-          limits:
-            cpu: ${var.environment == "production" ? "200m" : "100m"}
-            memory: ${var.environment == "production" ? "512Mi" : "256Mi"}
-    
-    # Node exporter configuration
-    nodeExporter:
-      enabled: true
-      serviceMonitor:
-        relabelings:
-          - action: replace
-            regex: (.*)
-            replacement: $1
-            sourceLabels:
-              - __meta_kubernetes_pod_node_name
-            targetLabel: instance
-    
-    # kube-state-metrics configuration
-    kubeStateMetrics:
-      enabled: true
-    
-    # Prometheus Operator configuration
-    prometheusOperator:
-      enabled: true
-      manageCrds: true
-      createCustomResource: true
-      resources:
-        requests:
-          cpu: ${var.environment == "production" ? "100m" : "50m"}
-          memory: ${var.environment == "production" ? "256Mi" : "128Mi"}
-        limits:
-          cpu: ${var.environment == "production" ? "200m" : "100m"}
-          memory: ${var.environment == "production" ? "512Mi" : "256Mi"}
-    EOT
-  ]
+  set {
+    name  = "prometheus.prometheusSpec.storageSpec.volumeClaimTemplate.spec.storageClassName"
+    value = var.storage_class_name
+  }
+  
+  set {
+    name  = "prometheus.prometheusSpec.storageSpec.volumeClaimTemplate.spec.resources.requests.storage"
+    value = var.prometheus_storage_size
+  }
+  
+  set {
+    name  = "grafana.persistence.enabled"
+    value = "true"
+  }
+  
+  set {
+    name  = "grafana.persistence.storageClassName"
+    value = var.storage_class_name
+  }
+  
+  set {
+    name  = "grafana.persistence.size"
+    value = var.grafana_storage_size
+  }
+  
+  set {
+    name  = "grafana.adminPassword"
+    value = "prom-operator" # In production, use a secret or external secret management
+  }
   
   # Add common labels to all resources
-  set {
-    name  = "commonLabels.app"
-    value = local.common_labels.app
-  }
-  
-  set {
-    name  = "commonLabels.environment"
-    value = local.common_labels.environment
-  }
-  
-  set {
-    name  = "commonLabels.managed_by"
-    value = local.common_labels.managed_by
-  }
-}
-
-# Deploy PostgreSQL exporter for database metrics
-resource "helm_release" "postgres_exporter" {
-  count      = local.prometheus_enabled ? 1 : 0
-  name       = "postgres-exporter"
-  repository = "https://prometheus-community.github.io/helm-charts"
-  chart      = "prometheus-postgres-exporter"
-  version    = var.postgres_exporter_version
-  namespace  = var.monitoring_namespace
-  
-  depends_on = [helm_release.prometheus_operator]
-  
   values = [
     <<-EOT
-    config:
-      datasource:
-        host: ${var.postgres_host}
-        user: ${var.postgres_exporter_user}
-        password: ${var.postgres_exporter_password}
-        port: ${var.postgres_port}
-        database: ${var.postgres_database}
-        sslmode: ${var.postgres_ssl_mode}
-      queries:
-        pg_replication:
-          query: "SELECT EXTRACT(EPOCH FROM (now() - pg_last_xact_replay_timestamp())) as lag"
-          metrics:
-            - lag:
-                usage: "GAUGE"
-                description: "Replication lag behind master in seconds"
-    
-    serviceMonitor:
-      enabled: true
-      labels:
-        app: "mca-monitoring"
-    
-    resources:
-      requests:
-        cpu: ${var.environment == "production" ? "100m" : "50m"}
-        memory: ${var.environment == "production" ? "128Mi" : "64Mi"}
-      limits:
-        cpu: ${var.environment == "production" ? "200m" : "100m"}
-        memory: ${var.environment == "production" ? "256Mi" : "128Mi"}
+    commonLabels:
+      app.kubernetes.io/managed-by: terraform
+      app.kubernetes.io/part-of: ${var.project_name}
+      app.kubernetes.io/environment: ${var.environment}
     EOT
   ]
 }
 
-# Deploy RabbitMQ exporter for message queue metrics
-resource "helm_release" "rabbitmq_exporter" {
-  count      = local.prometheus_enabled ? 1 : 0
-  name       = "rabbitmq-exporter"
-  repository = "https://prometheus-community.github.io/helm-charts"
-  chart      = "prometheus-rabbitmq-exporter"
-  version    = var.rabbitmq_exporter_version
-  namespace  = var.monitoring_namespace
+# Deploy Loki for log aggregation
+resource "helm_release" "loki" {
+  count = local.use_prometheus ? 1 : 0
   
-  depends_on = [helm_release.prometheus_operator]
+  name       = "loki"
+  repository = "https://grafana.github.io/helm-charts"
+  chart      = "loki-stack"
+  version    = "2.9.0"
+  namespace  = var.kubernetes_namespace
   
+  depends_on = [helm_release.prometheus]
+  
+  set {
+    name  = "loki.persistence.enabled"
+    value = "true"
+  }
+  
+  set {
+    name  = "loki.persistence.storageClassName"
+    value = var.storage_class_name
+  }
+  
+  set {
+    name  = "loki.persistence.size"
+    value = "10Gi"
+  }
+  
+  set {
+    name  = "promtail.enabled"
+    value = "true"
+  }
+  
+  # Add common labels to all resources
   values = [
     <<-EOT
-    rabbitmq:
-      url: ${var.rabbitmq_url}
-      user: ${var.rabbitmq_exporter_user}
-      password: ${var.rabbitmq_exporter_password}
-    
-    serviceMonitor:
-      enabled: true
-      labels:
-        app: "mca-monitoring"
-    
-    resources:
-      requests:
-        cpu: ${var.environment == "production" ? "100m" : "50m"}
-        memory: ${var.environment == "production" ? "128Mi" : "64Mi"}
-      limits:
-        cpu: ${var.environment == "production" ? "200m" : "100m"}
-        memory: ${var.environment == "production" ? "256Mi" : "128Mi"}
+    commonLabels:
+      app.kubernetes.io/managed-by: terraform
+      app.kubernetes.io/part-of: ${var.project_name}
+      app.kubernetes.io/environment: ${var.environment}
     EOT
   ]
 }
 
-# Deploy Redis exporter for cache metrics
-resource "helm_release" "redis_exporter" {
-  count      = local.prometheus_enabled ? 1 : 0
-  name       = "redis-exporter"
-  repository = "https://prometheus-community.github.io/helm-charts"
-  chart      = "prometheus-redis-exporter"
-  version    = var.redis_exporter_version
-  namespace  = var.monitoring_namespace
+# Deploy Tempo for distributed tracing
+resource "helm_release" "tempo" {
+  count = local.use_prometheus ? 1 : 0
   
-  depends_on = [helm_release.prometheus_operator]
+  name       = "tempo"
+  repository = "https://grafana.github.io/helm-charts"
+  chart      = "tempo"
+  version    = "1.0.0"
+  namespace  = var.kubernetes_namespace
   
+  depends_on = [helm_release.prometheus]
+  
+  set {
+    name  = "persistence.enabled"
+    value = "true"
+  }
+  
+  set {
+    name  = "persistence.storageClassName"
+    value = var.storage_class_name
+  }
+  
+  set {
+    name  = "persistence.size"
+    value = "10Gi"
+  }
+  
+  # Add common labels to all resources
   values = [
     <<-EOT
-    redisAddress: ${var.redis_url}
-    
-    serviceMonitor:
-      enabled: true
-      labels:
-        app: "mca-monitoring"
-    
-    resources:
-      requests:
-        cpu: ${var.environment == "production" ? "100m" : "50m"}
-        memory: ${var.environment == "production" ? "128Mi" : "64Mi"}
-      limits:
-        cpu: ${var.environment == "production" ? "200m" : "100m"}
-        memory: ${var.environment == "production" ? "256Mi" : "128Mi"}
+    commonLabels:
+      app.kubernetes.io/managed-by: terraform
+      app.kubernetes.io/part-of: ${var.project_name}
+      app.kubernetes.io/environment: ${var.environment}
     EOT
   ]
 }
 
-# Deploy S3 exporter for object storage metrics
-resource "kubernetes_deployment" "s3_exporter" {
-  count = local.prometheus_enabled ? 1 : 0
+# Create ConfigMap for Prometheus alert rules
+resource "kubernetes_config_map" "prometheus_alert_rules" {
+  count = local.use_prometheus ? 1 : 0
   
   metadata {
-    name      = "s3-exporter"
-    namespace = var.monitoring_namespace
-    labels    = merge(local.common_labels, { component = "s3-exporter" })
+    name      = "prometheus-alert-rules"
+    namespace = var.kubernetes_namespace
+    labels = {
+      "app.kubernetes.io/managed-by" = "terraform"
+      "app.kubernetes.io/part-of"    = var.project_name
+      "app.kubernetes.io/environment" = var.environment
+      "role"                        = "alert-rules"
+    }
   }
   
-  spec {
-    replicas = 1
-    
-    selector {
-      match_labels = merge(local.common_labels, { component = "s3-exporter" })
+  data = {
+    "application-alerts.yaml" = <<-EOT
+groups:
+- name: application-alerts
+  rules:
+  - alert: ApplicationProcessingTimeTooHigh
+    expr: avg(app_processing_time{environment="${var.environment}"}) by (service) > ${local.alert_thresholds.app_processing_time_critical}
+    for: 5m
+    labels:
+      severity: critical
+      environment: ${var.environment}
+    annotations:
+      summary: "Application processing time too high"
+      description: "Application processing time for {{ $labels.service }} is {{ $value }} seconds, which is above the critical threshold of ${local.alert_thresholds.app_processing_time_critical} seconds."
+
+  - alert: ApplicationProcessingTimeWarning
+    expr: avg(app_processing_time{environment="${var.environment}"}) by (service) > ${local.alert_thresholds.app_processing_time_warning}
+    for: 5m
+    labels:
+      severity: warning
+      environment: ${var.environment}
+    annotations:
+      summary: "Application processing time warning"
+      description: "Application processing time for {{ $labels.service }} is {{ $value }} seconds, which is above the warning threshold of ${local.alert_thresholds.app_processing_time_warning} seconds."
+
+  - alert: OCRAccuracyTooLow
+    expr: avg(ocr_accuracy{environment="${var.environment}"}) by (document_type) < ${local.alert_thresholds.ocr_accuracy_critical}
+    for: 5m
+    labels:
+      severity: critical
+      environment: ${var.environment}
+    annotations:
+      summary: "OCR accuracy too low"
+      description: "OCR accuracy for {{ $labels.document_type }} is {{ $value }}%, which is below the critical threshold of ${local.alert_thresholds.ocr_accuracy_critical}%."
+
+  - alert: OCRAccuracyWarning
+    expr: avg(ocr_accuracy{environment="${var.environment}"}) by (document_type) < ${local.alert_thresholds.ocr_accuracy_warning}
+    for: 5m
+    labels:
+      severity: warning
+      environment: ${var.environment}
+    annotations:
+      summary: "OCR accuracy warning"
+      description: "OCR accuracy for {{ $labels.document_type }} is {{ $value }}%, which is below the warning threshold of ${local.alert_thresholds.ocr_accuracy_warning}%."
+
+  - alert: QueueDepthTooHigh
+    expr: avg(rabbitmq_queue_messages{environment="${var.environment}"}) by (queue_name) > ${local.alert_thresholds.queue_depth_critical}
+    for: 5m
+    labels:
+      severity: critical
+      environment: ${var.environment}
+    annotations:
+      summary: "Queue depth too high"
+      description: "Queue depth for {{ $labels.queue_name }} is {{ $value }} messages, which is above the critical threshold of ${local.alert_thresholds.queue_depth_critical} messages."
+
+  - alert: QueueDepthWarning
+    expr: avg(rabbitmq_queue_messages{environment="${var.environment}"}) by (queue_name) > ${local.alert_thresholds.queue_depth_warning}
+    for: 5m
+    labels:
+      severity: warning
+      environment: ${var.environment}
+    annotations:
+      summary: "Queue depth warning"
+      description: "Queue depth for {{ $labels.queue_name }} is {{ $value }} messages, which is above the warning threshold of ${local.alert_thresholds.queue_depth_warning} messages."
+
+  - alert: APIResponseTimeTooHigh
+    expr: avg(api_response_time{environment="${var.environment}"}) by (endpoint) > ${local.alert_thresholds.api_response_time_critical}
+    for: 5m
+    labels:
+      severity: critical
+      environment: ${var.environment}
+    annotations:
+      summary: "API response time too high"
+      description: "API response time for {{ $labels.endpoint }} is {{ $value }} ms, which is above the critical threshold of ${local.alert_thresholds.api_response_time_critical} ms."
+
+  - alert: APIResponseTimeWarning
+    expr: avg(api_response_time{environment="${var.environment}"}) by (endpoint) > ${local.alert_thresholds.api_response_time_warning}
+    for: 5m
+    labels:
+      severity: warning
+      environment: ${var.environment}
+    annotations:
+      summary: "API response time warning"
+      description: "API response time for {{ $labels.endpoint }} is {{ $value }} ms, which is above the warning threshold of ${local.alert_thresholds.api_response_time_warning} ms."
+    EOT
+  }
+  
+  depends_on = [helm_release.prometheus]
+}
+
+# Create Grafana dashboards for application metrics
+resource "kubernetes_config_map" "grafana_dashboards" {
+  count = local.use_prometheus ? 1 : 0
+  
+  metadata {
+    name      = "grafana-dashboards"
+    namespace = var.kubernetes_namespace
+    labels = {
+      "app.kubernetes.io/managed-by" = "terraform"
+      "app.kubernetes.io/part-of"    = var.project_name
+      "app.kubernetes.io/environment" = var.environment
+      "grafana_dashboard"           = "1"
     }
-    
-    template {
-      metadata {
-        labels = merge(local.common_labels, { component = "s3-exporter" })
+  }
+  
+  data = {
+    "mca-application-dashboard.json" = <<-EOT
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": "-- Grafana --",
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
       }
-      
-      spec {
-        container {
-          name  = "s3-exporter"
-          image = "${var.s3_exporter_image}:${var.s3_exporter_version}"
-          
-          env {
-            name  = "AWS_ACCESS_KEY_ID"
-            value_from {
-              secret_key_ref {
-                name = var.s3_credentials_secret
-                key  = "access_key"
-              }
-            }
-          }
-          
-          env {
-            name  = "AWS_SECRET_ACCESS_KEY"
-            value_from {
-              secret_key_ref {
-                name = var.s3_credentials_secret
-                key  = "secret_key"
-              }
-            }
-          }
-          
-          env {
-            name  = "S3_ENDPOINT"
-            value = var.s3_endpoint
-          }
-          
-          env {
-            name  = "S3_BUCKETS"
-            value = join(",", var.s3_buckets)
-          }
-          
-          port {
-            container_port = 9340
-            name           = "metrics"
-          }
-          
-          resources {
-            requests = {
-              cpu    = var.environment == "production" ? "100m" : "50m"
-              memory = var.environment == "production" ? "128Mi" : "64Mi"
-            }
-            limits = {
-              cpu    = var.environment == "production" ? "200m" : "100m"
-              memory = var.environment == "production" ? "256Mi" : "128Mi"
-            }
-          }
-          
-          liveness_probe {
-            http_get {
-              path = "/metrics"
-              port = "metrics"
-            }
-            initial_delay_seconds = 30
-            period_seconds        = 10
-          }
-          
-          readiness_probe {
-            http_get {
-              path = "/metrics"
-              port = "metrics"
-            }
-            initial_delay_seconds = 15
-            period_seconds        = 5
-          }
+    ]
+  },
+  "editable": true,
+  "gnetId": null,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "collapsed": false,
+      "datasource": null,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "panels": [],
+      "title": "Application Processing",
+      "type": "row"
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "fill": 1,
+      "fillGradient": 0,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 1
+      },
+      "hiddenSeries": false,
+      "id": 2,
+      "legend": {
+        "avg": false,
+        "current": false,
+        "max": false,
+        "min": false,
+        "show": true,
+        "total": false,
+        "values": false
+      },
+      "lines": true,
+      "linewidth": 1,
+      "nullPointMode": "null",
+      "options": {
+        "alertThreshold": true
+      },
+      "percentage": false,
+      "pluginVersion": "7.3.7",
+      "pointradius": 2,
+      "points": false,
+      "renderer": "flot",
+      "seriesOverrides": [],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "expr": "avg(app_processing_time{environment=\"${var.environment}\"}) by (service)",
+          "interval": "",
+          "legendFormat": "{{service}}",
+          "refId": "A"
         }
+      ],
+      "thresholds": [
+        {
+          "colorMode": "critical",
+          "fill": true,
+          "line": true,
+          "op": "gt",
+          "value": ${local.alert_thresholds.app_processing_time_critical},
+          "yaxis": "left"
+        },
+        {
+          "colorMode": "warning",
+          "fill": true,
+          "line": true,
+          "op": "gt",
+          "value": ${local.alert_thresholds.app_processing_time_warning},
+          "yaxis": "left"
+        }
+      ],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "Application Processing Time (seconds)",
+      "tooltip": {
+        "shared": true,
+        "sort": 0,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "s",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": "0",
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "fill": 1,
+      "fillGradient": 0,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 1
+      },
+      "hiddenSeries": false,
+      "id": 3,
+      "legend": {
+        "avg": false,
+        "current": false,
+        "max": false,
+        "min": false,
+        "show": true,
+        "total": false,
+        "values": false
+      },
+      "lines": true,
+      "linewidth": 1,
+      "nullPointMode": "null",
+      "options": {
+        "alertThreshold": true
+      },
+      "percentage": false,
+      "pluginVersion": "7.3.7",
+      "pointradius": 2,
+      "points": false,
+      "renderer": "flot",
+      "seriesOverrides": [],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "expr": "avg(ocr_accuracy{environment=\"${var.environment}\"}) by (document_type)",
+          "interval": "",
+          "legendFormat": "{{document_type}}",
+          "refId": "A"
+        }
+      ],
+      "thresholds": [
+        {
+          "colorMode": "critical",
+          "fill": true,
+          "line": true,
+          "op": "lt",
+          "value": ${local.alert_thresholds.ocr_accuracy_critical},
+          "yaxis": "left"
+        },
+        {
+          "colorMode": "warning",
+          "fill": true,
+          "line": true,
+          "op": "lt",
+          "value": ${local.alert_thresholds.ocr_accuracy_warning},
+          "yaxis": "left"
+        }
+      ],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "OCR Accuracy (%)",
+      "tooltip": {
+        "shared": true,
+        "sort": 0,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "percent",
+          "label": null,
+          "logBase": 1,
+          "max": "100",
+          "min": "0",
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "collapsed": false,
+      "datasource": null,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 9
+      },
+      "id": 4,
+      "panels": [],
+      "title": "Queue and API",
+      "type": "row"
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "fill": 1,
+      "fillGradient": 0,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 10
+      },
+      "hiddenSeries": false,
+      "id": 5,
+      "legend": {
+        "avg": false,
+        "current": false,
+        "max": false,
+        "min": false,
+        "show": true,
+        "total": false,
+        "values": false
+      },
+      "lines": true,
+      "linewidth": 1,
+      "nullPointMode": "null",
+      "options": {
+        "alertThreshold": true
+      },
+      "percentage": false,
+      "pluginVersion": "7.3.7",
+      "pointradius": 2,
+      "points": false,
+      "renderer": "flot",
+      "seriesOverrides": [],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "expr": "avg(rabbitmq_queue_messages{environment=\"${var.environment}\"}) by (queue_name)",
+          "interval": "",
+          "legendFormat": "{{queue_name}}",
+          "refId": "A"
+        }
+      ],
+      "thresholds": [
+        {
+          "colorMode": "critical",
+          "fill": true,
+          "line": true,
+          "op": "gt",
+          "value": ${local.alert_thresholds.queue_depth_critical},
+          "yaxis": "left"
+        },
+        {
+          "colorMode": "warning",
+          "fill": true,
+          "line": true,
+          "op": "gt",
+          "value": ${local.alert_thresholds.queue_depth_warning},
+          "yaxis": "left"
+        }
+      ],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "Queue Depth",
+      "tooltip": {
+        "shared": true,
+        "sort": 0,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": "0",
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
+      }
+    },
+    {
+      "aliasColors": {},
+      "bars": false,
+      "dashLength": 10,
+      "dashes": false,
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "fill": 1,
+      "fillGradient": 0,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 10
+      },
+      "hiddenSeries": false,
+      "id": 6,
+      "legend": {
+        "avg": false,
+        "current": false,
+        "max": false,
+        "min": false,
+        "show": true,
+        "total": false,
+        "values": false
+      },
+      "lines": true,
+      "linewidth": 1,
+      "nullPointMode": "null",
+      "options": {
+        "alertThreshold": true
+      },
+      "percentage": false,
+      "pluginVersion": "7.3.7",
+      "pointradius": 2,
+      "points": false,
+      "renderer": "flot",
+      "seriesOverrides": [],
+      "spaceLength": 10,
+      "stack": false,
+      "steppedLine": false,
+      "targets": [
+        {
+          "expr": "avg(api_response_time{environment=\"${var.environment}\"}) by (endpoint)",
+          "interval": "",
+          "legendFormat": "{{endpoint}}",
+          "refId": "A"
+        }
+      ],
+      "thresholds": [
+        {
+          "colorMode": "critical",
+          "fill": true,
+          "line": true,
+          "op": "gt",
+          "value": ${local.alert_thresholds.api_response_time_critical},
+          "yaxis": "left"
+        },
+        {
+          "colorMode": "warning",
+          "fill": true,
+          "line": true,
+          "op": "gt",
+          "value": ${local.alert_thresholds.api_response_time_warning},
+          "yaxis": "left"
+        }
+      ],
+      "timeFrom": null,
+      "timeRegions": [],
+      "timeShift": null,
+      "title": "API Response Time (ms)",
+      "tooltip": {
+        "shared": true,
+        "sort": 0,
+        "value_type": "individual"
+      },
+      "type": "graph",
+      "xaxis": {
+        "buckets": null,
+        "mode": "time",
+        "name": null,
+        "show": true,
+        "values": []
+      },
+      "yaxes": [
+        {
+          "format": "ms",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": "0",
+          "show": true
+        },
+        {
+          "format": "short",
+          "label": null,
+          "logBase": 1,
+          "max": null,
+          "min": null,
+          "show": true
+        }
+      ],
+      "yaxis": {
+        "align": false,
+        "alignLevel": null
       }
     }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 26,
+  "style": "dark",
+  "tags": [
+    "mca",
+    "application",
+    "${var.environment}"
+  ],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "",
+  "title": "MCA Application Processing - ${title(var.environment)}",
+  "uid": "mca-application-${var.environment}",
+  "version": 1
+}
+    EOT
   }
   
-  depends_on = [helm_release.prometheus_operator]
+  depends_on = [helm_release.prometheus]
 }
 
-resource "kubernetes_service" "s3_exporter" {
-  count = local.prometheus_enabled ? 1 : 0
+# Configure AlertManager for notifications
+resource "kubernetes_config_map" "alertmanager_config" {
+  count = local.use_prometheus ? 1 : 0
   
   metadata {
-    name      = "s3-exporter"
-    namespace = var.monitoring_namespace
-    labels    = merge(local.common_labels, { component = "s3-exporter" })
-  }
-  
-  spec {
-    selector = merge(local.common_labels, { component = "s3-exporter" })
-    
-    port {
-      port        = 9340
-      target_port = 9340
-      name        = "metrics"
+    name      = "alertmanager-config"
+    namespace = var.kubernetes_namespace
+    labels = {
+      "app.kubernetes.io/managed-by" = "terraform"
+      "app.kubernetes.io/part-of"    = var.project_name
+      "app.kubernetes.io/environment" = var.environment
     }
   }
   
-  depends_on = [kubernetes_deployment.s3_exporter]
+  data = {
+    "alertmanager.yaml" = <<-EOT
+global:
+  resolve_timeout: 5m
+  slack_api_url: 'https://hooks.slack.com/services/REPLACE_WITH_ACTUAL_SLACK_WEBHOOK_URL'
+
+route:
+  group_by: ['alertname', 'job']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  receiver: 'slack-notifications'
+  routes:
+  - match:
+      severity: critical
+    receiver: 'pagerduty-critical'
+    continue: true
+  - match:
+      severity: warning
+    receiver: 'slack-notifications'
+
+receivers:
+- name: 'slack-notifications'
+  slack_configs:
+  - channel: '${var.notification_channels.slack.value}'
+    send_resolved: true
+    title: '[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}'
+    text: >-
+      {{ range .Alerts }}
+        *Alert:* {{ .Annotations.summary }}
+        *Description:* {{ .Annotations.description }}
+        *Severity:* {{ .Labels.severity }}
+        *Environment:* {{ .Labels.environment }}
+        {{ if ne .Labels.service "" }}*Service:* {{ .Labels.service }}{{ end }}
+        {{ if ne .Labels.endpoint "" }}*Endpoint:* {{ .Labels.endpoint }}{{ end }}
+        {{ if ne .Labels.queue_name "" }}*Queue:* {{ .Labels.queue_name }}{{ end }}
+        {{ if ne .Labels.document_type "" }}*Document Type:* {{ .Labels.document_type }}{{ end }}
+      {{ end }}
+
+- name: 'pagerduty-critical'
+  pagerduty_configs:
+  - service_key: '${var.notification_channels.pagerduty.value}'
+    send_resolved: true
+    description: '{{ .CommonLabels.alertname }}'
+    details:
+      summary: '{{ .CommonAnnotations.summary }}'
+      description: '{{ .CommonAnnotations.description }}'
+      environment: '{{ .CommonLabels.environment }}'
+      severity: '{{ .CommonLabels.severity }}'
+    EOT
+  }
+  
+  depends_on = [helm_release.prometheus]
 }
 
-resource "kubernetes_service_monitor" "s3_exporter" {
-  count = local.prometheus_enabled ? 1 : 0
-  
-  metadata {
-    name      = "s3-exporter"
-    namespace = var.monitoring_namespace
-    labels    = merge(local.common_labels, { component = "s3-exporter" })
-  }
-  
-  spec {
-    selector {
-      match_labels = merge(local.common_labels, { component = "s3-exporter" })
-    }
-    
-    endpoint {
-      port     = "metrics"
-      interval = "30s"
-    }
-  }
-  
-  depends_on = [kubernetes_service.s3_exporter, helm_release.prometheus_operator]
+# Output URLs for Prometheus, Grafana, and Alertmanager
+output "prometheus_url" {
+  value = "http://prometheus-server.${var.kubernetes_namespace}.svc.cluster.local:9090"
 }
 
-# Create ServiceMonitor resources for MCA microservices
-resource "kubernetes_service_monitor" "email_service" {
-  count = local.prometheus_enabled ? 1 : 0
-  
-  metadata {
-    name      = "email-service"
-    namespace = var.monitoring_namespace
-    labels    = merge(local.common_labels, { component = "email-service" })
-  }
-  
-  spec {
-    selector {
-      match_labels = {
-        app = "email-service"
-      }
-    }
-    
-    namespace_selector {
-      match_names = [var.app_namespace]
-    }
-    
-    endpoint {
-      port     = "metrics"
-      path     = "/metrics"
-      interval = "30s"
-    }
-  }
-  
-  depends_on = [helm_release.prometheus_operator]
+output "grafana_url" {
+  value = "http://grafana.${var.kubernetes_namespace}.svc.cluster.local:3000"
 }
 
-resource "kubernetes_service_monitor" "document_service" {
-  count = local.prometheus_enabled ? 1 : 0
-  
-  metadata {
-    name      = "document-service"
-    namespace = var.monitoring_namespace
-    labels    = merge(local.common_labels, { component = "document-service" })
-  }
-  
-  spec {
-    selector {
-      match_labels = {
-        app = "document-service"
-      }
-    }
-    
-    namespace_selector {
-      match_names = [var.app_namespace]
-    }
-    
-    endpoint {
-      port     = "metrics"
-      path     = "/metrics"
-      interval = "30s"
-    }
-  }
-  
-  depends_on = [helm_release.prometheus_operator]
+output "alertmanager_url" {
+  value = "http://alertmanager.${var.kubernetes_namespace}.svc.cluster.local:9093"
 }
 
-resource "kubernetes_service_monitor" "ocr_service" {
-  count = local.prometheus_enabled ? 1 : 0
-  
-  metadata {
-    name      = "ocr-service"
-    namespace = var.monitoring_namespace
-    labels    = merge(local.common_labels, { component = "ocr-service" })
-  }
-  
-  spec {
-    selector {
-      match_labels = {
-        app = "ocr-service"
-      }
-    }
-    
-    namespace_selector {
-      match_names = [var.app_namespace]
-    }
-    
-    endpoint {
-      port     = "metrics"
-      path     = "/metrics"
-      interval = "30s"
-    }
-  }
-  
-  depends_on = [helm_release.prometheus_operator]
+output "loki_url" {
+  value = "http://loki.${var.kubernetes_namespace}.svc.cluster.local:3100"
 }
 
-resource "kubernetes_service_monitor" "data_service" {
-  count = local.prometheus_enabled ? 1 : 0
-  
-  metadata {
-    name      = "data-service"
-    namespace = var.monitoring_namespace
-    labels    = merge(local.common_labels, { component = "data-service" })
-  }
-  
-  spec {
-    selector {
-      match_labels = {
-        app = "data-service"
-      }
-    }
-    
-    namespace_selector {
-      match_names = [var.app_namespace]
-    }
-    
-    endpoint {
-      port     = "metrics"
-      path     = "/actuator/prometheus"
-      interval = "30s"
-    }
-  }
-  
-  depends_on = [helm_release.prometheus_operator]
-}
-
-resource "kubernetes_service_monitor" "notification_service" {
-  count = local.prometheus_enabled ? 1 : 0
-  
-  metadata {
-    name      = "notification-service"
-    namespace = var.monitoring_namespace
-    labels    = merge(local.common_labels, { component = "notification-service" })
-  }
-  
-  spec {
-    selector {
-      match_labels = {
-        app = "notification-service"
-      }
-    }
-    
-    namespace_selector {
-      match_names = [var.app_namespace]
-    }
-    
-    endpoint {
-      port     = "metrics"
-      path     = "/metrics"
-      interval = "30s"
-    }
-  }
-  
-  depends_on = [helm_release.prometheus_operator]
-}
-
-resource "kubernetes_service_monitor" "api_gateway" {
-  count = local.prometheus_enabled ? 1 : 0
-  
-  metadata {
-    name      = "api-gateway"
-    namespace = var.monitoring_namespace
-    labels    = merge(local.common_labels, { component = "api-gateway" })
-  }
-  
-  spec {
-    selector {
-      match_labels = {
-        app = "api-gateway"
-      }
-    }
-    
-    namespace_selector {
-      match_names = [var.app_namespace]
-    }
-    
-    endpoint {
-      port     = "metrics"
-      path     = "/metrics"
-      interval = "30s"
-    }
-  }
-  
-  depends_on = [helm_release.prometheus_operator]
+output "tempo_url" {
+  value = "http://tempo.${var.kubernetes_namespace}.svc.cluster.local:3100"
 }
