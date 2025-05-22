@@ -1,75 +1,70 @@
-# Development Environment Terraform Variables
-# This file contains the actual values for variables defined in variables.tf, specific to the development environment.
+# Variable values for the MCA Application Processing System - Development Environment
 
-# Region Configuration
-region = "us-west-2"  # Development region
+# Region configuration
+aws_region     = "us-east-2"  # Development region
+replica_region = "us-west-1"  # Not used in development but kept for module compatibility
 
-# General Settings
-environment_name = "development"
-enable_high_availability = false  # Disable HA for development to reduce costs
+# Database configuration - PostgreSQL 14
+db_name = "mca_development"
+# db_username and db_password should be provided via environment variables or secure secrets management
+db_instance_class = "db.t3.micro"  # Smallest instance size for development
+db_allocated_storage = 20  # GB
+db_max_allocated_storage = 50  # GB
+db_replica_count = 0  # No read replicas for development
 
-# PostgreSQL Configuration
-postgresql_instance_type = "db.t3.small"  # Small instance for development
-postgresql_storage_gb = 20
-postgresql_enable_replicas = false  # No read replicas for development
-postgresql_backup_retention_days = 7  # Shorter backup retention for development
-postgresql_multi_az = false  # Single AZ deployment for development
-postgresql_connection_pool_min = 5
-postgresql_connection_pool_max = 20
-
-# RabbitMQ Configuration
-rabbitmq_instance_type = "t3.small"  # Small instance for development
+# RabbitMQ configuration
+rabbitmq_instance_type = "t3.micro"  # Smallest instance size for development
 rabbitmq_node_count = 1  # Single node for development
-rabbitmq_enable_clustering = false  # No clustering for development
-rabbitmq_storage_gb = 10
-rabbitmq_enable_mirrored_queues = false  # No mirrored queues for development
+rabbitmq_exchanges = ["mca.documents"]  # Fanout exchange
+rabbitmq_queues = ["document-processing", "data-extraction", "notification"]
 
-# Redis Configuration
-redis_instance_type = "cache.t3.small"  # Small instance for development
-redis_shard_count = 1  # Minimal shards for development
-redis_replica_count = 0  # No replicas for development
-redis_data_tiering_enabled = false  # Disable data tiering for development
-redis_auto_failover = false  # Disable auto-failover for development
+# Redis configuration
+redis_instance_type = "cache.t3.micro"  # Smallest instance size for development
+redis_node_count = 1  # Single node for development
+redis_data_ttl = 15  # Minutes for application data (same as other environments)
+redis_session_ttl = 1440  # Minutes (24 hours) for user sessions (same as other environments)
 
-# S3 Storage Configuration
-s3_bucket_names = {
-  documents = "mca-documents-development"
-  backups = "mca-backups-development"
-}
+# S3 Storage configuration
+s3_bucket_name = "mca-documents-development"  # Development-specific bucket name
 s3_versioning_enabled = true
-s3_lifecycle_rules_enabled = true
-s3_encryption_enabled = true  # Keep encryption enabled even in development
+s3_encryption_enabled = true  # AES-256 encryption
 
-# Network Configuration
-vpc_cidr = "10.0.0.0/16"
-private_subnet_cidrs = ["10.0.1.0/24", "10.0.2.0/24"]
-public_subnet_cidrs = ["10.0.101.0/24", "10.0.102.0/24"]
+# Network configuration
+# These values would be specific to your AWS account and VPC setup
+# vpc_id = "vpc-0123456789abcdef0"
+# subnet_ids = ["subnet-0123456789abcdef0"]
 
-# Security Configuration
-enable_enhanced_monitoring = false  # Disable enhanced monitoring for development
-enable_performance_insights = false  # Disable performance insights for development
+# High availability configuration
+multi_az_enabled = false  # No high availability for development
 
-# Feature Flags
-enable_gpu_nodes = false  # Disable GPU nodes for development
-enable_auto_scaling = false  # Disable auto-scaling for development
+# Backup configuration
+backup_window      = "02:00-04:00"  # 2-4 AM UTC
+maintenance_window = "sun:04:00-sun:06:00"  # Sunday 4-6 AM UTC
+backup_retention_period = 7  # Days (shorter for development)
 
-# Kubernetes Configuration
-kubernetes_node_instance_type = "t3.medium"  # Small instance for development
-kubernetes_node_count = 2  # Minimal node count for development
-kubernetes_max_node_count = 3  # Limited auto-scaling for development
+# Security configuration
+enable_encryption = true  # Keep encryption enabled even in development
+enable_deletion_protection = false  # No deletion protection for development
 
-# Monitoring Configuration
-monitoring_retention_days = 7  # Shorter retention for development
-monitoring_alert_emails = ["dev-team@dollarfunding.com"]
+# Monitoring configuration
+enable_enhanced_monitoring = false  # Basic monitoring for development
+monitoring_interval_seconds = 60  # Less frequent for development
+enable_performance_insights = false  # No performance insights for development
+performance_insights_retention_period = 7  # Days
 
-# Endpoint Configuration
-api_gateway_domain = "api-dev.dollarfunding.com"
-frontend_domain = "app-dev.dollarfunding.com"
+# Kubernetes configuration
+k8s_node_instance_type = "t3.small"  # Smallest instance size for development
+k8s_node_count_min = 1  # Minimum nodes
+k8s_node_count_max = 3  # Maximum nodes for auto-scaling
 
-# Cost Optimization
-enable_spot_instances = true  # Use spot instances for development to reduce costs
-enable_auto_shutdown = true  # Enable auto-shutdown for development environments during non-business hours
-auto_shutdown_start_time = "19:00"  # 7 PM
-auto_shutdown_end_time = "07:00"  # 7 AM
-auto_shutdown_timezone = "America/Los_Angeles"
-auto_shutdown_days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+# GPU configuration for OCR service
+gpu_enabled = false  # No GPU for development environment
+gpu_instance_type = ""  # No GPU instance type needed
+
+# Additional tags
+additional_tags = {
+  Environment  = "Development"
+  BusinessUnit = "Funding"
+  CostCenter   = "MCA-003"
+  Owner        = "developers@dollarfunding.com"
+}
