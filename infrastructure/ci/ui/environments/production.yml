@@ -1,0 +1,160 @@
+# Production Environment Configuration for UI CI/CD Pipeline
+# This file defines the configuration for the UI component's CI/CD pipeline in the production environment.
+# It includes API endpoints, feature flags, resource allocations, and deployment settings specific to production.
+
+# API Configuration
+api:
+  gateway_url: https://api-gateway.dollarfunding.com
+  timeout_ms: 30000
+  retry_attempts: 3
+  cache_ttl_minutes: 15
+
+# Feature Flags (only stable features enabled in production)
+feature_flags:
+  automated_document_processing: true
+  advanced_ocr_extraction: true
+  webhook_notifications: true
+  real_time_updates: true
+  experimental_features: false
+  beta_features: false
+  debug_tools: false
+
+# Resource Allocations (optimized for production)
+resources:
+  cpu: 4
+  memory: 8Gi
+  storage: 20Gi
+  replicas: 3
+  autoscaling:
+    enabled: true
+    min_replicas: 3
+    max_replicas: 10
+    target_cpu_utilization: 70
+
+# Deployment Configuration
+deployment:
+  platform: vercel
+  target: app.dollarfunding.com
+  build_command: yarn build
+  output_directory: dist
+  node_version: 20.0.0
+  environment_variables:
+    NODE_ENV: production
+    VITE_SERVER_URL: https://api-gateway.dollarfunding.com
+    VITE_APP_NAME: Dollar Funding MCA
+    VITE_APP_VERSION: ${APP_VERSION}
+    VITE_ASSETS_DIR: /assets
+  deployment_protection:
+    enabled: true
+    require_approval: true
+    approval_roles:
+      - PRODUCTION_DEPLOYER
+      - ADMIN
+
+# Authentication Configuration
+authentication:
+  method: jwt
+  jwt:
+    algorithm: RS256
+    token_expiry_minutes: 60
+    refresh_token_days: 7
+    issuer: dollarfunding-auth
+    audience: mca-application
+  session_storage: sessionStorage
+  persistent_login: false
+
+# Logging Configuration (minimal for production)
+logging:
+  level: warn
+  enabled_levels:
+    - error
+    - warn
+  disabled_levels:
+    - info
+    - debug
+    - trace
+  log_to_console: false
+  log_to_service: true
+  service_endpoint: https://logging.dollarfunding.com/api/logs
+
+# Performance Monitoring
+monitoring:
+  enabled: true
+  datadog:
+    api_key: ${DATADOG_API_KEY}
+    app_key: ${DATADOG_APP_KEY}
+    service_name: mca-ui
+    environment: production
+  metrics:
+    - response_time
+    - error_rate
+    - user_interactions
+    - page_load_time
+    - api_call_duration
+
+# UI Display Configuration
+ui:
+  screen_sizes:
+    desktop:
+      - 1920x1080
+      - 1440x900
+    tablet:
+      - 1024x768
+      - 768x1024
+    mobile:
+      - 375x667
+      - 414x896
+  theme:
+    primary_color: '#0052CC'
+    secondary_color: '#00875A'
+    funding_colors:
+      alpha:
+        primary: '#0052CC'
+        secondary: '#00875A'
+      beta:
+        primary: '#6E44FF'
+        secondary: '#FF5630'
+      gamma:
+        primary: '#006644'
+        secondary: '#DE350B'
+
+# Approval Workflow
+approval:
+  required: true
+  approvers_required: 2
+  timeout_hours: 24
+  auto_expire: true
+  notify_channels:
+    - email:operations@dollarfunding.com
+    - slack:#deployments
+
+# Health Checks
+health_checks:
+  enabled: true
+  endpoints:
+    - path: /health
+      expected_status: 200
+      timeout_ms: 5000
+    - path: /api/status
+      expected_status: 200
+      timeout_ms: 5000
+  interval_seconds: 60
+  failure_threshold: 3
+  success_threshold: 1
+
+# Rollback Configuration
+rollback:
+  automatic: true
+  on_health_check_failure: true
+  on_error_threshold: 0.05
+  max_deployment_time_minutes: 10
+  notify_on_rollback: true
+
+# Uptime Requirements
+uptime:
+  target_percentage: 99.9
+  maintenance_window:
+    day: Sunday
+    hour: 02
+    duration_minutes: 120
+    frequency: monthly
