@@ -2,39 +2,44 @@
 # -*- coding: utf-8 -*-
 
 """
-Core application setup module for the Document Service microservice.
+Document Service Application Module
 
-This module configures the Document Service components and provides the main application instance.
-It initializes the logger, loads configuration, and creates service instances for document classification,
-queue management, and storage. This file is the central hub that connects all service components together.
+This module provides the main application class for the Document Service microservice.
+It initializes all required components, loads configuration, and manages the service lifecycle.
+
+The Document Service is responsible for classifying incoming documents with 99% accuracy
+using scikit-learn models (SVM and Random Forest) and routing them to appropriate OCR processors.
 """
 
 import logging
 import os
 import signal
 import sys
-from typing import Optional
+from typing import Dict, Optional, Any
 
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 
 # Import configuration modules
-from config import app_config, logging_config
+from config import app_config, rabbitmq_config, model_config
+from config.app_config import AppConfig
 
-# Import service modules
-from services import QueueService, StorageService, ClassificationService, DocumentRoutingService
+# Import service components
+from services.classification_service import ClassificationService
+from services.queue_service import QueueService
+from services.storage_service import StorageService
+from services.document_routing_service import DocumentRoutingService
 
-# Import utility modules
-from utils.logging_utils import setup_logger, log_with_context
+# Import API routers
+from api import router as api_router
 
 
-class Application:
+class DocumentServiceApp:
     """
     Main application class for the Document Service microservice.
     
     This class manages the lifecycle of the Document Service, including initialization,
-    startup, and shutdown. It creates and configures all required service components
-    and provides a FastAPI application instance for health check endpoints.
+    configuration loading, service creation, and graceful shutdown.
     """
     
     def __init__(self):
@@ -42,37 +47,71 @@ class Application:
         Initialize the Document Service application.
         
         Sets up logging, loads configuration, and creates service instances.
-        Does not start any services or connections - use start() for that.
         """
-        # Initialize logger first for proper logging during startup
-        self.logger = setup_logger()
+        self.logger = self._setup_logging()
         self.logger.info("Initializing Document Service application")
         
         # Load configuration
-        self.config = app_config.load_config()
+        self.config = self._load_config()
         self.logger.info(f"Loaded configuration for environment: {self.config.environment}")
         
-        # Initialize FastAPI application
+        # Create FastAPI application
         self.app = self._create_fastapi_app()
         
-        # Initialize services (but don't start connections yet)
-        self.queue_service = QueueService(self.config.rabbitmq)
-        self.storage_service = StorageService(self.config.s3)
-        self.classification_service = ClassificationService(self.config.model)
-        self.document_routing_service = DocumentRoutingService()
+        # Initialize services
+        self.queue_service = None
+        self.storage_service = None
+        self.classification_service = None
+        self.document_routing_service = None
         
-        # Set initialized flag
-        self.initialized = True
-        self.running = False
+        # Flag to track if the application is running
+        self.is_running = False
+    
+    def _setup_logging(self) -> logging.Logger:
+        """
+        Set up logging configuration for the application.
         
-        self.logger.info("Document Service application initialized successfully")
+        Returns:
+            logging.Logger: Configured logger instance
+        """
+        log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
+        log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        
+        # Configure root logger
+        logging.basicConfig(
+            level=getattr(logging, log_level),
+            format=log_format,
+            handlers=[
+                logging.StreamHandler(sys.stdout)
+            ]
+        )
+        
+        # Create and return application logger
+        logger = logging.getLogger("document_service")
+        logger.setLevel(getattr(logging, log_level))
+        
+        return logger
+    
+    def _load_config(self) -> AppConfig:
+        """
+        Load and validate application configuration from environment variables.
+        
+        Returns:
+            AppConfig: Validated application configuration
+        """
+        try:
+            config = app_config.load_config()
+            return config
+        except Exception as e:
+            self.logger.error(f"Failed to load configuration: {str(e)}")
+            raise
     
     def _create_fastapi_app(self) -> FastAPI:
         """
         Create and configure the FastAPI application instance.
         
         Returns:
-            FastAPI: Configured FastAPI application instance
+            FastAPI: Configured FastAPI application
         """
         app = FastAPI(
             title="Document Service API",
@@ -91,192 +130,217 @@ class Application:
             allow_headers=["*"],
         )
         
-        # Add health check endpoints for Kubernetes probes
-        from api.health import health_router
-        app.include_router(health_router, prefix="/health")
+        # Include API router
+        app.include_router(api_router, prefix="/api")
         
-        # Add status endpoints for monitoring
-        from api.status import status_router
-        app.include_router(status_router, prefix="/status")
+        # Add health check endpoints directly to the app
+        @app.get("/health/liveness", tags=["Health"])
+        async def liveness_check():
+            """
+            Kubernetes liveness probe endpoint.
+            
+            Returns:
+                dict: Status indicating the service is running
+            """
+            return {"status": "alive", "service": "document-service"}
         
-        # Only include API documentation in non-production environments
-        if self.config.environment != "production":
-            # Add diagnostic endpoints
-            from api.diagnostics import diagnostics_router
-            app.include_router(diagnostics_router, prefix="/diagnostics")
-        
-        # Add document endpoints
-        from api.documents import documents_router
-        app.include_router(documents_router, prefix="/documents")
+        @app.get("/health/readiness", tags=["Health"])
+        async def readiness_check():
+            """
+            Kubernetes readiness probe endpoint.
+            
+            Checks if all required services (RabbitMQ, S3) are available.
+            
+            Returns:
+                dict: Status indicating the service is ready to accept requests
+            """
+            status = {"status": "ready", "service": "document-service"}
+            checks = {}
+            
+            # Check RabbitMQ connection
+            if self.queue_service:
+                try:
+                    rabbitmq_status = self.queue_service.check_connection()
+                    checks["rabbitmq"] = {"status": "up" if rabbitmq_status else "down"}
+                except Exception as e:
+                    self.logger.error(f"RabbitMQ health check failed: {str(e)}")
+                    checks["rabbitmq"] = {"status": "down", "error": str(e)}
+            else:
+                checks["rabbitmq"] = {"status": "not_initialized"}
+            
+            # Check S3 connection
+            if self.storage_service:
+                try:
+                    s3_status = self.storage_service.check_connection()
+                    checks["s3"] = {"status": "up" if s3_status else "down"}
+                except Exception as e:
+                    self.logger.error(f"S3 health check failed: {str(e)}")
+                    checks["s3"] = {"status": "down", "error": str(e)}
+            else:
+                checks["s3"] = {"status": "not_initialized"}
+            
+            # Add checks to status response
+            status["checks"] = checks
+            
+            # If any check is down, return 503 Service Unavailable
+            if any(check.get("status") == "down" for check in checks.values()):
+                status["status"] = "not_ready"
+                return status, 503
+            
+            return status
         
         return app
     
-    async def start(self):
+    def _initialize_services(self):
+        """
+        Initialize all required services for the Document Service.
+        
+        Creates instances of QueueService, StorageService, ClassificationService,
+        and DocumentRoutingService with appropriate configuration.
+        """
+        self.logger.info("Initializing services")
+        
+        try:
+            # Initialize storage service
+            self.logger.info("Initializing storage service")
+            self.storage_service = StorageService(self.config.s3_config)
+            
+            # Initialize queue service
+            self.logger.info("Initializing queue service")
+            self.queue_service = QueueService(self.config.rabbitmq_config)
+            
+            # Initialize classification service
+            self.logger.info("Initializing classification service")
+            self.classification_service = ClassificationService(
+                self.config.model_config,
+                self.storage_service
+            )
+            
+            # Initialize document routing service
+            self.logger.info("Initializing document routing service")
+            self.document_routing_service = DocumentRoutingService(
+                self.classification_service,
+                self.queue_service
+            )
+            
+            self.logger.info("All services initialized successfully")
+        except Exception as e:
+            self.logger.error(f"Failed to initialize services: {str(e)}")
+            raise
+    
+    def start(self):
         """
         Start the Document Service application.
         
-        Initializes connections to external services (RabbitMQ, S3) and
-        starts the document classification process.
+        Initializes all services and sets up signal handlers for graceful shutdown.
         """
-        if not self.initialized:
-            raise RuntimeError("Application must be initialized before starting")
-        
-        if self.running:
+        if self.is_running:
             self.logger.warning("Application is already running")
             return
         
         self.logger.info("Starting Document Service application")
         
         try:
-            # Connect to RabbitMQ
-            await self.queue_service.connect()
-            self.logger.info("Connected to RabbitMQ successfully")
+            # Initialize services
+            self._initialize_services()
             
-            # Connect to S3 storage
-            await self.storage_service.connect()
-            self.logger.info("Connected to S3 storage successfully")
-            
-            # Initialize classification service
-            await self.classification_service.initialize()
-            self.logger.info("Classification service initialized successfully")
+            # Set up signal handlers for graceful shutdown
+            signal.signal(signal.SIGTERM, self._signal_handler)
+            signal.signal(signal.SIGINT, self._signal_handler)
             
             # Start consuming messages from RabbitMQ
-            await self.queue_service.start_consuming(self._process_document)
-            self.logger.info("Started consuming messages from RabbitMQ")
+            if self.queue_service:
+                self.queue_service.start_consuming(
+                    callback=self._process_document_message
+                )
             
-            # Set running flag
-            self.running = True
+            self.is_running = True
             self.logger.info("Document Service application started successfully")
-            
         except Exception as e:
-            self.logger.error(f"Failed to start Document Service application: {str(e)}")
-            # Attempt to clean up any connections that were established
-            await self.stop()
+            self.logger.error(f"Failed to start application: {str(e)}")
+            self.stop()
             raise
     
-    async def _process_document(self, message):
-        """
-        Process a document message from RabbitMQ.
-        
-        This is the main document processing function that orchestrates the
-        classification workflow.
-        
-        Args:
-            message: The message from RabbitMQ containing document information
-        """
-        try:
-            self.logger.info(f"Processing document: {message.get('document_id', 'unknown')}")
-            
-            # Download document from S3
-            document = await self.storage_service.download_document(message)
-            
-            # Classify document
-            classification_result = await self.classification_service.classify_document(document)
-            
-            # Determine routing based on classification
-            routing_result = self.document_routing_service.route_document(classification_result)
-            
-            # Publish classification result to OCR Service
-            await self.queue_service.publish_classification_result(routing_result)
-            
-            self.logger.info(f"Document processed successfully: {message.get('document_id', 'unknown')}")
-            
-        except Exception as e:
-            self.logger.error(f"Error processing document: {str(e)}")
-            # Handle error based on type (retry, dead-letter, etc.)
-            await self.queue_service.handle_processing_error(message, str(e))
-    
-    async def stop(self):
+    def stop(self):
         """
         Stop the Document Service application.
         
-        Closes connections to external services and performs cleanup.
+        Gracefully shuts down all services and releases resources.
         """
         self.logger.info("Stopping Document Service application")
         
-        # Stop consuming messages
-        if hasattr(self, 'queue_service'):
+        # Stop queue service
+        if self.queue_service:
             try:
-                await self.queue_service.stop_consuming()
-                self.logger.info("Stopped consuming messages from RabbitMQ")
+                self.logger.info("Stopping queue service")
+                self.queue_service.stop_consuming()
+                self.queue_service.close_connection()
             except Exception as e:
-                self.logger.error(f"Error stopping queue consumption: {str(e)}")
+                self.logger.error(f"Error stopping queue service: {str(e)}")
         
-        # Close RabbitMQ connection
-        if hasattr(self, 'queue_service'):
+        # Close storage service connections
+        if self.storage_service:
             try:
-                await self.queue_service.disconnect()
-                self.logger.info("Disconnected from RabbitMQ")
+                self.logger.info("Closing storage service connections")
+                self.storage_service.close()
             except Exception as e:
-                self.logger.error(f"Error disconnecting from RabbitMQ: {str(e)}")
+                self.logger.error(f"Error closing storage service: {str(e)}")
         
-        # Close S3 connection
-        if hasattr(self, 'storage_service'):
-            try:
-                await self.storage_service.disconnect()
-                self.logger.info("Disconnected from S3 storage")
-            except Exception as e:
-                self.logger.error(f"Error disconnecting from S3: {str(e)}")
-        
-        # Clean up classification service
-        if hasattr(self, 'classification_service'):
-            try:
-                await self.classification_service.cleanup()
-                self.logger.info("Cleaned up classification service")
-            except Exception as e:
-                self.logger.error(f"Error cleaning up classification service: {str(e)}")
-        
-        # Set running flag
-        self.running = False
-        self.logger.info("Document Service application stopped successfully")
+        self.is_running = False
+        self.logger.info("Document Service application stopped")
     
-    def setup_signal_handlers(self):
+    def _signal_handler(self, sig, frame):
         """
-        Set up signal handlers for graceful shutdown.
+        Handle termination signals for graceful shutdown.
         
-        This ensures that the application shuts down properly when it
-        receives a SIGTERM or SIGINT signal.
+        Args:
+            sig: Signal number
+            frame: Current stack frame
         """
-        def signal_handler(sig, frame):
-            self.logger.info(f"Received signal {sig}, shutting down...")
-            import asyncio
-            loop = asyncio.get_event_loop()
-            loop.create_task(self.stop())
-            # Give the stop method some time to complete
-            loop.call_later(5, lambda: sys.exit(0))
+        self.logger.info(f"Received signal {sig}, shutting down")
+        self.stop()
+        sys.exit(0)
+    
+    def _process_document_message(self, message: Dict[str, Any]):
+        """
+        Process a document message from the queue.
         
-        signal.signal(signal.SIGINT, signal_handler)
-        signal.signal(signal.SIGTERM, signal_handler)
-        self.logger.info("Signal handlers set up for graceful shutdown")
+        This is the main callback for processing incoming document messages.
+        It orchestrates the document classification and routing process.
+        
+        Args:
+            message: Document message from RabbitMQ
+        """
+        try:
+            self.logger.info(f"Processing document message: {message.get('document_id')}")
+            
+            # Classify document
+            classification_result = self.classification_service.classify_document(message)
+            
+            # Route document based on classification
+            self.document_routing_service.route_document(message, classification_result)
+            
+            self.logger.info(f"Document processed successfully: {message.get('document_id')}")
+        except Exception as e:
+            self.logger.error(f"Error processing document: {str(e)}")
+            # Handle error based on application policy
+            # For example, publish to error queue or retry
 
 
-# Create a global application instance
-app_instance: Optional[Application] = None
+# Create a singleton instance of the application
+app_instance = DocumentServiceApp()
+
+# Export FastAPI app for ASGI servers
+app = app_instance.app
 
 
-def get_app() -> Application:
+def get_app_instance() -> DocumentServiceApp:
     """
-    Get or create the global Application instance.
+    Get the singleton instance of the DocumentServiceApp.
+    
+    This function is used as a FastAPI dependency to access the app instance.
     
     Returns:
-        Application: The global Application instance
+        DocumentServiceApp: The singleton application instance
     """
-    global app_instance
-    if app_instance is None:
-        app_instance = Application()
     return app_instance
-
-
-# Create a FastAPI dependency for accessing the application
-def get_application():
-    """
-    FastAPI dependency for accessing the Application instance.
-    
-    Returns:
-        Application: The global Application instance
-    """
-    return get_app()
-
-
-# Export the FastAPI application instance for ASGI servers
-app = get_app().app
