@@ -2,529 +2,493 @@ import os
 import json
 import pytest
 import tempfile
-import boto3
-import numpy as np
-import pandas as pd
 from unittest.mock import MagicMock, patch
-from moto import mock_s3
-from io import BytesIO
-from pathlib import Path
 from typing import Dict, List, Any, Tuple, Optional
+from datetime import datetime, timedelta
 
-# Import Document Service modules
-# These imports will be available when the actual service is implemented
-try:
-    from src.config import app_config, s3_config, rabbitmq_config, model_config
-    from src.models import DocumentClassifier, SVMClassifier, RandomForestClassifier
-    from src.services import QueueService, StorageService, ClassificationService
-    from src.types import Document, DocumentType, DocumentMetadata, ClassificationResult
-    from src.app import Application
-except ImportError:
-    # Create mock classes for testing when imports aren't available
-    class MockConfig:
-        def __init__(self, **kwargs):
-            for key, value in kwargs.items():
-                setattr(self, key, value)
-
-    app_config = MockConfig(service_name="document-service", version="1.0.0")
-    s3_config = MockConfig(bucket_name="mca-documents-test", endpoint_url="http://localhost:4566")
-    rabbitmq_config = MockConfig(host="localhost", port=5672, exchange="mca.documents", queue="document-processing")
-    model_config = MockConfig(model_path="./models", confidence_threshold=0.8)
-
-    class DocumentType:
-        APPLICATION = "APPLICATION"
-        TAX_RETURN = "TAX_RETURN"
-        BANK_STATEMENT = "BANK_STATEMENT"
-        PAY_STUB = "PAY_STUB"
-        ID_DOCUMENT = "ID_DOCUMENT"
-        OTHER = "OTHER"
-
-    class Document:
-        def __init__(self, id, content, metadata, doc_type=None):
-            self.id = id
-            self.content = content
-            self.metadata = metadata
-            self.doc_type = doc_type
-
-    class DocumentMetadata:
-        def __init__(self, filename, size, content_type, created_at=None):
-            self.filename = filename
-            self.size = size
-            self.content_type = content_type
-            self.created_at = created_at
-
-    class ClassificationResult:
-        def __init__(self, doc_type, confidence, features=None):
-            self.doc_type = doc_type
-            self.confidence = confidence
-            self.features = features or {}
+# Mock imports for dependencies that might not be available during testing
+pytest.importorskip("boto3")
+pytest.importorskip("scikit-learn")
+pytest.importorskip("pika")
 
 
-# ===== Configuration Fixtures =====
+# ============================================================================
+# Configuration Fixtures
+# ============================================================================
 
 @pytest.fixture
-def test_config():
-    """Provides a test configuration with predefined values."""
+def app_config():
+    """Fixture that provides a test configuration for the application."""
     return {
         "service": {
-            "name": "document-service-test",
-            "version": "1.0.0-test",
-            "port": 8080,
-            "environment": "test"
-        },
-        "s3": {
-            "endpoint_url": "http://localhost:4566",
-            "bucket_name": "mca-documents-test",
-            "region": "us-east-1",
-            "use_ssl": False,
-            "encryption": "AES256"
+            "name": "document-service",
+            "version": "1.0.0",
+            "environment": "test",
+            "log_level": "DEBUG"
         },
         "rabbitmq": {
             "host": "localhost",
             "port": 5672,
             "username": "guest",
             "password": "guest",
-            "exchange": "mca.documents.test",
-            "queue": "document-processing-test",
+            "exchange": "mca.documents",
+            "queue": "document-processing",
             "routing_key": "document.classify",
-            "use_tls": False
+            "use_tls": False,
+            "cert_path": None,
+            "reconnect_attempts": 3,
+            "reconnect_delay": 5
+        },
+        "s3": {
+            "endpoint_url": "http://localhost:4566",  # LocalStack endpoint
+            "region_name": "us-east-1",
+            "bucket_name": "mca-documents-test",
+            "use_ssl": True,
+            "encryption": {
+                "algorithm": "AES256",
+                "kms_key_id": None
+            },
+            "access_key_id": "test",
+            "secret_access_key": "test"
         },
         "model": {
-            "model_path": "./test_models",
-            "confidence_threshold": 0.8,
-            "feature_extraction": {
-                "max_features": 1000,
-                "ngram_range": [1, 2]
-            },
             "svm": {
                 "C": 1.0,
                 "kernel": "linear",
-                "probability": True
+                "probability": True,
+                "class_weight": "balanced"
             },
             "random_forest": {
                 "n_estimators": 100,
                 "max_depth": 10,
-                "random_state": 42
-            }
+                "min_samples_split": 2,
+                "min_samples_leaf": 1,
+                "class_weight": "balanced"
+            },
+            "confidence_threshold": 0.85,
+            "feature_extraction": {
+                "max_features": 5000,
+                "ngram_range": (1, 2),
+                "min_df": 2,
+                "max_df": 0.95
+            },
+            "model_path": "/tmp/models"
+        }
+    }
+
+
+@pytest.fixture
+def env_vars(app_config):
+    """Fixture that sets up environment variables for testing."""
+    original_environ = os.environ.copy()
+    
+    # Flatten the nested config into environment variables
+    os.environ["SERVICE_NAME"] = app_config["service"]["name"]
+    os.environ["SERVICE_VERSION"] = app_config["service"]["version"]
+    os.environ["SERVICE_ENVIRONMENT"] = app_config["service"]["environment"]
+    os.environ["LOG_LEVEL"] = app_config["service"]["log_level"]
+    
+    os.environ["RABBITMQ_HOST"] = app_config["rabbitmq"]["host"]
+    os.environ["RABBITMQ_PORT"] = str(app_config["rabbitmq"]["port"])
+    os.environ["RABBITMQ_USERNAME"] = app_config["rabbitmq"]["username"]
+    os.environ["RABBITMQ_PASSWORD"] = app_config["rabbitmq"]["password"]
+    os.environ["RABBITMQ_EXCHANGE"] = app_config["rabbitmq"]["exchange"]
+    os.environ["RABBITMQ_QUEUE"] = app_config["rabbitmq"]["queue"]
+    
+    os.environ["S3_ENDPOINT_URL"] = app_config["s3"]["endpoint_url"]
+    os.environ["S3_REGION_NAME"] = app_config["s3"]["region_name"]
+    os.environ["S3_BUCKET_NAME"] = app_config["s3"]["bucket_name"]
+    os.environ["S3_ACCESS_KEY_ID"] = app_config["s3"]["access_key_id"]
+    os.environ["S3_SECRET_ACCESS_KEY"] = app_config["s3"]["secret_access_key"]
+    
+    yield os.environ
+    
+    # Restore original environment
+    os.environ.clear()
+    os.environ.update(original_environ)
+
+
+# ============================================================================
+# S3 Storage Fixtures
+# ============================================================================
+
+@pytest.fixture
+def mock_s3_client():
+    """Fixture that provides a mocked S3 client."""
+    with patch("boto3.client") as mock_client:
+        s3_client = MagicMock()
+        mock_client.return_value = s3_client
+        
+        # Mock common S3 methods
+        s3_client.upload_fileobj = MagicMock()
+        s3_client.download_fileobj = MagicMock()
+        s3_client.head_object = MagicMock(return_value={
+            "ContentLength": 12345,
+            "LastModified": datetime.now(),
+            "Metadata": {"document-type": "application_form"}
+        })
+        s3_client.list_objects_v2 = MagicMock(return_value={
+            "Contents": [
+                {"Key": "documents/doc1.pdf", "Size": 12345, "LastModified": datetime.now()},
+                {"Key": "documents/doc2.pdf", "Size": 23456, "LastModified": datetime.now()}
+            ]
+        })
+        s3_client.generate_presigned_url = MagicMock(return_value="https://example.com/presigned-url")
+        
+        yield s3_client
+
+
+@pytest.fixture
+def mock_s3_bucket(mock_s3_client, app_config):
+    """Fixture that provides a mocked S3 bucket with test documents."""
+    bucket_name = app_config["s3"]["bucket_name"]
+    
+    # Mock bucket existence check
+    mock_s3_client.head_bucket = MagicMock()
+    
+    # Mock bucket creation
+    mock_s3_client.create_bucket = MagicMock()
+    
+    # Return bucket name for convenience
+    return bucket_name
+
+
+@pytest.fixture
+def s3_document_metadata():
+    """Fixture that provides sample document metadata as stored in S3."""
+    return {
+        "application_form": {
+            "document-type": "application_form",
+            "confidence-score": "0.95",
+            "page-count": "3",
+            "processed-at": datetime.now().isoformat(),
+            "application-id": "APP-12345"
         },
-        "logging": {
-            "level": "DEBUG",
-            "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        "bank_statement": {
+            "document-type": "bank_statement",
+            "confidence-score": "0.92",
+            "page-count": "2",
+            "processed-at": datetime.now().isoformat(),
+            "application-id": "APP-12345",
+            "institution": "Example Bank"
+        },
+        "tax_return": {
+            "document-type": "tax_return",
+            "confidence-score": "0.97",
+            "page-count": "5",
+            "processed-at": datetime.now().isoformat(),
+            "application-id": "APP-12345",
+            "tax-year": "2023"
+        },
+        "identity_document": {
+            "document-type": "identity_document",
+            "confidence-score": "0.94",
+            "page-count": "1",
+            "processed-at": datetime.now().isoformat(),
+            "application-id": "APP-12345",
+            "id-type": "drivers_license"
+        },
+        "business_license": {
+            "document-type": "business_license",
+            "confidence-score": "0.91",
+            "page-count": "1",
+            "processed-at": datetime.now().isoformat(),
+            "application-id": "APP-12345",
+            "expiration-date": (datetime.now() + timedelta(days=365)).isoformat()
         }
     }
 
 
-@pytest.fixture
-def app_config_fixture(test_config):
-    """Creates a mock application configuration for testing."""
-    with patch("src.config.app_config", create=True) as mock_config:
-        for key, value in test_config["service"].items():
-            setattr(mock_config, key, value)
-        yield mock_config
-
+# ============================================================================
+# RabbitMQ Fixtures
+# ============================================================================
 
 @pytest.fixture
-def s3_config_fixture(test_config):
-    """Creates a mock S3 configuration for testing."""
-    with patch("src.config.s3_config", create=True) as mock_config:
-        for key, value in test_config["s3"].items():
-            setattr(mock_config, key, value)
-        yield mock_config
-
-
-@pytest.fixture
-def rabbitmq_config_fixture(test_config):
-    """Creates a mock RabbitMQ configuration for testing."""
-    with patch("src.config.rabbitmq_config", create=True) as mock_config:
-        for key, value in test_config["rabbitmq"].items():
-            setattr(mock_config, key, value)
-        yield mock_config
+def mock_rabbitmq_connection():
+    """Fixture that provides a mocked RabbitMQ connection."""
+    with patch("pika.BlockingConnection") as mock_connection:
+        connection = MagicMock()
+        mock_connection.return_value = connection
+        
+        # Mock connection methods
+        connection.is_open = True
+        connection.is_closed = False
+        connection.close = MagicMock()
+        
+        yield connection
 
 
 @pytest.fixture
-def model_config_fixture(test_config):
-    """Creates a mock model configuration for testing."""
-    with patch("src.config.model_config", create=True) as mock_config:
-        for key, value in test_config["model"].items():
-            setattr(mock_config, key, value)
-        yield mock_config
-
-
-# ===== S3 Storage Fixtures =====
-
-@pytest.fixture
-def s3_client():
-    """Creates a mocked S3 client using moto."""
-    with mock_s3():
-        s3 = boto3.client(
-            "s3",
-            region_name="us-east-1",
-            aws_access_key_id="test",
-            aws_secret_access_key="test",
-            endpoint_url="http://localhost:4566"
-        )
-        # Create the test bucket
-        s3.create_bucket(Bucket="mca-documents-test")
-        yield s3
+def mock_rabbitmq_channel(mock_rabbitmq_connection):
+    """Fixture that provides a mocked RabbitMQ channel."""
+    channel = MagicMock()
+    mock_rabbitmq_connection.channel.return_value = channel
+    
+    # Mock channel methods
+    channel.exchange_declare = MagicMock()
+    channel.queue_declare = MagicMock(return_value=MagicMock(method=MagicMock(queue="document-processing")))
+    channel.queue_bind = MagicMock()
+    channel.basic_publish = MagicMock()
+    channel.basic_consume = MagicMock()
+    channel.basic_ack = MagicMock()
+    channel.basic_nack = MagicMock()
+    channel.start_consuming = MagicMock()
+    channel.stop_consuming = MagicMock()
+    
+    yield channel
 
 
 @pytest.fixture
-def storage_service(s3_client, s3_config_fixture):
-    """Creates a mocked StorageService instance for testing."""
-    try:
-        service = StorageService(s3_config_fixture)
-        # Override the S3 client with our mocked one
-        service._client = s3_client
-        yield service
-    except NameError:
-        # If StorageService is not available, create a mock
-        mock_service = MagicMock()
-        mock_service.download_document.return_value = b"test document content"
-        mock_service.upload_document.return_value = "s3://mca-documents-test/test-document.pdf"
-        mock_service.get_document_metadata.return_value = {
-            "filename": "test-document.pdf",
-            "size": 1024,
+def rabbitmq_message_factory():
+    """Fixture that provides a factory function for creating RabbitMQ messages."""
+    def _create_message(document_type: str, application_id: str, s3_key: str) -> Dict[str, Any]:
+        return {
+            "document": {
+                "id": f"doc-{document_type}-{application_id}",
+                "application_id": application_id,
+                "s3_key": s3_key,
+                "filename": f"{document_type}.pdf",
+                "content_type": "application/pdf",
+                "size": 12345,
+                "uploaded_at": datetime.now().isoformat(),
+                "metadata": {}
+            },
+            "request_id": f"req-{application_id}-{datetime.now().strftime('%Y%m%d%H%M%S')}",
+            "timestamp": datetime.now().isoformat()
+        }
+    
+    return _create_message
+
+
+@pytest.fixture
+def mock_rabbitmq_message():
+    """Fixture that provides a mocked RabbitMQ message."""
+    message = MagicMock()
+    
+    # Create a sample message body
+    message_body = json.dumps({
+        "document": {
+            "id": "doc-123",
+            "application_id": "APP-12345",
+            "s3_key": "documents/application_form.pdf",
+            "filename": "application_form.pdf",
             "content_type": "application/pdf",
-            "created_at": "2023-01-01T00:00:00Z"
-        }
-        yield mock_service
-
-
-@pytest.fixture
-def upload_test_documents(s3_client):
-    """Uploads test documents to the mocked S3 bucket."""
-    test_documents = {
-        "application.pdf": (b"test application content", "application/pdf", DocumentType.APPLICATION),
-        "tax_return.pdf": (b"test tax return content", "application/pdf", DocumentType.TAX_RETURN),
-        "bank_statement.pdf": (b"test bank statement content", "application/pdf", DocumentType.BANK_STATEMENT),
-        "pay_stub.pdf": (b"test pay stub content", "application/pdf", DocumentType.PAY_STUB),
-        "id_document.jpg": (b"test id document content", "image/jpeg", DocumentType.ID_DOCUMENT),
-        "unknown.txt": (b"test unknown content", "text/plain", DocumentType.OTHER)
-    }
+            "size": 12345,
+            "uploaded_at": datetime.now().isoformat(),
+            "metadata": {}
+        },
+        "request_id": "req-12345",
+        "timestamp": datetime.now().isoformat()
+    })
     
-    uploaded_docs = {}
-    for filename, (content, content_type, doc_type) in test_documents.items():
-        s3_client.put_object(
-            Bucket="mca-documents-test",
-            Key=filename,
-            Body=content,
-            ContentType=content_type,
-            Metadata={"document_type": doc_type}
-        )
-        uploaded_docs[filename] = {
-            "content": content,
-            "content_type": content_type,
-            "document_type": doc_type,
-            "s3_key": filename
-        }
+    # Mock message properties and methods
+    message.delivery_tag = 1
+    message.body = message_body.encode('utf-8')
     
-    return uploaded_docs
+    yield message
 
 
-# ===== RabbitMQ Fixtures =====
-
-@pytest.fixture
-def rabbitmq_connection():
-    """Creates a mocked RabbitMQ connection for testing."""
-    mock_connection = MagicMock()
-    mock_channel = MagicMock()
-    mock_connection.channel.return_value = mock_channel
-    
-    # Configure the mock channel to simulate RabbitMQ behavior
-    mock_channel.exchange_declare.return_value = None
-    mock_channel.queue_declare.return_value = MagicMock(method=MagicMock(queue="document-processing-test"))
-    mock_channel.queue_bind.return_value = None
-    
-    return mock_connection
-
-
-@pytest.fixture
-def queue_service(rabbitmq_connection, rabbitmq_config_fixture):
-    """Creates a mocked QueueService instance for testing."""
-    try:
-        with patch("pika.BlockingConnection", return_value=rabbitmq_connection):
-            service = QueueService(rabbitmq_config_fixture)
-            yield service
-    except NameError:
-        # If QueueService is not available, create a mock
-        mock_service = MagicMock()
-        mock_service.connection = rabbitmq_connection
-        mock_service.channel = rabbitmq_connection.channel()
-        
-        # Configure the mock service to simulate message handling
-        def publish_message(message, routing_key):
-            return True
-        
-        def consume_messages(callback, queue_name=None):
-            # Simulate message consumption by calling the callback with a test message
-            test_message = {
-                "document_id": "test-doc-123",
-                "s3_key": "application.pdf",
-                "metadata": {
-                    "filename": "application.pdf",
-                    "size": 1024,
-                    "content_type": "application/pdf"
-                }
-            }
-            callback(test_message)
-            return True
-        
-        mock_service.publish_message.side_effect = publish_message
-        mock_service.consume_messages.side_effect = consume_messages
-        yield mock_service
-
-
-# ===== Document Classification Model Fixtures =====
+# ============================================================================
+# Document Classification Model Fixtures
+# ============================================================================
 
 @pytest.fixture
 def mock_svm_classifier():
-    """Creates a mocked SVM classifier for testing."""
-    try:
-        with patch.object(SVMClassifier, "__init__", return_value=None):
-            classifier = SVMClassifier()
-            classifier.fit = MagicMock(return_value=classifier)
-            classifier.predict = MagicMock(return_value=[DocumentType.APPLICATION])
-            classifier.predict_proba = MagicMock(return_value=np.array([[0.1, 0.8, 0.1, 0.0, 0.0, 0.0]]))
-            yield classifier
-    except NameError:
-        # If SVMClassifier is not available, create a mock
-        mock_classifier = MagicMock()
-        mock_classifier.fit.return_value = mock_classifier
-        mock_classifier.predict.return_value = [DocumentType.APPLICATION]
-        mock_classifier.predict_proba.return_value = np.array([[0.1, 0.8, 0.1, 0.0, 0.0, 0.0]])
-        yield mock_classifier
+    """Fixture that provides a mocked SVM classifier."""
+    classifier = MagicMock()
+    
+    # Mock classifier methods
+    classifier.fit = MagicMock(return_value=classifier)
+    classifier.predict = MagicMock(return_value=["application_form"])
+    classifier.predict_proba = MagicMock(return_value=[[0.05, 0.95, 0.0, 0.0, 0.0]])  # High confidence for application_form
+    classifier.score = MagicMock(return_value=0.95)
+    
+    yield classifier
 
 
 @pytest.fixture
 def mock_random_forest_classifier():
-    """Creates a mocked Random Forest classifier for testing."""
-    try:
-        with patch.object(RandomForestClassifier, "__init__", return_value=None):
-            classifier = RandomForestClassifier()
-            classifier.fit = MagicMock(return_value=classifier)
-            classifier.predict = MagicMock(return_value=[DocumentType.APPLICATION])
-            classifier.predict_proba = MagicMock(return_value=np.array([[0.05, 0.85, 0.1, 0.0, 0.0, 0.0]]))
-            yield classifier
-    except NameError:
-        # If RandomForestClassifier is not available, create a mock
-        mock_classifier = MagicMock()
-        mock_classifier.fit.return_value = mock_classifier
-        mock_classifier.predict.return_value = [DocumentType.APPLICATION]
-        mock_classifier.predict_proba.return_value = np.array([[0.05, 0.85, 0.1, 0.0, 0.0, 0.0]])
-        yield mock_classifier
-
-
-@pytest.fixture
-def document_classifier(mock_svm_classifier, mock_random_forest_classifier, model_config_fixture):
-    """Creates a mocked DocumentClassifier instance for testing."""
-    try:
-        with patch.object(DocumentClassifier, "__init__", return_value=None):
-            classifier = DocumentClassifier()
-            classifier.svm_classifier = mock_svm_classifier
-            classifier.rf_classifier = mock_random_forest_classifier
-            classifier.classify_document = MagicMock(return_value=ClassificationResult(
-                doc_type=DocumentType.APPLICATION,
-                confidence=0.85,
-                features={"text_length": 1024, "keyword_matches": 5}
-            ))
-            yield classifier
-    except NameError:
-        # If DocumentClassifier is not available, create a mock
-        mock_classifier = MagicMock()
-        mock_classifier.classify_document.return_value = MagicMock(
-            doc_type=DocumentType.APPLICATION,
-            confidence=0.85,
-            features={"text_length": 1024, "keyword_matches": 5}
-        )
-        yield mock_classifier
-
-
-@pytest.fixture
-def classification_service(document_classifier, storage_service):
-    """Creates a mocked ClassificationService instance for testing."""
-    try:
-        service = ClassificationService(document_classifier, storage_service)
-        yield service
-    except NameError:
-        # If ClassificationService is not available, create a mock
-        mock_service = MagicMock()
-        mock_service.classify_document.return_value = ClassificationResult(
-            doc_type=DocumentType.APPLICATION,
-            confidence=0.85,
-            features={"text_length": 1024, "keyword_matches": 5}
-        )
-        yield mock_service
-
-
-# ===== Test Document Fixtures =====
-
-@pytest.fixture
-def test_documents():
-    """Provides a set of test documents with different types."""
-    documents = {
-        "application": Document(
-            id="test-app-123",
-            content=b"This is a merchant cash advance application form.",
-            metadata=DocumentMetadata(
-                filename="application.pdf",
-                size=1024,
-                content_type="application/pdf"
-            ),
-            doc_type=DocumentType.APPLICATION
-        ),
-        "tax_return": Document(
-            id="test-tax-123",
-            content=b"This is a tax return document with financial information.",
-            metadata=DocumentMetadata(
-                filename="tax_return.pdf",
-                size=2048,
-                content_type="application/pdf"
-            ),
-            doc_type=DocumentType.TAX_RETURN
-        ),
-        "bank_statement": Document(
-            id="test-bank-123",
-            content=b"This is a bank statement showing transaction history.",
-            metadata=DocumentMetadata(
-                filename="bank_statement.pdf",
-                size=1536,
-                content_type="application/pdf"
-            ),
-            doc_type=DocumentType.BANK_STATEMENT
-        ),
-        "pay_stub": Document(
-            id="test-pay-123",
-            content=b"This is a pay stub showing salary information.",
-            metadata=DocumentMetadata(
-                filename="pay_stub.pdf",
-                size=512,
-                content_type="application/pdf"
-            ),
-            doc_type=DocumentType.PAY_STUB
-        ),
-        "id_document": Document(
-            id="test-id-123",
-            content=b"This is an identification document with personal information.",
-            metadata=DocumentMetadata(
-                filename="id_document.jpg",
-                size=768,
-                content_type="image/jpeg"
-            ),
-            doc_type=DocumentType.ID_DOCUMENT
-        ),
-        "unknown": Document(
-            id="test-unknown-123",
-            content=b"This is an unknown document type.",
-            metadata=DocumentMetadata(
-                filename="unknown.txt",
-                size=256,
-                content_type="text/plain"
-            ),
-            doc_type=DocumentType.OTHER
-        )
-    }
-    return documents
-
-
-@pytest.fixture
-def test_document_files(tmpdir):
-    """Creates temporary document files for testing."""
-    document_files = {}
+    """Fixture that provides a mocked Random Forest classifier."""
+    classifier = MagicMock()
     
-    # Create test files with different content types
-    document_types = {
-        "application.pdf": (b"This is a merchant cash advance application form.", "application/pdf"),
-        "tax_return.pdf": (b"This is a tax return document with financial information.", "application/pdf"),
-        "bank_statement.pdf": (b"This is a bank statement showing transaction history.", "application/pdf"),
-        "pay_stub.pdf": (b"This is a pay stub showing salary information.", "application/pdf"),
-        "id_document.jpg": (b"This is an identification document with personal information.", "image/jpeg"),
-        "unknown.txt": (b"This is an unknown document type.", "text/plain")
-    }
+    # Mock classifier methods
+    classifier.fit = MagicMock(return_value=classifier)
+    classifier.predict = MagicMock(return_value=["application_form"])
+    classifier.predict_proba = MagicMock(return_value=[[0.03, 0.97, 0.0, 0.0, 0.0]])  # High confidence for application_form
+    classifier.score = MagicMock(return_value=0.97)
     
-    for filename, (content, content_type) in document_types.items():
-        file_path = tmpdir.join(filename)
-        with open(file_path, "wb") as f:
-            f.write(content)
-        document_files[filename] = {
-            "path": str(file_path),
-            "content": content,
-            "content_type": content_type
-        }
-    
-    return document_files
+    yield classifier
 
-
-# ===== Application Fixtures =====
 
 @pytest.fixture
-def mock_application(app_config_fixture, queue_service, storage_service, classification_service):
-    """Creates a mocked Application instance for testing."""
-    try:
-        app = Application(app_config_fixture)
-        app.queue_service = queue_service
-        app.storage_service = storage_service
-        app.classification_service = classification_service
-        yield app
-    except NameError:
-        # If Application is not available, create a mock
-        mock_app = MagicMock()
-        mock_app.queue_service = queue_service
-        mock_app.storage_service = storage_service
-        mock_app.classification_service = classification_service
-        mock_app.start = MagicMock(return_value=True)
-        mock_app.stop = MagicMock(return_value=True)
-        yield mock_app
+def mock_document_classifier(mock_svm_classifier, mock_random_forest_classifier):
+    """Fixture that provides a mocked document classifier."""
+    classifier = MagicMock()
+    
+    # Set up the classifiers
+    classifier.svm_classifier = mock_svm_classifier
+    classifier.rf_classifier = mock_random_forest_classifier
+    
+    # Mock classifier methods
+    classifier.classify = MagicMock(return_value=("application_form", 0.96, {
+        "svm_confidence": 0.95,
+        "rf_confidence": 0.97,
+        "ensemble_confidence": 0.96
+    }))
+    classifier.get_confidence_scores = MagicMock(return_value={
+        "application_form": 0.96,
+        "bank_statement": 0.02,
+        "tax_return": 0.01,
+        "identity_document": 0.01,
+        "business_license": 0.0
+    })
+    
+    yield classifier
 
-
-# ===== Message Fixtures =====
 
 @pytest.fixture
-def test_messages():
-    """Provides a set of test messages for RabbitMQ testing."""
-    messages = {
-        "document_received": {
-            "document_id": "test-doc-123",
-            "s3_key": "application.pdf",
-            "metadata": {
-                "filename": "application.pdf",
-                "size": 1024,
-                "content_type": "application/pdf",
-                "received_at": "2023-01-01T00:00:00Z"
-            }
-        },
-        "classification_result": {
-            "document_id": "test-doc-123",
-            "s3_key": "application.pdf",
-            "classification": {
-                "document_type": DocumentType.APPLICATION,
-                "confidence": 0.85,
-                "features": {
-                    "text_length": 1024,
-                    "keyword_matches": 5
-                }
-            },
-            "metadata": {
-                "filename": "application.pdf",
-                "size": 1024,
-                "content_type": "application/pdf",
-                "received_at": "2023-01-01T00:00:00Z",
-                "classified_at": "2023-01-01T00:00:05Z"
-            }
-        },
-        "error_message": {
-            "document_id": "test-doc-456",
-            "s3_key": "corrupted.pdf",
-            "error": {
-                "code": "CLASSIFICATION_ERROR",
-                "message": "Failed to classify document: Invalid file format",
-                "timestamp": "2023-01-01T00:00:10Z"
-            },
-            "metadata": {
-                "filename": "corrupted.pdf",
-                "size": 512,
-                "content_type": "application/pdf",
-                "received_at": "2023-01-01T00:00:08Z"
-            }
-        }
+def mock_feature_extractor():
+    """Fixture that provides a mocked feature extractor."""
+    extractor = MagicMock()
+    
+    # Mock extractor methods
+    extractor.extract_features = MagicMock(return_value={
+        "text_features": [1.0, 0.0, 0.5, 0.2, 0.8],
+        "metadata_features": [0.3, 0.7, 0.1]
+    })
+    extractor.vectorize = MagicMock(return_value=[[1.0, 0.0, 0.5, 0.2, 0.8, 0.3, 0.7, 0.1]])
+    
+    yield extractor
+
+
+# ============================================================================
+# Test Document Fixtures
+# ============================================================================
+
+@pytest.fixture
+def test_document_factory():
+    """Fixture that provides a factory function for creating test documents."""
+    def _create_document(document_type: str, content: Optional[bytes] = None) -> Tuple[str, bytes]:
+        if content is None:
+            # Generate some dummy content based on document type
+            if document_type == "application_form":
+                content = b"%PDF-1.5\nApplication Form\nName: John Doe\nBusiness: Acme Inc\nAmount Requested: $50,000"
+            elif document_type == "bank_statement":
+                content = b"%PDF-1.5\nBank Statement\nAccount: 12345\nBalance: $10,000\nTransactions: 25"
+            elif document_type == "tax_return":
+                content = b"%PDF-1.5\nTax Return\nTax Year: 2023\nIncome: $120,000\nTax Paid: $30,000"
+            elif document_type == "identity_document":
+                content = b"%PDF-1.5\nDriver's License\nName: John Doe\nID: DL12345\nExpiration: 2025-01-01"
+            elif document_type == "business_license":
+                content = b"%PDF-1.5\nBusiness License\nBusiness: Acme Inc\nLicense: BL12345\nExpiration: 2024-12-31"
+            else:
+                content = b"%PDF-1.5\nGeneric Document\nContent: Test content"
+        
+        # Create a temporary file with the content
+        with tempfile.NamedTemporaryFile(suffix=f".pdf", delete=False) as temp_file:
+            temp_file.write(content)
+            temp_file_path = temp_file.name
+        
+        return temp_file_path, content
+    
+    return _create_document
+
+
+@pytest.fixture
+def test_application_form(test_document_factory):
+    """Fixture that provides a test application form document."""
+    file_path, content = test_document_factory("application_form")
+    yield file_path, content
+    # Clean up the temporary file
+    if os.path.exists(file_path):
+        os.unlink(file_path)
+
+
+@pytest.fixture
+def test_bank_statement(test_document_factory):
+    """Fixture that provides a test bank statement document."""
+    file_path, content = test_document_factory("bank_statement")
+    yield file_path, content
+    # Clean up the temporary file
+    if os.path.exists(file_path):
+        os.unlink(file_path)
+
+
+@pytest.fixture
+def test_tax_return(test_document_factory):
+    """Fixture that provides a test tax return document."""
+    file_path, content = test_document_factory("tax_return")
+    yield file_path, content
+    # Clean up the temporary file
+    if os.path.exists(file_path):
+        os.unlink(file_path)
+
+
+@pytest.fixture
+def test_identity_document(test_document_factory):
+    """Fixture that provides a test identity document."""
+    file_path, content = test_document_factory("identity_document")
+    yield file_path, content
+    # Clean up the temporary file
+    if os.path.exists(file_path):
+        os.unlink(file_path)
+
+
+@pytest.fixture
+def test_business_license(test_document_factory):
+    """Fixture that provides a test business license document."""
+    file_path, content = test_document_factory("business_license")
+    yield file_path, content
+    # Clean up the temporary file
+    if os.path.exists(file_path):
+        os.unlink(file_path)
+
+
+@pytest.fixture
+def test_documents(test_application_form, test_bank_statement, test_tax_return, 
+                  test_identity_document, test_business_license):
+    """Fixture that provides all test documents."""
+    return {
+        "application_form": test_application_form,
+        "bank_statement": test_bank_statement,
+        "tax_return": test_tax_return,
+        "identity_document": test_identity_document,
+        "business_license": test_business_license
     }
-    return messages
+
+
+# ============================================================================
+# Miscellaneous Fixtures
+# ============================================================================
+
+@pytest.fixture
+def mock_logger():
+    """Fixture that provides a mocked logger."""
+    with patch("logging.getLogger") as mock_get_logger:
+        logger = MagicMock()
+        mock_get_logger.return_value = logger
+        
+        # Mock logger methods
+        logger.debug = MagicMock()
+        logger.info = MagicMock()
+        logger.warning = MagicMock()
+        logger.error = MagicMock()
+        logger.critical = MagicMock()
+        
+        yield logger
+
+
+@pytest.fixture
+def mock_time():
+    """Fixture that provides a mocked time function for deterministic testing."""
+    with patch("time.time") as mock_time:
+        mock_time.return_value = 1609459200.0  # 2021-01-01 00:00:00 UTC
+        yield mock_time
+
+
+@pytest.fixture
+def mock_uuid():
+    """Fixture that provides a mocked uuid function for deterministic testing."""
+    with patch("uuid.uuid4") as mock_uuid:
+        mock_uuid.return_value = "00000000-0000-0000-0000-000000000000"
+        yield mock_uuid
