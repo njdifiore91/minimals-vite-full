@@ -1,0 +1,265 @@
+{{- /*
+ConfigMap for PostgreSQL configuration
+This template generates a ConfigMap containing PostgreSQL configuration parameters
+including performance tuning, connection limits, and replication settings.
+*/}}
+
+{{- $environment := .Values.environment | default "staging" -}}
+{{- $isProd := eq $environment "production" -}}
+{{- $isStaging := eq $environment "staging" -}}
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "postgresql.fullname" . }}-config
+  labels:
+    {{- include "postgresql.labels" . | nindent 4 }}
+    {{- with .Values.global.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  annotations:
+    {{- with .Values.global.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+data:
+  # Main PostgreSQL configuration file
+  postgresql.conf: |
+    # Connection settings
+    listen_addresses = '*'
+    port = {{ .Values.postgresql.port | default 5432 }}
+    max_connections = {{ if $isProd }}{{ .Values.postgresql.production.configuration.maxConnections | default 500 }}{{ else if $isStaging }}{{ .Values.postgresql.staging.configuration.maxConnections | default 200 }}{{ else }}{{ .Values.postgresql.configuration.maxConnections | default 100 }}{{ end }}
+    
+    # Memory settings
+    shared_buffers = {{ if $isProd }}{{ .Values.postgresql.production.configuration.sharedBuffers | default "8GB" }}{{ else if $isStaging }}{{ .Values.postgresql.staging.configuration.sharedBuffers | default "4GB" }}{{ else }}{{ .Values.postgresql.configuration.sharedBuffers | default "1GB" }}{{ end }}
+    effective_cache_size = {{ if $isProd }}{{ .Values.postgresql.production.configuration.effectiveCacheSize | default "24GB" }}{{ else if $isStaging }}{{ .Values.postgresql.staging.configuration.effectiveCacheSize | default "12GB" }}{{ else }}{{ .Values.postgresql.configuration.effectiveCacheSize | default "3GB" }}{{ end }}
+    work_mem = {{ if $isProd }}{{ .Values.postgresql.production.configuration.workMem | default "64MB" }}{{ else if $isStaging }}{{ .Values.postgresql.staging.configuration.workMem | default "32MB" }}{{ else }}{{ .Values.postgresql.configuration.workMem | default "16MB" }}{{ end }}
+    maintenance_work_mem = {{ if $isProd }}{{ .Values.postgresql.production.configuration.maintenanceWorkMem | default "2GB" }}{{ else if $isStaging }}{{ .Values.postgresql.staging.configuration.maintenanceWorkMem | default "1GB" }}{{ else }}{{ .Values.postgresql.configuration.maintenanceWorkMem | default "256MB" }}{{ end }}
+    
+    # Replication settings
+    {{- if .Values.postgresql.replication.enabled }}
+    wal_level = 'replica'
+    max_wal_senders = {{ .Values.postgresql.configuration.extraParams.max_wal_senders | default 10 }}
+    wal_keep_segments = {{ .Values.postgresql.configuration.extraParams.wal_keep_segments | default 64 }}
+    hot_standby = on
+    {{- if $isProd }}
+    synchronous_commit = {{ .Values.postgresql.production.configuration.extraParams.synchronous_commit | default "on" }}
+    {{- else if $isStaging }}
+    synchronous_commit = {{ .Values.postgresql.staging.configuration.extraParams.synchronous_commit | default "off" }}
+    {{- else }}
+    synchronous_commit = off
+    {{- end }}
+    {{- if and $isProd .Values.custom.production.additionalSettings.synchronousReplication.enabled }}
+    synchronous_standby_names = 'FIRST {{ .Values.custom.production.additionalSettings.synchronousReplication.numSynchronousReplicas | default 1 }} ({{ .Values.postgresql.replication.applicationName | default "mca_replica" }})'
+    {{- else if and $isStaging .Values.custom.staging.additionalSettings.synchronousReplication.enabled }}
+    synchronous_standby_names = 'FIRST {{ .Values.custom.staging.additionalSettings.synchronousReplication.numSynchronousReplicas | default 0 }} ({{ .Values.postgresql.replication.applicationName | default "mca_replica" }})'
+    {{- end }}
+    {{- end }}
+    
+    # Performance tuning
+    random_page_cost = {{ .Values.postgresql.configuration.extraParams.random_page_cost | default 1.1 }}
+    effective_io_concurrency = {{ .Values.postgresql.configuration.extraParams.effective_io_concurrency | default 200 }}
+    
+    # Autovacuum settings
+    autovacuum = on
+    {{- if $isProd }}
+    autovacuum_vacuum_scale_factor = {{ .Values.postgresql.production.configuration.extraParams.autovacuum_vacuum_scale_factor | default 0.05 }}
+    autovacuum_analyze_scale_factor = {{ .Values.postgresql.production.configuration.extraParams.autovacuum_analyze_scale_factor | default 0.025 }}
+    {{- else if $isStaging }}
+    autovacuum_vacuum_scale_factor = {{ .Values.postgresql.staging.configuration.extraParams.autovacuum_vacuum_scale_factor | default 0.1 }}
+    autovacuum_analyze_scale_factor = {{ .Values.postgresql.staging.configuration.extraParams.autovacuum_analyze_scale_factor | default 0.05 }}
+    {{- else }}
+    autovacuum_vacuum_scale_factor = 0.2
+    autovacuum_analyze_scale_factor = 0.1
+    {{- end }}
+    
+    # Partitioning settings
+    {{- if .Values.postgresql.configuration.enablePartitioningFeatures }}
+    max_locks_per_transaction = {{ .Values.postgresql.configuration.maxLocksPerTransaction | default 128 }}
+    {{- end }}
+    
+    # Logging settings
+    log_min_duration_statement = {{ .Values.postgresql.configuration.logMinDurationStatement | default 1000 }}
+    log_statement = '{{ .Values.postgresql.configuration.logStatement | default "ddl" }}'
+    {{- if .Values.monitoring.logging.settings.logConnections }}
+    log_connections = on
+    {{- end }}
+    {{- if .Values.monitoring.logging.settings.logDisconnections }}
+    log_disconnections = on
+    {{- end }}
+    {{- if .Values.monitoring.logging.settings.logLockWaits }}
+    log_lock_waits = on
+    {{- end }}
+    {{- if .Values.monitoring.logging.settings.logTempFiles }}
+    log_temp_files = 0
+    {{- end }}
+    log_line_prefix = '%m [%p] %q%u@%d '
+    log_timezone = 'UTC'
+    
+    # WAL archiving
+    {{- if and $isProd .Values.custom.production.additionalSettings.walArchiving.enabled }}
+    archive_mode = on
+    archive_command = 'aws s3 cp %p {{ .Values.custom.production.additionalSettings.walArchiving.destination }}/%f'
+    {{- else if and $isStaging .Values.custom.staging.additionalSettings.walArchiving.enabled }}
+    archive_mode = on
+    archive_command = 'aws s3 cp %p {{ .Values.custom.staging.additionalSettings.walArchiving.destination }}/%f'
+    {{- end }}
+    
+    # Data protection
+    {{- if $isProd }}
+    full_page_writes = {{ .Values.postgresql.production.configuration.extraParams.full_page_writes | default "on" }}
+    {{- else }}
+    full_page_writes = on
+    {{- end }}
+    
+    # Extensions
+    {{- if .Values.postgresql.configuration.enablePgcrypto }}
+    shared_preload_libraries = 'pg_stat_statements,pg_partman_bgw'
+    pg_partman_bgw.interval = 3600
+    pg_partman_bgw.role = '{{ .Values.postgresql.username }}'
+    pg_partman_bgw.analyze = true
+    {{- end }}
+    
+    # Additional custom parameters
+    {{- range $key, $value := .Values.postgresql.configuration.extraParams }}
+    {{- if not (or (eq $key "max_wal_senders") (eq $key "wal_keep_segments") (eq $key "random_page_cost") (eq $key "effective_io_concurrency") (eq $key "synchronous_commit") (eq $key "full_page_writes") (eq $key "autovacuum_vacuum_scale_factor") (eq $key "autovacuum_analyze_scale_factor")) }}
+    {{ $key }} = {{ $value }}
+    {{- end }}
+    {{- end }}
+    {{- if $isProd }}
+    {{- range $key, $value := .Values.postgresql.production.configuration.extraParams }}
+    {{- if not (or (eq $key "max_wal_senders") (eq $key "wal_keep_segments") (eq $key "random_page_cost") (eq $key "effective_io_concurrency") (eq $key "synchronous_commit") (eq $key "full_page_writes") (eq $key "autovacuum_vacuum_scale_factor") (eq $key "autovacuum_analyze_scale_factor")) }}
+    {{ $key }} = {{ $value }}
+    {{- end }}
+    {{- end }}
+    {{- else if $isStaging }}
+    {{- range $key, $value := .Values.postgresql.staging.configuration.extraParams }}
+    {{- if not (or (eq $key "max_wal_senders") (eq $key "wal_keep_segments") (eq $key "random_page_cost") (eq $key "effective_io_concurrency") (eq $key "synchronous_commit") (eq $key "full_page_writes") (eq $key "autovacuum_vacuum_scale_factor") (eq $key "autovacuum_analyze_scale_factor")) }}
+    {{ $key }} = {{ $value }}
+    {{- end }}
+    {{- end }}
+    {{- end }}
+
+  # Client authentication configuration
+  pg_hba.conf: |
+    # TYPE  DATABASE        USER            ADDRESS                 METHOD
+    # Allow replication connections from localhost, by a user with the replication privilege
+    local   replication     {{ .Values.postgresql.replication.user | default "replicator" }}                                trust
+    host    replication     {{ .Values.postgresql.replication.user | default "replicator" }}      127.0.0.1/32            md5
+    host    replication     {{ .Values.postgresql.replication.user | default "replicator" }}      ::1/128                 md5
+    
+    # Allow replication connections from pods in the same namespace
+    host    replication     {{ .Values.postgresql.replication.user | default "replicator" }}      10.0.0.0/8              md5
+    
+    # Allow connections from all pods in the same namespace
+    host    all             all                                     10.0.0.0/8              md5
+    
+    # Allow connections from localhost
+    local   all             all                                                             trust
+    host    all             all                                     127.0.0.1/32            trust
+    host    all             all                                     ::1/128                 trust
+    
+    {{- if .Values.security.tls.enabled }}
+    # Require SSL for external connections
+    hostssl all             all                                     0.0.0.0/0               md5 clientcert=verify-ca
+    {{- else }}
+    # Allow external connections with password
+    host    all             all                                     0.0.0.0/0               md5
+    {{- end }}
+
+  {{- if .Values.connectionPooling.enabled }}
+  # PgBouncer configuration
+  pgbouncer.ini: |
+    [databases]
+    * = host=localhost port={{ .Values.postgresql.port | default 5432 }} dbname=postgres
+    
+    [pgbouncer]
+    listen_addr = *
+    listen_port = 6432
+    auth_type = md5
+    auth_file = /etc/pgbouncer/userlist.txt
+    
+    # Connection pooling settings
+    pool_mode = {{ .Values.connectionPooling.pgBouncer.poolMode | default "transaction" }}
+    max_client_conn = {{ if $isProd }}{{ .Values.connectionPooling.pgBouncer.production.maxClientConnections | default 2000 }}{{ else if $isStaging }}{{ .Values.connectionPooling.pgBouncer.staging.maxClientConnections | default 1000 }}{{ else }}{{ .Values.connectionPooling.pgBouncer.maxClientConnections | default 1000 }}{{ end }}
+    default_pool_size = {{ if $isProd }}{{ .Values.connectionPooling.pgBouncer.production.defaultPoolSize | default 50 }}{{ else if $isStaging }}{{ .Values.connectionPooling.pgBouncer.staging.defaultPoolSize | default 20 }}{{ else }}{{ .Values.connectionPooling.pgBouncer.defaultPoolSize | default 20 }}{{ end }}
+    min_pool_size = {{ if $isProd }}{{ .Values.connectionPooling.pgBouncer.production.minPoolSize | default 10 }}{{ else if $isStaging }}{{ .Values.connectionPooling.pgBouncer.staging.minPoolSize | default 10 }}{{ else }}{{ .Values.connectionPooling.pgBouncer.minPoolSize | default 10 }}{{ end }}
+    max_pool_size = {{ if $isProd }}{{ .Values.connectionPooling.pgBouncer.production.maxPoolSize | default 100 }}{{ else if $isStaging }}{{ .Values.connectionPooling.pgBouncer.staging.maxPoolSize | default 50 }}{{ else }}{{ .Values.connectionPooling.pgBouncer.maxPoolSize | default 50 }}{{ end }}
+    
+    # Connection settings
+    connect_timeout = {{ .Values.connectionPooling.pgBouncer.connectionTimeout | default 30 }}
+    client_idle_timeout = {{ .Values.connectionPooling.pgBouncer.clientIdleTimeout | default 600 }}
+    server_idle_timeout = {{ .Values.connectionPooling.pgBouncer.serverIdleTimeout | default 600 }}
+    
+    {{- if $isProd }}
+    server_lifetime = {{ .Values.connectionPooling.pgBouncer.production.serverLifetime | default 3600 }}
+    server_reset_query_always = {{ .Values.connectionPooling.pgBouncer.production.serverResetQueryAlways | default true }}
+    {{- else if $isStaging }}
+    server_lifetime = {{ .Values.connectionPooling.pgBouncer.staging.serverLifetime | default 1800 }}
+    server_reset_query_always = {{ .Values.connectionPooling.pgBouncer.staging.serverResetQueryAlways | default true }}
+    {{- end }}
+    
+    # Logging settings
+    log_connections = 1
+    log_disconnections = 1
+    log_pooler_errors = 1
+    stats_period = 60
+    
+    # TLS settings
+    {{- if .Values.security.tls.enabled }}
+    client_tls_sslmode = require
+    client_tls_key_file = /etc/pgbouncer/tls/tls.key
+    client_tls_cert_file = /etc/pgbouncer/tls/tls.crt
+    client_tls_ca_file = /etc/pgbouncer/tls/ca.crt
+    {{- end }}
+  {{- end }}
+
+  {{- if .Values.initialization.schema.enabled }}
+  # Database initialization script
+  init-db.sql: |
+    -- Create extensions
+    CREATE EXTENSION IF NOT EXISTS pgcrypto;
+    {{- if .Values.initialization.schema.createPartitionedTables }}
+    CREATE EXTENSION IF NOT EXISTS pg_partman;
+    {{- end }}
+    CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+    
+    {{- if .Values.initialization.schema.createEncryptionFunctions }}
+    -- Create encryption functions for PII protection
+    {{ .Values.initialization.schema.encryptionFunctions.encrypt_pii | default "" }}
+    {{ .Values.initialization.schema.encryptionFunctions.decrypt_pii | default "" }}
+    {{- end }}
+    
+    {{- if .Values.initialization.schema.createTables }}
+    -- Create tables
+    {{ .Values.initialization.schema.tables.applications | default "" }}
+    {{ .Values.initialization.schema.tables.documents | default "" }}
+    {{ .Values.initialization.schema.tables.merchant_details | default "" }}
+    {{- end }}
+    
+    {{- if .Values.initialization.schema.createPartitionedTables }}
+    -- Set up partitioning for applications table
+    SELECT create_parent(
+      'public.applications',
+      'created_at',
+      'native',
+      'monthly',
+      p_start_date := date_trunc('month', CURRENT_DATE)
+    );
+    
+    -- Set up partitioning for documents table
+    SELECT create_parent(
+      'public.documents',
+      'uploaded_at',
+      'native',
+      'monthly',
+      p_start_date := date_trunc('month', CURRENT_DATE)
+    );
+    
+    -- Set up background worker for automatic partition management
+    UPDATE part_config SET retention = '12 months', retention_keep_table = false
+    WHERE parent_table = 'public.applications';
+    
+    UPDATE part_config SET retention = '12 months', retention_keep_table = false
+    WHERE parent_table = 'public.documents';
+    {{- end }}
+  {{- end }}
