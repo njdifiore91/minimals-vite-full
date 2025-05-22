@@ -2,51 +2,97 @@
 # -*- coding: utf-8 -*-
 
 """
-Document Service Models Package.
+Document Service Models Package
 
-This package provides the document classification models and related utilities for the Document Service.
-It includes implementations of SVM and Random Forest classifiers, feature extraction utilities,
-model training and evaluation tools, and the main document classifier that orchestrates the
-classification process.
+This package provides document classification models and utilities for the Document Service.
+It includes base model interfaces, specific classifier implementations (SVM, Random Forest),
+feature extraction utilities, model training, evaluation, and serialization components.
 
-The models in this package are designed to achieve 99% classification accuracy for document types
-and provide confidence scores for classification decisions. They support the document classification
-requirements of the Merchant Cash Advance (MCA) Application Processing System.
+The models in this package are designed to achieve 99% classification accuracy as specified
+in the technical requirements for the Document Service.
 
-Example usage:
-    # Import the main document classifier
-    from document_service.models import DocumentClassifier
+Classes:
+    BaseModel: Abstract base class for all document classifiers
+    SVMClassifier: Support Vector Machine classifier implementation
+    RandomForestClassifier: Random Forest classifier implementation
+    DocumentClassifier: Main document classifier that orchestrates the classification process
     
-    # Create and train a classifier
-    classifier = DocumentClassifier()
-    classifier.fit(documents, document_types)
+    TextExtractor: Extracts text from various document formats
+    TextPreprocessor: Preprocesses text for feature extraction
+    TfidfFeatureExtractor: Extracts TF-IDF features from text
+    MetadataFeatureExtractor: Extracts features from document metadata
+    DimensionalityReducer: Reduces dimensionality of feature vectors
+    FeatureExtractor: Main class for feature extraction
     
-    # Classify a document
-    result = classifier.classify_document(document)
+    ModelEvaluator: Evaluates model performance against requirements
+    ModelTrainer: Trains and fine-tunes classification models
+
+Functions:
+    save_model: Serialize and save a trained model with metadata
+    load_model: Load a serialized model with validation
+    list_models: List all available models in the registry
+    get_model_metadata: Retrieve metadata for a specific model
+    register_model: Register a model in the model registry
+    delete_model: Remove a model from storage and registry
+    rollback_model: Rollback to a previous model version
+    validate_model: Validate model integrity and compatibility
     
-    # Import specific model implementations
-    from document_service.models import SVMClassifier, RandomForestClassifier
-    
-    # Create and train a specific classifier
-    svm = SVMClassifier()
-    svm.fit(features, labels)
+    prepare_dataset: Split dataset into training and testing sets
+    optimize_hyperparameters: Find optimal hyperparameters for a model
+    train_model_with_cv: Train a model with cross-validation
+    plot_learning_curve: Plot learning curve for model evaluation
+    plot_precision_recall_curve: Plot precision-recall curve
+    plot_calibration_curve: Plot calibration curve
+    evaluate_model_performance: Evaluate a model's performance
 """
 
-# Import and re-export base model
+# Import base model
 from .base_model import BaseModel
 
-# Import and re-export classifier implementations
+# Import classifier implementations
 from .svm_classifier import SVMClassifier
 from .random_forest_classifier import RandomForestClassifier
 from .document_classifier import DocumentClassifier
 
-# Import and re-export model utilities
-from .model_serialization import save_model, load_model
-from .model_evaluation import evaluate_classifier, calculate_metrics, plot_confusion_matrix
-from .model_training import train_model, optimize_hyperparameters, cross_validate
-from .feature_extraction import extract_document_features, extract_text_features, extract_metadata_features
+# Import feature extraction utilities
+from .feature_extraction import (
+    TextExtractor,
+    TextPreprocessor,
+    TfidfFeatureExtractor,
+    MetadataFeatureExtractor,
+    DimensionalityReducer,
+    FeatureExtractor
+)
 
-# Define package exports
+# Import model serialization utilities
+from .model_serialization import (
+    save_model,
+    load_model,
+    list_models,
+    get_model_metadata,
+    register_model,
+    delete_model,
+    rollback_model,
+    validate_model
+)
+
+# Import model evaluation utilities
+from .model_evaluation import (
+    ModelEvaluator,
+    plot_learning_curve,
+    plot_precision_recall_curve,
+    plot_calibration_curve,
+    evaluate_model_performance
+)
+
+# Import model training utilities
+from .model_training import (
+    ModelTrainer,
+    prepare_dataset,
+    optimize_hyperparameters,
+    train_model_with_cv
+)
+
 __all__ = [
     # Base model
     'BaseModel',
@@ -56,22 +102,34 @@ __all__ = [
     'RandomForestClassifier',
     'DocumentClassifier',
     
+    # Feature extraction
+    'TextExtractor',
+    'TextPreprocessor',
+    'TfidfFeatureExtractor',
+    'MetadataFeatureExtractor',
+    'DimensionalityReducer',
+    'FeatureExtractor',
+    
     # Model serialization
     'save_model',
     'load_model',
+    'list_models',
+    'get_model_metadata',
+    'register_model',
+    'delete_model',
+    'rollback_model',
+    'validate_model',
     
     # Model evaluation
-    'evaluate_classifier',
-    'calculate_metrics',
-    'plot_confusion_matrix',
+    'ModelEvaluator',
+    'plot_learning_curve',
+    'plot_precision_recall_curve',
+    'plot_calibration_curve',
+    'evaluate_model_performance',
     
     # Model training
-    'train_model',
+    'ModelTrainer',
+    'prepare_dataset',
     'optimize_hyperparameters',
-    'cross_validate',
-    
-    # Feature extraction
-    'extract_document_features',
-    'extract_text_features',
-    'extract_metadata_features',
+    'train_model_with_cv'
 ]
