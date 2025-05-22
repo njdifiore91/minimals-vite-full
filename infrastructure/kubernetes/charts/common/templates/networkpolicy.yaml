@@ -1,0 +1,387 @@
+{{- /*
+networkpolicy.yaml
+
+A reusable NetworkPolicy template for the MCA Application Processing System.
+This template provides a standardized way to control pod-to-pod communication
+with fine-grained security controls for both ingress and egress traffic.
+
+This template implements the security requirements specified in the MCA Application
+Processing System technical specification, including:
+- Network isolation between services
+- Namespace segregation
+- Defense-in-depth approach for container security
+- Fine-grained control over pod-to-pod communication
+
+Parameters (via values.yaml):
+  networkPolicy:
+    enabled: true|false - Whether to create the NetworkPolicy
+    annotations: {} - Additional annotations to add to the NetworkPolicy
+    policyTypes: [] - Array of policy types ("Ingress", "Egress", or both)
+    podSelector: {} - Pod selector to determine which pods the policy applies to
+    ingress: [] - Array of ingress rules
+    egress: [] - Array of egress rules
+    denyAll: true|false - Whether to create a policy that denies all traffic
+    defaultDeny: true|false - Whether to create a default deny-all policy
+    namespaceIsolation: true|false - Whether to create a namespace isolation policy
+    allowExternal: true|false - Whether to allow external traffic
+    externalCIDRs: [] - Array of CIDR blocks to allow external traffic from
+    externalCIDRsExcept: [] - Array of CIDR blocks to exclude from external traffic
+    allowExternalPorts: [] - Array of ports to allow external traffic on
+    allowedServices: [] - Array of services to allow communication with
+
+Example usage in values.yaml:
+
+# Basic network policy that allows communication within the same namespace
+networkPolicy:
+  enabled: true
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: email-service
+  policyTypes:
+    - Ingress
+    - Egress
+
+# Strict network policy that only allows specific communication
+networkPolicy:
+  enabled: true
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: data-service
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+      - namespaceSelector:
+          matchLabels:
+            app.kubernetes.io/name: api-gateway
+      ports:
+      - protocol: TCP
+        port: 8080
+  egress:
+    - to:
+      - namespaceSelector:
+          matchLabels:
+            app.kubernetes.io/name: document-service
+      ports:
+      - protocol: TCP
+        port: 5000
+    - to:
+      - namespaceSelector:
+          matchLabels:
+            app.kubernetes.io/name: ocr-service
+      ports:
+      - protocol: TCP
+        port: 5000
+
+# Allow specific microservices to communicate
+networkPolicy:
+  enabled: true
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: notification-service
+  allowedServices:
+    - namespaceSelector:
+        matchLabels:
+          app.kubernetes.io/name: data-service
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/component: api
+      ports:
+      - protocol: TCP
+        port: 8080
+*/}}
+
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "common.fullname" . }}
+  labels:
+    {{- include "common.labels" . | nindent 4 }}
+  {{- with .Values.networkPolicy.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  # Pod selector determines which pods this NetworkPolicy applies to
+  podSelector:
+    {{- toYaml .Values.networkPolicy.podSelector | nindent 4 }}
+  
+  # Policy types can be Ingress, Egress, or both
+  policyTypes:
+  {{- if .Values.networkPolicy.policyTypes }}
+    {{- toYaml .Values.networkPolicy.policyTypes | nindent 4 }}
+  {{- else }}
+    - Ingress
+    - Egress
+  {{- end }}
+  
+  # Ingress rules control incoming traffic to the selected pods
+  {{- if .Values.networkPolicy.ingress }}
+  ingress:
+    {{- toYaml .Values.networkPolicy.ingress | nindent 4 }}
+  {{- else if and (has "Ingress" .Values.networkPolicy.policyTypes) (not .Values.networkPolicy.denyAll) }}
+  ingress:
+    # Default ingress rule to allow traffic from pods in the same namespace
+    # This implements the namespace isolation principle while still allowing
+    # communication between pods within the same namespace, which is typically
+    # required for basic functionality.
+    - from:
+      - podSelector: {}
+  {{- end }}
+  
+  # Egress rules control outgoing traffic from the selected pods
+  {{- if .Values.networkPolicy.egress }}
+  egress:
+    {{- toYaml .Values.networkPolicy.egress | nindent 4 }}
+  {{- else if and (has "Egress" .Values.networkPolicy.policyTypes) (not .Values.networkPolicy.denyAll) }}
+  egress:
+    # Default egress rule to allow DNS traffic (port 53)
+    # This is essential for basic functionality as all pods need to be able to
+    # resolve DNS names. Without this rule, pods would not be able to communicate
+    # with each other using service names or external hostnames.
+    - to:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: kube-system
+        podSelector:
+          matchLabels:
+            k8s-app: kube-dns
+      ports:
+      - protocol: UDP
+        port: 53
+      - protocol: TCP
+        port: 53
+    # Allow traffic to pods in the same namespace
+    # This implements the namespace isolation principle while still allowing
+    # communication between pods within the same namespace, which is typically
+    # required for basic functionality.
+    - to:
+      - podSelector: {}
+  {{- end }}
+{{- end }}
+
+{{- /*
+Create a default deny-all policy if explicitly requested
+
+This implements a defense-in-depth approach by creating a separate NetworkPolicy
+that denies all traffic to the selected pods. This is useful for creating a secure
+baseline before adding specific allow rules.
+
+This follows the security best practice of denying all traffic by default and only
+allowing specific traffic that is explicitly permitted.
+*/}}
+{{- if and .Values.networkPolicy.enabled .Values.networkPolicy.defaultDeny }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "common.fullname" . }}-default-deny
+  labels:
+    {{- include "common.labels" . | nindent 4 }}
+  {{- with .Values.networkPolicy.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  podSelector:
+    {{- toYaml .Values.networkPolicy.podSelector | nindent 4 }}
+  policyTypes:
+  {{- if .Values.networkPolicy.policyTypes }}
+    {{- toYaml .Values.networkPolicy.policyTypes | nindent 4 }}
+  {{- else }}
+    - Ingress
+    - Egress
+  {{- end }}
+{{- end }}
+
+{{- /*
+Create a namespace isolation policy if explicitly requested
+
+This implements namespace segregation as specified in section 8.2.1 of the technical
+specification. It creates a NetworkPolicy that only allows traffic from pods within
+the same namespace, effectively isolating namespaces from each other.
+
+This is particularly important in a multi-service architecture like the MCA Application
+Processing System, where different services should be isolated from each other to
+prevent unauthorized access and limit the blast radius of potential security incidents.
+*/}}
+{{- if and .Values.networkPolicy.enabled .Values.networkPolicy.namespaceIsolation }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "common.fullname" . }}-namespace-isolation
+  labels:
+    {{- include "common.labels" . | nindent 4 }}
+  {{- with .Values.networkPolicy.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    # Allow traffic only from the same namespace
+    - from:
+      - podSelector: {}
+{{- end }}
+
+{{- /*
+Create a policy to allow specific external traffic if configured
+
+This allows for controlled access from external sources, such as the internet or
+other networks outside the Kubernetes cluster. It supports specifying CIDR blocks
+to allow traffic from, as well as CIDR blocks to exclude.
+
+This is useful for services that need to be accessed from outside the cluster, such
+as the API Gateway or services that need to communicate with external systems.
+
+The technical specification in section 3.8.6 mentions IP filtering and allowlist
+functionality for administrative endpoints, which this policy implements.
+*/}}
+{{- if and .Values.networkPolicy.enabled .Values.networkPolicy.allowExternal }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "common.fullname" . }}-allow-external
+  labels:
+    {{- include "common.labels" . | nindent 4 }}
+  {{- with .Values.networkPolicy.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  podSelector:
+    {{- toYaml .Values.networkPolicy.podSelector | nindent 4 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    # Allow traffic from specified external CIDR blocks
+    - from:
+      {{- if .Values.networkPolicy.externalCIDRs }}
+      - ipBlock:
+          cidr: {{ first .Values.networkPolicy.externalCIDRs }}
+          {{- if .Values.networkPolicy.externalCIDRsExcept }}
+          except:
+            {{- toYaml .Values.networkPolicy.externalCIDRsExcept | nindent 12 }}
+          {{- end }}
+      {{- range rest .Values.networkPolicy.externalCIDRs }}
+      - ipBlock:
+          cidr: {{ . }}
+          {{- if $.Values.networkPolicy.externalCIDRsExcept }}
+          except:
+            {{- toYaml $.Values.networkPolicy.externalCIDRsExcept | nindent 12 }}
+          {{- end }}
+      {{- end }}
+      {{- else }}
+      # Default to allowing all external traffic if no specific CIDRs are provided
+      - ipBlock:
+          cidr: 0.0.0.0/0
+          {{- if .Values.networkPolicy.externalCIDRsExcept }}
+          except:
+            {{- toYaml .Values.networkPolicy.externalCIDRsExcept | nindent 12 }}
+          {{- end }}
+      {{- end }}
+      {{- if .Values.networkPolicy.allowExternalPorts }}
+      ports:
+        {{- toYaml .Values.networkPolicy.allowExternalPorts | nindent 8 }}
+      {{- end }}
+{{- end }}
+
+{{- /*
+Create a policy to allow communication between specific microservices if configured
+
+This implements the microservice communication patterns specified in the technical
+specification. It allows for fine-grained control over which services can communicate
+with each other, based on namespace and pod selectors.
+
+This is essential for implementing the principle of least privilege in a microservice
+architecture, where services should only be able to communicate with other services
+that they explicitly need to interact with.
+
+As described in section 0.1.2 of the technical specification, the MCA Application
+Processing System consists of multiple microservices that need to communicate with
+each other in specific ways. This policy allows for implementing those communication
+patterns securely.
+*/}}
+{{- if and .Values.networkPolicy.enabled .Values.networkPolicy.allowedServices }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "common.fullname" . }}-service-communication
+  labels:
+    {{- include "common.labels" . | nindent 4 }}
+  {{- with .Values.networkPolicy.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  podSelector:
+    {{- toYaml .Values.networkPolicy.podSelector | nindent 4 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow traffic from specified services
+    {{- range .Values.networkPolicy.allowedServices }}
+    - from:
+      {{- if .namespaceSelector }}
+      - namespaceSelector:
+          {{- toYaml .namespaceSelector | nindent 10 }}
+        {{- if .podSelector }}
+        podSelector:
+          {{- toYaml .podSelector | nindent 10 }}
+        {{- end }}
+      {{- else if .podSelector }}
+      - podSelector:
+          {{- toYaml .podSelector | nindent 10 }}
+      {{- end }}
+      {{- if .ports }}
+      ports:
+        {{- toYaml .ports | nindent 8 }}
+      {{- end }}
+    {{- end }}
+  egress:
+    # Allow traffic to specified services
+    {{- range .Values.networkPolicy.allowedServices }}
+    - to:
+      {{- if .namespaceSelector }}
+      - namespaceSelector:
+          {{- toYaml .namespaceSelector | nindent 10 }}
+        {{- if .podSelector }}
+        podSelector:
+          {{- toYaml .podSelector | nindent 10 }}
+        {{- end }}
+      {{- else if .podSelector }}
+      - podSelector:
+          {{- toYaml .podSelector | nindent 10 }}
+      {{- end }}
+      {{- if .ports }}
+      ports:
+        {{- toYaml .ports | nindent 8 }}
+      {{- end }}
+    {{- end }}
+{{- end }}
+
+{{- /*
+This NetworkPolicy template implements the security requirements specified in the
+MCA Application Processing System technical specification. It provides a standardized
+way to control pod-to-pod communication with fine-grained security controls for both
+ingress and egress traffic.
+
+By using this template across all services in the MCA Application Processing System,
+we ensure consistent network security policies and reduce the risk of misconfiguration.
+
+The template supports various use cases, from simple namespace isolation to complex
+microservice communication patterns, and can be customized through values.yaml to
+meet the specific requirements of each service.
+
+This template should be used in conjunction with other security measures, such as
+RBAC, TLS encryption, and secure coding practices, to implement a defense-in-depth
+approach to security as specified in the technical specification.
+*/}}
