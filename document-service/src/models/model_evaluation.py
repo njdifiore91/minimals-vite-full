@@ -1,824 +1,537 @@
-"""
-Utilities for evaluating the performance of document classification models.
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 
-This module provides functions for calculating classification metrics, generating
-confusion matrices, ROC curves, and optimizing classification thresholds to ensure
-models meet the required 99% accuracy for document classification.
+"""
+Model Evaluation Utilities for Document Classification
+
+This module provides utilities for evaluating the performance of document classification models
+in the Document Service. It implements metrics calculation, confusion matrix analysis,
+ROC curve generation, and performance reporting to ensure models meet accuracy requirements.
+
+The module supports the following key functionalities:
+1. Classification metrics calculation (accuracy, precision, recall, F1)
+2. Confusion matrix analysis and visualization
+3. ROC curve and AUC calculation for model comparison
+4. Cross-validation performance reporting
+5. Threshold optimization for classification confidence
+
+These utilities help ensure that document classification models maintain the required
+99% data extraction accuracy as specified in the technical requirements.
 """
 
-import logging
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
-from typing import Dict, List, Tuple, Optional, Union, Any, Callable
+from typing import Dict, List, Tuple, Union, Optional, Any
 from sklearn.metrics import (
     accuracy_score,
     precision_score,
     recall_score,
     f1_score,
     confusion_matrix,
+    classification_report,
     roc_curve,
     auc,
-    classification_report,
+    roc_auc_score,
     precision_recall_curve,
-    average_precision_score,
-    roc_auc_score
+    average_precision_score
 )
 from sklearn.model_selection import cross_val_score, StratifiedKFold, learning_curve
-from sklearn.base import BaseEstimator, ClassifierMixin
-from sklearn.calibration import CalibratedClassifierCV
-from sklearn.utils import resample
+from sklearn.calibration import calibration_curve
+import logging
+from pathlib import Path
+import os
+import json
 
-from ..config import model_config
-from ..types.classification import (
-    ClassificationModel,
-    ClassificationResult,
-    ClassificationMetrics,
-    ConfidenceScore,
-    ModelParameters
-)
-
+# Configure logger
 logger = logging.getLogger(__name__)
 
 
-def calculate_classification_metrics(
-    y_true: np.ndarray,
-    y_pred: np.ndarray,
-    average: str = 'weighted'
-) -> ClassificationMetrics:
-    """Calculate standard classification metrics.
+class ModelEvaluator:
+    """Class for evaluating document classification models.
     
-    Args:
-        y_true: Ground truth labels
-        y_pred: Predicted labels
-        average: Averaging method for multi-class metrics ('micro', 'macro', 'weighted')
-        
-    Returns:
-        Dictionary containing accuracy, precision, recall, and F1 score
+    This class provides methods for calculating classification metrics,
+    generating confusion matrices, ROC curves, and performing cross-validation
+    to ensure models meet the required 99% accuracy threshold.
+    
+    The evaluator implements comprehensive model assessment capabilities to validate
+    that document classification models meet the technical requirements for the
+    Document Service, particularly the 99% data extraction accuracy requirement.
     """
-    metrics = {
-        'accuracy': float(accuracy_score(y_true, y_pred)),
-        'precision': float(precision_score(y_true, y_pred, average=average, zero_division=0)),
-        'recall': float(recall_score(y_true, y_pred, average=average, zero_division=0)),
-        'f1': float(f1_score(y_true, y_pred, average=average, zero_division=0))
-    }
     
-    logger.info(f"Classification metrics: {metrics}")
-    
-    # Check if accuracy meets the required threshold
-    if metrics['accuracy'] < model_config.REQUIRED_ACCURACY:
-        logger.warning(
-            f"Model accuracy {metrics['accuracy']:.4f} is below the required threshold "
-            f"of {model_config.REQUIRED_ACCURACY}"
-        )
-    
-    return metrics
-
-
-def generate_confusion_matrix(
-    y_true: np.ndarray,
-    y_pred: np.ndarray,
-    class_names: Optional[List[str]] = None,
-    normalize: Optional[str] = None,
-    figsize: Tuple[int, int] = (10, 8),
-    cmap: str = 'Blues',
-    save_path: Optional[str] = None,
-    use_seaborn: bool = True
-) -> np.ndarray:
-    """Generate and optionally visualize a confusion matrix.
-    
-    Args:
-        y_true: Ground truth labels
-        y_pred: Predicted labels
-        class_names: Names of the classes for axis labels
-        normalize: Normalization method ('true', 'pred', 'all', or None)
-        figsize: Figure size for the plot
-        cmap: Colormap for the plot
-        save_path: Path to save the confusion matrix visualization
+    def __init__(self, accuracy_threshold: float = 0.99):
+        """Initialize the ModelEvaluator.
         
-    Returns:
-        Confusion matrix as a numpy array
-    """
-    # Calculate confusion matrix
-    cm = confusion_matrix(y_true, y_pred, normalize=normalize)
+        Args:
+            accuracy_threshold: Minimum required accuracy threshold (default: 0.99)
+        """
+        self.accuracy_threshold = accuracy_threshold
+        logger.info(f"ModelEvaluator initialized with accuracy threshold: {accuracy_threshold}")
     
-    # Visualize confusion matrix
-    plt.figure(figsize=figsize)
-    
-    if use_seaborn:
-        # Use seaborn for better visualization
-        fmt = '.2f' if normalize else 'd'
-        df_cm = pd.DataFrame(cm, 
-                            index=class_names if class_names is not None else range(cm.shape[0]), 
-                            columns=class_names if class_names is not None else range(cm.shape[1]))
+    def calculate_metrics(self, y_true: np.ndarray, y_pred: np.ndarray, 
+                         labels: Optional[List] = None) -> Dict[str, float]:
+        """Calculate classification metrics.
         
-        sns.heatmap(df_cm, annot=True, fmt=fmt, cmap=cmap, cbar=True,
-                   xticklabels=df_cm.columns, yticklabels=df_cm.index)
-        plt.title('Confusion Matrix')
-        plt.ylabel('True Label')
-        plt.xlabel('Predicted Label')
-    else:
-        # Use matplotlib
-        plt.imshow(cm, interpolation='nearest', cmap=cmap)
-        plt.title('Confusion Matrix')
-        plt.colorbar()
-        
-        # Set axis labels
-        if class_names is not None:
-            tick_marks = np.arange(len(class_names))
-            plt.xticks(tick_marks, class_names, rotation=45)
-            plt.yticks(tick_marks, class_names)
-        
-        # Add text annotations
-        fmt = '.2f' if normalize else 'd'
-        thresh = cm.max() / 2.
-        for i in range(cm.shape[0]):
-            for j in range(cm.shape[1]):
-                plt.text(j, i, format(cm[i, j], fmt),
-                        ha="center", va="center",
-                        color="white" if cm[i, j] > thresh else "black")
-    
-    plt.tight_layout()
-    plt.ylabel('True Label')
-    plt.xlabel('Predicted Label')
-    
-    # Save or show the plot
-    if save_path:
-        plt.savefig(save_path)
-        logger.info(f"Confusion matrix saved to {save_path}")
-    else:
-        plt.show()
-    
-    plt.close()
-    
-    return cm
-
-
-def generate_roc_curve(
-    y_true: np.ndarray,
-    y_score: np.ndarray,
-    class_index: int = 1,
-    figsize: Tuple[int, int] = (10, 8),
-    save_path: Optional[str] = None
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, float]:
-    """Generate and visualize ROC curve for binary classification or a specific class.
-    
-    Args:
-        y_true: Ground truth labels (binary or one-hot encoded)
-        y_score: Predicted probabilities or decision function scores
-        class_index: Index of the class to evaluate for multi-class problems
-        figsize: Figure size for the plot
-        save_path: Path to save the ROC curve visualization
-        
-    Returns:
-        Tuple containing (fpr, tpr, thresholds, auc_score)
-    """
-    # For multi-class, convert to binary problem for the specified class
-    if y_true.ndim > 1 and y_true.shape[1] > 1:  # One-hot encoded
-        y_true_binary = y_true[:, class_index]
-        y_score_binary = y_score[:, class_index]
-    elif y_score.ndim > 1 and y_score.shape[1] > 1:  # Multi-class probabilities
-        y_true_binary = (y_true == class_index).astype(int)
-        y_score_binary = y_score[:, class_index]
-    else:  # Already binary
-        y_true_binary = y_true
-        y_score_binary = y_score
-    
-    # Calculate ROC curve and AUC
-    fpr, tpr, thresholds = roc_curve(y_true_binary, y_score_binary)
-    roc_auc = auc(fpr, tpr)
-    
-    # Plot ROC curve
-    plt.figure(figsize=figsize)
-    plt.plot(fpr, tpr, color='darkorange', lw=2, label=f'ROC curve (area = {roc_auc:.2f})')
-    plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
-    plt.xlim([0.0, 1.0])
-    plt.ylim([0.0, 1.05])
-    plt.xlabel('False Positive Rate')
-    plt.ylabel('True Positive Rate')
-    plt.title('Receiver Operating Characteristic (ROC) Curve')
-    plt.legend(loc="lower right")
-    
-    # Save or show the plot
-    if save_path:
-        plt.savefig(save_path)
-        logger.info(f"ROC curve saved to {save_path}")
-    else:
-        plt.show()
-    
-    plt.close()
-    
-    logger.info(f"ROC AUC: {roc_auc:.4f}")
-    
-    return fpr, tpr, thresholds, roc_auc
-
-
-def cross_validation_performance(
-    model: ClassificationModel,
-    X: np.ndarray,
-    y: np.ndarray,
-    cv: int = 5,
-    scoring: str = 'accuracy',
-    n_jobs: int = -1,
-    return_estimator: bool = False
-) -> Dict[str, Any]:
-    """Evaluate model performance using cross-validation.
-    
-    Args:
-        model: Classification model to evaluate
-        X: Feature matrix
-        y: Target labels
-        cv: Number of cross-validation folds
-        scoring: Scoring metric to use
-        n_jobs: Number of parallel jobs
-        
-    Returns:
-        Dictionary with cross-validation results
-    """
-    # Define cross-validation strategy
-    cv_strategy = StratifiedKFold(n_splits=cv, shuffle=True, random_state=42)
-    
-    if return_estimator:
-        from sklearn.model_selection import cross_validate
-        cv_results = cross_validate(
-            model, X, y, 
-            cv=cv_strategy, 
-            scoring={
-                'accuracy': 'accuracy',
-                'precision': 'precision_weighted',
-                'recall': 'recall_weighted',
-                'f1': 'f1_weighted'
-            },
-            n_jobs=n_jobs,
-            return_estimator=True,
-            return_train_score=True
-        )
-        # Extract the trained estimators
-        estimators = cv_results.pop('estimator')
-        
-        # Calculate cross-validation scores for different metrics
-        accuracy_scores = cv_results['test_accuracy']
-        precision_scores = cv_results['test_precision']
-        recall_scores = cv_results['test_recall']
-        f1_scores = cv_results['test_f1']
-    else:
-        # Calculate cross-validation scores for different metrics
-        accuracy_scores = cross_val_score(model, X, y, cv=cv_strategy, scoring='accuracy', n_jobs=n_jobs)
-        precision_scores = cross_val_score(model, X, y, cv=cv_strategy, scoring='precision_weighted', n_jobs=n_jobs)
-        recall_scores = cross_val_score(model, X, y, cv=cv_strategy, scoring='recall_weighted', n_jobs=n_jobs)
-        f1_scores = cross_val_score(model, X, y, cv=cv_strategy, scoring='f1_weighted', n_jobs=n_jobs)
-    
-    # Compile results
-    cv_results = {
-        'accuracy': {
-            'mean': float(np.mean(accuracy_scores)),
-            'std': float(np.std(accuracy_scores)),
-            'values': accuracy_scores.tolist()
-        },
-        'precision': {
-            'mean': float(np.mean(precision_scores)),
-            'std': float(np.std(precision_scores)),
-            'values': precision_scores.tolist()
-        },
-        'recall': {
-            'mean': float(np.mean(recall_scores)),
-            'std': float(np.std(recall_scores)),
-            'values': recall_scores.tolist()
-        },
-        'f1': {
-            'mean': float(np.mean(f1_scores)),
-            'std': float(np.std(f1_scores)),
-            'values': f1_scores.tolist()
+        Args:
+            y_true: Ground truth labels
+            y_pred: Predicted labels
+            labels: List of label names (optional)
+            
+        Returns:
+            Dictionary containing accuracy, precision, recall, and F1 score
+        """
+        metrics = {
+            'accuracy': accuracy_score(y_true, y_pred),
+            'precision_micro': precision_score(y_true, y_pred, average='micro'),
+            'precision_macro': precision_score(y_true, y_pred, average='macro'),
+            'precision_weighted': precision_score(y_true, y_pred, average='weighted'),
+            'recall_micro': recall_score(y_true, y_pred, average='micro'),
+            'recall_macro': recall_score(y_true, y_pred, average='macro'),
+            'recall_weighted': recall_score(y_true, y_pred, average='weighted'),
+            'f1_micro': f1_score(y_true, y_pred, average='micro'),
+            'f1_macro': f1_score(y_true, y_pred, average='macro'),
+            'f1_weighted': f1_score(y_true, y_pred, average='weighted')
         }
-    }
-    
-    logger.info(f"Cross-validation results:\n"
-               f"Accuracy: {cv_results['accuracy']['mean']:.4f} ± {cv_results['accuracy']['std']:.4f}\n"
-               f"Precision: {cv_results['precision']['mean']:.4f} ± {cv_results['precision']['std']:.4f}\n"
-               f"Recall: {cv_results['recall']['mean']:.4f} ± {cv_results['recall']['std']:.4f}\n"
-               f"F1 Score: {cv_results['f1']['mean']:.4f} ± {cv_results['f1']['std']:.4f}")
-    
-    # Check if accuracy meets the required threshold
-    if cv_results['accuracy']['mean'] < model_config.REQUIRED_ACCURACY:
-        logger.warning(
-            f"Cross-validation accuracy {cv_results['accuracy']['mean']:.4f} is below "
-            f"the required threshold of {model_config.REQUIRED_ACCURACY}"
-        )
-    
-    if return_estimator:
-        return cv_results, estimators
-    
-    return cv_results
-
-
-def optimize_threshold(
-    y_true: np.ndarray,
-    y_score: np.ndarray,
-    metric: str = 'f1',
-    class_index: int = 1,
-    thresholds: Optional[np.ndarray] = None,
-    plot_curve: bool = True,
-    figsize: Tuple[int, int] = (10, 8),
-    save_path: Optional[str] = None
-) -> Tuple[float, Dict[str, float]]:
-    """Optimize classification threshold based on a specified metric.
-    
-    Args:
-        y_true: Ground truth labels
-        y_score: Predicted probabilities or decision function scores
-        metric: Metric to optimize ('f1', 'precision', 'recall', 'accuracy')
-        class_index: Index of the class to evaluate for multi-class problems
-        thresholds: Array of thresholds to evaluate (default: 100 values from 0.01 to 0.99)
-        plot_curve: Whether to plot the metric vs threshold curve
-        figsize: Figure size for the plot
-        save_path: Path to save the threshold optimization curve
         
-    Returns:
-        Tuple containing (optimal_threshold, metrics_at_optimal_threshold)
-    """
-    # For multi-class, convert to binary problem for the specified class
-    if y_true.ndim > 1 and y_true.shape[1] > 1:  # One-hot encoded
-        y_true_binary = y_true[:, class_index]
-        y_score_binary = y_score[:, class_index]
-    elif y_score.ndim > 1 and y_score.shape[1] > 1:  # Multi-class probabilities
-        y_true_binary = (y_true == class_index).astype(int)
-        y_score_binary = y_score[:, class_index]
-    else:  # Already binary
-        y_true_binary = y_true
-        y_score_binary = y_score
-    
-    # Define thresholds to evaluate
-    if thresholds is None:
-        thresholds = np.linspace(0.01, 0.99, 100)
-    
-    # Initialize arrays to store metric values
-    accuracies = np.zeros_like(thresholds)
-    precisions = np.zeros_like(thresholds)
-    recalls = np.zeros_like(thresholds)
-    f1_scores_array = np.zeros_like(thresholds)
-    
-    # Calculate metrics for each threshold
-    for i, threshold in enumerate(thresholds):
-        y_pred_binary = (y_score_binary >= threshold).astype(int)
+        logger.info(f"Classification metrics: accuracy={metrics['accuracy']:.4f}, "
+                  f"precision_weighted={metrics['precision_weighted']:.4f}, "
+                  f"recall_weighted={metrics['recall_weighted']:.4f}, "
+                  f"f1_weighted={metrics['f1_weighted']:.4f}")
         
-        accuracies[i] = accuracy_score(y_true_binary, y_pred_binary)
-        precisions[i] = precision_score(y_true_binary, y_pred_binary, zero_division=0)
-        recalls[i] = recall_score(y_true_binary, y_pred_binary, zero_division=0)
-        f1_scores_array[i] = f1_score(y_true_binary, y_pred_binary, zero_division=0)
+        # Check if accuracy meets the threshold
+        if metrics['accuracy'] < self.accuracy_threshold:
+            logger.warning(f"Model accuracy {metrics['accuracy']:.4f} is below the required threshold "
+                          f"of {self.accuracy_threshold}")
+        
+        return metrics
     
-    # Select the metric to optimize
-    if metric == 'accuracy':
-        metric_values = accuracies
-    elif metric == 'precision':
-        metric_values = precisions
-    elif metric == 'recall':
-        metric_values = recalls
-    elif metric == 'f1':
-        metric_values = f1_scores_array
-    else:
-        raise ValueError(f"Unsupported metric: {metric}. Use 'accuracy', 'precision', 'recall', or 'f1'.")
+    def generate_classification_report(self, y_true: np.ndarray, y_pred: np.ndarray, 
+                                      target_names: Optional[List[str]] = None) -> str:
+        """Generate a detailed classification report.
+        
+        Args:
+            y_true: Ground truth labels
+            y_pred: Predicted labels
+            target_names: List of target class names (optional)
+            
+        Returns:
+            String containing the classification report
+        """
+        report = classification_report(y_true, y_pred, target_names=target_names)
+        logger.info(f"Classification report:\n{report}")
+        return report
     
-    # Find the optimal threshold
-    best_idx = np.argmax(metric_values)
-    optimal_threshold = float(thresholds[best_idx])
-    
-    # Metrics at the optimal threshold
-    metrics_at_optimal = {
-        'threshold': optimal_threshold,
-        'accuracy': float(accuracies[best_idx]),
-        'precision': float(precisions[best_idx]),
-        'recall': float(recalls[best_idx]),
-        'f1': float(f1_scores_array[best_idx])
-    }
-    
-    logger.info(f"Optimal threshold: {optimal_threshold:.4f} (optimizing {metric})")
-    logger.info(f"Metrics at optimal threshold: {metrics_at_optimal}")
-    
-    # Plot metric vs threshold curve
-    if plot_curve:
+    def plot_confusion_matrix(self, y_true: np.ndarray, y_pred: np.ndarray, 
+                             class_names: Optional[List[str]] = None, 
+                             normalize: bool = False,
+                             cmap: str = 'Blues',
+                             figsize: Tuple[int, int] = (10, 8),
+                             save_path: Optional[str] = None,
+                             use_seaborn: bool = True) -> np.ndarray:
+        """Generate and plot a confusion matrix.
+        
+        Args:
+            y_true: Ground truth labels
+            y_pred: Predicted labels
+            class_names: List of class names (optional)
+            normalize: Whether to normalize the confusion matrix (default: False)
+            cmap: Colormap for the plot (default: 'Blues')
+            figsize: Figure size as (width, height) in inches (default: (10, 8))
+            save_path: Path to save the figure (optional)
+            use_seaborn: Whether to use seaborn for enhanced visualization (default: True)
+            
+        Returns:
+            Confusion matrix as numpy array
+        """
+        # Compute confusion matrix
+        cm = confusion_matrix(y_true, y_pred)
+        
+        # Normalize if requested
+        if normalize:
+            cm = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
+            title = 'Normalized Confusion Matrix'
+        else:
+            title = 'Confusion Matrix'
+        
+        # Plot the confusion matrix
         plt.figure(figsize=figsize)
-        plt.plot(thresholds, accuracies, label='Accuracy')
-        plt.plot(thresholds, precisions, label='Precision')
-        plt.plot(thresholds, recalls, label='Recall')
-        plt.plot(thresholds, f1_scores_array, label='F1 Score')
-        plt.axvline(x=optimal_threshold, color='r', linestyle='--', 
-                   label=f'Optimal Threshold = {optimal_threshold:.2f}')
-        plt.xlabel('Threshold')
-        plt.ylabel('Score')
-        plt.title(f'Classification Metrics vs. Threshold (Optimizing {metric})')
-        plt.legend(loc='best')
-        plt.grid(True, alpha=0.3)
         
-        # Save or show the plot
+        if use_seaborn:
+            # Use seaborn for enhanced visualization
+            df_cm = pd.DataFrame(cm, index=class_names if class_names is not None else None,
+                               columns=class_names if class_names is not None else None)
+            
+            # Create a more visually appealing heatmap
+            sns.heatmap(df_cm, annot=True, fmt='.2f' if normalize else 'd',
+                      cmap=cmap, cbar=True, linewidths=0.5,
+                      annot_kws={"size": 10 if cm.shape[0] > 10 else 12})
+            plt.title(title, fontsize=14)
+            plt.ylabel('True Label', fontsize=12)
+            plt.xlabel('Predicted Label', fontsize=12)
+        else:
+            # Use matplotlib for basic visualization
+            plt.imshow(cm, interpolation='nearest', cmap=plt.cm.get_cmap(cmap))
+            plt.title(title, fontsize=14)
+            plt.colorbar()
+            
+            # Add class labels
+            if class_names is not None:
+                tick_marks = np.arange(len(class_names))
+                plt.xticks(tick_marks, class_names, rotation=45, ha='right')
+                plt.yticks(tick_marks, class_names)
+            
+            # Add text annotations to each cell
+            fmt = '.2f' if normalize else 'd'
+            thresh = cm.max() / 2.
+            for i in range(cm.shape[0]):
+                for j in range(cm.shape[1]):
+                    plt.text(j, i, format(cm[i, j], fmt),
+                            ha="center", va="center",
+                            color="white" if cm[i, j] > thresh else "black")
+            
+            plt.ylabel('True Label', fontsize=12)
+            plt.xlabel('Predicted Label', fontsize=12)
+        
+        plt.tight_layout()
+        
+        # Save the figure if a path is provided
         if save_path:
-            plt.savefig(save_path)
-            logger.info(f"Threshold optimization curve saved to {save_path}")
-        else:
+            plt.savefig(save_path, bbox_inches='tight', dpi=300)
+            logger.info(f"Confusion matrix saved to {save_path}")
+        
+        plt.show()
+        return cm
+    
+    def plot_roc_curve(self, y_true: np.ndarray, y_score: np.ndarray, 
+                      class_names: Optional[List[str]] = None,
+                      figsize: Tuple[int, int] = (10, 8),
+                      save_path: Optional[str] = None) -> Dict[str, float]:
+        """Generate and plot ROC curves for each class.
+        
+        Args:
+            y_true: Ground truth labels (one-hot encoded for multiclass)
+            y_score: Predicted probabilities
+            class_names: List of class names (optional)
+            figsize: Figure size as (width, height) in inches (default: (10, 8))
+            save_path: Path to save the figure (optional)
+            
+        Returns:
+            Dictionary containing AUC scores for each class
+        """
+        # For binary classification
+        if len(y_score.shape) == 1 or y_score.shape[1] == 2:
+            if len(y_score.shape) == 2:  # If probabilities for both classes are provided
+                y_score = y_score[:, 1]  # Take the probability of the positive class
+            
+            fpr, tpr, _ = roc_curve(y_true, y_score)
+            roc_auc = auc(fpr, tpr)
+            
+            plt.figure(figsize=figsize)
+            plt.plot(fpr, tpr, lw=2, label=f'ROC curve (area = {roc_auc:.2f})')
+            plt.plot([0, 1], [0, 1], 'k--', lw=2)
+            plt.xlim([0.0, 1.0])
+            plt.ylim([0.0, 1.05])
+            plt.xlabel('False Positive Rate', fontsize=12)
+            plt.ylabel('True Positive Rate', fontsize=12)
+            plt.title('Receiver Operating Characteristic (ROC) Curve', fontsize=14)
+            plt.legend(loc="lower right")
+            
+            if save_path:
+                plt.savefig(save_path, bbox_inches='tight', dpi=300)
+                logger.info(f"ROC curve saved to {save_path}")
+            
             plt.show()
+            return {'auc': roc_auc}
         
-        plt.close()
-    
-    return optimal_threshold, metrics_at_optimal
-
-
-def calibrate_confidence_scores(
-    model: ClassificationModel,
-    X_train: np.ndarray,
-    y_train: np.ndarray,
-    method: str = 'sigmoid',
-    cv: int = 5
-) -> ClassificationModel:
-    """Calibrate model probability outputs to improve confidence score reliability.
-    
-    Args:
-        model: Classification model to calibrate
-        X_train: Training feature matrix
-        y_train: Training target labels
-        method: Calibration method ('sigmoid' for Platt scaling or 'isotonic' for isotonic regression)
-        cv: Number of cross-validation folds for calibration
-        
-    Returns:
-        Calibrated classification model
-    """
-    calibrated_model = CalibratedClassifierCV(
-        model, method=method, cv=cv, n_jobs=-1
-    )
-    calibrated_model.fit(X_train, y_train)
-    
-    logger.info(f"Model calibrated using {method} method with {cv}-fold cross-validation")
-    
-    return calibrated_model
-
-
-def compare_models(
-    models: Dict[str, ClassificationModel],
-    X_test: np.ndarray,
-    y_test: np.ndarray,
-    class_names: Optional[List[str]] = None,
-    figsize: Tuple[int, int] = (12, 10),
-    save_path: Optional[str] = None
-) -> Dict[str, Dict[str, Any]]:
-    """Compare multiple classification models using ROC curves and metrics.
-    
-    Args:
-        models: Dictionary mapping model names to trained models
-        X_test: Test feature matrix
-        y_test: Test target labels
-        class_names: Names of the classes for visualization
-        figsize: Figure size for the plot
-        save_path: Path to save the comparison plot
-        
-    Returns:
-        Dictionary with comparison results for each model
-    """
-    # Initialize results dictionary
-    results = {}
-    
-    # Check if binary or multi-class classification
-    is_binary = len(np.unique(y_test)) == 2
-    
-    # Create figure for ROC curves
-    plt.figure(figsize=figsize)
-    
-    # Evaluate each model
-    for model_name, model in models.items():
-        # Get predictions
-        y_pred = model.predict(X_test)
-        
-        # Calculate basic metrics
-        metrics = calculate_classification_metrics(y_test, y_pred)
-        results[model_name] = {'metrics': metrics}
-        
-        # For binary classification, plot ROC curve
-        if is_binary:
-            try:
-                # Get probability scores
-                if hasattr(model, 'predict_proba'):
-                    y_prob = model.predict_proba(X_test)[:, 1]
-                elif hasattr(model, 'decision_function'):
-                    y_prob = model.decision_function(X_test)
-                else:
-                    logger.warning(f"Model {model_name} does not support predict_proba or decision_function")
-                    continue
-                
-                # Calculate ROC curve
-                fpr, tpr, _ = roc_curve(y_test, y_prob)
-                roc_auc = auc(fpr, tpr)
-                
-                # Plot ROC curve
-                plt.plot(fpr, tpr, lw=2, label=f'{model_name} (AUC = {roc_auc:.3f})')
-                
-                # Store ROC data
-                results[model_name]['roc'] = {
-                    'fpr': fpr.tolist(),
-                    'tpr': tpr.tolist(),
-                    'auc': float(roc_auc)
-                }
-            except Exception as e:
-                logger.error(f"Error calculating ROC curve for {model_name}: {str(e)}")
-    
-    # Finalize ROC plot
-    if is_binary:
-        plt.plot([0, 1], [0, 1], 'k--', lw=2)
-        plt.xlim([0.0, 1.0])
-        plt.ylim([0.0, 1.05])
-        plt.xlabel('False Positive Rate')
-        plt.ylabel('True Positive Rate')
-        plt.title('ROC Curves for Model Comparison')
-        plt.legend(loc="lower right")
-        
-        # Save or show the plot
-        if save_path:
-            plt.savefig(save_path)
-            logger.info(f"Model comparison plot saved to {save_path}")
+        # For multiclass classification
         else:
-            plt.show()
-        
-        plt.close()
-    
-    return results
-
-
-def evaluate_model_performance(
-    model: ClassificationModel,
-    X_test: np.ndarray,
-    y_test: np.ndarray,
-    class_names: Optional[List[str]] = None,
-    output_dir: Optional[str] = None,
-    threshold: Optional[float] = None,
-    bootstrap_ci: bool = False
-) -> Dict[str, Any]:
-    """Comprehensive evaluation of a classification model's performance.
-    
-    Args:
-        model: Trained classification model to evaluate
-        X_test: Test feature matrix
-        y_test: Test target labels
-        class_names: Names of the classes for visualization
-        output_dir: Directory to save evaluation artifacts
-        
-    Returns:
-        Dictionary containing all evaluation results
-    """
-    # Get predictions and probabilities
-    if threshold is not None and hasattr(model, 'predict_proba'):
-        # Apply custom threshold if specified
-        y_prob = model.predict_proba(X_test)
-        if y_prob.shape[1] == 2:  # Binary classification
-            y_pred = (y_prob[:, 1] >= threshold).astype(int)
-        else:
-            # For multi-class, still use argmax but log the custom threshold
-            logger.warning("Custom threshold specified for multi-class classification. "
-                          "Using argmax instead.")
-            y_pred = model.predict(X_test)
-    else:
-        y_pred = model.predict(X_test)
-    
-    try:
-        y_prob = model.predict_proba(X_test)
-    except (AttributeError, NotImplementedError):
-        logger.warning("Model does not support predict_proba, using decision_function if available")
-        try:
-            y_prob = model.decision_function(X_test)
-            # Convert decision function to pseudo-probabilities
-            if y_prob.ndim == 1:  # Binary classification
-                y_prob = np.column_stack([1 - sigmoid(y_prob), sigmoid(y_prob)])
-            else:  # Multi-class
-                y_prob = softmax(y_prob, axis=1)
-        except (AttributeError, NotImplementedError):
-            logger.warning("Model does not support decision_function either, skipping probability-based metrics")
-            y_prob = None
-    
-    # Basic classification metrics
-    metrics = calculate_classification_metrics(y_test, y_pred)
-    
-    # Detailed classification report
-    report = classification_report(y_test, y_pred, target_names=class_names, output_dict=True)
-    
-    # Confusion matrix
-    cm_path = f"{output_dir}/confusion_matrix.png" if output_dir else None
-    cm = generate_confusion_matrix(y_test, y_pred, class_names=class_names, save_path=cm_path)
-    
-    # Initialize results dictionary
-    results = {
-        'metrics': metrics,
-        'classification_report': report,
-        'confusion_matrix': cm.tolist(),
-    }
-    
-    # Add bootstrap confidence intervals if requested
-    if bootstrap_ci:
-        accuracy_ci = bootstrap_confidence_interval(model, X_test, y_test, accuracy_score)
-        precision_ci = bootstrap_confidence_interval(model, X_test, y_test, 
-                                                   lambda y, y_pred: precision_score(y, y_pred, average='weighted', zero_division=0))
-        recall_ci = bootstrap_confidence_interval(model, X_test, y_test,
-                                                lambda y, y_pred: recall_score(y, y_pred, average='weighted', zero_division=0))
-        f1_ci = bootstrap_confidence_interval(model, X_test, y_test,
-                                            lambda y, y_pred: f1_score(y, y_pred, average='weighted', zero_division=0))
-        
-        results['bootstrap_ci'] = {
-            'accuracy': accuracy_ci,
-            'precision': precision_ci,
-            'recall': recall_ci,
-            'f1': f1_ci
-        }
-    
-    # Add probability-based metrics if available
-    if y_prob is not None:
-        # For binary classification or per-class metrics in multi-class
-        if y_prob.shape[1] == 2:  # Binary classification
-            # ROC curve
-            roc_path = f"{output_dir}/roc_curve.png" if output_dir else None
-            fpr, tpr, roc_thresholds, roc_auc = generate_roc_curve(
-                y_test, y_prob[:, 1], save_path=roc_path
-            )
+            n_classes = y_score.shape[1]
             
-            # Precision-Recall curve
-            pr_path = f"{output_dir}/precision_recall_curve.png" if output_dir else None
-            precision, recall, pr_thresholds, avg_precision = generate_precision_recall_curve(
-                y_test, y_prob[:, 1], save_path=pr_path
-            )
-            
-            # Threshold optimization
-            threshold_path = f"{output_dir}/threshold_optimization.png" if output_dir else None
-            optimal_threshold, threshold_metrics = optimize_threshold(
-                y_test, y_prob[:, 1], save_path=threshold_path
-            )
-            
-            results.update({
-                'roc': {
-                    'fpr': fpr.tolist(),
-                    'tpr': tpr.tolist(),
-                    'thresholds': roc_thresholds.tolist(),
-                    'auc': float(roc_auc)
-                },
-                'precision_recall': {
-                    'precision': precision.tolist(),
-                    'recall': recall.tolist(),
-                    'thresholds': pr_thresholds.tolist() if len(pr_thresholds) > 0 else [],
-                    'average_precision': float(avg_precision)
-                },
-                'threshold_optimization': {
-                    'optimal_threshold': optimal_threshold,
-                    'metrics': threshold_metrics
-                }
-            })
-        else:  # Multi-class
-            # For multi-class, we can compute ROC AUC for each class
-            n_classes = y_prob.shape[1]
-            multi_roc_auc = {}
+            # Compute ROC curve and ROC area for each class
+            fpr = {}
+            tpr = {}
+            roc_auc = {}
             
             for i in range(n_classes):
-                class_name = class_names[i] if class_names else f"Class {i}"
-                roc_path = f"{output_dir}/roc_curve_class_{i}.png" if output_dir else None
-                _, _, _, roc_auc = generate_roc_curve(
-                    y_test, y_prob, class_index=i, save_path=roc_path
-                )
-                multi_roc_auc[class_name] = float(roc_auc)
+                fpr[i], tpr[i], _ = roc_curve(y_true[:, i], y_score[:, i])
+                roc_auc[i] = auc(fpr[i], tpr[i])
             
-            results['multi_class_roc_auc'] = multi_roc_auc
+            # Plot all ROC curves
+            plt.figure(figsize=figsize)
+            
+            # Plot the micro-average ROC curve
+            fpr_micro, tpr_micro, _ = roc_curve(y_true.ravel(), y_score.ravel())
+            roc_auc_micro = auc(fpr_micro, tpr_micro)
+            plt.plot(fpr_micro, tpr_micro,
+                    label=f'micro-average ROC curve (area = {roc_auc_micro:.2f})',
+                    color='deeppink', linestyle=':', linewidth=4)
+            
+            # Plot the macro-average ROC curve
+            all_fpr = np.unique(np.concatenate([fpr[i] for i in range(n_classes)]))
+            mean_tpr = np.zeros_like(all_fpr)
+            for i in range(n_classes):
+                mean_tpr += np.interp(all_fpr, fpr[i], tpr[i])
+            mean_tpr /= n_classes
+            
+            roc_auc_macro = auc(all_fpr, mean_tpr)
+            plt.plot(all_fpr, mean_tpr,
+                    label=f'macro-average ROC curve (area = {roc_auc_macro:.2f})',
+                    color='navy', linestyle=':', linewidth=4)
+            
+            # Plot ROC curves for each class
+            colors = plt.cm.get_cmap('tab10')(np.linspace(0, 1, n_classes))
+            for i, color in zip(range(n_classes), colors):
+                class_name = class_names[i] if class_names is not None else f'Class {i}'
+                plt.plot(fpr[i], tpr[i], color=color, lw=2,
+                        label=f'ROC curve of {class_name} (area = {roc_auc[i]:.2f})')
+            
+            plt.plot([0, 1], [0, 1], 'k--', lw=2)
+            plt.xlim([0.0, 1.0])
+            plt.ylim([0.0, 1.05])
+            plt.xlabel('False Positive Rate', fontsize=12)
+            plt.ylabel('True Positive Rate', fontsize=12)
+            plt.title('Receiver Operating Characteristic (ROC) Curve for Multi-class', fontsize=14)
+            plt.legend(loc="lower right")
+            
+            if save_path:
+                plt.savefig(save_path, bbox_inches='tight', dpi=300)
+                logger.info(f"ROC curve saved to {save_path}")
+            
+            plt.show()
+            
+            # Return AUC scores
+            auc_scores = {f'class_{i}': roc_auc[i] for i in range(n_classes)}
+            auc_scores['micro'] = roc_auc_micro
+            auc_scores['macro'] = roc_auc_macro
+            
+            return auc_scores
     
-    return results
-
-
-def generate_precision_recall_curve(
-    y_true: np.ndarray,
-    y_score: np.ndarray,
-    class_index: int = 1,
-    figsize: Tuple[int, int] = (10, 8),
-    save_path: Optional[str] = None
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, float]:
-    """Generate and visualize Precision-Recall curve for binary classification or a specific class.
-    
-    Args:
-        y_true: Ground truth labels (binary or one-hot encoded)
-        y_score: Predicted probabilities or decision function scores
-        class_index: Index of the class to evaluate for multi-class problems
-        figsize: Figure size for the plot
-        save_path: Path to save the Precision-Recall curve visualization
+    def cross_validate(self, model: Any, X: np.ndarray, y: np.ndarray, 
+                      cv: int = 5, scoring: str = 'accuracy') -> Dict[str, float]:
+        """Perform cross-validation to evaluate model performance.
         
-    Returns:
-        Tuple containing (precision, recall, thresholds, average_precision)
-    """
-    # For multi-class, convert to binary problem for the specified class
-    if y_true.ndim > 1 and y_true.shape[1] > 1:  # One-hot encoded
-        y_true_binary = y_true[:, class_index]
-        y_score_binary = y_score[:, class_index]
-    elif y_score.ndim > 1 and y_score.shape[1] > 1:  # Multi-class probabilities
-        y_true_binary = (y_true == class_index).astype(int)
-        y_score_binary = y_score[:, class_index]
-    else:  # Already binary
-        y_true_binary = y_true
-        y_score_binary = y_score
+        Args:
+            model: Classifier model with fit and predict methods
+            X: Feature matrix
+            y: Target labels
+            cv: Number of cross-validation folds (default: 5)
+            scoring: Scoring metric to use (default: 'accuracy')
+            
+        Returns:
+            Dictionary containing cross-validation results
+        """
+        # Define cross-validation strategy
+        cv_strategy = StratifiedKFold(n_splits=cv, shuffle=True, random_state=42)
+        
+        # Perform cross-validation
+        cv_scores = cross_val_score(model, X, y, cv=cv_strategy, scoring=scoring)
+        
+        # Calculate statistics
+        cv_results = {
+            'mean_score': np.mean(cv_scores),
+            'std_score': np.std(cv_scores),
+            'min_score': np.min(cv_scores),
+            'max_score': np.max(cv_scores),
+            'all_scores': cv_scores
+        }
+        
+        logger.info(f"Cross-validation results ({scoring}): "
+                  f"mean={cv_results['mean_score']:.4f}, "
+                  f"std={cv_results['std_score']:.4f}, "
+                  f"min={cv_results['min_score']:.4f}, "
+                  f"max={cv_results['max_score']:.4f}")
+        
+        # Check if mean score meets the threshold
+        if scoring == 'accuracy' and cv_results['mean_score'] < self.accuracy_threshold:
+            logger.warning(f"Cross-validation accuracy {cv_results['mean_score']:.4f} "
+                          f"is below the required threshold of {self.accuracy_threshold}")
+        
+        return cv_results
     
-    # Calculate Precision-Recall curve
-    precision, recall, thresholds = precision_recall_curve(y_true_binary, y_score_binary)
-    avg_precision = average_precision_score(y_true_binary, y_score_binary)
-    
-    # Plot Precision-Recall curve
-    plt.figure(figsize=figsize)
-    plt.plot(recall, precision, color='darkorange', lw=2, 
-             label=f'Precision-Recall curve (AP = {avg_precision:.2f})')
-    plt.xlabel('Recall')
-    plt.ylabel('Precision')
-    plt.title('Precision-Recall Curve')
-    plt.legend(loc="best")
-    plt.grid(True, alpha=0.3)
-    
-    # Save or show the plot
-    if save_path:
-        plt.savefig(save_path)
-        logger.info(f"Precision-Recall curve saved to {save_path}")
-    else:
+    def optimize_threshold(self, y_true: np.ndarray, y_score: np.ndarray, 
+                         metric: str = 'f1') -> Dict[str, Union[float, np.ndarray]]:
+        """Optimize classification threshold based on a specified metric.
+        
+        Args:
+            y_true: Ground truth binary labels
+            y_score: Predicted probabilities for the positive class
+            metric: Metric to optimize ('f1', 'accuracy', 'precision', or 'recall')
+            
+        Returns:
+            Dictionary containing optimal threshold and corresponding predictions
+        """
+        # Validate inputs
+        if metric not in ['f1', 'accuracy', 'precision', 'recall']:
+            raise ValueError("Metric must be one of: 'f1', 'accuracy', 'precision', 'recall'")
+        
+        # Generate a range of thresholds to evaluate
+        thresholds = np.linspace(0.01, 0.99, 99)
+        scores = []
+        
+        # Evaluate each threshold
+        for threshold in thresholds:
+            y_pred = (y_score >= threshold).astype(int)
+            
+            if metric == 'f1':
+                score = f1_score(y_true, y_pred)
+            elif metric == 'accuracy':
+                score = accuracy_score(y_true, y_pred)
+            elif metric == 'precision':
+                score = precision_score(y_true, y_pred)
+            elif metric == 'recall':
+                score = recall_score(y_true, y_pred)
+            
+            scores.append(score)
+        
+        # Find the threshold that maximizes the metric
+        best_idx = np.argmax(scores)
+        optimal_threshold = thresholds[best_idx]
+        optimal_score = scores[best_idx]
+        optimal_predictions = (y_score >= optimal_threshold).astype(int)
+        
+        logger.info(f"Optimal threshold: {optimal_threshold:.4f} with {metric} score: {optimal_score:.4f}")
+        
+        # Plot threshold vs. metric
+        plt.figure(figsize=(10, 6))
+        plt.plot(thresholds, scores, 'b-')
+        plt.axvline(x=optimal_threshold, color='r', linestyle='--')
+        plt.xlabel('Threshold', fontsize=12)
+        plt.ylabel(f'{metric.capitalize()} Score', fontsize=12)
+        plt.title(f'Threshold Optimization for {metric.capitalize()}', fontsize=14)
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
         plt.show()
+        
+        return {
+            'optimal_threshold': optimal_threshold,
+            'optimal_score': optimal_score,
+            'optimal_predictions': optimal_predictions,
+            'thresholds': thresholds,
+            'scores': np.array(scores)
+        }
     
-    plt.close()
-    
-    logger.info(f"Average Precision: {avg_precision:.4f}")
-    
-    return precision, recall, thresholds, avg_precision
+    def generate_performance_report(self, y_true: np.ndarray, y_pred: np.ndarray, 
+                                  y_score: Optional[np.ndarray] = None,
+                                  class_names: Optional[List[str]] = None) -> Dict[str, Any]:
+        """Generate a comprehensive performance report.
+        
+        Args:
+            y_true: Ground truth labels
+            y_pred: Predicted labels
+            y_score: Predicted probabilities (optional)
+            class_names: List of class names (optional)
+            
+        Returns:
+            Dictionary containing all performance metrics and reports
+        """
+        # Calculate basic metrics
+        metrics = self.calculate_metrics(y_true, y_pred)
+        
+        # Generate classification report
+        report = self.generate_classification_report(y_true, y_pred, target_names=class_names)
+        
+        # Compute confusion matrix (without plotting)
+        cm = confusion_matrix(y_true, y_pred)
+        
+        # Initialize results dictionary
+        results = {
+            'metrics': metrics,
+            'classification_report': report,
+            'confusion_matrix': cm
+        }
+        
+        # Add ROC AUC if probabilities are provided
+        if y_score is not None:
+            try:
+                # For binary classification
+                if len(np.unique(y_true)) == 2:
+                    if len(y_score.shape) == 2:  # If probabilities for both classes are provided
+                        y_score_binary = y_score[:, 1]  # Take the probability of the positive class
+                    else:
+                        y_score_binary = y_score
+                    
+                    results['roc_auc'] = roc_auc_score(y_true, y_score_binary)
+                    logger.info(f"ROC AUC: {results['roc_auc']:.4f}")
+                
+                # For multiclass classification
+                else:
+                    # One-hot encode the true labels if they're not already
+                    from sklearn.preprocessing import label_binarize
+                    classes = np.unique(y_true)
+                    y_true_bin = label_binarize(y_true, classes=classes)
+                    
+                    if len(y_score.shape) == 1 or y_score.shape[1] == 1:
+                        logger.warning("Multiclass ROC AUC requires probability estimates for each class")
+                    else:
+                        results['roc_auc_ovr'] = roc_auc_score(y_true_bin, y_score, multi_class='ovr')
+                        results['roc_auc_ovo'] = roc_auc_score(y_true_bin, y_score, multi_class='ovo')
+                        logger.info(f"ROC AUC (OvR): {results['roc_auc_ovr']:.4f}, "
+                                  f"ROC AUC (OvO): {results['roc_auc_ovo']:.4f}")
+            except Exception as e:
+                logger.warning(f"Could not calculate ROC AUC: {str(e)}")
+        
+        # Check if performance meets requirements
+        meets_requirements = metrics['accuracy'] >= self.accuracy_threshold
+        results['meets_requirements'] = meets_requirements
+        
+        if meets_requirements:
+            logger.info("Model meets the accuracy requirements")
+        else:
+            logger.warning(f"Model does not meet the accuracy requirement of {self.accuracy_threshold}")
+        
+        return results
 
 
-def sigmoid(x: np.ndarray) -> np.ndarray:
-    """Apply sigmoid function to convert decision function values to probabilities."""
-    return 1 / (1 + np.exp(-x))
-
-
-def softmax(x: np.ndarray, axis: int = 1) -> np.ndarray:
-    """Apply softmax function to convert decision function values to probabilities."""
-    # Subtract max for numerical stability
-    e_x = np.exp(x - np.max(x, axis=axis, keepdims=True))
-    return e_x / np.sum(e_x, axis=axis, keepdims=True)
-
-
-def plot_learning_curve(
-    estimator: ClassificationModel,
-    X: np.ndarray,
-    y: np.ndarray,
-    cv: int = 5,
-    train_sizes: np.ndarray = np.linspace(0.1, 1.0, 5),
-    scoring: str = 'accuracy',
-    n_jobs: int = -1,
-    figsize: Tuple[int, int] = (10, 6),
-    save_path: Optional[str] = None
-) -> Dict[str, np.ndarray]:
-    """Generate and plot a learning curve to evaluate model performance with varying training set sizes.
+def plot_learning_curve(model: Any, X: np.ndarray, y: np.ndarray, 
+                      cv: int = 5, n_jobs: int = -1, train_sizes: np.ndarray = np.linspace(0.1, 1.0, 10),
+                      figsize: Tuple[int, int] = (10, 6), save_path: Optional[str] = None) -> Dict[str, np.ndarray]:
+    """Plot learning curve to evaluate model performance with varying training set sizes.
     
     Args:
-        estimator: Classification model to evaluate
+        model: Classifier model with fit and predict methods
         X: Feature matrix
         y: Target labels
-        cv: Number of cross-validation folds
+        cv: Number of cross-validation folds (default: 5)
+        n_jobs: Number of jobs to run in parallel (default: -1, all processors)
         train_sizes: Array of training set sizes to evaluate
-        scoring: Scoring metric to use
-        n_jobs: Number of parallel jobs
-        figsize: Figure size for the plot
-        save_path: Path to save the learning curve plot
+        figsize: Figure size as (width, height) in inches (default: (10, 6))
+        save_path: Path to save the figure (optional)
         
     Returns:
-        Dictionary with learning curve results
+        Dictionary containing train sizes, train scores, and test scores
     """
+    plt.figure(figsize=figsize)
+    
+    # Calculate learning curve
     train_sizes, train_scores, test_scores = learning_curve(
-        estimator, X, y, train_sizes=train_sizes, cv=cv, scoring=scoring, n_jobs=n_jobs
+        model, X, y, cv=cv, n_jobs=n_jobs, train_sizes=train_sizes, shuffle=True, random_state=42
     )
     
+    # Calculate mean and standard deviation
     train_mean = np.mean(train_scores, axis=1)
     train_std = np.std(train_scores, axis=1)
     test_mean = np.mean(test_scores, axis=1)
     test_std = np.std(test_scores, axis=1)
     
     # Plot learning curve
-    plt.figure(figsize=figsize)
-    plt.title(f'Learning Curve ({scoring})')
-    plt.xlabel('Training examples')
-    plt.ylabel(f'Score ({scoring})')
+    plt.plot(train_sizes, train_mean, 'o-', color='r', label='Training score')
+    plt.fill_between(train_sizes, train_mean - train_std, train_mean + train_std, alpha=0.1, color='r')
+    plt.plot(train_sizes, test_mean, 'o-', color='g', label='Cross-validation score')
+    plt.fill_between(train_sizes, test_mean - test_std, test_mean + test_std, alpha=0.1, color='g')
+    
+    plt.title('Learning Curve', fontsize=14)
+    plt.xlabel('Training Set Size', fontsize=12)
+    plt.ylabel('Accuracy Score', fontsize=12)
     plt.grid(True, alpha=0.3)
-    
-    plt.fill_between(train_sizes, train_mean - train_std, train_mean + train_std, 
-                     alpha=0.1, color='blue')
-    plt.fill_between(train_sizes, test_mean - test_std, test_mean + test_std, 
-                     alpha=0.1, color='orange')
-    
-    plt.plot(train_sizes, train_mean, 'o-', color='blue', label='Training score')
-    plt.plot(train_sizes, test_mean, 'o-', color='orange', label='Cross-validation score')
-    
     plt.legend(loc='best')
+    plt.tight_layout()
     
-    # Add horizontal line for required accuracy
-    if scoring == 'accuracy':
-        plt.axhline(y=model_config.REQUIRED_ACCURACY, color='r', linestyle='--',
-                   label=f'Required Accuracy ({model_config.REQUIRED_ACCURACY})')
-        plt.legend(loc='best')
-    
-    # Save or show the plot
     if save_path:
-        plt.savefig(save_path)
+        plt.savefig(save_path, bbox_inches='tight', dpi=300)
         logger.info(f"Learning curve saved to {save_path}")
-    else:
-        plt.show()
     
-    plt.close()
+    plt.show()
     
     return {
         'train_sizes': train_sizes,
@@ -831,146 +544,288 @@ def plot_learning_curve(
     }
 
 
-def bootstrap_confidence_interval(
-    model: ClassificationModel,
-    X: np.ndarray,
-    y: np.ndarray,
-    metric_func: Callable,
-    n_iterations: int = 1000,
-    confidence_level: float = 0.95,
-    random_state: Optional[int] = None
-) -> Dict[str, float]:
-    """Calculate confidence intervals for model performance metrics using bootstrapping.
+def plot_precision_recall_curve(y_true: np.ndarray, y_score: np.ndarray, 
+                              class_names: Optional[List[str]] = None,
+                              figsize: Tuple[int, int] = (10, 6),
+                              save_path: Optional[str] = None) -> Dict[str, Any]:
+    """Plot precision-recall curve for binary or multiclass classification.
     
     Args:
-        model: Trained classification model
-        X: Feature matrix
-        y: Target labels
-        metric_func: Function to calculate the metric (e.g., accuracy_score)
-        n_iterations: Number of bootstrap iterations
-        confidence_level: Confidence level for the interval (default: 0.95 for 95% CI)
-        random_state: Random seed for reproducibility
+        y_true: Ground truth labels (one-hot encoded for multiclass)
+        y_score: Predicted probabilities
+        class_names: List of class names (optional)
+        figsize: Figure size as (width, height) in inches (default: (10, 6))
+        save_path: Path to save the figure (optional)
         
     Returns:
-        Dictionary with bootstrap results
+        Dictionary containing precision, recall, and average precision scores
     """
-    # Make predictions
-    y_pred = model.predict(X)
+    plt.figure(figsize=figsize)
     
-    # Calculate base metric
-    base_metric = metric_func(y, y_pred)
-    
-    # Initialize array to store bootstrap results
-    bootstrap_metrics = np.zeros(n_iterations)
-    
-    # Set random state for reproducibility
-    rng = np.random.RandomState(random_state)
-    
-    # Perform bootstrap iterations
-    for i in range(n_iterations):
-        # Generate bootstrap sample indices
-        indices = rng.randint(0, len(y), size=len(y))
+    # For binary classification
+    if len(y_score.shape) == 1 or y_score.shape[1] == 2:
+        if len(y_score.shape) == 2:  # If probabilities for both classes are provided
+            y_score = y_score[:, 1]  # Take the probability of the positive class
         
-        # Calculate metric on bootstrap sample
-        bootstrap_metrics[i] = metric_func(y[indices], y_pred[indices])
+        precision, recall, _ = precision_recall_curve(y_true, y_score)
+        avg_precision = average_precision_score(y_true, y_score)
+        
+        plt.plot(recall, precision, lw=2, label=f'Precision-Recall curve (AP = {avg_precision:.2f})')
+        plt.xlabel('Recall', fontsize=12)
+        plt.ylabel('Precision', fontsize=12)
+        plt.title('Precision-Recall Curve', fontsize=14)
+        plt.legend(loc="best")
+        plt.grid(True, alpha=0.3)
+        
+        if save_path:
+            plt.savefig(save_path, bbox_inches='tight', dpi=300)
+            logger.info(f"Precision-recall curve saved to {save_path}")
+        
+        plt.show()
+        return {
+            'precision': precision,
+            'recall': recall,
+            'average_precision': avg_precision
+        }
     
-    # Calculate confidence interval
-    alpha = 1.0 - confidence_level
-    lower_percentile = alpha / 2.0 * 100
-    upper_percentile = (1.0 - alpha / 2.0) * 100
-    lower_bound = np.percentile(bootstrap_metrics, lower_percentile)
-    upper_bound = np.percentile(bootstrap_metrics, upper_percentile)
+    # For multiclass classification
+    else:
+        n_classes = y_score.shape[1]
+        precision = {}
+        recall = {}
+        avg_precision = {}
+        
+        for i in range(n_classes):
+            precision[i], recall[i], _ = precision_recall_curve(y_true[:, i], y_score[:, i])
+            avg_precision[i] = average_precision_score(y_true[:, i], y_score[:, i])
+            
+            class_name = class_names[i] if class_names is not None else f'Class {i}'
+            plt.plot(recall[i], precision[i], lw=2,
+                    label=f'{class_name} (AP = {avg_precision[i]:.2f})')
+        
+        # Calculate micro-average precision-recall curve
+        precision_micro, recall_micro, _ = precision_recall_curve(y_true.ravel(), y_score.ravel())
+        avg_precision_micro = average_precision_score(y_true.ravel(), y_score.ravel())
+        
+        plt.plot(recall_micro, precision_micro, lw=2, linestyle=':', color='black',
+                label=f'micro-average (AP = {avg_precision_micro:.2f})')
+        
+        plt.xlabel('Recall', fontsize=12)
+        plt.ylabel('Precision', fontsize=12)
+        plt.title('Precision-Recall Curve for Multi-class', fontsize=14)
+        plt.legend(loc="best")
+        plt.grid(True, alpha=0.3)
+        
+        if save_path:
+            plt.savefig(save_path, bbox_inches='tight', dpi=300)
+            logger.info(f"Precision-recall curve saved to {save_path}")
+        
+        plt.show()
+        
+        # Return results
+        results = {
+            'precision': precision,
+            'recall': recall,
+            'average_precision': avg_precision,
+            'precision_micro': precision_micro,
+            'recall_micro': recall_micro,
+            'average_precision_micro': avg_precision_micro
+        }
+        
+        return results
+
+
+def plot_calibration_curve(y_true: np.ndarray, y_score: np.ndarray, 
+                         n_bins: int = 10, figsize: Tuple[int, int] = (10, 6),
+                         save_path: Optional[str] = None) -> Dict[str, np.ndarray]:
+    """Plot calibration curve to evaluate probability calibration.
     
-    logger.info(f"Bootstrap {metric_func.__name__} estimate: {base_metric:.4f} "
-               f"[{lower_bound:.4f}, {upper_bound:.4f}] ({confidence_level*100:.1f}% CI)")
+    Args:
+        y_true: Ground truth binary labels
+        y_score: Predicted probabilities for the positive class
+        n_bins: Number of bins for calibration curve (default: 10)
+        figsize: Figure size as (width, height) in inches (default: (10, 6))
+        save_path: Path to save the figure (optional)
+        
+    Returns:
+        Dictionary containing calibration curve data
+    """
+    plt.figure(figsize=figsize)
+    
+    # Calculate calibration curve
+    prob_true, prob_pred = calibration_curve(y_true, y_score, n_bins=n_bins)
+    
+    # Plot calibration curve
+    plt.plot(prob_pred, prob_true, 's-', label='Calibration curve')
+    plt.plot([0, 1], [0, 1], 'k--', label='Perfectly calibrated')
+    
+    plt.title('Calibration Curve', fontsize=14)
+    plt.xlabel('Mean Predicted Probability', fontsize=12)
+    plt.ylabel('Fraction of Positives', fontsize=12)
+    plt.legend(loc='best')
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    
+    if save_path:
+        plt.savefig(save_path, bbox_inches='tight', dpi=300)
+        logger.info(f"Calibration curve saved to {save_path}")
+    
+    plt.show()
     
     return {
-        'base_metric': float(base_metric),
-        'lower_bound': float(lower_bound),
-        'upper_bound': float(upper_bound),
-        'confidence_level': confidence_level,
-        'n_iterations': n_iterations,
-        'bootstrap_samples': bootstrap_metrics.tolist()
+        'prob_true': prob_true,
+        'prob_pred': prob_pred
     }
 
 
-class ThresholdClassifier:
-    """Wrapper for classification models that applies a custom decision threshold.
+def evaluate_model_performance(model: Any, X_test: np.ndarray, y_test: np.ndarray, 
+                             class_names: Optional[List[str]] = None,
+                             accuracy_threshold: float = 0.99,
+                             output_dir: Optional[str] = None) -> Dict[str, Any]:
+    """Convenience function to evaluate a model's performance.
     
-    This class wraps a classifier that provides predict_proba and allows setting
-    a custom threshold for binary classification decisions.
+    Args:
+        model: Trained classifier model with predict and predict_proba methods
+        X_test: Test feature matrix
+        y_test: Test target labels
+        class_names: List of class names (optional)
+        accuracy_threshold: Minimum required accuracy threshold (default: 0.99)
+        output_dir: Directory to save evaluation results and plots (optional)
+        
+    Returns:
+        Dictionary containing performance metrics and evaluation results
     """
+    # Create evaluator
+    evaluator = ModelEvaluator(accuracy_threshold=accuracy_threshold)
     
-    def __init__(self, classifier: ClassificationModel, threshold: float = 0.5):
-        """Initialize the threshold classifier.
-        
-        Args:
-            classifier: Base classification model that provides predict_proba
-            threshold: Decision threshold for positive class (default: 0.5)
-        """
-        self.classifier = classifier
-        self.threshold = threshold
+    # Create output directory if specified
+    if output_dir is not None:
+        os.makedirs(output_dir, exist_ok=True)
+        logger.info(f"Saving evaluation results to {output_dir}")
     
-    def fit(self, X: np.ndarray, y: np.ndarray) -> 'ThresholdClassifier':
-        """Fit the underlying classifier.
-        
-        Args:
-            X: Feature matrix
-            y: Target labels
-            
-        Returns:
-            Self instance
-        """
-        self.classifier.fit(X, y)
-        return self
+    # Get predictions
+    y_pred = model.predict(X_test)
     
-    def predict(self, X: np.ndarray) -> np.ndarray:
-        """Predict class labels using the custom threshold.
-        
-        Args:
-            X: Feature matrix
-            
-        Returns:
-            Predicted class labels
-        """
-        y_prob = self.classifier.predict_proba(X)[:, 1]
-        return (y_prob >= self.threshold).astype(int)
+    # Get probability scores if available
+    y_score = None
+    if hasattr(model, 'predict_proba'):
+        try:
+            y_score = model.predict_proba(X_test)
+        except Exception as e:
+            logger.warning(f"Could not get probability scores: {str(e)}")
     
-    def predict_proba(self, X: np.ndarray) -> np.ndarray:
-        """Predict class probabilities.
-        
-        Args:
-            X: Feature matrix
-            
-        Returns:
-            Predicted class probabilities
-        """
-        return self.classifier.predict_proba(X)
+    # Generate comprehensive performance report
+    results = evaluator.generate_performance_report(y_test, y_pred, y_score, class_names)
     
-    def get_confidence_scores(self, X: np.ndarray) -> List[ConfidenceScore]:
-        """Get confidence scores for predictions.
-        
-        Args:
-            X: Feature matrix
-            
-        Returns:
-            List of confidence scores for each prediction
-        """
-        probas = self.predict_proba(X)
-        predictions = self.predict(X)
-        
-        confidence_scores = []
-        for i, (proba, pred) in enumerate(zip(probas, predictions)):
+    # Plot confusion matrix
+    cm_save_path = os.path.join(output_dir, 'confusion_matrix.png') if output_dir else None
+    cm = evaluator.plot_confusion_matrix(y_test, y_pred, class_names=class_names, save_path=cm_save_path)
+    results['confusion_matrix_plot'] = cm
+    
+    # Plot ROC curve if probability scores are available
+    if y_score is not None:
+        try:
             # For binary classification
-            if probas.shape[1] == 2:
-                confidence = float(proba[1]) if pred == 1 else float(proba[0])
-            else:  # For multi-class
-                confidence = float(proba[pred])
+            if len(np.unique(y_test)) == 2:
+                roc_save_path = os.path.join(output_dir, 'roc_curve_binary.png') if output_dir else None
+                roc_results = evaluator.plot_roc_curve(y_test, y_score, save_path=roc_save_path)
+                results['roc_curve'] = roc_results
             
-            confidence_scores.append({
-                'prediction': int(pred),
-                'confidence': confidence,
-                'meets_threshold': confidence >= self.threshold
-            })
+            # For multiclass classification
+            else:
+                # One-hot encode the true labels
+                from sklearn.preprocessing import label_binarize
+                classes = np.unique(y_test)
+                y_test_bin = label_binarize(y_test, classes=classes)
+                
+                if y_score.shape[1] == len(classes):
+                    roc_save_path = os.path.join(output_dir, 'roc_curve_multiclass.png') if output_dir else None
+                    roc_results = evaluator.plot_roc_curve(y_test_bin, y_score, class_names=class_names, save_path=roc_save_path)
+                    results['roc_curve'] = roc_results
+        except Exception as e:
+            logger.warning(f"Could not plot ROC curve: {str(e)}")
+    
+    # Generate additional evaluation plots if output directory is specified
+    if output_dir is not None and y_score is not None:
+        try:
+            # Generate precision-recall curve
+            if len(np.unique(y_test)) == 2:
+                # Binary classification
+                if len(y_score.shape) == 2:  # If probabilities for both classes are provided
+                    y_score_binary = y_score[:, 1]  # Take the probability of the positive class
+                else:
+                    y_score_binary = y_score
+                
+                pr_save_path = os.path.join(output_dir, 'precision_recall_curve.png')
+                pr_results = plot_precision_recall_curve(y_test, y_score_binary, save_path=pr_save_path)
+                results['precision_recall_curve'] = pr_results
+                
+                # Generate calibration curve
+                cal_save_path = os.path.join(output_dir, 'calibration_curve.png')
+                cal_results = plot_calibration_curve(y_test, y_score_binary, save_path=cal_save_path)
+                results['calibration_curve'] = cal_results
+            else:
+                # Multiclass classification - one-hot encode the true labels if needed
+                from sklearn.preprocessing import label_binarize
+                classes = np.unique(y_test)
+                y_test_bin = label_binarize(y_test, classes=classes)
+                
+                if y_score.shape[1] == len(classes):
+                    pr_save_path = os.path.join(output_dir, 'precision_recall_curve_multiclass.png')
+                    pr_results = plot_precision_recall_curve(y_test_bin, y_score, class_names=class_names, save_path=pr_save_path)
+                    results['precision_recall_curve'] = pr_results
+        except Exception as e:
+            logger.warning(f"Could not generate additional evaluation plots: {str(e)}")
+    
+        # Convert numpy arrays to lists for JSON serialization
+        json_results = {}
+        for key, value in results.items():
+            if key not in ['confusion_matrix_plot', 'roc_curve', 'optimal_predictions', 'precision_recall_curve', 'calibration_curve']:
+                if isinstance(value, np.ndarray):
+                    json_results[key] = value.tolist()
+                elif isinstance(value, dict):
+                    json_results[key] = {k: v.tolist() if isinstance(v, np.ndarray) else v for k, v in value.items()}
+                else:
+                    json_results[key] = value
         
-        return confidence_scores
+        # Save metrics to JSON file
+        with open(os.path.join(output_dir, 'evaluation_results.json'), 'w') as f:
+            json.dump(json_results, f, indent=4)
+        
+        logger.info(f"Evaluation results saved to {os.path.join(output_dir, 'evaluation_results.json')}")
+    
+    return results
+
+
+if __name__ == "__main__":
+    # Example usage
+    from sklearn.datasets import make_classification
+    from sklearn.model_selection import train_test_split
+    from sklearn.ensemble import RandomForestClassifier
+    import tempfile
+    
+    # Generate sample data
+    X, y = make_classification(n_samples=1000, n_classes=3, n_features=20, n_informative=10, random_state=42)
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
+    
+    # Train a model
+    model = RandomForestClassifier(n_estimators=100, random_state=42)
+    model.fit(X_train, y_train)
+    
+    # Create a temporary directory for output
+    with tempfile.TemporaryDirectory() as temp_dir:
+        # Evaluate the model and save results to the temporary directory
+        results = evaluate_model_performance(
+            model, X_test, y_test, 
+            class_names=['Class 0', 'Class 1', 'Class 2'],
+            output_dir=temp_dir
+        )
+        
+        # Print accuracy
+        print(f"Accuracy: {results['metrics']['accuracy']:.4f}")
+        print(f"Results saved to: {temp_dir}")
+        
+        # Generate and plot learning curve
+        learning_curve_path = os.path.join(temp_dir, 'learning_curve.png')
+        lc_results = plot_learning_curve(model, X, y, save_path=learning_curve_path)
+        print(f"Learning curve saved to: {learning_curve_path}")
