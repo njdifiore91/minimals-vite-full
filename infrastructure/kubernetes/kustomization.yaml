@@ -1,0 +1,198 @@
+# Root kustomization.yaml for MCA Application Processing System
+# This file orchestrates the deployment of all Kubernetes resources
+# across environments (development, staging, production)
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Common labels applied to all resources
+commonLabels:
+  app.kubernetes.io/part-of: mca-application-system
+  app.kubernetes.io/managed-by: kustomize
+
+# Common annotations applied to all resources
+commonAnnotations:
+  app.kubernetes.io/version: "1.0.0"
+  app.kubernetes.io/description: "MCA Application Processing System"
+
+# Resources to be applied
+resources:
+  # Namespace definitions
+  - namespaces/development-namespace.yaml
+  - namespaces/staging-namespace.yaml
+  - namespaces/production-namespace.yaml
+  - namespaces/rbac.yaml
+  - namespaces/network-policies.yaml
+  - namespaces/resource-quotas.yaml
+
+  # Infrastructure operators
+  - infrastructure/postgresql-operator.yaml
+  - infrastructure/rabbitmq-operator.yaml
+  - infrastructure/redis-operator.yaml
+  - infrastructure/minio-operator.yaml
+
+  # Storage classes
+  - infrastructure/storage-classes.yaml
+  
+  # Infrastructure instances
+  - infrastructure/postgresql-cluster.yaml
+  - infrastructure/rabbitmq-cluster.yaml
+  - infrastructure/redis-cluster.yaml
+  - infrastructure/minio-instance.yaml
+
+# Configuration for Helm charts using helmCharts generator
+helmCharts:
+  # Backend microservices
+  - name: email-service
+    repo: https://dollarfunding.github.io/helm-charts
+    version: 1.0.0
+    releaseName: email-service
+    namespace: mca-system
+    valuesFile: config/common-values.yaml
+    
+  - name: document-service
+    repo: https://dollarfunding.github.io/helm-charts
+    version: 1.0.0
+    releaseName: document-service
+    namespace: mca-system
+    valuesFile: config/common-values.yaml
+    
+  - name: ocr-service
+    repo: https://dollarfunding.github.io/helm-charts
+    version: 1.0.0
+    releaseName: ocr-service
+    namespace: mca-system
+    valuesFile: config/common-values.yaml
+    
+  - name: data-service
+    repo: https://dollarfunding.github.io/helm-charts
+    version: 1.0.0
+    releaseName: data-service
+    namespace: mca-system
+    valuesFile: config/common-values.yaml
+    
+  - name: notification-service
+    repo: https://dollarfunding.github.io/helm-charts
+    version: 1.0.0
+    releaseName: notification-service
+    namespace: mca-system
+    valuesFile: config/common-values.yaml
+    
+  - name: api-gateway
+    repo: https://dollarfunding.github.io/helm-charts
+    version: 1.0.0
+    releaseName: api-gateway
+    namespace: mca-system
+    valuesFile: config/common-values.yaml
+
+# Resource transformers for customizing resources
+transformers:
+  # Add resource requests/limits based on environment
+  - |-
+    apiVersion: builtin
+    kind: PatchTransformer
+    metadata:
+      name: resource-limits
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/resources
+        value:
+          requests:
+            cpu: ${CPU_REQUEST}
+            memory: ${MEMORY_REQUEST}
+          limits:
+            cpu: ${CPU_LIMIT}
+            memory: ${MEMORY_LIMIT}
+    target:
+      kind: Deployment
+
+# Patches to apply to resources
+patches:
+  # Set namespace for all resources
+  - patch: |-
+      - op: replace
+        path: /metadata/namespace
+        value: ${NAMESPACE}
+    target:
+      kind: Deployment
+      labelSelector: "app.kubernetes.io/part-of=mca-application-system"
+
+# Environment-specific configurations
+configurations:
+  - kustomizeconfig.yaml
+
+# Configures the order in which resources are applied
+# to ensure dependencies are created in the correct sequence
+vars:
+  - name: NAMESPACE
+    objref:
+      kind: Namespace
+      name: mca-system
+      apiVersion: v1
+    fieldref:
+      fieldpath: metadata.name
+  - name: CPU_REQUEST
+    objref:
+      kind: ConfigMap
+      name: resource-config
+      apiVersion: v1
+    fieldref:
+      fieldpath: data.cpuRequest
+  - name: MEMORY_REQUEST
+    objref:
+      kind: ConfigMap
+      name: resource-config
+      apiVersion: v1
+    fieldref:
+      fieldpath: data.memoryRequest
+  - name: CPU_LIMIT
+    objref:
+      kind: ConfigMap
+      name: resource-config
+      apiVersion: v1
+    fieldref:
+      fieldpath: data.cpuLimit
+  - name: MEMORY_LIMIT
+    objref:
+      kind: ConfigMap
+      name: resource-config
+      apiVersion: v1
+    fieldref:
+      fieldpath: data.memoryLimit
+
+# Environment-specific overlays
+# These directories contain environment-specific kustomization files
+# that override the base configuration
+bases:
+  - overlays/development
+  - overlays/staging
+  - overlays/production
+
+# The following directories should be created for environment-specific overlays:
+# - overlays/development/kustomization.yaml
+# - overlays/staging/kustomization.yaml
+# - overlays/production/kustomization.yaml
+#
+# Each overlay kustomization.yaml should reference this base kustomization
+# and apply environment-specific patches and configurations.
+#
+# Example overlay structure:
+# ```
+# apiVersion: kustomize.config.k8s.io/v1beta1
+# kind: Kustomization
+#
+# resources:
+#   - ../../kustomization.yaml
+#
+# patchesStrategicMerge:
+#   - patches/resource-config.yaml
+#
+# configMapGenerator:
+#   - name: resource-config
+#     behavior: create
+#     literals:
+#       - cpuRequest=100m
+#       - memoryRequest=128Mi
+#       - cpuLimit=500m
+#       - memoryLimit=512Mi
+# ```
