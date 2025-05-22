@@ -5,26 +5,23 @@
  * It provides a single entry point for importing types, simplifying imports and
  * preventing circular dependencies.
  * 
- * @module types
+ * The Email Service is implemented in TypeScript for type safety as specified in
+ * section 3.1.1 of the technical specification. This modular approach to type
+ * definitions supports maintainability and enables tree-shaking for optimized builds.
  */
 
 // Common types used throughout the application
+// These are exported first to prevent circular dependencies
 export * from './common';
 
-// Configuration types for service settings and environment variables
+// Configuration types for the Email Service
 export * from './config';
 
-// Email message types for processing incoming emails
-export * from './email';
-
-// Error handling and logging types
-export * from './error';
-
-// IMAP connection and mailbox operation types
-export * from './imap';
+// Storage types for S3-compatible document storage
+export * from './storage';
 
 // Message queue types for RabbitMQ integration
 export * from './message-queue';
 
-// Storage types for S3-compatible document storage
-export * from './storage';
+// Email processing types
+export * from './email';
