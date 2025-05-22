@@ -1,0 +1,683 @@
+# =========================================================================
+# CI/CD Notification Template
+# =========================================================================
+# This template provides standardized notification mechanisms for build and
+# deployment events across all services in the MCA Application Processing System.
+# It supports multiple notification channels (email, Slack, webhooks) with
+# templated messages for different event types.
+# =========================================================================
+
+# Template parameters
+parameters:
+  # Event information
+  event_type:
+    description: 'Type of event triggering the notification'
+    type: string
+    required: true
+    allowed_values:
+      - 'build.started'
+      - 'build.success'
+      - 'build.failure'
+      - 'deployment.started'
+      - 'deployment.success'
+      - 'deployment.failure'
+      - 'security.vulnerability'
+      - 'security.compliance'
+      - 'test.failure'
+      - 'approval.required'
+      - 'approval.granted'
+      - 'approval.rejected'
+  
+  event_severity:
+    description: 'Severity level of the event'
+    type: string
+    required: true
+    default: 'info'
+    allowed_values:
+      - 'info'
+      - 'warning'
+      - 'error'
+      - 'critical'
+  
+  # Service and environment information
+  service_name:
+    description: 'Name of the service related to the event'
+    type: string
+    required: true
+  
+  environment:
+    description: 'Deployment environment'
+    type: string
+    required: true
+    allowed_values:
+      - 'development'
+      - 'staging'
+      - 'production'
+  
+  # Event details
+  title:
+    description: 'Title of the notification'
+    type: string
+    required: true
+  
+  message:
+    description: 'Detailed message for the notification'
+    type: string
+    required: true
+  
+  # Artifacts and logs
+  build_logs:
+    description: 'Path to build logs to attach to notification'
+    type: string
+    required: false
+  
+  artifacts:
+    description: 'List of artifacts to reference in notification'
+    type: array
+    required: false
+    items:
+      type: object
+      properties:
+        name:
+          type: string
+        path:
+          type: string
+        url:
+          type: string
+  
+  # Notification channels configuration
+  channels:
+    description: 'Notification channels to use'
+    type: array
+    required: true
+    default: ['webhook']
+    items:
+      type: string
+      enum: ['email', 'slack', 'webhook']
+  
+  # Email-specific configuration
+  email_recipients:
+    description: 'List of email recipients'
+    type: array
+    required: false
+    items:
+      type: string
+  
+  email_subject_prefix:
+    description: 'Prefix for email subject'
+    type: string
+    required: false
+    default: '[MCA CI/CD]'
+  
+  # Slack-specific configuration
+  slack_channels:
+    description: 'List of Slack channels'
+    type: array
+    required: false
+    items:
+      type: string
+  
+  slack_mentions:
+    description: 'List of Slack users/groups to mention'
+    type: array
+    required: false
+    items:
+      type: string
+  
+  # Webhook-specific configuration
+  webhook_endpoints:
+    description: 'List of webhook endpoints to notify'
+    type: array
+    required: false
+    items:
+      type: object
+      properties:
+        url:
+          type: string
+        secret:
+          type: string
+  
+  # Rate limiting and audit configuration
+  rate_limit:
+    description: 'Rate limiting configuration to prevent alert fatigue'
+    type: object
+    required: false
+    properties:
+      enabled:
+        type: boolean
+        default: true
+      max_per_hour:
+        type: number
+        default: 10
+      group_by:
+        type: array
+        items:
+          type: string
+          enum: ['service_name', 'event_type', 'environment', 'event_severity']
+        default: ['service_name', 'event_type']
+  
+  track_history:
+    description: 'Whether to track notification history for audit purposes'
+    type: boolean
+    required: false
+    default: true
+
+# Notification templates for different event types
+templates:
+  build:
+    started:
+      title: '🚀 Build Started: ${service_name}'
+      message: |
+        Build process has started for ${service_name} in ${environment} environment.
+        
+        **Details:**
+        - Commit: ${git.commit_sha}
+        - Branch: ${git.branch}
+        - Triggered by: ${git.author}
+        - Timestamp: ${timestamp}
+    
+    success:
+      title: '✅ Build Successful: ${service_name}'
+      message: |
+        Build completed successfully for ${service_name} in ${environment} environment.
+        
+        **Details:**
+        - Commit: ${git.commit_sha}
+        - Branch: ${git.branch}
+        - Build duration: ${build.duration}
+        - Timestamp: ${timestamp}
+        
+        **Artifacts:**
+        ${artifacts_list}
+    
+    failure:
+      title: '❌ Build Failed: ${service_name}'
+      message: |
+        Build failed for ${service_name} in ${environment} environment.
+        
+        **Details:**
+        - Commit: ${git.commit_sha}
+        - Branch: ${git.branch}
+        - Error: ${build.error}
+        - Timestamp: ${timestamp}
+        
+        **Logs:**
+        ${logs_url}
+  
+  deployment:
+    started:
+      title: '🚀 Deployment Started: ${service_name}'
+      message: |
+        Deployment process has started for ${service_name} to ${environment} environment.
+        
+        **Details:**
+        - Version: ${version}
+        - Triggered by: ${triggered_by}
+        - Timestamp: ${timestamp}
+    
+    success:
+      title: '✅ Deployment Successful: ${service_name}'
+      message: |
+        Deployment completed successfully for ${service_name} to ${environment} environment.
+        
+        **Details:**
+        - Version: ${version}
+        - Deployment duration: ${deployment.duration}
+        - Health checks: Passed
+        - Timestamp: ${timestamp}
+        
+        **Access:**
+        - Service URL: ${service_url}
+        - Monitoring Dashboard: ${dashboard_url}
+    
+    failure:
+      title: '❌ Deployment Failed: ${service_name}'
+      message: |
+        Deployment failed for ${service_name} to ${environment} environment.
+        
+        **Details:**
+        - Version: ${version}
+        - Error: ${deployment.error}
+        - Timestamp: ${timestamp}
+        
+        **Logs:**
+        ${logs_url}
+        
+        **Rollback:**
+        - Status: ${rollback.status}
+        - Previous version: ${rollback.version}
+  
+  security:
+    vulnerability:
+      title: '🔒 Security Vulnerability: ${service_name}'
+      message: |
+        Security vulnerability detected in ${service_name}.
+        
+        **Details:**
+        - Severity: ${vulnerability.severity}
+        - Package: ${vulnerability.package}
+        - Version: ${vulnerability.version}
+        - CVE: ${vulnerability.cve}
+        - Description: ${vulnerability.description}
+        - Timestamp: ${timestamp}
+        
+        **Recommendation:**
+        ${vulnerability.recommendation}
+    
+    compliance:
+      title: '📋 Compliance Issue: ${service_name}'
+      message: |
+        Compliance issue detected in ${service_name}.
+        
+        **Details:**
+        - Policy: ${compliance.policy}
+        - Description: ${compliance.description}
+        - Timestamp: ${timestamp}
+        
+        **Recommendation:**
+        ${compliance.recommendation}
+  
+  test:
+    failure:
+      title: '❌ Test Failure: ${service_name}'
+      message: |
+        Tests failed for ${service_name} in ${environment} environment.
+        
+        **Details:**
+        - Test suite: ${test.suite}
+        - Failed tests: ${test.failed_count}
+        - Error: ${test.error}
+        - Timestamp: ${timestamp}
+        
+        **Logs:**
+        ${logs_url}
+  
+  approval:
+    required:
+      title: '🔍 Approval Required: ${service_name}'
+      message: |
+        Approval required for ${service_name} deployment to ${environment} environment.
+        
+        **Details:**
+        - Version: ${version}
+        - Requested by: ${requested_by}
+        - Timestamp: ${timestamp}
+        - Expiration: ${approval.expiration}
+        
+        **Approval Link:**
+        ${approval.url}
+    
+    granted:
+      title: '✅ Approval Granted: ${service_name}'
+      message: |
+        Approval granted for ${service_name} deployment to ${environment} environment.
+        
+        **Details:**
+        - Version: ${version}
+        - Approved by: ${approved_by}
+        - Timestamp: ${timestamp}
+        
+        **Next Steps:**
+        Deployment will proceed automatically.
+    
+    rejected:
+      title: '❌ Approval Rejected: ${service_name}'
+      message: |
+        Approval rejected for ${service_name} deployment to ${environment} environment.
+        
+        **Details:**
+        - Version: ${version}
+        - Rejected by: ${rejected_by}
+        - Reason: ${rejection.reason}
+        - Timestamp: ${timestamp}
+        
+        **Next Steps:**
+        Deployment will not proceed. Please address the concerns and resubmit for approval.
+
+# Notification steps
+steps:
+  # Step 1: Prepare notification payload
+  - name: prepare_notification
+    description: 'Prepare notification payload based on event type and templates'
+    script: |
+      #!/bin/bash
+      set -e
+      
+      # Extract event type components
+      EVENT_CATEGORY=$(echo "${event_type}" | cut -d'.' -f1)
+      EVENT_ACTION=$(echo "${event_type}" | cut -d'.' -f2)
+      
+      # Use template if available, otherwise use provided title/message
+      if [[ -n "${templates[${EVENT_CATEGORY}][${EVENT_ACTION}][title]}" ]]; then
+        TITLE="${templates[${EVENT_CATEGORY}][${EVENT_ACTION}][title]}"
+      else
+        TITLE="${title}"
+      fi
+      
+      if [[ -n "${templates[${EVENT_CATEGORY}][${EVENT_ACTION}][message]}" ]]; then
+        MESSAGE="${templates[${EVENT_CATEGORY}][${EVENT_ACTION}][message]}"
+      else
+        MESSAGE="${message}"
+      fi
+      
+      # Replace variables in title and message
+      # This would be handled by a more sophisticated templating engine in practice
+      # For demonstration, we're using simple variable substitution
+      
+      # Format artifacts list if provided
+      ARTIFACTS_LIST=""
+      if [[ -n "${artifacts}" ]]; then
+        for artifact in ${artifacts}; do
+          ARTIFACTS_LIST+="- ${artifact.name}: ${artifact.url}\n"
+        done
+      fi
+      
+      # Create notification payload
+      cat > notification_payload.json << EOF
+      {
+        "event_type": "${event_type}",
+        "event_severity": "${event_severity}",
+        "service_name": "${service_name}",
+        "environment": "${environment}",
+        "title": "${TITLE}",
+        "message": "${MESSAGE}",
+        "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+        "metadata": {
+          "git": {
+            "commit_sha": "${git_commit_sha}",
+            "branch": "${git_branch}",
+            "author": "${git_author}"
+          },
+          "build": {
+            "id": "${build_id}",
+            "duration": "${build_duration}",
+            "error": "${build_error}"
+          },
+          "deployment": {
+            "id": "${deployment_id}",
+            "duration": "${deployment_duration}",
+            "error": "${deployment_error}"
+          },
+          "version": "${version}",
+          "triggered_by": "${triggered_by}",
+          "service_url": "${service_url}",
+          "dashboard_url": "${dashboard_url}",
+          "logs_url": "${logs_url}"
+        },
+        "artifacts": ${artifacts},
+        "build_logs": "${build_logs}"
+      }
+      EOF
+      
+      echo "Notification payload prepared successfully."
+  
+  # Step 2: Apply rate limiting
+  - name: apply_rate_limiting
+    description: 'Apply rate limiting to prevent alert fatigue'
+    condition: "${rate_limit.enabled} == true"
+    script: |
+      #!/bin/bash
+      set -e
+      
+      # Define rate limiting key based on group_by parameters
+      RATE_LIMIT_KEY=""
+      for param in ${rate_limit.group_by}; do
+        RATE_LIMIT_KEY+="${!param}:"
+      done
+      
+      # Check if rate limit has been exceeded
+      CURRENT_COUNT=$(redis-cli GET "notification_rate:${RATE_LIMIT_KEY}" || echo "0")
+      
+      if [[ $CURRENT_COUNT -ge ${rate_limit.max_per_hour} ]]; then
+        echo "Rate limit exceeded for key: ${RATE_LIMIT_KEY}. Skipping notification."
+        echo "::set-output name=rate_limited::true"
+        exit 0
+      else
+        # Increment counter and set expiry (1 hour)
+        redis-cli INCR "notification_rate:${RATE_LIMIT_KEY}"
+        redis-cli EXPIRE "notification_rate:${RATE_LIMIT_KEY}" 3600
+        
+        echo "Rate limit check passed. Current count: $((CURRENT_COUNT+1))/${rate_limit.max_per_hour}"
+        echo "::set-output name=rate_limited::false"
+      fi
+  
+  # Step 3: Send email notification
+  - name: send_email_notification
+    description: 'Send email notification'
+    condition: "contains(${channels}, 'email') && ${apply_rate_limiting.outputs.rate_limited} != 'true'"
+    script: |
+      #!/bin/bash
+      set -e
+      
+      # Skip if no recipients configured
+      if [[ -z "${email_recipients}" ]]; then
+        echo "No email recipients configured. Skipping email notification."
+        exit 0
+      fi
+      
+      # Prepare email content from notification payload
+      SUBJECT="${email_subject_prefix} $(jq -r '.title' notification_payload.json)"
+      BODY=$(jq -r '.message' notification_payload.json)
+      
+      # Send email to each recipient
+      for recipient in ${email_recipients}; do
+        echo "Sending email notification to ${recipient}..."
+        
+        # In a real implementation, this would use a proper email sending library or service
+        # For demonstration, we're just echoing the command
+        echo "mail -s \"${SUBJECT}\" ${recipient} << EOF
+      ${BODY}
+      EOF"
+      done
+      
+      echo "Email notifications sent successfully."
+  
+  # Step 4: Send Slack notification
+  - name: send_slack_notification
+    description: 'Send Slack notification'
+    condition: "contains(${channels}, 'slack') && ${apply_rate_limiting.outputs.rate_limited} != 'true'"
+    script: |
+      #!/bin/bash
+      set -e
+      
+      # Skip if no Slack channels configured
+      if [[ -z "${slack_channels}" ]]; then
+        echo "No Slack channels configured. Skipping Slack notification."
+        exit 0
+      fi
+      
+      # Prepare Slack message from notification payload
+      TITLE=$(jq -r '.title' notification_payload.json)
+      MESSAGE=$(jq -r '.message' notification_payload.json)
+      
+      # Set color based on event severity
+      case "${event_severity}" in
+        "info")
+          COLOR="#2eb886"
+          ;;
+        "warning")
+          COLOR="#daa038"
+          ;;
+        "error")
+          COLOR="#cc5f5f"
+          ;;
+        "critical")
+          COLOR="#cc2f2f"
+          ;;
+        *)
+          COLOR="#36a3f7"
+          ;;
+      esac
+      
+      # Add mentions if configured
+      MENTIONS=""
+      if [[ -n "${slack_mentions}" ]]; then
+        for mention in ${slack_mentions}; do
+          MENTIONS+="<@${mention}> "
+        done
+      fi
+      
+      # Create Slack payload
+      cat > slack_payload.json << EOF
+      {
+        "attachments": [
+          {
+            "color": "${COLOR}",
+            "pretext": "${MENTIONS}",
+            "title": "${TITLE}",
+            "text": "${MESSAGE}",
+            "footer": "MCA CI/CD Pipeline | ${service_name} | ${environment}",
+            "ts": $(date +%s)
+          }
+        ]
+      }
+      EOF
+      
+      # Send to each Slack channel
+      for channel in ${slack_channels}; do
+        echo "Sending Slack notification to ${channel}..."
+        
+        # In a real implementation, this would use the Slack API
+        # For demonstration, we're just echoing the command
+        echo "curl -X POST -H 'Content-type: application/json' --data @slack_payload.json ${SLACK_WEBHOOK_URL}?channel=${channel}"
+      done
+      
+      echo "Slack notifications sent successfully."
+  
+  # Step 5: Send webhook notification
+  - name: send_webhook_notification
+    description: 'Send webhook notification via notification service'
+    condition: "contains(${channels}, 'webhook') && ${apply_rate_limiting.outputs.rate_limited} != 'true'"
+    script: |
+      #!/bin/bash
+      set -e
+      
+      # Skip if no webhook endpoints configured
+      if [[ -z "${webhook_endpoints}" ]]; then
+        echo "No webhook endpoints configured. Skipping webhook notification."
+        exit 0
+      fi
+      
+      # Prepare webhook payload
+      NOTIFICATION_PAYLOAD=$(cat notification_payload.json)
+      
+      # Send to notification service for each endpoint
+      for endpoint in ${webhook_endpoints}; do
+        ENDPOINT_URL=$(echo ${endpoint} | jq -r '.url')
+        ENDPOINT_SECRET=$(echo ${endpoint} | jq -r '.secret')
+        
+        echo "Sending webhook notification to ${ENDPOINT_URL}..."
+        
+        # Create webhook delivery request for notification service
+        cat > webhook_request.json << EOF
+        {
+          "notification": ${NOTIFICATION_PAYLOAD},
+          "webhook": {
+            "url": "${ENDPOINT_URL}",
+            "secret": "${ENDPOINT_SECRET}",
+            "method": "POST",
+            "headers": {
+              "Content-Type": "application/json",
+              "User-Agent": "MCA-CI/CD-Pipeline"
+            }
+          },
+          "retry": {
+            "enabled": true,
+            "max_attempts": 3,
+            "initial_delay": 5,
+            "backoff_factor": 2
+          }
+        }
+        EOF
+        
+        # Send to notification service API
+        # In a real implementation, this would use the actual notification service API
+        # For demonstration, we're just echoing the command
+        echo "curl -X POST -H 'Content-type: application/json' --data @webhook_request.json ${NOTIFICATION_SERVICE_URL}/api/v1/webhooks/deliver"
+      done
+      
+      echo "Webhook notifications sent successfully."
+  
+  # Step 6: Track notification history
+  - name: track_notification_history
+    description: 'Track notification history for audit purposes'
+    condition: "${track_history} == true && ${apply_rate_limiting.outputs.rate_limited} != 'true'"
+    script: |
+      #!/bin/bash
+      set -e
+      
+      # Create history record
+      NOTIFICATION_ID=$(uuidgen)
+      TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+      
+      # Create history record
+      cat > history_record.json << EOF
+      {
+        "notification_id": "${NOTIFICATION_ID}",
+        "timestamp": "${TIMESTAMP}",
+        "event_type": "${event_type}",
+        "event_severity": "${event_severity}",
+        "service_name": "${service_name}",
+        "environment": "${environment}",
+        "channels": ${channels},
+        "rate_limited": ${apply_rate_limiting.outputs.rate_limited},
+        "payload": $(cat notification_payload.json)
+      }
+      EOF
+      
+      # Store history record
+      # In a real implementation, this would store to a database or audit log service
+      # For demonstration, we're just echoing the command
+      echo "Storing notification history record ${NOTIFICATION_ID}..."
+      echo "curl -X POST -H 'Content-type: application/json' --data @history_record.json ${NOTIFICATION_SERVICE_URL}/api/v1/notifications/history"
+      
+      echo "Notification history tracked successfully."
+
+# Usage examples
+examples:
+  # Example 1: Basic build success notification
+  - name: basic_build_success
+    description: 'Basic build success notification'
+    parameters:
+      event_type: 'build.success'
+      event_severity: 'info'
+      service_name: 'email-service'
+      environment: 'development'
+      title: 'Build Successful: email-service'
+      message: 'Build completed successfully for email-service in development environment.'
+      channels: ['slack']
+      slack_channels: ['ci-cd-notifications']
+  
+  # Example 2: Production deployment with all channels
+  - name: production_deployment
+    description: 'Production deployment notification with all channels'
+    parameters:
+      event_type: 'deployment.success'
+      event_severity: 'info'
+      service_name: 'data-service'
+      environment: 'production'
+      title: 'Deployment Successful: data-service'
+      message: 'Deployment completed successfully for data-service to production environment.'
+      channels: ['email', 'slack', 'webhook']
+      email_recipients: ['devops@dollarfunding.com', 'engineering@dollarfunding.com']
+      slack_channels: ['deployments', 'engineering']
+      webhook_endpoints:
+        - url: 'https://monitoring.dollarfunding.com/webhooks/deployment'
+          secret: '${MONITORING_WEBHOOK_SECRET}'
+  
+  # Example 3: Critical security vulnerability
+  - name: security_vulnerability
+    description: 'Critical security vulnerability notification'
+    parameters:
+      event_type: 'security.vulnerability'
+      event_severity: 'critical'
+      service_name: 'api-gateway'
+      environment: 'production'
+      title: 'Critical Security Vulnerability: api-gateway'
+      message: 'Critical security vulnerability detected in api-gateway.'
+      channels: ['email', 'slack']
+      email_recipients: ['security@dollarfunding.com', 'devops@dollarfunding.com']
+      slack_channels: ['security-alerts']
+      slack_mentions: ['security-team', 'devops-oncall']
+      rate_limit:
+        enabled: false  # Bypass rate limiting for critical security issues
