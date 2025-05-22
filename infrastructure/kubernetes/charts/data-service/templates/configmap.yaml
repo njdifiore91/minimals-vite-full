@@ -1,0 +1,405 @@
+{{- /*
+ConfigMap for Data Service
+
+This template creates a Kubernetes ConfigMap for storing non-sensitive configuration data
+for the Data Service. It includes application properties, logging configuration, and other
+settings that can be mounted as files or environment variables in the Data Service pods.
+*/}}
+
+{{- $name := include "common.fullname" . -}}
+{{- $labels := include "common.labels" . -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- $labels | nindent 4 }}
+  annotations:
+    {{- with .Values.configAnnotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    "app.kubernetes.io/config-version": {{ default "1.0.0" .Chart.AppVersion | quote }}
+    "app.kubernetes.io/managed-by": {{ .Release.Service | quote }}
+    "meta.helm.sh/release-name": {{ .Release.Name | quote }}
+    "meta.helm.sh/release-namespace": {{ .Release.Namespace | quote }}
+    {{- if .Values.configVersioning }}
+    "config.mca.dollarfunding.com/version": {{ .Values.configVersioning.version | default "1" | quote }}
+    "config.mca.dollarfunding.com/last-updated": {{ now | date "2006-01-02T15:04:05Z07:00" | quote }}
+    {{- end }}
+data:
+  # Spring Boot application properties
+  application.yaml: |
+    spring:
+      application:
+        name: data-service
+      
+      # Database configuration (non-sensitive)
+      datasource:
+        driver-class-name: org.postgresql.Driver
+        # Connection details are provided via environment variables from Secret
+        hikari:
+          minimum-idle: {{ .Values.config.database.minIdle | default 5 }}
+          maximum-pool-size: {{ .Values.config.database.maxPoolSize | default 20 }}
+          idle-timeout: {{ .Values.config.database.idleTimeout | default 30000 }}
+          max-lifetime: {{ .Values.config.database.maxLifetime | default 1800000 }}
+          connection-timeout: {{ .Values.config.database.connectionTimeout | default 30000 }}
+          pool-name: DataServiceHikariCP
+          auto-commit: true
+          leak-detection-threshold: 60000
+      
+      # JPA/Hibernate configuration
+      jpa:
+        database-platform: org.hibernate.dialect.PostgreSQLDialect
+        hibernate:
+          ddl-auto: validate
+        properties:
+          hibernate:
+            format_sql: {{ .Values.config.jpa.formatSql | default false }}
+            jdbc.batch_size: {{ .Values.config.jpa.batchSize | default 50 }}
+            order_inserts: true
+            order_updates: true
+            connection.provider_disables_autocommit: false
+      
+      # Flyway migration configuration
+      flyway:
+        enabled: true
+        locations: classpath:db/migrations
+        baseline-on-migrate: true
+        baseline-version: 0
+        validate-on-migrate: true
+        out-of-order: false
+        table: flyway_schema_history
+      
+      # Redis cache configuration
+      redis:
+        # Connection details are provided via environment variables from Secret
+        timeout: 2000
+        connect-timeout: 2000
+        client-name: data-service
+        # Cluster configuration if enabled
+        {{- if .Values.config.redis.cluster.enabled }}
+        cluster:
+          nodes: ${REDIS_NODES}
+          max-redirects: {{ .Values.config.redis.cluster.maxRedirects | default 3 }}
+        {{- end }}
+      
+      # Cache configuration with TTL settings
+      cache:
+        type: redis
+        redis:
+          time-to-live: {{ .Values.config.cache.defaultTtl | default 900000 }} # 15 minutes in milliseconds
+          cache-null-values: false
+          use-key-prefix: true
+          key-prefix: data-service
+        cache-names: applications, documents, merchantDetails
+        application:
+          time-to-live: {{ .Values.config.cache.applicationTtl | default 900000 }} # 15 minutes in milliseconds
+        session:
+          time-to-live: {{ .Values.config.cache.sessionTtl | default 86400000 }} # 24 hours in milliseconds
+      
+      # RabbitMQ configuration (non-sensitive)
+      rabbitmq:
+        # Connection details are provided via environment variables from Secret
+        virtual-host: ${RABBITMQ_VHOST}
+        listener:
+          simple:
+            concurrency: {{ .Values.config.rabbitmq.concurrency | default 5 }}
+            max-concurrency: {{ .Values.config.rabbitmq.maxConcurrency | default 10 }}
+            prefetch: {{ .Values.config.rabbitmq.prefetch | default 10 }}
+            default-requeue-rejected: false
+            retry:
+              enabled: true
+              initial-interval: 1000
+              max-attempts: 3
+              max-interval: 10000
+              multiplier: 2.0
+      
+      # Jackson JSON configuration
+      jackson:
+        serialization:
+          write-dates-as-timestamps: false
+        deserialization:
+          fail-on-unknown-properties: false
+        default-property-inclusion: non_null
+        date-format: yyyy-MM-dd'T'HH:mm:ss.SSSZ
+        time-zone: UTC
+    
+    # Server configuration
+    server:
+      port: 8080
+      servlet:
+        context-path: /api/v1
+      compression:
+        enabled: true
+        mime-types: application/json,application/xml,text/html,text/xml,text/plain
+        min-response-size: 2048
+      tomcat:
+        max-threads: {{ .Values.config.server.maxThreads | default 200 }}
+        min-spare-threads: {{ .Values.config.server.minSpareThreads | default 20 }}
+        max-connections: {{ .Values.config.server.maxConnections | default 8192 }}
+        connection-timeout: {{ .Values.config.server.connectionTimeout | default 20000 }}
+    
+    # Management endpoints configuration
+    management:
+      endpoints:
+        web:
+          exposure:
+            include: health,info,metrics,prometheus
+          base-path: /actuator
+      endpoint:
+        health:
+          show-details: when_authorized
+          probes:
+            enabled: true
+          group:
+            readiness:
+              include: db,redis,rabbitmq
+      health:
+        db:
+          enabled: true
+        redis:
+          enabled: true
+        rabbitmq:
+          enabled: true
+    
+    # Application-specific configuration
+    app:
+      # Field-level encryption configuration
+      encryption:
+        enabled: true
+        algorithm: AES/GCM/NoPadding
+        key-size: 256
+      
+      # Document storage configuration
+      document:
+        storage:
+          type: s3
+          bucket: ${S3_BUCKET_NAME}
+          region: ${S3_REGION}
+          encryption: AES256
+      
+      # Asynchronous processing configuration
+      async:
+        core-pool-size: {{ .Values.config.async.corePoolSize | default 10 }}
+        max-pool-size: {{ .Values.config.async.maxPoolSize | default 50 }}
+        queue-capacity: {{ .Values.config.async.queueCapacity | default 100 }}
+        thread-name-prefix: data-service-async-
+      
+      # RabbitMQ exchange and queue configuration
+      rabbitmq:
+        exchange:
+          name: mca.documents
+          type: fanout
+          durable: true
+        queues:
+          document-processing:
+            name: document-processing
+            durable: true
+          data-extraction:
+            name: data-extraction
+            durable: true
+          notification:
+            name: notification
+            durable: true
+
+  # Logging configuration
+  logback-spring.xml: |
+    <?xml version="1.0" encoding="UTF-8"?>
+    <configuration>
+      <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+      <include resource="org/springframework/boot/logging/logback/console-appender.xml"/>
+      
+      <!-- Application name and environment variables -->
+      <springProperty scope="context" name="appName" source="spring.application.name"/>
+      <springProperty scope="context" name="appEnvironment" source="spring.profiles.active" defaultValue="development"/>
+      
+      <!-- Log levels from ConfigMap -->
+      <property name="LOG_LEVEL_ROOT" value="${LOG_LEVEL_ROOT:-INFO}"/>
+      <property name="LOG_LEVEL_APP" value="${LOG_LEVEL_APP:-INFO}"/>
+      <property name="LOG_LEVEL_SPRING" value="${LOG_LEVEL_SPRING:-WARN}"/>
+      <property name="LOG_LEVEL_HIBERNATE" value="${LOG_LEVEL_HIBERNATE:-WARN}"/>
+      
+      <!-- Console appender pattern -->
+      <property name="CONSOLE_LOG_PATTERN" value="%clr(%d{yyyy-MM-dd HH:mm:ss.SSS}){faint} %clr(${LOG_LEVEL_PATTERN:-%5p}) %clr(${PID:- }){magenta} %clr(---){faint} %clr([%15.15t]){faint} %clr(%-40.40logger{39}){cyan} %clr(:){faint} %m%n${LOG_EXCEPTION_CONVERSION_WORD:-%wEx}"/>
+      
+      <!-- JSON appender for structured logging in production -->
+      <appender name="JSON" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+          <includeMdcKeyName>requestId</includeMdcKeyName>
+          <includeMdcKeyName>userId</includeMdcKeyName>
+          <includeMdcKeyName>sessionId</includeMdcKeyName>
+          <fieldNames>
+            <timestamp>timestamp</timestamp>
+            <thread>thread</thread>
+            <logger>logger</logger>
+            <level>level</level>
+            <message>message</message>
+            <stackTrace>exception</stackTrace>
+          </fieldNames>
+          <customFields>{"app":"${appName}","environment":"${appEnvironment}"}</customFields>
+        </encoder>
+      </appender>
+      
+      <!-- Plain text console appender for development -->
+      <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+          <pattern>${CONSOLE_LOG_PATTERN}</pattern>
+          <charset>utf8</charset>
+        </encoder>
+      </appender>
+      
+      <!-- Application loggers -->
+      <logger name="com.dollarfunding.mca" level="${LOG_LEVEL_APP}"/>
+      
+      <!-- Spring Framework loggers -->
+      <logger name="org.springframework" level="${LOG_LEVEL_SPRING}"/>
+      <logger name="org.springframework.web" level="${LOG_LEVEL_SPRING}"/>
+      <logger name="org.springframework.security" level="${LOG_LEVEL_SPRING}"/>
+      <logger name="org.springframework.cache" level="${LOG_LEVEL_SPRING}"/>
+      <logger name="org.springframework.data" level="${LOG_LEVEL_SPRING}"/>
+      
+      <!-- Hibernate loggers -->
+      <logger name="org.hibernate" level="${LOG_LEVEL_HIBERNATE}"/>
+      <logger name="org.hibernate.SQL" level="${LOG_LEVEL_HIBERNATE}"/>
+      <logger name="org.hibernate.type.descriptor.sql.BasicBinder" level="${LOG_LEVEL_HIBERNATE}"/>
+      
+      <!-- Database and connection pool loggers -->
+      <logger name="com.zaxxer.hikari" level="WARN"/>
+      <logger name="org.postgresql" level="WARN"/>
+      
+      <!-- Cache and messaging loggers -->
+      <logger name="org.springframework.data.redis" level="WARN"/>
+      <logger name="org.springframework.amqp" level="WARN"/>
+      <logger name="com.rabbitmq" level="WARN"/>
+      
+      <!-- Root logger configuration -->
+      <root level="${LOG_LEVEL_ROOT}">
+        <!-- Use JSON appender in production, plain console in development -->
+        <springProfile name="production,staging">
+          <appender-ref ref="JSON"/>
+        </springProfile>
+        <springProfile name="development,local,test">
+          <appender-ref ref="CONSOLE"/>
+        </springProfile>
+      </root>
+    </configuration>
+
+  # Application environment variables
+  application.env: |
+    # Database configuration
+    SPRING_DATASOURCE_URL=jdbc:postgresql://${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}
+    SPRING_DATASOURCE_USERNAME=${POSTGRES_USER}
+    SPRING_DATASOURCE_PASSWORD=${POSTGRES_PASSWORD}
+    
+    # Redis configuration
+    SPRING_REDIS_HOST=${REDIS_HOST}
+    SPRING_REDIS_PORT=${REDIS_PORT}
+    SPRING_REDIS_PASSWORD=${REDIS_PASSWORD}
+    
+    # RabbitMQ configuration
+    SPRING_RABBITMQ_HOST=${RABBITMQ_HOST}
+    SPRING_RABBITMQ_PORT=${RABBITMQ_PORT}
+    SPRING_RABBITMQ_USERNAME=${RABBITMQ_USER}
+    SPRING_RABBITMQ_PASSWORD=${RABBITMQ_PASSWORD}
+    SPRING_RABBITMQ_VIRTUAL_HOST=${RABBITMQ_VHOST}
+    
+    # Logging configuration
+    LOG_LEVEL_ROOT=INFO
+    LOG_LEVEL_APP=INFO
+    LOG_LEVEL_SPRING=WARN
+    LOG_LEVEL_HIBERNATE=WARN
+    
+    # JWT configuration
+    JWT_ISSUER=dollarfunding.com
+    JWT_AUDIENCE=mca-application
+    JWT_EXPIRATION=3600
+    
+    # S3 configuration
+    S3_ENDPOINT=${S3_ENDPOINT}
+    S3_REGION=${S3_REGION}
+    S3_BUCKET_NAME=${S3_BUCKET_NAME}
+    S3_ACCESS_KEY=${S3_ACCESS_KEY}
+    S3_SECRET_KEY=${S3_SECRET_KEY}
+    
+    # Application-specific configuration
+    APP_ENCRYPTION_ENABLED=true
+    APP_ENCRYPTION_KEY_ALIAS=data-encryption-key
+
+  # Environment-specific overrides
+  application-development.yaml: |
+    # Development environment specific settings
+    logging:
+      level:
+        root: INFO
+        com.dollarfunding.mca: DEBUG
+        org.springframework: INFO
+        org.hibernate: INFO
+        org.hibernate.SQL: DEBUG
+    
+    spring:
+      jpa:
+        properties:
+          hibernate:
+            format_sql: true
+            show_sql: true
+      
+      # Disable Redis cache in development if needed
+      cache:
+        type: ${CACHE_TYPE:redis}
+
+  application-staging.yaml: |
+    # Staging environment specific settings
+    logging:
+      level:
+        root: INFO
+        com.dollarfunding.mca: INFO
+        org.springframework: WARN
+        org.hibernate: WARN
+    
+    spring:
+      datasource:
+        hikari:
+          maximum-pool-size: 15
+
+  application-production.yaml: |
+    # Production environment specific settings
+    logging:
+      level:
+        root: WARN
+        com.dollarfunding.mca: INFO
+        org.springframework: ERROR
+        org.hibernate: ERROR
+    
+    spring:
+      datasource:
+        hikari:
+          maximum-pool-size: 30
+      
+      # Production-specific cache settings
+      cache:
+        redis:
+          time-to-live: 900000  # 15 minutes
+        session:
+          time-to-live: 86400000  # 24 hours
+      
+      # Production-specific RabbitMQ settings
+      rabbitmq:
+        listener:
+          simple:
+            concurrency: 10
+            max-concurrency: 20
+            prefetch: 20
+    
+    # Production-specific server settings
+    server:
+      tomcat:
+        max-threads: 300
+        min-spare-threads: 30
+        max-connections: 10000
+    
+    # Production-specific async settings
+    app:
+      async:
+        core-pool-size: 20
+        max-pool-size: 100
+        queue-capacity: 200
