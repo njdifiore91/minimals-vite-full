@@ -1,0 +1,34 @@
+{
+  "jwt": {
+    "issuer": "dollarfunding-mca-test",
+    "audience": "mca-application-processing-test",
+    "accessToken": {
+      "expiryTimeMinutes": 60,
+      "algorithm": "RS256"
+    },
+    "refreshToken": {
+      "expiryTimeDays": 7,
+      "algorithm": "RS256"
+    },
+    "keys": {
+      "private": "classpath:jwt/test_private_key.pem",
+      "public": "classpath:jwt/test_public_key.pem",
+      "rotationIntervalDays": 30
+    },
+    "validation": {
+      "validateIssuer": true,
+      "validateAudience": true,
+      "validateExpiry": true,
+      "clockSkewSeconds": 30
+    },
+    "claims": {
+      "roles": "roles",
+      "permissions": "permissions",
+      "userId": "sub"
+    },
+    "storage": {
+      "tokenKey": "jwt_access_token",
+      "useSessionStorage": true
+    }
+  }
+}
