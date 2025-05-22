@@ -4,988 +4,664 @@
 """
 Integration tests for the Document Service API endpoints.
 
-This module contains tests that verify the API correctly handles document operations,
-health checks, status reporting, and diagnostics. It validates request validation,
-response formatting, error handling, and authentication.
+This module contains tests that verify the Document Service API endpoints work correctly
+with the underlying document processing functionality. It tests health checks, document
+operations, status reporting, and diagnostic endpoints.
+
+These tests validate:
+- Request validation and response formatting
+- Error handling and status codes
+- Authentication and authorization
+- Integration with underlying services (RabbitMQ, S3)
 """
 
 import json
-import os
+import pytest
 import uuid
 from datetime import datetime, timedelta
-from typing import Dict, List, Any, Generator, Tuple
-
-import pytest
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
 from unittest.mock import patch, MagicMock
+from fastapi import status
+from fastapi.testclient import TestClient
 
-# Import application modules
 from app import create_app
 from services.classification_service import ClassificationService
 from services.document_routing_service import DocumentRoutingService
-from services.queue_service import QueueService
 from services.storage_service import StorageService
+from services.queue_service import QueueService
 from types.documents import Document, DocumentType, ProcessingStatus
 from types.classification import ClassificationResult, ConfidenceScore
-from types.errors import ServiceError, ErrorCategory
-from utils.security_utils import create_test_token
+from utils.validation_utils import generate_jwt_token
 
 
 # Fixtures
 @pytest.fixture
-def app() -> FastAPI:
-    """Create a FastAPI application instance for testing.
-    
-    Returns:
-        FastAPI: The application instance
-    """
+def app():
+    """Create a test instance of the FastAPI application."""
     return create_app(testing=True)
 
 
 @pytest.fixture
-def client(app: FastAPI) -> TestClient:
-    """Create a test client for the FastAPI application.
-    
-    Args:
-        app: The FastAPI application instance
-        
-    Returns:
-        TestClient: The test client
-    """
+def client(app):
+    """Create a test client for the FastAPI application."""
     return TestClient(app)
 
 
 @pytest.fixture
-def admin_token() -> str:
-    """Create a JWT token with admin permissions.
-    
-    Returns:
-        str: The JWT token
-    """
-    return create_test_token({
-        "sub": "admin-user",
-        "name": "Admin User",
+def admin_token():
+    """Generate a valid JWT token with system_admin role."""
+    return generate_jwt_token({
+        "sub": "test-admin",
+        "name": "Test Admin",
         "email": "admin@example.com",
-        "roles": ["System Admin"]
+        "roles": ["system_admin"],
+        "exp": datetime.utcnow() + timedelta(hours=1)
     })
 
 
 @pytest.fixture
-def operations_token() -> str:
-    """Create a JWT token with operations staff permissions.
-    
-    Returns:
-        str: The JWT token
-    """
-    return create_test_token({
-        "sub": "ops-user",
-        "name": "Operations User",
+def operations_token():
+    """Generate a valid JWT token with operations_staff role."""
+    return generate_jwt_token({
+        "sub": "test-ops",
+        "name": "Test Operations",
         "email": "ops@example.com",
-        "roles": ["Operations Staff"]
+        "roles": ["operations_staff"],
+        "exp": datetime.utcnow() + timedelta(hours=1)
     })
 
 
 @pytest.fixture
-def regular_token() -> str:
-    """Create a JWT token with regular user permissions.
-    
-    Returns:
-        str: The JWT token
-    """
-    return create_test_token({
-        "sub": "regular-user",
-        "name": "Regular User",
+def user_token():
+    """Generate a valid JWT token with regular user role (no special permissions)."""
+    return generate_jwt_token({
+        "sub": "test-user",
+        "name": "Test User",
         "email": "user@example.com",
-        "roles": ["User"]
+        "roles": ["user"],
+        "exp": datetime.utcnow() + timedelta(hours=1)
     })
 
 
 @pytest.fixture
-def mock_queue_service() -> Generator[MagicMock, None, None]:
-    """Mock the QueueService for testing.
-    
-    Yields:
-        MagicMock: The mocked QueueService
-    """
-    with patch("app.QueueService") as mock:
-        # Configure the mock
-        instance = mock.return_value
-        instance.check_connection.return_value = True
-        instance.get_queue_depth.return_value = 5
-        instance.get_connection_count.return_value = 2
-        yield instance
+def expired_token():
+    """Generate an expired JWT token."""
+    return generate_jwt_token({
+        "sub": "test-expired",
+        "name": "Test Expired",
+        "email": "expired@example.com",
+        "roles": ["operations_staff"],
+        "exp": datetime.utcnow() - timedelta(hours=1)
+    })
 
 
 @pytest.fixture
-def mock_storage_service() -> Generator[MagicMock, None, None]:
-    """Mock the StorageService for testing.
-    
-    Yields:
-        MagicMock: The mocked StorageService
-    """
-    with patch("app.StorageService") as mock:
-        # Configure the mock
-        instance = mock.return_value
-        instance.check_connection.return_value = True
-        
-        # Mock document retrieval
-        test_doc_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
-        test_doc = Document(
-            id=test_doc_id,
-            metadata={
-                "filename": "test_document.pdf",
-                "size": 1024,
-                "mime_type": "application/pdf"
-            },
-            status=ProcessingStatus.RECEIVED,
-            created_at=datetime.now(),
-            updated_at=datetime.now()
-        )
-        instance.get_document.return_value = test_doc
-        instance.get_document_metadata.return_value = test_doc
-        
-        # Mock document listing
-        instance.list_documents.return_value = ([test_doc], 1)
-        
-        yield instance
+def mock_document():
+    """Create a mock document for testing."""
+    return Document(
+        id=uuid.uuid4(),
+        file_name="test_document.pdf",
+        file_type="application/pdf",
+        file_size=1024,
+        status=ProcessingStatus.RECEIVED,
+        metadata={
+            "source": "email",
+            "sender": "test@example.com",
+            "received_at": datetime.utcnow().isoformat()
+        },
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow()
+    )
 
 
 @pytest.fixture
-def mock_classification_service() -> Generator[MagicMock, None, None]:
-    """Mock the ClassificationService for testing.
-    
-    Yields:
-        MagicMock: The mocked ClassificationService
-    """
-    with patch("app.ClassificationService") as mock:
-        # Configure the mock
-        instance = mock.return_value
-        
-        # Mock classification result
-        test_doc_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
-        classification_result = ClassificationResult(
-            document_id=test_doc_id,
-            document_type=DocumentType.APPLICATION,
-            confidence=ConfidenceScore(value=0.95),
-            classified_at=datetime.now()
-        )
-        instance.get_classification_result.return_value = classification_result
-        instance.classify_document.return_value = classification_result
-        
-        yield instance
+def mock_classification_result(mock_document):
+    """Create a mock classification result for testing."""
+    return ClassificationResult(
+        document_id=mock_document.id,
+        document_type=DocumentType.APPLICATION_FORM,
+        confidence=ConfidenceScore(0.95),
+        classified_at=datetime.utcnow()
+    )
 
 
-@pytest.fixture
-def mock_document_routing_service() -> Generator[MagicMock, None, None]:
-    """Mock the DocumentRoutingService for testing.
-    
-    Yields:
-        MagicMock: The mocked DocumentRoutingService
-    """
-    with patch("app.DocumentRoutingService") as mock:
-        # Configure the mock
-        instance = mock.return_value
-        
-        # Mock routing result
-        instance.route_document.return_value = MagicMock(
-            destination="ocr-service",
-            routed_at=datetime.now()
-        )
-        
-        yield instance
-
-
-# Health Check Tests
+# Health Check Endpoint Tests
 @pytest.mark.integration
 class TestHealthEndpoints:
     """Tests for the health check endpoints."""
-    
-    def test_liveness_probe(self, client: TestClient):
-        """Test the liveness probe endpoint."""
+
+    def test_liveness_check(self, client):
+        """Test that the liveness endpoint returns a 200 status code."""
         response = client.get("/health/liveness")
-        
-        assert response.status_code == 200
+        assert response.status_code == status.HTTP_200_OK
         data = response.json()
         assert data["status"] == "UP"
-        assert "timestamp" in data
-        assert data["service"] == "document-service"
-    
-    def test_readiness_probe_success(self, client: TestClient, mock_queue_service: MagicMock, mock_storage_service: MagicMock):
-        """Test the readiness probe endpoint when all dependencies are available."""
-        # Configure mocks for successful connections
-        mock_queue_service.check_connection.return_value = True
-        mock_storage_service.check_connection.return_value = True
-        
-        response = client.get("/health/readiness")
-        
-        assert response.status_code == 200
-        data = response.json()
-        assert data["status"] == "UP"
-        assert "timestamp" in data
-        assert data["service"] == "document-service"
-        assert data["dependencies"]["rabbitmq"]["status"] == "UP"
-        assert data["dependencies"]["s3"]["status"] == "UP"
-    
-    def test_readiness_probe_rabbitmq_down(self, client: TestClient, mock_queue_service: MagicMock, mock_storage_service: MagicMock):
-        """Test the readiness probe endpoint when RabbitMQ is down."""
-        # Configure mocks for RabbitMQ connection failure
-        mock_queue_service.check_connection.return_value = False
-        mock_storage_service.check_connection.return_value = True
-        
-        response = client.get("/health/readiness")
-        
-        assert response.status_code == 503
-        data = response.json()
-        assert data["status"] == "DOWN"
-        assert data["dependencies"]["rabbitmq"]["status"] == "DOWN"
-        assert data["dependencies"]["s3"]["status"] == "UP"
-    
-    def test_readiness_probe_s3_down(self, client: TestClient, mock_queue_service: MagicMock, mock_storage_service: MagicMock):
-        """Test the readiness probe endpoint when S3 is down."""
-        # Configure mocks for S3 connection failure
-        mock_queue_service.check_connection.return_value = True
-        mock_storage_service.check_connection.return_value = False
-        
-        response = client.get("/health/readiness")
-        
-        assert response.status_code == 503
-        data = response.json()
-        assert data["status"] == "DOWN"
-        assert data["dependencies"]["rabbitmq"]["status"] == "UP"
-        assert data["dependencies"]["s3"]["status"] == "DOWN"
-    
-    def test_readiness_probe_all_down(self, client: TestClient, mock_queue_service: MagicMock, mock_storage_service: MagicMock):
-        """Test the readiness probe endpoint when all dependencies are down."""
-        # Configure mocks for all connections failing
-        mock_queue_service.check_connection.return_value = False
-        mock_storage_service.check_connection.return_value = False
-        
-        response = client.get("/health/readiness")
-        
-        assert response.status_code == 503
-        data = response.json()
-        assert data["status"] == "DOWN"
-        assert data["dependencies"]["rabbitmq"]["status"] == "DOWN"
-        assert data["dependencies"]["s3"]["status"] == "DOWN"
-    
-    def test_health_check_endpoint(self, client: TestClient, mock_queue_service: MagicMock, mock_storage_service: MagicMock):
-        """Test the general health check endpoint."""
-        # Configure mocks for successful connections
-        mock_queue_service.check_connection.return_value = True
-        mock_storage_service.check_connection.return_value = True
-        
-        response = client.get("/health")
-        
-        assert response.status_code == 200
-        data = response.json()
-        assert data["status"] == "UP"
-        assert "timestamp" in data
-        assert "service" in data
-        assert "dependencies" in data
+        assert "version" in data
         assert "details" in data
-        assert data["dependencies"]["rabbitmq"]["status"] == "UP"
-        assert data["dependencies"]["s3"]["status"] == "UP"
-    
-    def test_health_check_connection_error(self, client: TestClient, mock_queue_service: MagicMock, mock_storage_service: MagicMock):
-        """Test the health check endpoint when a connection error occurs."""
-        # Configure mock to raise an exception
-        mock_queue_service.check_connection.side_effect = Exception("Connection error")
-        
-        response = client.get("/health")
-        
-        assert response.status_code == 503
-        data = response.json()
-        assert data["status"] == "DOWN"
-        assert data["dependencies"]["rabbitmq"]["status"] == "DOWN"
-        assert "Connection error" in data["dependencies"]["rabbitmq"]["details"]["message"]
+
+    def test_readiness_check_success(self, client):
+        """Test that the readiness endpoint returns a 200 status code when all dependencies are available."""
+        # Mock the dependencies to be available
+        with patch.object(QueueService, 'is_connected', return_value=True), \
+             patch.object(StorageService, 'is_connected', return_value=True), \
+             patch.object(StorageService, 'get_bucket_name', return_value="test-bucket"):
+            
+            response = client.get("/health/readiness")
+            assert response.status_code == status.HTTP_200_OK
+            data = response.json()
+            assert data["status"] == "UP"
+            assert data["details"]["dependencies"]["rabbitmq"]["status"] == "UP"
+            assert data["details"]["dependencies"]["s3"]["status"] == "UP"
+
+    def test_readiness_check_rabbitmq_down(self, client):
+        """Test that the readiness endpoint returns a 503 status code when RabbitMQ is down."""
+        # Mock RabbitMQ to be down
+        with patch.object(QueueService, 'is_connected', return_value=False), \
+             patch.object(StorageService, 'is_connected', return_value=True), \
+             patch.object(StorageService, 'get_bucket_name', return_value="test-bucket"):
+            
+            response = client.get("/health/readiness")
+            assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+            data = response.json()
+            assert data["status"] == "DOWN"
+            assert data["details"]["dependencies"]["rabbitmq"]["status"] == "DOWN"
+            assert data["details"]["dependencies"]["s3"]["status"] == "UP"
+
+    def test_readiness_check_s3_down(self, client):
+        """Test that the readiness endpoint returns a 503 status code when S3 is down."""
+        # Mock S3 to be down
+        with patch.object(QueueService, 'is_connected', return_value=True), \
+             patch.object(StorageService, 'is_connected', return_value=False):
+            
+            response = client.get("/health/readiness")
+            assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+            data = response.json()
+            assert data["status"] == "DOWN"
+            assert data["details"]["dependencies"]["rabbitmq"]["status"] == "UP"
+            assert data["details"]["dependencies"]["s3"]["status"] == "DOWN"
+
+    def test_readiness_check_all_down(self, client):
+        """Test that the readiness endpoint returns a 503 status code when all dependencies are down."""
+        # Mock all dependencies to be down
+        with patch.object(QueueService, 'is_connected', return_value=False), \
+             patch.object(StorageService, 'is_connected', return_value=False):
+            
+            response = client.get("/health/readiness")
+            assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+            data = response.json()
+            assert data["status"] == "DOWN"
+            assert data["details"]["dependencies"]["rabbitmq"]["status"] == "DOWN"
+            assert data["details"]["dependencies"]["s3"]["status"] == "DOWN"
+
+    def test_readiness_check_exception(self, client):
+        """Test that the readiness endpoint handles exceptions gracefully."""
+        # Mock an exception during health check
+        with patch.object(QueueService, 'is_connected', side_effect=Exception("Test exception")), \
+             patch.object(StorageService, 'is_connected', return_value=True), \
+             patch.object(StorageService, 'get_bucket_name', return_value="test-bucket"):
+            
+            response = client.get("/health/readiness")
+            assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+            data = response.json()
+            assert data["status"] == "DOWN"
+            assert data["details"]["dependencies"]["rabbitmq"]["status"] == "DOWN"
+            assert "error" in data["details"]["dependencies"]["rabbitmq"]["details"]
 
 
-# Document Operations Tests
+# Document API Endpoint Tests
 @pytest.mark.integration
 class TestDocumentEndpoints:
-    """Tests for the document operations endpoints."""
-    
-    def test_get_document(self, client: TestClient, mock_storage_service: MagicMock, mock_classification_service: MagicMock):
+    """Tests for the document API endpoints."""
+
+    def test_get_document_success(self, client, mock_document, mock_classification_result):
         """Test retrieving a document's classification status."""
-        # Test document ID
-        doc_id = "00000000-0000-0000-0000-000000000001"
+        document_id = mock_document.id
         
-        response = client.get(f"/documents/{doc_id}")
-        
-        assert response.status_code == 200
-        data = response.json()
-        assert data["document_id"] == doc_id
-        assert "metadata" in data
-        assert "status" in data
-        assert "classification" in data
-        assert data["classification"]["document_type"] == "APPLICATION"
-        assert data["classification"]["confidence"] == 0.95
-        assert data["classification"]["requires_review"] is False
-    
-    def test_get_document_not_found(self, client: TestClient, mock_storage_service: MagicMock):
+        # Mock the storage and classification services
+        with patch.object(StorageService, 'get_document_metadata', return_value=mock_document), \
+             patch.object(ClassificationService, 'get_classification_result', return_value=mock_classification_result):
+            
+            response = client.get(f"/documents/{document_id}")
+            assert response.status_code == status.HTTP_200_OK
+            data = response.json()
+            assert data["document_id"] == str(document_id)
+            assert data["status"] == mock_document.status.value
+            assert "metadata" in data
+            assert "classification" in data
+            assert data["classification"]["document_type"] == mock_classification_result.document_type.value
+            assert data["classification"]["confidence"] == mock_classification_result.confidence.value
+
+    def test_get_document_not_found(self, client):
         """Test retrieving a non-existent document."""
-        # Configure mock to return None for non-existent document
-        mock_storage_service.get_document_metadata.return_value = None
+        document_id = uuid.uuid4()
         
-        response = client.get("/documents/00000000-0000-0000-0000-000000000999")
-        
-        assert response.status_code == 404
-        data = response.json()
-        assert "detail" in data
-        assert "not found" in data["detail"]
-    
-    def test_get_document_invalid_id(self, client: TestClient):
+        # Mock the storage service to return None (document not found)
+        with patch.object(StorageService, 'get_document_metadata', return_value=None):
+            
+            response = client.get(f"/documents/{document_id}")
+            assert response.status_code == status.HTTP_404_NOT_FOUND
+            data = response.json()
+            assert "detail" in data
+            assert f"Document with ID {document_id} not found" in data["detail"]
+
+    def test_get_document_invalid_id(self, client):
         """Test retrieving a document with an invalid ID."""
-        response = client.get("/documents/invalid-id")
+        response = client.get("/documents/invalid-uuid")
+        assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+    def test_get_document_server_error(self, client, mock_document):
+        """Test server error handling when retrieving a document."""
+        document_id = mock_document.id
         
-        assert response.status_code == 422
-        data = response.json()
-        assert "detail" in data
-    
-    def test_classify_document(self, client: TestClient, mock_storage_service: MagicMock, 
-                              mock_classification_service: MagicMock, mock_document_routing_service: MagicMock):
+        # Mock the storage service to raise an exception
+        with patch.object(StorageService, 'get_document_metadata', side_effect=Exception("Test exception")):
+            
+            response = client.get(f"/documents/{document_id}")
+            assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+            data = response.json()
+            assert "detail" in data
+
+    def test_classify_document_success(self, client, mock_document, mock_classification_result):
         """Test manually triggering document classification."""
-        # Test document ID
-        doc_id = "00000000-0000-0000-0000-000000000001"
+        document_id = mock_document.id
         
-        response = client.post(f"/documents/{doc_id}/classify")
+        # Mock the services
+        with patch.object(StorageService, 'get_document', return_value=mock_document), \
+             patch.object(ClassificationService, 'get_classification_result', return_value=None), \
+             patch.object(ClassificationService, 'classify_document', return_value=mock_classification_result), \
+             patch.object(DocumentRoutingService, 'route_document', return_value=MagicMock(destination="ocr-service", routed_at=datetime.utcnow())), \
+             patch.object(StorageService, 'update_document_metadata', return_value=None):
+            
+            response = client.post(f"/documents/{document_id}/classify")
+            assert response.status_code == status.HTTP_200_OK
+            data = response.json()
+            assert data["document_id"] == str(document_id)
+            assert data["status"] == "classification_complete"
+            assert "classification" in data
+            assert data["classification"]["document_type"] == mock_classification_result.document_type.value
+            assert data["classification"]["confidence"] == mock_classification_result.confidence.value
+            assert "routing" in data
+            assert data["routing"]["destination"] == "ocr-service"
+
+    def test_classify_document_already_classified(self, client, mock_document, mock_classification_result):
+        """Test manually triggering classification for an already classified document."""
+        document_id = mock_document.id
         
-        assert response.status_code == 200
-        data = response.json()
-        assert data["document_id"] == doc_id
-        assert data["status"] == "classification_complete"
-        assert "classification" in data
-        assert "routing" in data
-        assert data["classification"]["document_type"] == "APPLICATION"
-        assert data["classification"]["confidence"] == 0.95
-        assert data["routing"]["destination"] == "ocr-service"
-    
-    def test_classify_document_already_classified(self, client: TestClient, mock_storage_service: MagicMock, 
-                                                mock_classification_service: MagicMock):
-        """Test classifying an already classified document without force flag."""
-        # Test document ID
-        doc_id = "00000000-0000-0000-0000-000000000001"
-        
-        # Configure mock to return existing classification
-        mock_classification_service.get_classification_result.return_value = ClassificationResult(
-            document_id=uuid.UUID(doc_id),
-            document_type=DocumentType.APPLICATION,
-            confidence=ConfidenceScore(value=0.95),
-            classified_at=datetime.now()
-        )
-        
-        response = client.post(f"/documents/{doc_id}/classify?force=false")
-        
-        assert response.status_code == 200
-        data = response.json()
-        assert data["document_id"] == doc_id
-        assert data["status"] == "already_classified"
-        assert data["classification"]["document_type"] == "APPLICATION"
-    
-    def test_classify_document_force_reclassification(self, client: TestClient, mock_storage_service: MagicMock, 
-                                                    mock_classification_service: MagicMock, 
-                                                    mock_document_routing_service: MagicMock):
+        # Mock the services to indicate document is already classified
+        with patch.object(StorageService, 'get_document', return_value=mock_document), \
+             patch.object(ClassificationService, 'get_classification_result', return_value=mock_classification_result):
+            
+            response = client.post(f"/documents/{document_id}/classify")
+            assert response.status_code == status.HTTP_200_OK
+            data = response.json()
+            assert data["document_id"] == str(document_id)
+            assert data["status"] == "already_classified"
+            assert "classification" in data
+
+    def test_classify_document_force_reclassification(self, client, mock_document, mock_classification_result):
         """Test forcing reclassification of an already classified document."""
-        # Test document ID
-        doc_id = "00000000-0000-0000-0000-000000000001"
+        document_id = mock_document.id
         
-        # Configure mock to return existing classification
-        mock_classification_service.get_classification_result.return_value = ClassificationResult(
-            document_id=uuid.UUID(doc_id),
-            document_type=DocumentType.APPLICATION,
-            confidence=ConfidenceScore(value=0.95),
-            classified_at=datetime.now()
-        )
-        
-        response = client.post(f"/documents/{doc_id}/classify?force=true")
-        
-        assert response.status_code == 200
-        data = response.json()
-        assert data["document_id"] == doc_id
-        assert data["status"] == "classification_complete"
-        
-        # Verify classify_document was called
-        mock_classification_service.classify_document.assert_called_once()
-    
-    def test_classify_document_not_found(self, client: TestClient, mock_storage_service: MagicMock):
+        # Mock the services
+        with patch.object(StorageService, 'get_document', return_value=mock_document), \
+             patch.object(ClassificationService, 'get_classification_result', return_value=mock_classification_result), \
+             patch.object(ClassificationService, 'classify_document', return_value=mock_classification_result), \
+             patch.object(DocumentRoutingService, 'route_document', return_value=MagicMock(destination="ocr-service", routed_at=datetime.utcnow())), \
+             patch.object(StorageService, 'update_document_metadata', return_value=None):
+            
+            response = client.post(f"/documents/{document_id}/classify?force=true")
+            assert response.status_code == status.HTTP_200_OK
+            data = response.json()
+            assert data["document_id"] == str(document_id)
+            assert data["status"] == "classification_complete"
+
+    def test_classify_document_not_found(self, client):
         """Test classifying a non-existent document."""
-        # Configure mock to return None for non-existent document
-        mock_storage_service.get_document.return_value = None
+        document_id = uuid.uuid4()
         
-        response = client.post("/documents/00000000-0000-0000-0000-000000000999/classify")
-        
-        assert response.status_code == 404
-        data = response.json()
-        assert "detail" in data
-        assert "not found" in data["detail"]
-    
-    def test_classify_document_service_error(self, client: TestClient, mock_storage_service: MagicMock, 
-                                           mock_classification_service: MagicMock):
-        """Test handling of service errors during classification."""
-        # Test document ID
-        doc_id = "00000000-0000-0000-0000-000000000001"
-        
-        # Configure mock to raise a service error
-        mock_classification_service.classify_document.side_effect = ServiceError(
-            message="Classification error",
-            category=ErrorCategory.PROCESSING
-        )
-        
-        response = client.post(f"/documents/{doc_id}/classify")
-        
-        assert response.status_code == 500
-        data = response.json()
-        assert "detail" in data
-        assert "Classification error" in data["detail"]
-    
-    def test_batch_classify(self, client: TestClient, mock_classification_service: MagicMock):
+        # Mock the storage service to return None (document not found)
+        with patch.object(StorageService, 'get_document', return_value=None):
+            
+            response = client.post(f"/documents/{document_id}/classify")
+            assert response.status_code == status.HTTP_404_NOT_FOUND
+
+    def test_batch_classify_success(self, client):
         """Test batch document classification."""
-        # Test document IDs
-        doc_ids = [
-            "00000000-0000-0000-0000-000000000001",
-            "00000000-0000-0000-0000-000000000002",
-            "00000000-0000-0000-0000-000000000003"
-        ]
+        document_ids = [str(uuid.uuid4()) for _ in range(3)]
         
-        response = client.post("/documents/batch", json=doc_ids)
+        # Mock the services
+        with patch.object(StorageService, 'get_document', return_value=MagicMock()), \
+             patch.object(ClassificationService, 'get_classification_result', return_value=None), \
+             patch.object(ClassificationService, 'queue_for_classification', return_value=None):
+            
+            response = client.post(
+                "/documents/batch",
+                json={"document_ids": document_ids}
+            )
+            assert response.status_code == status.HTTP_200_OK
+            data = response.json()
+            assert "summary" in data
+            assert data["summary"]["total"] == len(document_ids)
+            assert data["summary"]["successful"] == len(document_ids)
+            assert data["summary"]["failed"] == 0
+            assert data["summary"]["skipped"] == 0
+
+    def test_batch_classify_empty_list(self, client):
+        """Test batch classification with an empty list of document IDs."""
+        response = client.post(
+            "/documents/batch",
+            json={"document_ids": []}
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_batch_classify_too_many_documents(self, client):
+        """Test batch classification with too many document IDs."""
+        document_ids = [str(uuid.uuid4()) for _ in range(101)]  # Exceeds the 100 limit
         
-        assert response.status_code == 200
-        data = response.json()
-        assert "summary" in data
-        assert "results" in data
-        assert data["summary"]["total"] == 3
+        response = client.post(
+            "/documents/batch",
+            json={"document_ids": document_ids}
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_batch_classify_mixed_results(self, client):
+        """Test batch classification with mixed results (success, failure, skipped)."""
+        document_ids = [str(uuid.uuid4()) for _ in range(3)]
         
-        # Verify queue_for_classification was called for each document
-        assert mock_classification_service.queue_for_classification.call_count == 3
-    
-    def test_batch_classify_empty_list(self, client: TestClient):
-        """Test batch classification with an empty list."""
-        response = client.post("/documents/batch", json=[])
-        
-        assert response.status_code == 400
-        data = response.json()
-        assert "detail" in data
-        assert "No document IDs provided" in data["detail"]
-    
-    def test_batch_classify_too_many_documents(self, client: TestClient):
-        """Test batch classification with too many documents."""
-        # Create a list of 101 document IDs (exceeding the limit of 100)
-        doc_ids = [str(uuid.uuid4()) for _ in range(101)]
-        
-        response = client.post("/documents/batch", json=doc_ids)
-        
-        assert response.status_code == 400
-        data = response.json()
-        assert "detail" in data
-        assert "Batch size exceeds maximum limit" in data["detail"]
-    
-    def test_list_documents(self, client: TestClient, mock_storage_service: MagicMock, mock_classification_service: MagicMock):
+        # Mock the services with different behaviors for each document
+        with patch.object(StorageService, 'get_document', side_effect=[
+                MagicMock(),  # First document exists
+                None,          # Second document doesn't exist
+                MagicMock()    # Third document exists
+            ]), \
+             patch.object(ClassificationService, 'get_classification_result', side_effect=[
+                None,           # First document not classified
+                None,           # Second document not relevant (will fail earlier)
+                MagicMock()     # Third document already classified
+            ]), \
+             patch.object(ClassificationService, 'queue_for_classification', return_value=None):
+            
+            response = client.post(
+                "/documents/batch",
+                json={"document_ids": document_ids}
+            )
+            assert response.status_code == status.HTTP_200_OK
+            data = response.json()
+            assert data["summary"]["total"] == 3
+            assert data["summary"]["successful"] == 1
+            assert data["summary"]["failed"] == 1
+            assert data["summary"]["skipped"] == 1
+
+    def test_list_documents_success(self, client, mock_document):
         """Test listing documents with filtering."""
-        response = client.get("/documents?document_type=application&status=received&page=1&page_size=20")
-        
-        assert response.status_code == 200
-        data = response.json()
-        assert "documents" in data
-        assert "pagination" in data
-        assert len(data["documents"]) == 1  # Our mock returns 1 document
-        assert data["pagination"]["page"] == 1
-        assert data["pagination"]["page_size"] == 20
-        
-        # Verify list_documents was called with correct parameters
-        mock_storage_service.list_documents.assert_called_once()
-        call_args = mock_storage_service.list_documents.call_args[1]
-        assert call_args["page"] == 1
-        assert call_args["page_size"] == 20
-    
-    def test_list_documents_invalid_filter(self, client: TestClient):
-        """Test listing documents with an invalid filter."""
-        response = client.get("/documents?document_type=invalid_type")
-        
-        assert response.status_code == 400
-        data = response.json()
-        assert "detail" in data
-        assert "Invalid document type" in data["detail"]
+        # Mock the services
+        with patch.object(StorageService, 'list_documents', return_value=([mock_document], 1)), \
+             patch.object(ClassificationService, 'get_classification_result', return_value=None):
+            
+            response = client.get("/documents?page=1&page_size=20")
+            assert response.status_code == status.HTTP_200_OK
+            data = response.json()
+            assert "documents" in data
+            assert len(data["documents"]) == 1
+            assert "pagination" in data
+            assert data["pagination"]["page"] == 1
+            assert data["pagination"]["total_items"] == 1
+
+    def test_list_documents_with_filters(self, client, mock_document, mock_classification_result):
+        """Test listing documents with various filters."""
+        # Mock the services
+        with patch.object(StorageService, 'list_documents', return_value=([mock_document], 1)), \
+             patch.object(ClassificationService, 'get_classification_result', return_value=mock_classification_result):
+            
+            response = client.get(
+                "/documents?document_type=APPLICATION_FORM&status=RECEIVED&confidence_min=0.9&requires_review=false"
+            )
+            assert response.status_code == status.HTTP_200_OK
+            data = response.json()
+            assert len(data["documents"]) == 1
+            assert "classification" in data["documents"][0]
+
+    def test_list_documents_invalid_filter(self, client):
+        """Test listing documents with invalid filter values."""
+        response = client.get("/documents?document_type=INVALID_TYPE")
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_list_documents_empty_result(self, client):
+        """Test listing documents with no results."""
+        # Mock the services to return empty results
+        with patch.object(StorageService, 'list_documents', return_value=([], 0)):
+            
+            response = client.get("/documents")
+            assert response.status_code == status.HTTP_200_OK
+            data = response.json()
+            assert len(data["documents"]) == 0
+            assert data["pagination"]["total_items"] == 0
 
 
-# Status Endpoint Tests
+# Status API Endpoint Tests
 @pytest.mark.integration
 class TestStatusEndpoints:
-    """Tests for the status endpoints."""
-    
-    def test_get_status(self, client: TestClient, mock_queue_service: MagicMock):
+    """Tests for the status API endpoints."""
+
+    def test_get_status_success(self, client):
         """Test retrieving service status."""
-        # Configure mock
-        mock_queue_service.get_queue_depth.return_value = 5
-        mock_queue_service.get_connection_count.return_value = 2
-        
-        response = client.get("/status")
-        
-        assert response.status_code == 200
-        data = response.json()
-        assert data["status"] == "operational"
-        assert data["service"] == "document-service"
-        assert "version" in data
-        assert "uptime_seconds" in data
-        assert "resources" in data
-        assert "queue" in data
-        assert "connections" in data
-        assert data["queue"]["document_processing_depth"] == 5
-        assert data["connections"]["rabbitmq"] == 2
-    
-    def test_get_status_queue_error(self, client: TestClient, mock_queue_service: MagicMock):
-        """Test status endpoint when queue service has an error."""
-        # Configure mock to raise an exception
-        mock_queue_service.get_queue_depth.side_effect = Exception("Queue error")
-        
-        response = client.get("/status")
-        
-        assert response.status_code == 200  # Should still return 200 even with queue error
-        data = response.json()
-        assert data["status"] == "operational"
-        assert data["queue"]["document_processing_depth"] == -1  # Error indicator
-    
-    def test_health_check(self, client: TestClient):
-        """Test the simple health check endpoint."""
-        response = client.get("/status/health")
-        
-        assert response.status_code == 200
-        data = response.json()
-        assert data["status"] == "healthy"
-    
-    def test_metrics_endpoint(self, client: TestClient, mock_queue_service: MagicMock):
-        """Test the Prometheus metrics endpoint."""
+        # Mock the services
+        with patch('psutil.cpu_percent', return_value=50.0), \
+             patch('psutil.virtual_memory', return_value=MagicMock(used=1024*1024*1024, percent=50.0)), \
+             patch('psutil.disk_usage', return_value=MagicMock(percent=50.0)), \
+             patch('psutil.net_connections', return_value=[]), \
+             patch('psutil.Process', return_value=MagicMock(open_files=lambda: [])), \
+             patch.object(QueueService, 'get_queue_stats', return_value=[]), \
+             patch.object(DocumentService, 'get_processing_stats', return_value=MagicMock(
+                 total_processed=100,
+                 successful=95,
+                 failed=5,
+                 avg_processing_time=2.5,
+                 classification_accuracy=0.95,
+                 documents_by_type={"APPLICATION_FORM": 50, "TAX_RETURN": 30, "BANK_STATEMENT": 20}
+             )):
+            
+            response = client.get("/status")
+            assert response.status_code == status.HTTP_200_OK
+            data = response.json()
+            assert "status" in data
+            assert "version" in data
+            assert "system" in data
+            assert "queues" in data
+            assert "document_stats" in data
+
+    def test_get_metrics_success(self, client, operations_token):
+        """Test retrieving Prometheus metrics with valid token."""
+        response = client.get(
+            "/status/metrics",
+            headers={"Authorization": f"Bearer {operations_token}"}
+        )
+        assert response.status_code == status.HTTP_200_OK
+        assert response.headers["content-type"] == "text/plain; version=0.0.4; charset=utf-8"
+
+    def test_get_metrics_unauthorized(self, client):
+        """Test retrieving metrics without authentication."""
         response = client.get("/status/metrics")
-        
-        assert response.status_code == 200
-        assert response.headers["Content-Type"] == "application/openmetrics-text; version=1.0.0; charset=utf-8"
-        # Prometheus metrics are plain text, so we can't easily parse them as JSON
-        assert "document_service_" in response.text
-    
-    def test_processing_stats(self, client: TestClient):
-        """Test retrieving processing statistics."""
-        response = client.get("/status/stats")
-        
-        assert response.status_code == 200
-        data = response.json()
-        assert "throughput" in data
-        assert "accuracy" in data
-        assert "errors" in data
-        assert "queue_status" in data
-        assert data["accuracy"]["overall_percent"] > 90  # Should be high accuracy
+        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+
+    def test_get_metrics_forbidden(self, client, user_token):
+        """Test retrieving metrics with insufficient permissions."""
+        response = client.get(
+            "/status/metrics",
+            headers={"Authorization": f"Bearer {user_token}"}
+        )
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_get_metrics_expired_token(self, client, expired_token):
+        """Test retrieving metrics with an expired token."""
+        response = client.get(
+            "/status/metrics",
+            headers={"Authorization": f"Bearer {expired_token}"}
+        )
+        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+
+    def test_get_document_stats_success(self, client, admin_token):
+        """Test retrieving detailed document processing statistics with admin token."""
+        # Mock the document service
+        with patch.object(DocumentService, 'get_detailed_stats', return_value={
+            "document_types": [
+                {"type": "APPLICATION_FORM", "count": 50, "avg_confidence": 0.95},
+                {"type": "TAX_RETURN", "count": 30, "avg_confidence": 0.92},
+                {"type": "BANK_STATEMENT", "count": 20, "avg_confidence": 0.88}
+            ],
+            "processing_times": {
+                "avg_seconds": 2.5,
+                "p50_seconds": 2.0,
+                "p95_seconds": 5.0,
+                "p99_seconds": 10.0
+            },
+            "accuracy": {
+                "overall": 0.95,
+                "by_type": {
+                    "APPLICATION_FORM": 0.98,
+                    "TAX_RETURN": 0.95,
+                    "BANK_STATEMENT": 0.90
+                }
+            }
+        }):
+            
+            response = client.get(
+                "/status/stats",
+                headers={"Authorization": f"Bearer {admin_token}"}
+            )
+            assert response.status_code == status.HTTP_200_OK
+            data = response.json()
+            assert "document_types" in data
+            assert "processing_times" in data
+            assert "accuracy" in data
 
 
-# Diagnostics Endpoint Tests
+# Diagnostics API Endpoint Tests
 @pytest.mark.integration
 class TestDiagnosticsEndpoints:
-    """Tests for the diagnostics endpoints."""
-    
-    def test_get_logs_unauthorized(self, client: TestClient):
+    """Tests for the diagnostics API endpoints."""
+
+    def test_get_logs_success(self, client, operations_token):
+        """Test retrieving logs with valid token."""
+        # Mock the log file reading
+        mock_log_entries = [
+            json.dumps({
+                "timestamp": datetime.utcnow().isoformat(),
+                "level": "INFO",
+                "service": "document-service",
+                "message": "Test log message",
+                "correlation_id": "test-correlation-id",
+                "environment": "test"
+            })
+        ]
+        
+        with patch('builtins.open', return_value=MagicMock(__enter__=lambda _: MagicMock(readlines=lambda: mock_log_entries))), \
+             patch('os.path.exists', return_value=True):
+            
+            response = client.get(
+                "/diagnostics/logs?level=INFO&limit=10",
+                headers={"Authorization": f"Bearer {operations_token}"}
+            )
+            assert response.status_code == status.HTTP_200_OK
+            data = response.json()
+            assert "logs" in data
+            assert len(data["logs"]) == 1
+            assert data["logs"][0]["level"] == "INFO"
+            assert data["logs"][0]["message"] == "Test log message"
+
+    def test_get_logs_unauthorized(self, client):
         """Test retrieving logs without authentication."""
         response = client.get("/diagnostics/logs")
-        
-        assert response.status_code == 401
-        data = response.json()
-        assert "detail" in data
-    
-    def test_get_logs_forbidden(self, client: TestClient, regular_token: str):
+        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+
+    def test_get_logs_forbidden(self, client, user_token):
         """Test retrieving logs with insufficient permissions."""
         response = client.get(
             "/diagnostics/logs",
-            headers={"Authorization": f"Bearer {regular_token}"}
+            headers={"Authorization": f"Bearer {user_token}"}
         )
-        
-        assert response.status_code == 403
-        data = response.json()
-        assert "detail" in data
-        assert "required" in data["detail"]
-    
-    def test_get_logs_operations_staff(self, client: TestClient, operations_token: str):
-        """Test retrieving logs with operations staff permissions."""
-        with patch("utils.logging_utils.get_logs") as mock_get_logs:
-            # Configure mock to return sample logs
-            mock_get_logs.return_value = [
-                {
-                    "timestamp": datetime.now().isoformat(),
-                    "level": "INFO",
-                    "message": "Test log message",
-                    "context": {"test": True}
-                }
-            ]
-            
-            response = client.get(
-                "/diagnostics/logs?limit=10&level=INFO",
-                headers={"Authorization": f"Bearer {operations_token}"}
-            )
-            
-            assert response.status_code == 200
-            data = response.json()
-            assert "logs" in data
-            assert "count" in data
-            assert data["count"] == 1
-            assert data["logs"][0]["level"] == "INFO"
-            assert data["logs"][0]["message"] == "Test log message"
-            
-            # Verify get_logs was called with correct parameters
-            mock_get_logs.assert_called_once_with(
-                limit=10, level="INFO", start_time=None, end_time=None
-            )
-    
-    def test_get_logs_admin(self, client: TestClient, admin_token: str):
-        """Test retrieving logs with admin permissions."""
-        with patch("utils.logging_utils.get_logs") as mock_get_logs:
-            # Configure mock to return sample logs
-            mock_get_logs.return_value = [
-                {
-                    "timestamp": datetime.now().isoformat(),
-                    "level": "ERROR",
-                    "message": "Test error message",
-                    "context": {"error": True}
-                }
-            ]
-            
-            response = client.get(
-                "/diagnostics/logs?limit=10&level=ERROR",
-                headers={"Authorization": f"Bearer {admin_token}"}
-            )
-            
-            assert response.status_code == 200
-            data = response.json()
-            assert "logs" in data
-            assert "count" in data
-            assert data["count"] == 1
-            assert data["logs"][0]["level"] == "ERROR"
-    
-    def test_get_config_unauthorized(self, client: TestClient):
-        """Test retrieving configuration without authentication."""
-        response = client.get("/diagnostics/config")
-        
-        assert response.status_code == 401
-        data = response.json()
-        assert "detail" in data
-    
-    def test_get_config_forbidden(self, client: TestClient, operations_token: str):
-        """Test retrieving configuration with insufficient permissions."""
-        response = client.get(
-            "/diagnostics/config",
-            headers={"Authorization": f"Bearer {operations_token}"}
-        )
-        
-        assert response.status_code == 403
-        data = response.json()
-        assert "detail" in data
-        assert "Admin permissions required" in data["detail"]
-    
-    def test_get_config_admin(self, client: TestClient, admin_token: str):
-        """Test retrieving configuration with admin permissions."""
-        with patch("config.app_config.load_config") as mock_load_config:
-            # Configure mock to return sample config
-            mock_config = MagicMock()
-            mock_config.service_name = "document-service"
-            mock_config.version = "1.0.0"
-            mock_config.port = 8000
-            mock_config.host = "0.0.0.0"
-            mock_config.debug = False
-            mock_config.environment = "test"
-            
-            # RabbitMQ config
-            mock_config.rabbitmq = MagicMock()
-            mock_config.rabbitmq.__dict__ = {
-                "host": "rabbitmq",
-                "port": 5672,
-                "username": "user",
-                "password": "password",
-                "vhost": "/",
-                "exchange": "mca.documents",
-                "queue": "document-processing"
-            }
-            
-            # S3 config
-            mock_config.s3 = MagicMock()
-            mock_config.s3.__dict__ = {
-                "endpoint": "s3.amazonaws.com",
-                "region": "us-east-1",
-                "bucket": "mca-documents-test",
-                "access_key": "access_key",
-                "secret_key": "secret_key",
-                "encryption_key": "encryption_key"
-            }
-            
-            # Model config
-            mock_config.model = MagicMock()
-            mock_config.model.__dict__ = {
-                "path": "/models",
-                "version": "1.0.0",
-                "type": "svm"
-            }
-            
-            mock_load_config.return_value = mock_config
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_get_config_success(self, client, operations_token):
+        """Test retrieving service configuration with valid token."""
+        # Mock the configuration retrieval
+        with patch('app_config.get_safe_config', return_value={
+            "log_level": "INFO",
+            "rabbitmq": {"host": "rabbitmq", "port": 5672},
+            "s3": {"bucket": "test-bucket"}
+        }), \
+        patch('os.environ.get', side_effect=lambda key, default: 
+              "test" if key == "ENVIRONMENT" else 
+              "1.0.0" if key == "SERVICE_VERSION" else 
+              default), \
+        patch('_get_package_version', return_value="1.0.0"), \
+        patch('_get_python_version', return_value="3.9.0"):
             
             response = client.get(
                 "/diagnostics/config",
-                headers={"Authorization": f"Bearer {admin_token}"}
+                headers={"Authorization": f"Bearer {operations_token}"}
             )
-            
-            assert response.status_code == 200
+            assert response.status_code == status.HTTP_200_OK
             data = response.json()
-            assert "service" in data
-            assert "rabbitmq" in data
-            assert "s3" in data
-            assert "model" in data
+            assert "app_config" in data
             assert "environment" in data
-            assert data["service"]["name"] == "document-service"
-            assert data["environment"] == "test"
+            assert "version" in data
+            assert "dependencies" in data
+
+    def test_run_diagnostic_tests_success(self, client, operations_token):
+        """Test running diagnostic tests with valid token."""
+        # Mock the test functions
+        with patch('_test_rabbitmq_connection', return_value={
+            "test_name": "RabbitMQ Connection",
+            "status": "success",
+            "message": "Successfully connected to RabbitMQ",
+            "details": {"connected": True}
+        }), \
+        patch('_test_s3_connection', return_value={
+            "test_name": "S3 Storage Connection",
+            "status": "success",
+            "message": "Successfully connected to S3 storage",
+            "details": {"connected": True}
+        }):
             
-            # Verify sensitive values are masked
-            assert data["rabbitmq"]["password"] == "*****"
-            assert data["s3"]["access_key"] == "*****"
-            assert data["s3"]["secret_key"] == "*****"
-            assert data["s3"]["encryption_key"] == "*****"
-    
-    def test_run_diagnostic_tests_unauthorized(self, client: TestClient):
-        """Test running diagnostic tests without authentication."""
-        response = client.get("/diagnostics/test")
-        
-        assert response.status_code == 401
-        data = response.json()
-        assert "detail" in data
-    
-    def test_run_diagnostic_tests_operations_staff(self, client: TestClient, operations_token: str):
-        """Test running diagnostic tests with operations staff permissions."""
-        with patch("app.get_application") as mock_get_app, \
-             patch("utils.rabbitmq_utils.test_rabbitmq_connection") as mock_test_rabbitmq, \
-             patch("utils.s3_utils.test_s3_connection") as mock_test_s3, \
-             patch("utils.ml_utils.get_model_info") as mock_get_model_info:
-            
-            # Configure mocks
-            mock_app = MagicMock()
-            mock_app.queue_service = MagicMock()
-            mock_app.storage_service = MagicMock()
-            mock_app.classification_service = MagicMock()
-            mock_app.start_time = time.time() - 3600  # 1 hour ago
-            mock_get_app.return_value = mock_app
-            
-            mock_test_rabbitmq.return_value = {
-                "connected": True,
-                "latency_ms": 5.2,
-                "details": "Connected to RabbitMQ"
-            }
-            
-            mock_test_s3.return_value = {
-                "connected": True,
-                "latency_ms": 12.7,
-                "details": "Connected to S3"
-            }
-            
-            mock_get_model_info.return_value = {
-                "loaded": True,
-                "version": "1.0.0",
-                "accuracy": 0.992,
-                "last_trained": "2023-01-15T12:00:00Z",
-                "document_types": ["APPLICATION", "TAX_RETURN", "BANK_STATEMENT"]
-            }
-            
-            response = client.get(
+            response = client.post(
                 "/diagnostics/test",
+                json={"test_type": "all"},
                 headers={"Authorization": f"Bearer {operations_token}"}
             )
-            
-            assert response.status_code == 200
+            assert response.status_code == status.HTTP_200_OK
             data = response.json()
-            assert "timestamp" in data
-            assert "system" in data
-            assert "rabbitmq" in data
-            assert "s3" in data
-            assert "model" in data
+            assert "test_results" in data
             assert "overall_status" in data
-            assert data["overall_status"] == "healthy"
-            assert data["rabbitmq"]["connected"] is True
-            assert data["s3"]["connected"] is True
-            assert data["model"]["loaded"] is True
-    
-    def test_run_diagnostic_tests_degraded(self, client: TestClient, operations_token: str):
-        """Test running diagnostic tests with degraded service."""
-        with patch("app.get_application") as mock_get_app, \
-             patch("utils.rabbitmq_utils.test_rabbitmq_connection") as mock_test_rabbitmq, \
-             patch("utils.s3_utils.test_s3_connection") as mock_test_s3, \
-             patch("utils.ml_utils.get_model_info") as mock_get_model_info:
+            assert "execution_time" in data
+            assert data["overall_status"] == "success"
+
+    def test_run_diagnostic_tests_partial_failure(self, client, operations_token):
+        """Test running diagnostic tests with partial failure."""
+        # Mock the test functions with one success and one failure
+        with patch('_test_rabbitmq_connection', return_value={
+            "test_name": "RabbitMQ Connection",
+            "status": "success",
+            "message": "Successfully connected to RabbitMQ",
+            "details": {"connected": True}
+        }), \
+        patch('_test_s3_connection', return_value={
+            "test_name": "S3 Storage Connection",
+            "status": "failure",
+            "message": "Failed to connect to S3 storage",
+            "details": {"connected": False, "error": "Connection timeout"}
+        }):
             
-            # Configure mocks
-            mock_app = MagicMock()
-            mock_app.queue_service = MagicMock()
-            mock_app.storage_service = MagicMock()
-            mock_app.classification_service = MagicMock()
-            mock_get_app.return_value = mock_app
-            
-            mock_test_rabbitmq.return_value = {
-                "connected": True,
-                "latency_ms": 5.2,
-                "details": "Connected to RabbitMQ"
-            }
-            
-            mock_test_s3.return_value = {
-                "connected": True,
-                "latency_ms": 12.7,
-                "details": "Connected to S3"
-            }
-            
-            # Model not loaded
-            mock_get_model_info.return_value = {
-                "loaded": False,
-                "version": "1.0.0",
-                "accuracy": 0.0,
-                "last_trained": "2023-01-15T12:00:00Z",
-                "document_types": []
-            }
-            
-            response = client.get(
+            response = client.post(
                 "/diagnostics/test",
+                json={"test_type": "all"},
                 headers={"Authorization": f"Bearer {operations_token}"}
             )
-            
-            assert response.status_code == 200
+            assert response.status_code == status.HTTP_200_OK
             data = response.json()
-            assert data["overall_status"] == "degraded"
-            assert data["rabbitmq"]["connected"] is True
-            assert data["s3"]["connected"] is True
-            assert data["model"]["loaded"] is False
-    
-    def test_run_diagnostic_tests_critical(self, client: TestClient, operations_token: str):
-        """Test running diagnostic tests with critical failures."""
-        with patch("app.get_application") as mock_get_app, \
-             patch("utils.rabbitmq_utils.test_rabbitmq_connection") as mock_test_rabbitmq, \
-             patch("utils.s3_utils.test_s3_connection") as mock_test_s3, \
-             patch("utils.ml_utils.get_model_info") as mock_get_model_info:
-            
-            # Configure mocks
-            mock_app = MagicMock()
-            mock_app.queue_service = MagicMock()
-            mock_app.storage_service = MagicMock()
-            mock_app.classification_service = MagicMock()
-            mock_get_app.return_value = mock_app
-            
-            # RabbitMQ connection failure
-            mock_test_rabbitmq.return_value = {
-                "connected": False,
-                "error": "Connection refused"
-            }
-            
-            # S3 connection failure
-            mock_test_s3.return_value = {
-                "connected": False,
-                "error": "Access denied"
-            }
-            
-            mock_get_model_info.return_value = {
-                "loaded": True,
-                "version": "1.0.0",
-                "accuracy": 0.992,
-                "last_trained": "2023-01-15T12:00:00Z",
-                "document_types": ["APPLICATION", "TAX_RETURN", "BANK_STATEMENT"]
-            }
-            
-            response = client.get(
-                "/diagnostics/test",
-                headers={"Authorization": f"Bearer {operations_token}"}
-            )
-            
-            assert response.status_code == 200
-            data = response.json()
-            assert data["overall_status"] == "critical"
-            assert data["rabbitmq"]["connected"] is False
-            assert data["s3"]["connected"] is False
-            assert "Connection refused" in data["rabbitmq"]["error"]
-            assert "Access denied" in data["s3"]["error"]
-    
-    def test_test_rabbitmq(self, client: TestClient, operations_token: str):
-        """Test the RabbitMQ connection test endpoint."""
-        with patch("app.get_application") as mock_get_app, \
-             patch("utils.rabbitmq_utils.test_rabbitmq_connection") as mock_test_rabbitmq:
-            
-            # Configure mocks
-            mock_app = MagicMock()
-            mock_app.queue_service = MagicMock()
-            mock_get_app.return_value = mock_app
-            
-            mock_test_rabbitmq.return_value = {
-                "connected": True,
-                "latency_ms": 5.2,
-                "details": "Connected to RabbitMQ and published test message"
-            }
-            
-            response = client.post(
-                "/diagnostics/test/rabbitmq",
-                headers={"Authorization": f"Bearer {operations_token}"}
-            )
-            
-            assert response.status_code == 200
-            data = response.json()
-            assert data["connected"] is True
-            assert data["latency_ms"] == 5.2
-            assert "test message" in data["details"]
-            
-            # Verify test_rabbitmq_connection was called with test_publish=True
-            mock_test_rabbitmq.assert_called_once_with(mock_app.queue_service, test_publish=True)
-    
-    def test_test_s3(self, client: TestClient, operations_token: str):
-        """Test the S3 connection test endpoint."""
-        with patch("app.get_application") as mock_get_app, \
-             patch("utils.s3_utils.test_s3_connection") as mock_test_s3:
-            
-            # Configure mocks
-            mock_app = MagicMock()
-            mock_app.storage_service = MagicMock()
-            mock_get_app.return_value = mock_app
-            
-            mock_test_s3.return_value = {
-                "connected": True,
-                "latency_ms": 12.7,
-                "details": "Connected to S3 and verified write access"
-            }
-            
-            response = client.post(
-                "/diagnostics/test/s3",
-                headers={"Authorization": f"Bearer {operations_token}"}
-            )
-            
-            assert response.status_code == 200
-            data = response.json()
-            assert data["connected"] is True
-            assert data["latency_ms"] == 12.7
-            assert "verified write access" in data["details"]
-            
-            # Verify test_s3_connection was called with test_write=True
-            mock_test_s3.assert_called_once_with(mock_app.storage_service, test_write=True)
-    
-    def test_test_model(self, client: TestClient, operations_token: str):
-        """Test the model test endpoint."""
-        with patch("app.get_application") as mock_get_app, \
-             patch("utils.ml_utils.get_model_info") as mock_get_model_info:
-            
-            # Configure mocks
-            mock_app = MagicMock()
-            mock_app.classification_service = MagicMock()
-            mock_get_app.return_value = mock_app
-            
-            mock_get_model_info.return_value = {
-                "loaded": True,
-                "version": "1.0.0",
-                "accuracy": 0.992,
-                "last_trained": "2023-01-15T12:00:00Z",
-                "document_types": ["APPLICATION", "TAX_RETURN", "BANK_STATEMENT"]
-            }
-            
-            response = client.post(
-                "/diagnostics/test/model",
-                headers={"Authorization": f"Bearer {operations_token}"}
-            )
-            
-            assert response.status_code == 200
-            data = response.json()
-            assert data["loaded"] is True
-            assert data["version"] == "1.0.0"
-            assert data["accuracy"] == 0.992
-            assert data["document_types"] == ["APPLICATION", "TAX_RETURN", "BANK_STATEMENT"]
-            
-            # Verify get_model_info was called with run_test=True
-            mock_get_model_info.assert_called_once_with(mock_app.classification_service, run_test=True)
+            assert data["overall_status"] == "failure"
+            assert len(data["test_results"]) == 2
+            assert any(result["status"] == "failure" for result in data["test_results"])
+
+
+if __name__ == "__main__":
+    pytest.main()
