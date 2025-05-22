@@ -10,197 +10,167 @@ import { createServer } from 'http';
 import process from 'process';
 
 // Import configuration
-import { appConfig, imapConfig, rabbitMQConfig, s3Config } from './config';
-import { logger } from './config/logger';
+import { config } from './config/app';
+import { logger, setupLogger } from './config/logger';
+import { setupRabbitMQ } from './config/rabbitmq';
+import { setupS3Client } from './config/s3';
 
 // Import services
-import {
+import { 
   EmailMonitorService,
   MessageQueueService,
   StorageService,
   VirusScannerService,
+  AttachmentProcessorService
 } from './services';
 
-// Import utility functions
-import { formatTime } from './utils';
-import { createServiceError } from './utils/error';
-
-// Initialize services
-let emailMonitorService: EmailMonitorService | null = null;
-let messageQueueService: MessageQueueService | null = null;
-let storageService: StorageService | null = null;
-let virusScannerService: VirusScannerService | null = null;
-
-// Create a simple health check server
-const server = createServer((req, res) => {
-  if (req.url === '/health') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ status: 'ok', timestamp: formatTime(new Date()) }));
-  } else {
-    res.writeHead(404);
-    res.end();
-  }
-});
+// Import utilities
+import { handleError } from './utils/error';
 
 /**
- * Handle uncaught exceptions
+ * Initialize the application
  */
-process.on('uncaughtException', (error) => {
-  logger.error(
-    createServiceError('Uncaught exception', {
-      error,
-      context: 'process.uncaughtException',
-    })
-  );
-  // Perform graceful shutdown
-  shutdown(1);
-});
-
-/**
- * Handle unhandled promise rejections
- */
-process.on('unhandledRejection', (reason, promise) => {
-  logger.error(
-    createServiceError('Unhandled promise rejection', {
-      error: reason,
-      context: 'process.unhandledRejection',
-    })
-  );
-});
-
-/**
- * Handle termination signals for graceful shutdown
- */
-process.on('SIGTERM', () => {
-  logger.info('SIGTERM received, shutting down gracefully');
-  shutdown(0);
-});
-
-process.on('SIGINT', () => {
-  logger.info('SIGINT received, shutting down gracefully');
-  shutdown(0);
-});
-
-/**
- * Graceful shutdown function
- * Closes all connections and exits the process
- */
-async function shutdown(exitCode: number): Promise<void> {
-  logger.info('Shutting down Email Service...');
-  
-  // Set a timeout for shutdown to ensure the process exits
-  const shutdownTimeout = setTimeout(() => {
-    logger.error('Shutdown timed out, forcing exit');
-    process.exit(exitCode);
-  }, 10000); // 10 seconds timeout
-  
+async function bootstrap() {
   try {
-    // Stop the health check server
-    server.close();
-    
-    // Stop the email monitor service
-    if (emailMonitorService) {
-      logger.info('Stopping email monitor service...');
-      await emailMonitorService.stop();
-      emailMonitorService = null;
-    }
-    
-    // Close the message queue connection
-    if (messageQueueService) {
-      logger.info('Closing message queue connection...');
-      await messageQueueService.close();
-      messageQueueService = null;
-    }
-    
-    // Close the storage service
-    if (storageService) {
-      logger.info('Closing storage service...');
-      await storageService.close();
-      storageService = null;
-    }
-    
-    // Close the virus scanner service
-    if (virusScannerService) {
-      logger.info('Closing virus scanner service...');
-      await virusScannerService.close();
-      virusScannerService = null;
-    }
-    
-    logger.info('All connections closed, exiting process');
-    clearTimeout(shutdownTimeout);
-    process.exit(exitCode);
-  } catch (error) {
-    logger.error(
-      createServiceError('Error during shutdown', {
-        error,
-        context: 'shutdown',
-      })
-    );
-    clearTimeout(shutdownTimeout);
-    process.exit(1); // Exit with error code
-  }
-}
+    // Set up logger first to capture initialization logs
+    setupLogger();
+    logger.info(`Starting ${config.serviceName} v${config.version}`);
+    logger.info(`Environment: ${config.nodeEnv}`);
 
-/**
- * Initialize and start the Email Service
- */
-async function startService(): Promise<void> {
-  try {
-    logger.info(`Starting ${appConfig.serviceName} v${appConfig.version}...`);
+    // Initialize services
+    logger.info('Initializing services...');
     
-    // Initialize the virus scanner service
-    logger.info('Initializing virus scanner service...');
-    virusScannerService = new VirusScannerService();
-    await virusScannerService.initialize();
+    // Set up S3 client for document storage
+    logger.info('Connecting to S3 storage...');
+    const s3Client = await setupS3Client();
+    const storageService = new StorageService(s3Client, config.s3);
+    logger.info('S3 storage connection established');
     
-    // Initialize the storage service
-    logger.info('Initializing storage service...');
-    storageService = new StorageService(s3Config);
-    await storageService.initialize();
-    
-    // Initialize the message queue service
+    // Set up RabbitMQ connection
     logger.info('Connecting to RabbitMQ...');
-    messageQueueService = new MessageQueueService(rabbitMQConfig);
-    await messageQueueService.connect();
+    const rabbitMQConnection = await setupRabbitMQ();
+    const messageQueueService = new MessageQueueService(rabbitMQConnection, config.rabbitmq);
+    logger.info('RabbitMQ connection established');
     
-    // Initialize and start the email monitor service
-    logger.info('Starting email monitoring service...');
-    emailMonitorService = new EmailMonitorService(
-      imapConfig,
-      messageQueueService,
+    // Initialize virus scanner service
+    logger.info('Initializing virus scanner...');
+    const virusScannerService = new VirusScannerService(config.virusScanner);
+    logger.info('Virus scanner initialized');
+    
+    // Initialize attachment processor service
+    logger.info('Initializing attachment processor...');
+    const attachmentProcessorService = new AttachmentProcessorService(
+      virusScannerService,
       storageService,
-      virusScannerService
+      messageQueueService
     );
-    await emailMonitorService.start();
+    logger.info('Attachment processor initialized');
     
-    // Start the health check server
-    server.listen(appConfig.port, () => {
-      logger.info(`Health check server listening on port ${appConfig.port}`);
+    // Initialize email monitor service
+    logger.info('Initializing email monitor...');
+    const emailMonitorService = new EmailMonitorService(
+      config.imap,
+      attachmentProcessorService
+    );
+    logger.info('Email monitor initialized');
+    
+    // Create a simple HTTP server for health checks
+    const server = createServer((req, res) => {
+      if (req.url === '/health') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', service: config.serviceName, version: config.version }));
+      } else {
+        res.writeHead(404);
+        res.end();
+      }
     });
     
-    logger.info(`${appConfig.serviceName} started successfully`);
-    logger.info(`Environment: ${appConfig.environment}`);
-    logger.info(`Monitoring inbox: ${imapConfig.user}`);
-    logger.info(`Polling interval: ${imapConfig.pollingInterval}ms`);
+    server.listen(config.port, () => {
+      logger.info(`Health check server listening on port ${config.port}`);
+    });
+    
+    // Start email monitoring
+    logger.info('Starting email monitoring...');
+    await emailMonitorService.startMonitoring();
+    logger.info('Email monitoring started');
+    
+    // Set up graceful shutdown
+    setupGracefulShutdown({
+      server,
+      emailMonitorService,
+      messageQueueService,
+      storageService
+    });
+    
+    logger.info(`${config.serviceName} is running`);
   } catch (error) {
-    logger.error(
-      createServiceError('Failed to start Email Service', {
-        error,
-        context: 'startService',
-      })
-    );
-    // Shutdown with error code
-    await shutdown(1);
+    logger.error('Failed to start the application', { error: handleError(error) });
+    process.exit(1);
   }
 }
 
-// Start the service
-startService().catch((error) => {
-  logger.error(
-    createServiceError('Unhandled error during service startup', {
-      error,
-      context: 'startService',
-    })
-  );
-  process.exit(1);
-});
+/**
+ * Set up graceful shutdown to close connections when the process terminates
+ */
+function setupGracefulShutdown({
+  server,
+  emailMonitorService,
+  messageQueueService,
+  storageService
+}: {
+  server: ReturnType<typeof createServer>;
+  emailMonitorService: EmailMonitorService;
+  messageQueueService: MessageQueueService;
+  storageService: StorageService;
+}) {
+  // Handle process termination signals
+  const shutdownHandler = async (signal: string) => {
+    logger.info(`Received ${signal}. Shutting down gracefully...`);
+    
+    try {
+      // Stop the HTTP server first to prevent new health check requests
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+      logger.info('Health check server stopped');
+      
+      // Stop email monitoring
+      await emailMonitorService.stopMonitoring();
+      logger.info('Email monitoring stopped');
+      
+      // Close message queue connection
+      await messageQueueService.close();
+      logger.info('RabbitMQ connection closed');
+      
+      // Close storage connection
+      await storageService.close();
+      logger.info('S3 storage connection closed');
+      
+      logger.info('Graceful shutdown completed');
+      process.exit(0);
+    } catch (error) {
+      logger.error('Error during graceful shutdown', { error: handleError(error) });
+      process.exit(1);
+    }
+  };
+  
+  // Register shutdown handlers for different signals
+  process.on('SIGTERM', () => shutdownHandler('SIGTERM'));
+  process.on('SIGINT', () => shutdownHandler('SIGINT'));
+  
+  // Handle uncaught exceptions and unhandled rejections
+  process.on('uncaughtException', (error) => {
+    logger.error('Uncaught exception', { error: handleError(error) });
+    // Attempt graceful shutdown
+    shutdownHandler('uncaughtException');
+  });
+  
+  process.on('unhandledRejection', (reason) => {
+    logger.error('Unhandled rejection', { reason: handleError(reason) });
+    // Attempt graceful shutdown
+    shutdownHandler('unhandledRejection');
+  });
+}
+
+// Start the application
+bootstrap();
