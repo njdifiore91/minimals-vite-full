@@ -1,0 +1,291 @@
+# Security Scanning Template for CI/CD Pipelines
+# This template provides standardized vulnerability scanning for container images,
+# application dependencies, and infrastructure code using Trivy scanner.
+#
+# Usage:
+#   include:
+#     - project: 'infrastructure/ci/templates'
+#       file: 'security-scan.yml'
+#
+# Parameters:
+#   SCAN_TYPE: Type of scan to perform (container, fs, config)
+#   SCAN_TARGET: Target to scan (image name, directory path)
+#   SEVERITY_THRESHOLD: Comma-separated list of severities to check (UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL)
+#   EXIT_CODE: Exit code to return when vulnerabilities are found (0 = don't fail, 1 = fail)
+#   TRIVY_VERSION: Version of Trivy to use (default: 0.35.0)
+#   IGNORE_UNFIXED: Whether to ignore unfixed vulnerabilities (default: true)
+#   FORMAT: Output format (table, json, sarif)
+#   OUTPUT_FILE: File to write results to
+#   CACHE_DIR: Directory to cache vulnerability database
+
+variables:
+  # Default values for parameters
+  TRIVY_VERSION: "0.35.0"
+  SCAN_TYPE: "container"
+  SEVERITY_THRESHOLD: "HIGH,CRITICAL"
+  EXIT_CODE: "0"
+  IGNORE_UNFIXED: "true"
+  FORMAT: "table"
+  CACHE_DIR: ".trivycache"
+  TRIVY_TIMEOUT: "10m"
+  
+  # Environment-specific configurations
+  # These can be overridden in the pipeline that includes this template
+  DEVELOPMENT_SEVERITY_THRESHOLD: "CRITICAL"
+  DEVELOPMENT_EXIT_CODE: "0"
+  
+  STAGING_SEVERITY_THRESHOLD: "HIGH,CRITICAL"
+  STAGING_EXIT_CODE: "1"
+  
+  PRODUCTION_SEVERITY_THRESHOLD: "MEDIUM,HIGH,CRITICAL"
+  PRODUCTION_EXIT_CODE: "1"
+
+.trivy_install:
+  before_script:
+    - echo "Installing Trivy ${TRIVY_VERSION}..."
+    - apt-get update && apt-get install -y curl
+    - curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin ${TRIVY_VERSION}
+    - trivy --version
+    # Create cache directory if it doesn't exist
+    - mkdir -p ${CACHE_DIR}
+
+.configure_environment_settings:
+  before_script:
+    - |
+      if [[ "${CI_ENVIRONMENT_NAME}" == "development" ]]; then
+        echo "Configuring for development environment"
+        SEVERITY_THRESHOLD=${DEVELOPMENT_SEVERITY_THRESHOLD}
+        EXIT_CODE=${DEVELOPMENT_EXIT_CODE}
+      elif [[ "${CI_ENVIRONMENT_NAME}" == "staging" ]]; then
+        echo "Configuring for staging environment"
+        SEVERITY_THRESHOLD=${STAGING_SEVERITY_THRESHOLD}
+        EXIT_CODE=${STAGING_EXIT_CODE}
+      elif [[ "${CI_ENVIRONMENT_NAME}" == "production" ]]; then
+        echo "Configuring for production environment"
+        SEVERITY_THRESHOLD=${PRODUCTION_SEVERITY_THRESHOLD}
+        EXIT_CODE=${PRODUCTION_EXIT_CODE}
+      else
+        echo "Using default configuration"
+      fi
+      echo "Severity threshold: ${SEVERITY_THRESHOLD}"
+      echo "Exit code: ${EXIT_CODE}"
+
+# Container Image Scanning
+# Scans container images for vulnerabilities in OS packages and application dependencies
+container_scan:
+  extends: .trivy_install
+  stage: security_scan
+  variables:
+    SCAN_TYPE: "container"
+  script:
+    - echo "Scanning container image: ${SCAN_TARGET}"
+    - |
+      trivy ${SCAN_TYPE} 
+        --cache-dir ${CACHE_DIR} 
+        --exit-code ${EXIT_CODE} 
+        --format ${FORMAT} 
+        --severity ${SEVERITY_THRESHOLD} 
+        --timeout ${TRIVY_TIMEOUT} 
+        --ignore-unfixed=${IGNORE_UNFIXED} 
+        ${OUTPUT_FILE:+--output ${OUTPUT_FILE}} 
+        ${SCAN_TARGET}
+  cache:
+    paths:
+      - ${CACHE_DIR}
+  artifacts:
+    paths:
+      - ${OUTPUT_FILE}
+    when: always
+    expire_in: 1 week
+  rules:
+    - if: $SCAN_TYPE == "container"
+
+# Filesystem Scanning
+# Scans application dependencies (package.json, requirements.txt, pom.xml, etc.)
+filesystem_scan:
+  extends: .trivy_install
+  stage: security_scan
+  variables:
+    SCAN_TYPE: "fs"
+  script:
+    - echo "Scanning filesystem: ${SCAN_TARGET}"
+    - |
+      trivy ${SCAN_TYPE} 
+        --cache-dir ${CACHE_DIR} 
+        --exit-code ${EXIT_CODE} 
+        --format ${FORMAT} 
+        --severity ${SEVERITY_THRESHOLD} 
+        --timeout ${TRIVY_TIMEOUT} 
+        --ignore-unfixed=${IGNORE_UNFIXED} 
+        ${OUTPUT_FILE:+--output ${OUTPUT_FILE}} 
+        ${SCAN_TARGET}
+  cache:
+    paths:
+      - ${CACHE_DIR}
+  artifacts:
+    paths:
+      - ${OUTPUT_FILE}
+    when: always
+    expire_in: 1 week
+  rules:
+    - if: $SCAN_TYPE == "fs"
+
+# Infrastructure Code Scanning
+# Scans Terraform, Kubernetes, and other IaC files for misconfigurations
+config_scan:
+  extends: .trivy_install
+  stage: security_scan
+  variables:
+    SCAN_TYPE: "config"
+  script:
+    - echo "Scanning infrastructure code: ${SCAN_TARGET}"
+    - |
+      trivy ${SCAN_TYPE} 
+        --cache-dir ${CACHE_DIR} 
+        --exit-code ${EXIT_CODE} 
+        --format ${FORMAT} 
+        --severity ${SEVERITY_THRESHOLD} 
+        --timeout ${TRIVY_TIMEOUT} 
+        ${OUTPUT_FILE:+--output ${OUTPUT_FILE}} 
+        ${SCAN_TARGET}
+  cache:
+    paths:
+      - ${CACHE_DIR}
+  artifacts:
+    paths:
+      - ${OUTPUT_FILE}
+    when: always
+    expire_in: 1 week
+  rules:
+    - if: $SCAN_TYPE == "config"
+
+# Environment-specific scanning jobs
+# These jobs automatically set the appropriate severity thresholds based on the environment
+
+development_security_scan:
+  extends:
+    - .configure_environment_settings
+    - .trivy_install
+  stage: security_scan
+  variables:
+    CI_ENVIRONMENT_NAME: "development"
+  script:
+    - echo "Running security scan for development environment"
+    - |
+      trivy ${SCAN_TYPE} 
+        --cache-dir ${CACHE_DIR} 
+        --exit-code ${DEVELOPMENT_EXIT_CODE} 
+        --format ${FORMAT} 
+        --severity ${DEVELOPMENT_SEVERITY_THRESHOLD} 
+        --timeout ${TRIVY_TIMEOUT} 
+        --ignore-unfixed=${IGNORE_UNFIXED} 
+        ${OUTPUT_FILE:+--output ${OUTPUT_FILE}} 
+        ${SCAN_TARGET}
+  cache:
+    paths:
+      - ${CACHE_DIR}
+  artifacts:
+    paths:
+      - ${OUTPUT_FILE}
+    when: always
+    expire_in: 1 week
+  rules:
+    - if: $CI_ENVIRONMENT_NAME == "development"
+
+staging_security_scan:
+  extends:
+    - .configure_environment_settings
+    - .trivy_install
+  stage: security_scan
+  variables:
+    CI_ENVIRONMENT_NAME: "staging"
+  script:
+    - echo "Running security scan for staging environment"
+    - |
+      trivy ${SCAN_TYPE} 
+        --cache-dir ${CACHE_DIR} 
+        --exit-code ${STAGING_EXIT_CODE} 
+        --format ${FORMAT} 
+        --severity ${STAGING_SEVERITY_THRESHOLD} 
+        --timeout ${TRIVY_TIMEOUT} 
+        --ignore-unfixed=${IGNORE_UNFIXED} 
+        ${OUTPUT_FILE:+--output ${OUTPUT_FILE}} 
+        ${SCAN_TARGET}
+  cache:
+    paths:
+      - ${CACHE_DIR}
+  artifacts:
+    paths:
+      - ${OUTPUT_FILE}
+    when: always
+    expire_in: 1 week
+  rules:
+    - if: $CI_ENVIRONMENT_NAME == "staging"
+
+production_security_scan:
+  extends:
+    - .configure_environment_settings
+    - .trivy_install
+  stage: security_scan
+  variables:
+    CI_ENVIRONMENT_NAME: "production"
+  script:
+    - echo "Running security scan for production environment"
+    - |
+      trivy ${SCAN_TYPE} 
+        --cache-dir ${CACHE_DIR} 
+        --exit-code ${PRODUCTION_EXIT_CODE} 
+        --format ${FORMAT} 
+        --severity ${PRODUCTION_SEVERITY_THRESHOLD} 
+        --timeout ${TRIVY_TIMEOUT} 
+        --ignore-unfixed=${IGNORE_UNFIXED} 
+        ${OUTPUT_FILE:+--output ${OUTPUT_FILE}} 
+        ${SCAN_TARGET}
+  cache:
+    paths:
+      - ${CACHE_DIR}
+  artifacts:
+    paths:
+      - ${OUTPUT_FILE}
+    when: always
+    expire_in: 1 week
+  rules:
+    - if: $CI_ENVIRONMENT_NAME == "production"
+
+# Example usage:
+# 
+# include:
+#   - project: 'infrastructure/ci/templates'
+#     file: 'security-scan.yml'
+#
+# stages:
+#   - build
+#   - security_scan
+#   - deploy
+#
+# build_image:
+#   stage: build
+#   script:
+#     - docker build -t myapp:$CI_COMMIT_SHA .
+#
+# scan_image:
+#   extends: container_scan
+#   variables:
+#     SCAN_TARGET: "myapp:$CI_COMMIT_SHA"
+#     FORMAT: "sarif"
+#     OUTPUT_FILE: "trivy-results.sarif"
+#     SEVERITY_THRESHOLD: "HIGH,CRITICAL"
+#     EXIT_CODE: "1"  # Fail pipeline if vulnerabilities found
+#
+# scan_dependencies:
+#   extends: filesystem_scan
+#   variables:
+#     SCAN_TARGET: "."
+#     FORMAT: "json"
+#     OUTPUT_FILE: "dependency-scan.json"
+#
+# scan_terraform:
+#   extends: config_scan
+#   variables:
+#     SCAN_TARGET: "./infrastructure"
+#     FORMAT: "table"
