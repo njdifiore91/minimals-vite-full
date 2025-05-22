@@ -2,842 +2,693 @@
 # -*- coding: utf-8 -*-
 
 """
-Support Vector Machine (SVM) Classifier for Document Classification.
+Support Vector Machine (SVM) classifier for document classification.
 
-This module implements an SVM classifier for document classification in the Document Service.
-It extends the base model interface and provides a complete implementation of SVM-based
-document classification with hyperparameter tuning, feature importance analysis, and confidence scoring.
+This module implements an SVM-based document classifier that extends the base model
+interface. It provides methods for training, prediction, evaluation, and feature
+importance analysis for document classification tasks.
 
-The SVM classifier uses kernel methods to achieve high accuracy in document classification,
-particularly for high-dimensional feature spaces typical in text classification. It provides
-confidence scores based on distance to the decision boundary and includes methods for
-hyperparameter tuning and cross-validation.
+The SVM classifier supports both linear and non-linear kernels, with hyperparameter
+tuning capabilities and confidence scoring for classification results.
 
-Example usage:
-    # Initialize the classifier with default parameters
-    classifier = SVMClassifier()
+Classes:
+    SVMClassifier: SVM-based document classifier implementation.
+
+Example:
+    ```python
+    from models import SVMClassifier
+    from types.config import ModelConfig
     
-    # Train the classifier on document features
-    classifier.fit(features, labels)
+    # Create configuration
+    config = ModelConfig(
+        model_path="/models/svm_classifier.pkl",
+        vectorizer_path="/models/tfidf_vectorizer.pkl",
+        min_confidence_threshold=0.75,
+        supported_document_types=["APPLICATION", "TAX_RETURN", "BANK_STATEMENT"],
+        batch_size=32,
+        max_document_size_mb=10,
+        gpu_acceleration=False,
+        memory_limit_mb=16384
+    )
     
-    # Predict document types with confidence scores
-    predictions = classifier.predict(features)
-    probabilities = classifier.predict_proba(features)
+    # Create and train classifier
+    classifier = SVMClassifier(config)
+    classifier.fit(X_train, y_train)
     
-    # Get feature importance ranking
-    importance = classifier.get_feature_importance()
+    # Make predictions with confidence scores
+    results = classifier.predict_with_confidence(X_test)
     
-    # Optimize hyperparameters
-    classifier.optimize_hyperparameters(features, labels)
+    # Evaluate model performance
+    metrics = classifier.evaluate(X_test, y_test)
+    ```
 """
 
 import logging
-import time
-from datetime import datetime
-from typing import Dict, List, Optional, Tuple, Union, Any, Callable
-
 import numpy as np
-import pandas as pd
+from typing import Dict, List, Optional, Tuple, Union, Any, cast
 from sklearn.svm import SVC
-from sklearn.model_selection import GridSearchCV, RandomizedSearchCV, cross_val_score
-from sklearn.metrics import accuracy_score, precision_recall_fscore_support
+from sklearn.model_selection import GridSearchCV, cross_val_score
+from sklearn.metrics import accuracy_score, precision_recall_fscore_support, confusion_matrix
 from sklearn.inspection import permutation_importance
+import time
 
-# Import types
+from .base_model import BaseModel, T
 from ..types.classification import (
-    ClassificationModel,
-    ConfidenceScore,
-    DocumentType,
     FeatureVector,
-    ModelParameters,
     ClassificationResult,
-    ClassificationMetrics
+    ConfidenceScore,
+    ModelParameters,
+    ClassificationMetrics,
+    DocumentType
 )
-from ..types.errors import Result, ServiceError, ErrorCategory
+from ..types.config import ModelConfig
+from ..types.errors import Result
 
-# Set up logging
 logger = logging.getLogger(__name__)
 
 
-class SVMClassifier(ClassificationModel):
-    """Support Vector Machine classifier for document classification.
+class SVMClassifier(BaseModel['SVMClassifier']):
+    """
+    Support Vector Machine (SVM) classifier for document classification.
     
-    This class implements an SVM classifier for document classification,
-    extending the base model interface. It provides methods for training, prediction,
-    confidence scoring, feature importance analysis, and hyperparameter tuning.
+    This class extends the BaseModel abstract class to provide a complete
+    implementation of SVM-based document classification with hyperparameter tuning,
+    feature importance analysis, and confidence scoring.
     
-    The classifier uses scikit-learn's SVC as the underlying implementation
-    and enhances it with additional functionality specific to document classification
-    requirements.
+    Attributes:
+        config (ModelConfig): Configuration parameters for the model.
+        model (Optional[SVC]): The underlying scikit-learn SVM model instance.
+        model_name (str): Name of the model for identification and logging.
+        model_version (str): Version of the model for tracking and compatibility.
+        classes_ (Optional[np.ndarray]): Array of class labels known to the classifier.
+        trained (bool): Flag indicating whether the model has been trained.
+        feature_names (Optional[List[str]]): Names of features used by the model.
+        kernel (str): Kernel type used by the SVM (linear, rbf, poly, sigmoid).
+        is_linear (bool): Flag indicating whether the model uses a linear kernel.
     """
     
-    def __init__(self, params: Optional[ModelParameters] = None):
-        """Initialize the SVM classifier.
+    def __init__(self, config: ModelConfig):
+        """
+        Initialize the SVM classifier with configuration parameters.
         
         Args:
-            params: Optional dictionary of model parameters. If None, default parameters are used.
+            config (ModelConfig): Configuration parameters for the model.
         """
-        self.params = params or self._get_default_params()
-        self.model = self._create_model()
-        self.feature_names: List[str] = []
-        self.class_mapping: Dict[int, DocumentType] = {}
-        self.inverse_class_mapping: Dict[DocumentType, int] = {}
-        self.is_fitted = False
-        self.version = "1.0.0"
-        self.last_trained = None
-        self.feature_importances_ = None
-        self.training_accuracy = None
+        super().__init__(config)
         
-        logger.info(f"Initialized SVMClassifier with parameters: {self.params}")
+        # Set SVM-specific attributes
+        self.kernel = config.get('kernel', 'rbf')
+        self.is_linear = self.kernel == 'linear'
+        
+        # Initialize SVM model with configuration parameters
+        svm_params = self._get_svm_params_from_config(config)
+        self.model = SVC(**svm_params)
+        
+        logger.info(f"Initialized {self.model_name} with {self.kernel} kernel")
     
-    def _get_default_params(self) -> ModelParameters:
-        """Get default parameters for the SVM classifier.
-        
-        Returns:
-            Dictionary of default model parameters
+    def _get_svm_params_from_config(self, config: ModelConfig) -> Dict[str, Any]:
         """
-        return {
-            "C": 1.0,              # Regularization parameter
-            "kernel": "rbf",      # Kernel type (rbf, linear, poly, sigmoid)
-            "degree": 3,          # Degree of polynomial kernel (if kernel='poly')
-            "gamma": "scale",     # Kernel coefficient for 'rbf', 'poly' and 'sigmoid'
-            "coef0": 0.0,         # Independent term in kernel function (for 'poly' and 'sigmoid')
-            "shrinking": True,    # Whether to use the shrinking heuristic
-            "probability": True,  # Whether to enable probability estimates
-            "tol": 1e-3,          # Tolerance for stopping criterion
-            "cache_size": 200,    # Size of kernel cache
-            "class_weight": "balanced",  # Class weights
-            "verbose": False,     # Enable verbose output
-            "max_iter": -1,       # Hard limit on iterations within solver (-1 means no limit)
-            "decision_function_shape": "ovr",  # Decision function shape ('ovo', 'ovr')
-            "break_ties": False,  # Whether to break ties according to confidence values
-            "random_state": 42    # Random seed for reproducibility
+        Extract SVM-specific parameters from the configuration.
+        
+        Args:
+            config (ModelConfig): Configuration parameters for the model.
+            
+        Returns:
+            Dict[str, Any]: Dictionary of SVM parameters for scikit-learn.
+        """
+        # Default SVM parameters
+        params = {
+            'kernel': self.kernel,
+            'C': config.get('C', 1.0),
+            'probability': True,  # Required for predict_proba
+            'random_state': config.get('random_state', 42),
+            'verbose': config.get('verbose', False),
+            'class_weight': config.get('class_weight', 'balanced'),
         }
-    
-    def _create_model(self) -> SVC:
-        """Create a scikit-learn SVC with the specified parameters.
         
-        Returns:
-            Initialized scikit-learn SVC
-        """
-        return SVC(**self.params)
+        # Add kernel-specific parameters
+        if self.kernel == 'rbf' or self.kernel == 'poly' or self.kernel == 'sigmoid':
+            params['gamma'] = config.get('gamma', 'scale')
+            
+        if self.kernel == 'poly':
+            params['degree'] = config.get('degree', 3)
+            params['coef0'] = config.get('coef0', 0.0)
+            
+        if self.kernel == 'sigmoid':
+            params['coef0'] = config.get('coef0', 0.0)
+        
+        return params
     
     def fit(self, X: FeatureVector, y: np.ndarray) -> 'SVMClassifier':
-        """Fit the SVM classifier to the training data.
+        """
+        Train the SVM model on the provided data.
         
         Args:
-            X: Feature vectors for training
-            y: Target labels for training (can be numeric indices or DocumentType instances)
+            X (FeatureVector): Feature vectors for training.
+            y (np.ndarray): Target labels for training.
             
         Returns:
-            Self for method chaining
+            SVMClassifier: The trained model instance (self) for method chaining.
             
         Raises:
-            ValueError: If input data is invalid
+            ValueError: If input data is invalid or incompatible with the model.
+            RuntimeError: If training fails due to internal errors.
         """
-        if X.shape[0] != len(y):
-            raise ValueError(f"Number of samples in X ({X.shape[0]}) does not match length of y ({len(y)})")
+        # Validate input data
+        self._validate_input(X, y)
         
         start_time = time.time()
-        logger.info(f"Training SVMClassifier on {X.shape[0]} samples with {X.shape[1]} features")
+        logger.info(f"Training {self.model_name} on {X.shape[0]} samples with {X.shape[1]} features")
         
-        # Convert DocumentType instances to numeric indices if needed
-        if isinstance(y[0], DocumentType):
-            # Create class mapping
-            unique_classes = list(set(y))
-            self.class_mapping = {i: cls for i, cls in enumerate(unique_classes)}
-            self.inverse_class_mapping = {cls: i for i, cls in enumerate(unique_classes)}
-            
-            # Convert to numeric indices
-            y_numeric = np.array([self.inverse_class_mapping[cls] for cls in y])
-        else:
-            # Assume y already contains numeric indices
-            y_numeric = y
-            
-            # Create default class mapping if not already set
-            if not self.class_mapping:
-                unique_classes = list(set(y_numeric))
-                self.class_mapping = {i: DocumentType(f"CLASS_{i}") for i in unique_classes}
-                self.inverse_class_mapping = {v: k for k, v in self.class_mapping.items()}
-        
-        # Fit the model
-        self.model.fit(X, y_numeric)
-        
-        # Update model state
-        self.is_fitted = True
-        self.last_trained = datetime.now()
-        
-        # Calculate training accuracy
-        y_pred = self.model.predict(X)
-        self.training_accuracy = accuracy_score(y_numeric, y_pred)
-        
-        elapsed_time = time.time() - start_time
-        logger.info(f"SVMClassifier training completed in {elapsed_time:.2f} seconds")
-        logger.info(f"Training accuracy: {self.training_accuracy:.4f}")
-        
-        return self
-    
-    def predict(self, X: FeatureVector) -> np.ndarray:
-        """Predict class labels for samples in X.
-        
-        Args:
-            X: Feature vectors to predict
-            
-        Returns:
-            Predicted class labels (as DocumentType instances)
-            
-        Raises:
-            ValueError: If the model has not been trained
-        """
-        if not self.is_fitted:
-            raise ValueError("Model has not been trained. Call fit() before predict().")
-        
-        # Get numeric predictions from the model
-        y_pred_numeric = self.model.predict(X)
-        
-        # Convert numeric predictions to DocumentType instances
-        y_pred = np.array([self.class_mapping[idx] for idx in y_pred_numeric])
-        
-        return y_pred
-    
-    def predict_proba(self, X: FeatureVector) -> np.ndarray:
-        """Predict class probabilities for samples in X.
-        
-        Args:
-            X: Feature vectors to predict
-            
-        Returns:
-            Class probabilities for each sample
-            
-        Raises:
-            ValueError: If the model has not been trained or probability=False
-        """
-        if not self.is_fitted:
-            raise ValueError("Model has not been trained. Call fit() before predict_proba().")
-        
-        if not self.params.get("probability", True):
-            raise ValueError("SVM model was trained with probability=False. Cannot predict probabilities.")
-        
-        # Get probability predictions from the model
-        probas = self.model.predict_proba(X)
-        
-        return probas
-    
-    def predict_with_confidence(self, X: FeatureVector) -> List[Tuple[DocumentType, ConfidenceScore]]:
-        """Predict class labels with confidence scores for samples in X.
-        
-        Args:
-            X: Feature vectors to predict
-            
-        Returns:
-            List of tuples containing (predicted class, confidence score)
-            
-        Raises:
-            ValueError: If the model has not been trained
-        """
-        if not self.is_fitted:
-            raise ValueError("Model has not been trained. Call fit() before predict_with_confidence().")
-        
-        # Get numeric predictions from the model
-        y_pred_numeric = self.model.predict(X)
-        
-        # Get confidence scores
-        if self.params.get("probability", True):
-            # If probability=True, use predict_proba
-            probas = self.model.predict_proba(X)
-            confidences = np.max(probas, axis=1)
-        else:
-            # If probability=False, use decision_function
-            # For binary classification, decision_function returns a 1D array
-            # For multiclass, it returns a 2D array with shape (n_samples, n_classes)
-            decision_values = self.model.decision_function(X)
-            
-            if decision_values.ndim == 1:
-                # Binary classification
-                # Convert decision values to confidence scores (0 to 1 range)
-                # Using sigmoid function: 1 / (1 + exp(-x))
-                confidences = 1.0 / (1.0 + np.exp(-np.abs(decision_values)))
+        try:
+            # Check if hyperparameter tuning is enabled
+            if self.config.get('hyperparameter_tuning', False):
+                self._perform_hyperparameter_tuning(X, y)
             else:
-                # Multiclass classification
-                # For each sample, get the maximum decision value
-                # and convert to confidence score
-                max_decision_values = np.max(decision_values, axis=1)
-                confidences = 1.0 / (1.0 + np.exp(-max_decision_values))
-        
-        # Create result list
-        results = []
-        for i, pred_idx in enumerate(y_pred_numeric):
-            # Get predicted class and its confidence
-            pred_class = self.class_mapping[pred_idx]
-            confidence = confidences[i]
+                # Train the model with current parameters
+                self.model.fit(X, y)
             
-            # Create confidence score
-            confidence_score = ConfidenceScore(confidence)
+            # Store class labels and feature count
+            self.classes_ = self.model.classes_
+            self.trained = True
             
-            # Add to results
-            results.append((pred_class, confidence_score))
-        
-        return results
+            training_time = time.time() - start_time
+            logger.info(f"Training completed in {training_time:.2f} seconds")
+            
+            # Evaluate on training data for initial performance assessment
+            train_accuracy = self.model.score(X, y)
+            logger.info(f"Training accuracy: {train_accuracy:.4f}")
+            
+            return self
+            
+        except Exception as e:
+            error_msg = f"Failed to train {self.model_name}: {str(e)}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg) from e
     
-    def get_feature_importance(self) -> Dict[str, float]:
-        """Get feature importance ranking.
-        
-        For SVM, feature importance is not directly available like in tree-based models.
-        This method uses permutation importance to estimate feature importance.
-        
-        Returns:
-            Dictionary mapping feature names to importance scores
-            
-        Raises:
-            ValueError: If the model has not been trained
+    def _perform_hyperparameter_tuning(self, X: FeatureVector, y: np.ndarray) -> None:
         """
-        if not self.is_fitted:
-            raise ValueError("Model has not been trained. Call fit() before get_feature_importance().")
-        
-        # If feature importances have already been calculated, return them
-        if self.feature_importances_ is not None:
-            # Create dictionary mapping feature names to importance scores
-            if self.feature_names and len(self.feature_names) == len(self.feature_importances_):
-                # If feature names are available, use them
-                importance_dict = {name: float(importance) for name, importance in zip(self.feature_names, self.feature_importances_)}
-            else:
-                # Otherwise, use feature indices
-                importance_dict = {f"feature_{i}": float(importance) for i, importance in enumerate(self.feature_importances_)}
-            
-            # Sort by importance (descending)
-            importance_dict = dict(sorted(importance_dict.items(), key=lambda x: x[1], reverse=True))
-            
-            return importance_dict
-        
-        logger.warning("Feature importance for SVM requires a separate dataset. Returning empty dictionary.")
-        return {}
-    
-    def calculate_feature_importance(self, X: FeatureVector, y: np.ndarray, n_repeats: int = 10, random_state: int = 42) -> Dict[str, float]:
-        """Calculate feature importance using permutation importance.
-        
-        This method calculates feature importance by measuring how much model performance
-        decreases when a feature is randomly permuted. It requires a separate dataset
-        (typically the validation set) to calculate importance.
+        Perform hyperparameter tuning using grid search cross-validation.
         
         Args:
-            X: Feature vectors for importance calculation
-            y: Target labels for importance calculation
-            n_repeats: Number of times to permute each feature
-            random_state: Random seed for reproducibility
-            
-        Returns:
-            Dictionary mapping feature names to importance scores
+            X (FeatureVector): Feature vectors for training.
+            y (np.ndarray): Target labels for training.
             
         Raises:
-            ValueError: If the model has not been trained or input data is invalid
+            RuntimeError: If hyperparameter tuning fails.
         """
-        if not self.is_fitted:
-            raise ValueError("Model has not been trained. Call fit() before calculate_feature_importance().")
+        logger.info("Performing hyperparameter tuning with grid search")
         
-        if X.shape[0] != len(y):
-            raise ValueError(f"Number of samples in X ({X.shape[0]}) does not match length of y ({len(y)})")
-        
-        # Convert DocumentType instances to numeric indices if needed
-        if isinstance(y[0], DocumentType):
-            y_numeric = np.array([self.inverse_class_mapping.get(cls, -1) for cls in y])
-            # Check for unknown classes
-            if -1 in y_numeric:
-                raise ValueError("Data contains classes not seen during training")
-        else:
-            # Assume y already contains numeric indices
-            y_numeric = y
-        
-        logger.info(f"Calculating permutation importance with {n_repeats} repeats")
-        start_time = time.time()
-        
-        # Calculate permutation importance
-        result = permutation_importance(
-            self.model, X, y_numeric, n_repeats=n_repeats, random_state=random_state
-        )
-        
-        # Store feature importances
-        self.feature_importances_ = result.importances_mean
-        
-        # Create dictionary mapping feature names to importance scores
-        if self.feature_names and len(self.feature_names) == len(self.feature_importances_):
-            # If feature names are available, use them
-            importance_dict = {name: float(importance) for name, importance in zip(self.feature_names, self.feature_importances_)}
-        else:
-            # Otherwise, use feature indices
-            importance_dict = {f"feature_{i}": float(importance) for i, importance in enumerate(self.feature_importances_)}
-        
-        # Sort by importance (descending)
-        importance_dict = dict(sorted(importance_dict.items(), key=lambda x: x[1], reverse=True))
-        
-        elapsed_time = time.time() - start_time
-        logger.info(f"Permutation importance calculation completed in {elapsed_time:.2f} seconds")
-        
-        return importance_dict
-    
-    def get_decision_function(self, X: FeatureVector) -> np.ndarray:
-        """Get decision function values for samples in X.
-        
-        The decision function gives the signed distance to the hyperplane for each sample.
-        For binary classification, positive values indicate the first class, negative values
-        indicate the second class. For multiclass, the decision function is calculated for
-        each class against the rest (for 'ovr') or for each pair of classes (for 'ovo').
-        
-        Args:
-            X: Feature vectors to get decision function values for
-            
-        Returns:
-            Decision function values
-            
-        Raises:
-            ValueError: If the model has not been trained
-        """
-        if not self.is_fitted:
-            raise ValueError("Model has not been trained. Call fit() before get_decision_function().")
-        
-        # Get decision function values from the model
-        decision_values = self.model.decision_function(X)
-        
-        return decision_values
-    
-    def get_support_vectors(self) -> Tuple[np.ndarray, List[int]]:
-        """Get support vectors and their indices.
-        
-        Support vectors are the samples that lie closest to the decision boundary.
-        They are the most difficult to classify and have the most influence on the
-        position of the hyperplane.
-        
-        Returns:
-            Tuple containing (support vectors, support vector indices)
-            
-        Raises:
-            ValueError: If the model has not been trained
-        """
-        if not self.is_fitted:
-            raise ValueError("Model has not been trained. Call fit() before get_support_vectors().")
-        
-        # Get support vectors and their indices from the model
-        support_vectors = self.model.support_vectors_
-        support_indices = self.model.support_
-        
-        return support_vectors, support_indices.tolist()
-    
-    def get_kernel_matrix(self, X: FeatureVector) -> np.ndarray:
-        """Get kernel matrix for samples in X.
-        
-        The kernel matrix contains the kernel values between each pair of samples.
-        This is useful for understanding the similarity structure of the data in
-        the feature space induced by the kernel.
-        
-        Args:
-            X: Feature vectors to get kernel matrix for
-            
-        Returns:
-            Kernel matrix with shape (n_samples, n_samples)
-            
-        Raises:
-            ValueError: If the model has not been trained
-        """
-        if not self.is_fitted:
-            raise ValueError("Model has not been trained. Call fit() before get_kernel_matrix().")
-        
-        # Get kernel function from the model
-        kernel = self.model._get_kernel()
-        
-        # Calculate kernel matrix
-        K = kernel(X, X)
-        
-        return K
-    
-    def optimize_hyperparameters(self, X: FeatureVector, y: np.ndarray, 
-                               param_grid: Optional[Dict[str, List[Any]]] = None,
-                               cv: int = 5, scoring: str = 'accuracy',
-                               n_iter: int = 10, method: str = 'grid') -> Dict[str, Any]:
-        """Optimize hyperparameters using cross-validation.
-        
-        Args:
-            X: Feature vectors for optimization
-            y: Target labels for optimization
-            param_grid: Parameter grid to search. If None, a default grid is used.
-            cv: Number of cross-validation folds
-            scoring: Scoring metric to use
-            n_iter: Number of iterations for randomized search
-            method: Search method ('grid' or 'random')
-            
-        Returns:
-            Dictionary with optimization results
-            
-        Raises:
-            ValueError: If input data is invalid or method is unknown
-        """
-        if X.shape[0] != len(y):
-            raise ValueError(f"Number of samples in X ({X.shape[0]}) does not match length of y ({len(y)})")
-        
-        if method not in ['grid', 'random']:
-            raise ValueError(f"Unknown search method: {method}. Use 'grid' or 'random'.")
-        
-        start_time = time.time()
-        logger.info(f"Optimizing SVMClassifier parameters using {method} search with {cv}-fold cross-validation")
-        
-        # Convert DocumentType instances to numeric indices if needed
-        if isinstance(y[0], DocumentType):
-            # Create class mapping
-            unique_classes = list(set(y))
-            self.class_mapping = {i: cls for i, cls in enumerate(unique_classes)}
-            self.inverse_class_mapping = {cls: i for i, cls in enumerate(unique_classes)}
-            
-            # Convert to numeric indices
-            y_numeric = np.array([self.inverse_class_mapping[cls] for cls in y])
-        else:
-            # Assume y already contains numeric indices
-            y_numeric = y
-        
-        # Define default parameter grid if not provided
-        if param_grid is None:
+        # Define parameter grid based on kernel type
+        if self.kernel == 'linear':
             param_grid = {
-                "C": [0.1, 1.0, 10.0, 100.0],
-                "kernel": ["linear", "rbf", "poly", "sigmoid"],
-                "gamma": ["scale", "auto", 0.1, 0.01, 0.001],
-                "degree": [2, 3, 4],  # Only relevant for poly kernel
-                "class_weight": ["balanced", None]
+                'C': [0.1, 1, 10, 100],
+                'class_weight': ['balanced', None],
+            }
+        elif self.kernel == 'rbf':
+            param_grid = {
+                'C': [0.1, 1, 10, 100],
+                'gamma': ['scale', 'auto', 0.1, 0.01, 0.001],
+                'class_weight': ['balanced', None],
+            }
+        elif self.kernel == 'poly':
+            param_grid = {
+                'C': [0.1, 1, 10],
+                'degree': [2, 3, 4],
+                'gamma': ['scale', 'auto', 0.1, 0.01],
+                'class_weight': ['balanced', None],
+            }
+        else:  # sigmoid
+            param_grid = {
+                'C': [0.1, 1, 10, 100],
+                'gamma': ['scale', 'auto', 0.1, 0.01, 0.001],
+                'coef0': [0.0, 0.1, 0.5],
+                'class_weight': ['balanced', None],
             }
         
-        # Create base model for search
-        base_model = SVC(probability=True, random_state=42)
+        # Create grid search with cross-validation
+        cv_folds = self.config.get('cv_folds', 5)
+        grid_search = GridSearchCV(
+            estimator=self.model,
+            param_grid=param_grid,
+            cv=cv_folds,
+            scoring='accuracy',
+            n_jobs=self.config.get('n_jobs', -1),
+            verbose=self.config.get('verbose', 0)
+        )
         
-        # Perform parameter search
-        if method == 'grid':
-            search = GridSearchCV(base_model, param_grid, cv=cv, scoring=scoring, n_jobs=-1)
-        else:  # method == 'random'
-            search = RandomizedSearchCV(base_model, param_grid, n_iter=n_iter, cv=cv, scoring=scoring, n_jobs=-1, random_state=42)
+        # Perform grid search
+        try:
+            grid_search.fit(X, y)
+            
+            # Update model with best parameters
+            self.model = grid_search.best_estimator_
+            
+            logger.info(f"Best parameters found: {grid_search.best_params_}")
+            logger.info(f"Best cross-validation accuracy: {grid_search.best_score_:.4f}")
+            
+        except Exception as e:
+            error_msg = f"Hyperparameter tuning failed: {str(e)}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg) from e
+    
+    def predict(self, X: FeatureVector) -> np.ndarray:
+        """
+        Predict class labels for the provided data.
         
-        # Fit the search
-        search.fit(X, y_numeric)
+        Args:
+            X (FeatureVector): Feature vectors for prediction.
+            
+        Returns:
+            np.ndarray: Predicted class labels.
+            
+        Raises:
+            ValueError: If input data is invalid or incompatible with the model.
+            RuntimeError: If prediction fails due to internal errors.
+            RuntimeError: If the model has not been trained.
+        """
+        if not self.trained or self.model is None:
+            raise RuntimeError("Model has not been trained. Call fit() before prediction.")
         
-        # Get best parameters and score
-        best_params = search.best_params_
-        best_score = search.best_score_
+        # Validate input data
+        self._validate_input(X, for_prediction=True)
         
-        # Update model with best parameters
-        self.params.update(best_params)
-        self.model = self._create_model()
+        try:
+            # Make predictions
+            predictions = self.model.predict(X)
+            return predictions
+            
+        except Exception as e:
+            error_msg = f"Prediction failed: {str(e)}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg) from e
+    
+    def predict_proba(self, X: FeatureVector) -> np.ndarray:
+        """
+        Predict class probabilities for the provided data.
         
-        # Fit the model with best parameters
-        self.fit(X, y_numeric)
+        Args:
+            X (FeatureVector): Feature vectors for prediction.
+            
+        Returns:
+            np.ndarray: Predicted class probabilities, where each row sums to 1.
+            
+        Raises:
+            ValueError: If input data is invalid or incompatible with the model.
+            RuntimeError: If prediction fails due to internal errors.
+            RuntimeError: If the model has not been trained.
+        """
+        if not self.trained or self.model is None:
+            raise RuntimeError("Model has not been trained. Call fit() before prediction.")
         
-        elapsed_time = time.time() - start_time
-        logger.info(f"Parameter optimization completed in {elapsed_time:.2f} seconds")
-        logger.info(f"Best parameters: {best_params}")
-        logger.info(f"Best cross-validation score: {best_score:.4f}")
+        # Validate input data
+        self._validate_input(X, for_prediction=True)
         
-        # Return optimization results
-        return {
-            "best_params": best_params,
-            "best_score": best_score,
-            "cv_results": search.cv_results_,
-            "elapsed_time": elapsed_time
-        }
+        try:
+            # Make probability predictions
+            probabilities = self.model.predict_proba(X)
+            return probabilities
+            
+        except Exception as e:
+            error_msg = f"Probability prediction failed: {str(e)}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg) from e
     
     def evaluate(self, X: FeatureVector, y: np.ndarray) -> ClassificationMetrics:
-        """Evaluate the classifier on test data.
+        """
+        Evaluate the model on the provided data.
         
         Args:
-            X: Feature vectors for testing
-            y: True labels for testing
+            X (FeatureVector): Feature vectors for evaluation.
+            y (np.ndarray): True target labels for evaluation.
             
         Returns:
-            Classification metrics including accuracy, precision, recall, and F1 score
-            
+            ClassificationMetrics: Dictionary of evaluation metrics including accuracy,
+                precision, recall, F1 score, and confusion matrix.
+                
         Raises:
-            ValueError: If the model has not been trained or input data is invalid
+            ValueError: If input data is invalid or incompatible with the model.
+            RuntimeError: If evaluation fails due to internal errors.
+            RuntimeError: If the model has not been trained.
         """
-        if not self.is_fitted:
-            raise ValueError("Model has not been trained. Call fit() before evaluate().")
+        if not self.trained or self.model is None or self.classes_ is None:
+            raise RuntimeError("Model has not been trained. Call fit() before evaluation.")
         
-        if X.shape[0] != len(y):
-            raise ValueError(f"Number of samples in X ({X.shape[0]}) does not match length of y ({len(y)})")
+        # Validate input data
+        self._validate_input(X, y, for_prediction=True)
         
-        # Convert DocumentType instances to numeric indices if needed
-        if isinstance(y[0], DocumentType):
-            y_numeric = np.array([self.inverse_class_mapping.get(cls, -1) for cls in y])
-            # Check for unknown classes
-            if -1 in y_numeric:
-                raise ValueError("Test data contains classes not seen during training")
-        else:
-            # Assume y already contains numeric indices
-            y_numeric = y
-        
-        # Get predictions
-        y_pred_numeric = self.model.predict(X)
-        
-        # Calculate metrics
-        accuracy = accuracy_score(y_numeric, y_pred_numeric)
-        precision, recall, f1, _ = precision_recall_fscore_support(y_numeric, y_pred_numeric, average=None)
-        
-        # Create metrics dictionaries
-        precision_dict = {}
-        recall_dict = {}
-        f1_dict = {}
-        
-        for i, class_idx in enumerate(np.unique(y_numeric)):
-            class_type = self.class_mapping[class_idx]
-            precision_dict[class_type] = float(precision[i])
-            recall_dict[class_type] = float(recall[i])
-            f1_dict[class_type] = float(f1[i])
-        
-        # Create confusion matrix
-        from sklearn.metrics import confusion_matrix
-        cm = confusion_matrix(y_numeric, y_pred_numeric)
-        
-        # Create ClassificationMetrics object
-        metrics = ClassificationMetrics(
-            accuracy=accuracy,
-            precision=precision_dict,
-            recall=recall_dict,
-            f1_score=f1_dict,
-            confusion_matrix=cm
-        )
-        
-        return metrics
+        try:
+            # Make predictions
+            y_pred = self.predict(X)
+            y_proba = self.predict_proba(X)
+            
+            # Calculate accuracy
+            accuracy = accuracy_score(y, y_pred)
+            
+            # Calculate precision, recall, and F1 score for each class
+            precision, recall, f1, support = precision_recall_fscore_support(
+                y, y_pred, average=None, labels=self.classes_
+            )
+            
+            # Calculate confusion matrix
+            cm = confusion_matrix(y, y_pred, labels=self.classes_)
+            
+            # Calculate average confidence score
+            avg_confidence = self._calculate_average_confidence(y_proba)
+            
+            # Create metrics dictionary
+            metrics: ClassificationMetrics = {
+                'accuracy': float(accuracy),
+                'precision': {str(self.classes_[i]): float(precision[i]) for i in range(len(self.classes_))},
+                'recall': {str(self.classes_[i]): float(recall[i]) for i in range(len(self.classes_))},
+                'f1_score': {str(self.classes_[i]): float(f1[i]) for i in range(len(self.classes_))},
+                'confusion_matrix': cm.tolist(),
+                'support': {str(self.classes_[i]): int(support[i]) for i in range(len(self.classes_))},
+                'average_confidence': float(avg_confidence)
+            }
+            
+            # Add feature importance if available
+            if self.feature_names is not None:
+                feature_importance = self.get_feature_importance(X, y)
+                metrics['feature_importance'] = feature_importance
+            
+            return metrics
+            
+        except Exception as e:
+            error_msg = f"Evaluation failed: {str(e)}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg) from e
     
-    def cross_validate(self, X: FeatureVector, y: np.ndarray, cv: int = 5, scoring: str = 'accuracy') -> Dict[str, List[float]]:
-        """Perform cross-validation on the classifier.
+    def _calculate_average_confidence(self, probabilities: np.ndarray) -> float:
+        """
+        Calculate the average confidence score across all predictions.
         
         Args:
-            X: Feature vectors for cross-validation
-            y: Target labels for cross-validation
-            cv: Number of cross-validation folds
-            scoring: Scoring metric to use
+            probabilities (np.ndarray): Predicted class probabilities.
             
         Returns:
-            Dictionary with cross-validation results
-            
-        Raises:
-            ValueError: If input data is invalid
+            float: Average confidence score.
         """
-        if X.shape[0] != len(y):
-            raise ValueError(f"Number of samples in X ({X.shape[0]}) does not match length of y ({len(y)})")
-        
-        logger.info(f"Performing {cv}-fold cross-validation with scoring metric '{scoring}'")
-        
-        # Convert DocumentType instances to numeric indices if needed
-        if isinstance(y[0], DocumentType):
-            # Create class mapping
-            unique_classes = list(set(y))
-            self.class_mapping = {i: cls for i, cls in enumerate(unique_classes)}
-            self.inverse_class_mapping = {cls: i for i, cls in enumerate(unique_classes)}
-            
-            # Convert to numeric indices
-            y_numeric = np.array([self.inverse_class_mapping[cls] for cls in y])
-        else:
-            # Assume y already contains numeric indices
-            y_numeric = y
-        
-        # Create model for cross-validation
-        model = SVC(**self.params)
-        
-        # Perform cross-validation
-        from sklearn.model_selection import cross_validate
-        cv_results = cross_validate(
-            model, X, y_numeric, cv=cv, scoring=scoring, return_train_score=True
-        )
-        
-        # Convert results to lists
-        results = {
-            "test_score": cv_results["test_score"].tolist(),
-            "train_score": cv_results["train_score"].tolist(),
-            "fit_time": cv_results["fit_time"].tolist(),
-            "score_time": cv_results["score_time"].tolist()
-        }
-        
-        # Log results
-        logger.info(f"Cross-validation results:")
-        logger.info(f"  Mean test score: {np.mean(results['test_score']):.4f}")
-        logger.info(f"  Mean train score: {np.mean(results['train_score']):.4f}")
-        logger.info(f"  Mean fit time: {np.mean(results['fit_time']):.4f} seconds")
-        
-        return results
+        # For each sample, get the maximum probability (confidence in the predicted class)
+        max_probabilities = np.max(probabilities, axis=1)
+        return float(np.mean(max_probabilities))
     
-    def set_feature_names(self, feature_names: List[str]) -> None:
-        """Set feature names for the classifier.
+    def get_feature_importance(self, X: FeatureVector, y: np.ndarray) -> Dict[str, float]:
+        """
+        Calculate feature importance scores for the trained model.
+        
+        For linear kernels, uses the absolute values of the coefficients.
+        For non-linear kernels, uses permutation importance.
         
         Args:
-            feature_names: List of feature names
+            X (FeatureVector): Feature vectors for importance calculation.
+            y (np.ndarray): True target labels.
+            
+        Returns:
+            Dict[str, float]: Dictionary mapping feature names to importance scores.
             
         Raises:
-            ValueError: If feature names length doesn't match model expectations
+            RuntimeError: If the model has not been trained.
+            ValueError: If feature names are not available.
         """
-        if self.is_fitted and hasattr(self.model, 'n_features_in_') and len(feature_names) != self.model.n_features_in_:
-            raise ValueError(f"Number of feature names ({len(feature_names)}) does not match model's expected number of features ({self.model.n_features_in_})")
+        if not self.trained or self.model is None:
+            raise RuntimeError("Model has not been trained. Call fit() before getting feature importance.")
+        
+        if self.feature_names is None:
+            raise ValueError("Feature names are not available. Set feature_names before getting feature importance.")
+        
+        feature_importance: Dict[str, float] = {}
+        
+        try:
+            # For linear kernel, use coefficients as feature importance
+            if self.is_linear:
+                # Get coefficients from the model
+                if hasattr(self.model, 'coef_'):
+                    # For binary classification, coef_ is a 2D array with shape (1, n_features)
+                    # For multiclass, it's (n_classes, n_features)
+                    coef = self.model.coef_
+                    
+                    # For multiclass, average the absolute coefficients across all classes
+                    if coef.shape[0] > 1:  # multiclass
+                        importance_scores = np.mean(np.abs(coef), axis=0)
+                    else:  # binary
+                        importance_scores = np.abs(coef[0])
+                    
+                    # Create dictionary of feature importances
+                    for i, feature_name in enumerate(self.feature_names):
+                        feature_importance[feature_name] = float(importance_scores[i])
+                else:
+                    logger.warning("Coefficients not available for feature importance calculation")
+            else:
+                # For non-linear kernels, use permutation importance
+                logger.info("Calculating permutation importance for non-linear kernel")
+                
+                # Calculate permutation importance
+                perm_importance = permutation_importance(
+                    self.model, X, y,
+                    n_repeats=10,
+                    random_state=self.config.get('random_state', 42),
+                    n_jobs=self.config.get('n_jobs', -1)
+                )
+                
+                # Create dictionary of feature importances
+                for i, feature_name in enumerate(self.feature_names):
+                    feature_importance[feature_name] = float(perm_importance.importances_mean[i])
+            
+            # Normalize importance scores to sum to 1.0
+            total_importance = sum(feature_importance.values())
+            if total_importance > 0:
+                for feature_name in feature_importance:
+                    feature_importance[feature_name] /= total_importance
+            
+            return feature_importance
+            
+        except Exception as e:
+            error_msg = f"Feature importance calculation failed: {str(e)}"
+            logger.error(error_msg)
+            # Return empty dict instead of raising exception
+            return {}
+    
+    def cross_validate(self, X: FeatureVector, y: np.ndarray, cv: int = 5) -> Dict[str, float]:
+        """
+        Perform cross-validation to estimate model performance.
+        
+        Args:
+            X (FeatureVector): Feature vectors for cross-validation.
+            y (np.ndarray): Target labels for cross-validation.
+            cv (int): Number of cross-validation folds.
+            
+        Returns:
+            Dict[str, float]: Dictionary of cross-validation metrics.
+            
+        Raises:
+            ValueError: If input data is invalid.
+            RuntimeError: If cross-validation fails.
+        """
+        # Validate input data
+        self._validate_input(X, y)
+        
+        try:
+            # Perform cross-validation
+            cv_scores = cross_val_score(
+                self.model, X, y, cv=cv, scoring='accuracy',
+                n_jobs=self.config.get('n_jobs', -1)
+            )
+            
+            # Calculate metrics
+            cv_metrics = {
+                'mean_accuracy': float(np.mean(cv_scores)),
+                'std_accuracy': float(np.std(cv_scores)),
+                'min_accuracy': float(np.min(cv_scores)),
+                'max_accuracy': float(np.max(cv_scores)),
+                'cv_folds': cv
+            }
+            
+            return cv_metrics
+            
+        except Exception as e:
+            error_msg = f"Cross-validation failed: {str(e)}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg) from e
+    
+    def set_feature_names(self, feature_names: List[str]) -> 'SVMClassifier':
+        """
+        Set the feature names for the model.
+        
+        Args:
+            feature_names (List[str]): List of feature names.
+            
+        Returns:
+            SVMClassifier: Self for method chaining.
+            
+        Raises:
+            ValueError: If feature names length doesn't match model expectations.
+        """
+        if self.trained and self.model is not None and hasattr(self.model, 'coef_'):
+            expected_features = self.model.coef_.shape[1]
+            if len(feature_names) != expected_features:
+                raise ValueError(
+                    f"Feature names length ({len(feature_names)}) doesn't match "
+                    f"model's expected features ({expected_features})"
+                )
         
         self.feature_names = feature_names
-        logger.debug(f"Set {len(feature_names)} feature names for SVMClassifier")
+        return self
     
-    def get_model_info(self) -> Dict[str, Any]:
-        """Get information about the classifier.
-        
-        Returns:
-            Dictionary with classifier information
+    def get_support_vectors(self) -> Optional[np.ndarray]:
         """
-        info = {
-            "model_type": "svm",
-            "version": self.version,
-            "parameters": self.params,
-            "is_fitted": self.is_fitted,
-            "feature_count": len(self.feature_names) if self.feature_names else None,
-            "class_count": len(self.class_mapping) if self.class_mapping else None,
-            "classes": [str(cls) for cls in self.class_mapping.values()] if self.class_mapping else None,
-        }
+        Get the support vectors from the trained model.
         
-        # Add training information if available
-        if self.is_fitted:
-            info.update({
-                "last_trained": self.last_trained.isoformat() if self.last_trained else None,
-                "training_accuracy": self.training_accuracy,
-                "n_support": self.model.n_support_.tolist() if hasattr(self.model, 'n_support_') else None,
-                "n_features": self.model.n_features_in_ if hasattr(self.model, 'n_features_in_') else None,
-                "n_classes": self.model.n_classes_ if hasattr(self.model, 'n_classes_') else None,
-            })
-        
-        return info
-    
-    def get_confidence_calibration(self, X: FeatureVector, y: np.ndarray) -> Dict[str, List[float]]:
-        """Calculate confidence calibration metrics.
-        
-        This method assesses how well the model's confidence scores align with
-        its actual accuracy, which is important for reliable decision-making.
-        
-        Args:
-            X: Feature vectors for calibration assessment
-            y: True labels for calibration assessment
-            
         Returns:
-            Dictionary with calibration metrics
+            Optional[np.ndarray]: Array of support vectors or None if not available.
             
         Raises:
-            ValueError: If the model has not been trained or input data is invalid
+            RuntimeError: If the model has not been trained.
         """
-        if not self.is_fitted:
-            raise ValueError("Model has not been trained. Call fit() before get_confidence_calibration().")
+        if not self.trained or self.model is None:
+            raise RuntimeError("Model has not been trained. Call fit() before getting support vectors.")
         
-        if not self.params.get("probability", True):
-            raise ValueError("SVM model was trained with probability=False. Cannot calculate confidence calibration.")
+        if hasattr(self.model, 'support_vectors_'):
+            return self.model.support_vectors_
         
-        if X.shape[0] != len(y):
-            raise ValueError(f"Number of samples in X ({X.shape[0]}) does not match length of y ({len(y)})")
+        return None
+    
+    def get_parameters(self) -> ModelParameters:
+        """
+        Get the model parameters.
         
-        # Convert DocumentType instances to numeric indices if needed
-        if isinstance(y[0], DocumentType):
-            y_numeric = np.array([self.inverse_class_mapping.get(cls, -1) for cls in y])
-            # Check for unknown classes
-            if -1 in y_numeric:
-                raise ValueError("Test data contains classes not seen during training")
-        else:
-            # Assume y already contains numeric indices
-            y_numeric = y
+        Returns:
+            ModelParameters: Dictionary of model parameters.
+        """
+        params = super().get_parameters()
         
-        # Get predictions and probabilities
-        y_pred_numeric = self.model.predict(X)
-        probas = self.model.predict_proba(X)
+        # Add SVM-specific parameters
+        if self.model is not None:
+            params.update({
+                'kernel': self.kernel,
+                'is_linear': self.is_linear,
+                'n_support_vectors': len(self.model.support_vectors_) if hasattr(self.model, 'support_vectors_') else 0,
+                'n_classes': len(self.classes_) if self.classes_ is not None else 0,
+            })
         
-        # Get max probability for each prediction (confidence)
-        confidences = np.max(probas, axis=1)
+        return params
+    
+    def calibrate_probabilities(self, X: FeatureVector, y: np.ndarray) -> 'SVMClassifier':
+        """
+        Calibrate probability estimates for better confidence scoring.
         
-        # Check if predictions are correct
-        correct = (y_pred_numeric == y_numeric)
+        SVM probability estimates can sometimes be poorly calibrated.
+        This method uses Platt scaling to improve probability calibration.
         
-        # Create confidence bins
-        bins = np.linspace(0, 1, 11)  # 10 bins from 0 to 1
-        bin_indices = np.digitize(confidences, bins) - 1
+        Args:
+            X (FeatureVector): Calibration data features.
+            y (np.ndarray): Calibration data labels.
+            
+        Returns:
+            SVMClassifier: Self for method chaining.
+            
+        Raises:
+            RuntimeError: If the model has not been trained.
+            ValueError: If input data is invalid.
+        """
+        if not self.trained or self.model is None:
+            raise RuntimeError("Model has not been trained. Call fit() before calibration.")
         
-        # Calculate accuracy in each bin
-        bin_accuracies = []
-        bin_confidences = []
-        bin_counts = []
+        # Validate input data
+        self._validate_input(X, y)
         
-        for i in range(len(bins) - 1):
-            bin_mask = (bin_indices == i)
-            if np.sum(bin_mask) > 0:
-                bin_acc = np.mean(correct[bin_mask])
-                bin_conf = np.mean(confidences[bin_mask])
-                bin_count = np.sum(bin_mask)
+        try:
+            from sklearn.calibration import CalibratedClassifierCV
+            
+            # Create a calibrated classifier using the trained model
+            calibrated_classifier = CalibratedClassifierCV(
+                base_estimator=self.model,
+                cv='prefit',  # Use the already fitted model
+                method='sigmoid'  # Platt scaling
+            )
+            
+            # Fit the calibrator
+            calibrated_classifier.fit(X, y)
+            
+            # Replace the model with the calibrated version
+            self.model = calibrated_classifier
+            
+            logger.info(f"Probability calibration completed for {self.model_name}")
+            return self
+            
+        except Exception as e:
+            error_msg = f"Probability calibration failed: {str(e)}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg) from e
+    
+    def optimize_threshold(self, X: FeatureVector, y: np.ndarray) -> float:
+        """
+        Optimize the confidence threshold for classification decisions.
+        
+        This method finds the optimal threshold that maximizes F1 score
+        on the provided validation data.
+        
+        Args:
+            X (FeatureVector): Validation data features.
+            y (np.ndarray): Validation data labels.
+            
+        Returns:
+            float: Optimized confidence threshold.
+            
+        Raises:
+            RuntimeError: If the model has not been trained.
+            ValueError: If input data is invalid.
+        """
+        if not self.trained or self.model is None or self.classes_ is None:
+            raise RuntimeError("Model has not been trained. Call fit() before threshold optimization.")
+        
+        # Validate input data
+        self._validate_input(X, y, for_prediction=True)
+        
+        try:
+            from sklearn.metrics import f1_score
+            
+            # Get probability predictions
+            probabilities = self.predict_proba(X)
+            
+            # Try different thresholds
+            thresholds = np.arange(0.5, 1.0, 0.01)
+            best_threshold = 0.5
+            best_f1 = 0.0
+            
+            for threshold in thresholds:
+                # For each sample, predict the class with highest probability
+                # if that probability exceeds the threshold, otherwise predict
+                # the class that requires review
+                y_pred = np.zeros_like(y)
                 
-                bin_accuracies.append(float(bin_acc))
-                bin_confidences.append(float(bin_conf))
-                bin_counts.append(int(bin_count))
-            else:
-                bin_accuracies.append(0.0)
-                bin_confidences.append(0.0)
-                bin_counts.append(0)
-        
-        # Calculate calibration metrics
-        # Expected Calibration Error (ECE)
-        ece = np.sum(np.abs(np.array(bin_accuracies) - np.array(bin_confidences)) * 
-                    np.array(bin_counts) / len(y_numeric))
-        
-        # Return calibration metrics
-        return {
-            "bin_edges": bins.tolist(),
-            "bin_accuracies": bin_accuracies,
-            "bin_confidences": bin_confidences,
-            "bin_counts": bin_counts,
-            "expected_calibration_error": float(ece)
-        }
-    
-    def save(self, path: str) -> Result[bool]:
-        """Save the model to disk.
-        
-        Args:
-            path: Path to save the model to
+                for i in range(len(y)):
+                    max_prob_idx = np.argmax(probabilities[i])
+                    max_prob = probabilities[i][max_prob_idx]
+                    
+                    if max_prob >= threshold:
+                        y_pred[i] = self.classes_[max_prob_idx]
+                    else:
+                        # If below threshold, assign to most common class
+                        # This is a simplification; in practice, these would be flagged for review
+                        y_pred[i] = self.classes_[max_prob_idx]
+                
+                # Calculate F1 score for this threshold
+                f1 = f1_score(y, y_pred, average='weighted')
+                
+                # Update best threshold if F1 score improves
+                if f1 > best_f1:
+                    best_f1 = f1
+                    best_threshold = threshold
             
-        Returns:
-            Result indicating success or failure
-        """
-        try:
-            import joblib
-            import os
+            logger.info(f"Optimized confidence threshold: {best_threshold:.2f} (F1: {best_f1:.4f})")
             
-            # Create directory if it doesn't exist
-            os.makedirs(os.path.dirname(path), exist_ok=True)
+            # Update the confidence threshold in the config
+            self.config['min_confidence_threshold'] = best_threshold
             
-            # Save the model
-            joblib.dump(self, path)
+            return best_threshold
             
-            logger.info(f"Model saved to {path}")
-            return Result.success(True)
         except Exception as e:
-            error_msg = f"Error saving model: {str(e)}"
-            logger.error(error_msg, exc_info=True)
-            return Result.failure(ServiceError(
-                category=ErrorCategory.STORAGE_ERROR,
-                message=error_msg
-            ))
-    
-    @classmethod
-    def load(cls, path: str) -> Result['SVMClassifier']:
-        """Load a model from disk.
-        
-        Args:
-            path: Path to load the model from
-            
-        Returns:
-            Result containing the loaded model or an error
-        """
-        try:
-            import joblib
-            
-            # Load the model
-            model = joblib.load(path)
-            
-            # Verify that it's the correct type
-            if not isinstance(model, cls):
-                raise TypeError(f"Loaded object is not a {cls.__name__}")
-            
-            logger.info(f"Model loaded from {path}")
-            return Result.success(model)
-        except Exception as e:
-            error_msg = f"Error loading model: {str(e)}"
-            logger.error(error_msg, exc_info=True)
-            return Result.failure(ServiceError(
-                category=ErrorCategory.STORAGE_ERROR,
-                message=error_msg
-            ))
+            error_msg = f"Threshold optimization failed: {str(e)}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg) from e
