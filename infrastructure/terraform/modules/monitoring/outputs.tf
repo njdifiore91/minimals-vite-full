@@ -60,3 +60,33 @@ output "monitoring_labels" {
     managed_by  = "terraform"
   }
 }
+
+# Datadog outputs
+output "datadog_dashboard_url" {
+  description = "URL to the main Datadog dashboard"
+  value       = var.monitoring_type == "datadog" ? "https://app.${var.datadog_site}/dashboard/mca-application-overview" : null
+}
+
+output "datadog_monitors" {
+  description = "List of Datadog monitor IDs created"
+  value       = var.monitoring_type == "datadog" ? {
+    application_processing_time = try(datadog_monitor.application_processing_time[0].id, null)
+    ocr_accuracy                = try(datadog_monitor.ocr_accuracy[0].id, null)
+    queue_depth                 = try(datadog_monitor.queue_depth[0].id, null)
+    api_response_time           = try(datadog_monitor.api_response_time[0].id, null)
+  } : null
+}
+
+output "datadog_slos" {
+  description = "List of Datadog SLO IDs created"
+  value       = var.monitoring_type == "datadog" ? {
+    application_processing_time = try(datadog_service_level_objective.application_processing_time_slo[0].id, null)
+    ocr_accuracy                = try(datadog_service_level_objective.ocr_accuracy_slo[0].id, null)
+    api_availability            = try(datadog_service_level_objective.api_availability_slo[0].id, null)
+  } : null
+}
+
+output "datadog_agent_namespace" {
+  description = "Kubernetes namespace where Datadog agent is deployed"
+  value       = var.monitoring_type == "datadog" ? kubernetes_namespace.datadog[0].metadata[0].name : null
+}
