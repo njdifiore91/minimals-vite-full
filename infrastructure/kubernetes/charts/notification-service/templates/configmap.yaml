@@ -1,0 +1,449 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "notification-service.fullname" . }}
+  labels:
+    {{- include "notification-service.labels" . | nindent 4 }}
+data:
+  # Application configuration
+  NODE_ENV: {{ .Values.environment | quote }}
+  LOG_LEVEL: {{ .Values.logLevel | default "info" | quote }}
+  PORT: {{ .Values.service.port | default "3000" | quote }}
+  SERVICE_NAME: "notification-service"
+  ENABLE_REQUEST_LOGGING: {{ .Values.enableRequestLogging | default "true" | quote }}
+  
+  # RabbitMQ configuration
+  RABBITMQ_HOST: {{ .Values.rabbitmq.host | default "rabbitmq" | quote }}
+  RABBITMQ_PORT: {{ .Values.rabbitmq.port | default "5672" | quote }}
+  RABBITMQ_USERNAME: {{ .Values.rabbitmq.username | default "guest" | quote }}
+  RABBITMQ_VHOST: {{ .Values.rabbitmq.vhost | default "/" | quote }}
+  RABBITMQ_EXCHANGE: "mca.documents"
+  RABBITMQ_NOTIFICATION_QUEUE: "notification"
+  RABBITMQ_RETRY_QUEUE: "notification.retry"
+  RABBITMQ_DEAD_LETTER_QUEUE: "notification.dlq"
+  RABBITMQ_CONNECTION_TIMEOUT_MS: "30000"
+  RABBITMQ_HEARTBEAT_INTERVAL: "30"
+  RABBITMQ_PREFETCH_COUNT: "10"
+  RABBITMQ_RECONNECT_ATTEMPTS: "10"
+  RABBITMQ_RECONNECT_DELAY_MS: "5000"
+  
+  # Webhook configuration
+  WEBHOOK_TIMEOUT_MS: "5000"
+  WEBHOOK_MAX_RETRIES: "5"
+  WEBHOOK_INITIAL_RETRY_DELAY_MS: "1000"
+  WEBHOOK_MAX_RETRY_DELAY_MS: "60000"
+  WEBHOOK_BACKOFF_MULTIPLIER: "2"
+  WEBHOOK_JITTER_FACTOR: "0.2"
+  WEBHOOK_BATCH_SIZE: "10"
+  WEBHOOK_BATCH_INTERVAL_MS: "1000"
+  WEBHOOK_CONCURRENT_REQUESTS: "5"
+  WEBHOOK_CIRCUIT_BREAKER_THRESHOLD: "5"
+  WEBHOOK_CIRCUIT_BREAKER_RESET_TIMEOUT_MS: "60000"
+  WEBHOOK_DELIVERY_TIMEOUT_MS: "30000"
+  
+  # HMAC signature configuration
+  WEBHOOK_SIGNATURE_HEADER: "X-MCA-Signature"
+  WEBHOOK_SIGNATURE_ALGORITHM: "sha256"
+  
+  # Monitoring and health check configuration
+  ENABLE_METRICS: {{ .Values.metrics.enabled | default "true" | quote }}
+  METRICS_PATH: "/metrics"
+  HEALTH_CHECK_PATH: "/health"
+  READINESS_CHECK_PATH: "/ready"
+  LIVENESS_CHECK_PATH: "/live"
+  ENABLE_TRACING: {{ .Values.tracing.enabled | default "false" | quote }}
+  TRACING_SAMPLING_RATE: {{ .Values.tracing.samplingRate | default "0.1" | quote }}
+  
+  # Security configuration
+  ENABLE_HELMET: "true"
+  ENABLE_CORS: "true"
+  CORS_ALLOWED_ORIGINS: {{ .Values.security.corsAllowedOrigins | default "*" | quote }}
+  CORS_ALLOWED_METHODS: "GET,POST,OPTIONS"
+  CORS_ALLOWED_HEADERS: "Content-Type,Authorization,X-Requested-With"
+  CORS_MAX_AGE: "86400"
+  RATE_LIMIT_WINDOW_MS: "60000"
+  RATE_LIMIT_MAX_REQUESTS: "100"
+  ENABLE_REQUEST_VALIDATION: "true"
+  
+  # Performance tuning
+  NODE_OPTIONS: "--max-old-space-size=512 --max-http-header-size=16384"
+  WORKER_THREADS: "4"
+  EVENT_LOOP_DELAY_THRESHOLD_MS: "100"
+  ENABLE_COMPRESSION: "true"
+  COMPRESSION_LEVEL: "6"
+  COMPRESSION_THRESHOLD_BYTES: "1024"
+  HTTP_KEEP_ALIVE_TIMEOUT_MS: "5000"
+  HTTP_HEADERS_TIMEOUT_MS: "60000"
+  MAX_WEBHOOK_PAYLOAD_SIZE_BYTES: "1048576"
+  
+  # Redis configuration for caching
+  REDIS_HOST: {{ .Values.redis.host | default "redis" | quote }}
+  REDIS_PORT: {{ .Values.redis.port | default "6379" | quote }}
+  REDIS_DB: {{ .Values.redis.db | default "0" | quote }}
+  REDIS_KEY_PREFIX: "notification:"
+  REDIS_CACHE_TTL_MS: "900000"
+  ENABLE_REDIS_CACHE: {{ .Values.redis.enabled | default "true" | quote }}
+  REDIS_RECONNECT_ATTEMPTS: "10"
+  REDIS_RECONNECT_DELAY_MS: "1000"
+  REDIS_MAX_RECONNECT_DELAY_MS: "30000"
+  
+  # Notification templates
+  NOTIFICATION_TEMPLATES_DIR: "/app/templates"
+  ENABLE_TEMPLATE_CACHING: "true"
+  TEMPLATE_CACHE_TTL_MS: "300000"
+  TEMPLATE_REFRESH_INTERVAL_MS: "60000"
+  
+  # Notification formats
+  notification-formats.json: |
+    {
+      "application_received": {
+        "title": "Application Received",
+        "description": "A new merchant cash advance application has been received",
+        "priority": "normal",
+        "webhook_payload_template": "application_received.json"
+      },
+      "application_processed": {
+        "title": "Application Processed",
+        "description": "A merchant cash advance application has been processed",
+        "priority": "normal",
+        "webhook_payload_template": "application_processed.json"
+      },
+      "application_approved": {
+        "title": "Application Approved",
+        "description": "A merchant cash advance application has been approved",
+        "priority": "high",
+        "webhook_payload_template": "application_approved.json"
+      },
+      "application_rejected": {
+        "title": "Application Rejected",
+        "description": "A merchant cash advance application has been rejected",
+        "priority": "high",
+        "webhook_payload_template": "application_rejected.json"
+      },
+      "document_received": {
+        "title": "Document Received",
+        "description": "A new document has been received for an application",
+        "priority": "normal",
+        "webhook_payload_template": "document_received.json"
+      },
+      "document_processed": {
+        "title": "Document Processed",
+        "description": "A document has been processed for an application",
+        "priority": "normal",
+        "webhook_payload_template": "document_processed.json"
+      },
+      "processing_error": {
+        "title": "Processing Error",
+        "description": "An error occurred during application processing",
+        "priority": "critical",
+        "webhook_payload_template": "processing_error.json"
+      }
+    }
+  
+  # Webhook payload templates
+  webhook-payload-templates.json: |
+    {
+      "application_received": {
+        "event_type": "application_received",
+        "timestamp": "{{timestamp}}",
+        "application_id": "{{application_id}}",
+        "merchant": {
+          "legal_name": "{{merchant.legal_name}}",
+          "dba_name": "{{merchant.dba_name}}",
+          "ein": "{{merchant.ein}}"
+        },
+        "documents": [
+          {
+            "id": "{{document.id}}",
+            "type": "{{document.type}}",
+            "received_at": "{{document.received_at}}"
+          }
+        ]
+      },
+      "application_processed": {
+        "event_type": "application_processed",
+        "timestamp": "{{timestamp}}",
+        "application_id": "{{application_id}}",
+        "status": "{{status}}",
+        "processing_time_ms": "{{processing_time_ms}}",
+        "merchant": {
+          "legal_name": "{{merchant.legal_name}}",
+          "dba_name": "{{merchant.dba_name}}",
+          "ein": "{{merchant.ein}}"
+        }
+      },
+      "application_approved": {
+        "event_type": "application_approved",
+        "timestamp": "{{timestamp}}",
+        "application_id": "{{application_id}}",
+        "approval_details": {
+          "approved_amount": "{{approval_details.approved_amount}}",
+          "term_days": "{{approval_details.term_days}}",
+          "factor_rate": "{{approval_details.factor_rate}}"
+        },
+        "merchant": {
+          "legal_name": "{{merchant.legal_name}}",
+          "dba_name": "{{merchant.dba_name}}",
+          "ein": "{{merchant.ein}}"
+        }
+      },
+      "application_rejected": {
+        "event_type": "application_rejected",
+        "timestamp": "{{timestamp}}",
+        "application_id": "{{application_id}}",
+        "rejection_reason": "{{rejection_reason}}",
+        "merchant": {
+          "legal_name": "{{merchant.legal_name}}",
+          "dba_name": "{{merchant.dba_name}}",
+          "ein": "{{merchant.ein}}"
+        }
+      },
+      "document_received": {
+        "event_type": "document_received",
+        "timestamp": "{{timestamp}}",
+        "application_id": "{{application_id}}",
+        "document": {
+          "id": "{{document.id}}",
+          "type": "{{document.type}}",
+          "received_at": "{{document.received_at}}",
+          "file_name": "{{document.file_name}}",
+          "file_size": "{{document.file_size}}",
+          "mime_type": "{{document.mime_type}}"
+        }
+      },
+      "document_processed": {
+        "event_type": "document_processed",
+        "timestamp": "{{timestamp}}",
+        "application_id": "{{application_id}}",
+        "document": {
+          "id": "{{document.id}}",
+          "type": "{{document.type}}",
+          "processed_at": "{{document.processed_at}}",
+          "classification": "{{document.classification}}",
+          "confidence": "{{document.confidence}}"
+        }
+      },
+      "processing_error": {
+        "event_type": "processing_error",
+        "timestamp": "{{timestamp}}",
+        "application_id": "{{application_id}}",
+        "error": {
+          "code": "{{error.code}}",
+          "message": "{{error.message}}",
+          "component": "{{error.component}}",
+          "severity": "{{error.severity}}"
+        }
+      }
+    }
+  
+  # Webhook endpoint templates
+  webhook-endpoints.json: |
+    {
+      "default": {
+        "url": "{{ .Values.webhooks.defaultEndpoint }}",
+        "headers": {
+          "Content-Type": "application/json",
+          "User-Agent": "MCA-Notification-Service/1.0"
+        },
+        "method": "POST",
+        "timeout": 5000,
+        "retryable": true
+      },
+      "operations": {
+        "url": "{{ .Values.webhooks.operationsEndpoint }}",
+        "headers": {
+          "Content-Type": "application/json",
+          "User-Agent": "MCA-Notification-Service/1.0",
+          "X-API-Key": "{{ .Values.webhooks.operationsApiKey }}"
+        },
+        "method": "POST",
+        "timeout": 10000,
+        "retryable": true
+      },
+      "admin": {
+        "url": "{{ .Values.webhooks.adminEndpoint }}",
+        "headers": {
+          "Content-Type": "application/json",
+          "User-Agent": "MCA-Notification-Service/1.0",
+          "X-API-Key": "{{ .Values.webhooks.adminApiKey }}"
+        },
+        "method": "POST",
+        "timeout": 15000,
+        "retryable": true
+      }
+    }
+  
+  # Logging configuration
+  logging-config.json: |
+    {
+      "appenders": {
+        "console": {
+          "type": "console",
+          "layout": {
+            "type": "pattern",
+            "pattern": "%d{ISO8601} [%p] [%c] [%x{correlationId}] - %m"
+          }
+        },
+        "file": {
+          "type": "file",
+          "filename": "/var/log/notification-service/app.log",
+          "maxLogSize": 10485760,
+          "backups": 5,
+          "compress": true,
+          "layout": {
+            "type": "pattern",
+            "pattern": "%d{ISO8601} [%p] [%c] [%x{correlationId}] - %m"
+          }
+        },
+        "error": {
+          "type": "file",
+          "filename": "/var/log/notification-service/error.log",
+          "maxLogSize": 10485760,
+          "backups": 5,
+          "compress": true,
+          "layout": {
+            "type": "pattern",
+            "pattern": "%d{ISO8601} [%p] [%c] [%x{correlationId}] - %m%n%s"
+          }
+        },
+        "audit": {
+          "type": "file",
+          "filename": "/var/log/notification-service/audit.log",
+          "maxLogSize": 10485760,
+          "backups": 5,
+          "compress": true,
+          "layout": {
+            "type": "pattern",
+            "pattern": "%d{ISO8601} [AUDIT] [%x{correlationId}] [%x{userId}] [%x{action}] - %m"
+          }
+        }
+      },
+      "categories": {
+        "default": {
+          "appenders": ["console", "file"],
+          "level": "${LOG_LEVEL}"
+        },
+        "webhook": {
+          "appenders": ["console", "file"],
+          "level": "${LOG_LEVEL}"
+        },
+        "notification": {
+          "appenders": ["console", "file"],
+          "level": "${LOG_LEVEL}"
+        },
+        "rabbitmq": {
+          "appenders": ["console", "file"],
+          "level": "${LOG_LEVEL}"
+        },
+        "error": {
+          "appenders": ["console", "error"],
+          "level": "ERROR"
+        },
+        "audit": {
+          "appenders": ["audit"],
+          "level": "INFO"
+        },
+        "security": {
+          "appenders": ["console", "file", "audit"],
+          "level": "INFO"
+        },
+        "performance": {
+          "appenders": ["console", "file"],
+          "level": "${LOG_LEVEL}"
+        }
+      }
+    }
+  
+  # Notification delivery rules
+  delivery-rules.json: |
+    {
+      "application_received": {
+        "channels": ["webhook"],
+        "recipients": ["default", "operations"],
+        "priority": "normal",
+        "retry_policy": "standard",
+        "throttle": false,
+        "batch": false,
+        "requires_acknowledgment": false
+      },
+      "application_processed": {
+        "channels": ["webhook"],
+        "recipients": ["default", "operations"],
+        "priority": "normal",
+        "retry_policy": "standard",
+        "throttle": false,
+        "batch": false,
+        "requires_acknowledgment": false
+      },
+      "application_approved": {
+        "channels": ["webhook"],
+        "recipients": ["default", "operations", "admin"],
+        "priority": "high",
+        "retry_policy": "aggressive",
+        "throttle": false,
+        "batch": false,
+        "requires_acknowledgment": true
+      },
+      "application_rejected": {
+        "channels": ["webhook"],
+        "recipients": ["default", "operations", "admin"],
+        "priority": "high",
+        "retry_policy": "aggressive",
+        "throttle": false,
+        "batch": false,
+        "requires_acknowledgment": true
+      },
+      "document_received": {
+        "channels": ["webhook"],
+        "recipients": ["default"],
+        "priority": "normal",
+        "retry_policy": "standard",
+        "throttle": true,
+        "batch": true,
+        "requires_acknowledgment": false
+      },
+      "document_processed": {
+        "channels": ["webhook"],
+        "recipients": ["default"],
+        "priority": "normal",
+        "retry_policy": "standard",
+        "throttle": true,
+        "batch": true,
+        "requires_acknowledgment": false
+      },
+      "processing_error": {
+        "channels": ["webhook"],
+        "recipients": ["operations", "admin"],
+        "priority": "critical",
+        "retry_policy": "aggressive",
+        "throttle": false,
+        "batch": false,
+        "requires_acknowledgment": true
+      }
+    }
+  
+  # Retry policies
+  retry-policies.json: |
+    {
+      "standard": {
+        "max_attempts": 5,
+        "initial_delay_ms": 1000,
+        "max_delay_ms": 60000,
+        "backoff_multiplier": 2,
+        "jitter_factor": 0.2
+      },
+      "aggressive": {
+        "max_attempts": 10,
+        "initial_delay_ms": 500,
+        "max_delay_ms": 120000,
+        "backoff_multiplier": 1.5,
+        "jitter_factor": 0.1
+      },
+      "minimal": {
+        "max_attempts": 3,
+        "initial_delay_ms": 2000,
+        "max_delay_ms": 30000,
+        "backoff_multiplier": 2,
+        "jitter_factor": 0.2
+      }
+    }
