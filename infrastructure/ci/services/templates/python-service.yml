@@ -1,0 +1,294 @@
+# Python Microservice CI/CD Template
+# Used for Document Service and OCR Service
+# Requires Python ≥3.13.3
+
+name: Python Service CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, development ]
+    paths:
+      - 'document-service/**'
+      - 'ocr-service/**'
+      - 'infrastructure/ci/services/templates/python-service.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'document-service/**'
+      - 'ocr-service/**'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment Environment'
+        required: true
+        default: 'development'
+        type: choice
+        options:
+          - development
+          - staging
+          - production
+      service:
+        description: 'Service to deploy'
+        required: true
+        type: choice
+        options:
+          - document-service
+          - ocr-service
+
+# Global environment variables
+env:
+  PYTHON_VERSION: '3.13.3'
+  POETRY_VERSION: '1.7.1'
+  REGISTRY: ${{ secrets.CONTAINER_REGISTRY }}
+  TRIVY_SEVERITY: 'HIGH,CRITICAL'
+
+jobs:
+  # Determine which service directory has changed
+  changes:
+    name: Detect Service Changes
+    runs-on: ubuntu-latest
+    outputs:
+      document_service: ${{ steps.filter.outputs.document_service }}
+      ocr_service: ${{ steps.filter.outputs.ocr_service }}
+      service_name: ${{ steps.set-service.outputs.service_name }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Filter for service changes
+        uses: dorny/paths-filter@v2
+        id: filter
+        with:
+          filters: |
+            document_service:
+              - 'document-service/**'
+            ocr_service:
+              - 'ocr-service/**'
+
+      - name: Set service name from changes
+        id: set-service
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "service_name=${{ github.event.inputs.service }}" >> $GITHUB_OUTPUT
+          elif [[ "${{ steps.filter.outputs.document_service }}" == "true" ]]; then
+            echo "service_name=document-service" >> $GITHUB_OUTPUT
+          elif [[ "${{ steps.filter.outputs.ocr_service }}" == "true" ]]; then
+            echo "service_name=ocr-service" >> $GITHUB_OUTPUT
+          else
+            echo "No service changes detected"
+            exit 1
+          fi
+
+  # Code quality and testing
+  quality:
+    name: Code Quality & Testing
+    needs: changes
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: ${{ fromJson(format('["%s"]', needs.changes.outputs.service_name)) }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+        with:
+          version: ${{ env.POETRY_VERSION }}
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+
+      - name: Load cached dependencies
+        id: cached-poetry-dependencies
+        uses: actions/cache@v3
+        with:
+          path: ${{ matrix.service }}/.venv
+          key: ${{ runner.os }}-poetry-${{ hashFiles('**/poetry.lock') }}
+
+      - name: Install dependencies
+        working-directory: ${{ matrix.service }}
+        run: poetry install --no-interaction --no-root
+
+      - name: Lint with Flake8
+        working-directory: ${{ matrix.service }}
+        run: |
+          poetry run flake8 src/ tests/ --count --select=E9,F63,F7,F82 --show-source --statistics
+          poetry run flake8 src/ tests/ --count --max-complexity=10 --max-line-length=127 --statistics
+
+      - name: Type check with mypy
+        working-directory: ${{ matrix.service }}
+        run: poetry run mypy src/
+
+      - name: Test with pytest
+        working-directory: ${{ matrix.service }}
+        run: poetry run pytest --cov=src --cov-report=xml
+
+      - name: Upload coverage report
+        uses: codecov/codecov-action@v3
+        with:
+          file: ${{ matrix.service }}/coverage.xml
+          flags: ${{ matrix.service }}
+          name: ${{ matrix.service }}-coverage
+
+  # Build and package
+  build:
+    name: Build and Package
+    needs: [changes, quality]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: ${{ fromJson(format('["%s"]', needs.changes.outputs.service_name)) }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+        with:
+          version: ${{ env.POETRY_VERSION }}
+
+      - name: Build Python wheel
+        working-directory: ${{ matrix.service }}
+        run: poetry build -f wheel
+
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ matrix.service }}-wheel
+          path: ${{ matrix.service }}/dist/*.whl
+          retention-days: 7
+
+      # Set up Docker Buildx for multi-platform builds
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      # Extract version from pyproject.toml
+      - name: Extract version
+        id: version
+        working-directory: ${{ matrix.service }}
+        run: |
+          VERSION=$(poetry version -s)
+          COMMIT_SHA=$(git rev-parse --short HEAD)
+          echo "version=${VERSION}-${COMMIT_SHA}" >> $GITHUB_OUTPUT
+
+      # Special handling for OCR service with GPU support
+      - name: Build and push OCR service with GPU support
+        if: matrix.service == 'ocr-service'
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.service }}
+          file: ${{ matrix.service }}/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ matrix.service }}:latest
+            ${{ env.REGISTRY }}/${{ matrix.service }}:${{ steps.version.outputs.version }}
+          build-args: |
+            PYTHON_VERSION=${{ env.PYTHON_VERSION }}
+            WITH_GPU=true
+            TENSORFLOW_VERSION=2.15.0
+
+      # Build for Document service (no GPU needed)
+      - name: Build and push Document service
+        if: matrix.service == 'document-service'
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.service }}
+          file: ${{ matrix.service }}/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ matrix.service }}:latest
+            ${{ env.REGISTRY }}/${{ matrix.service }}:${{ steps.version.outputs.version }}
+          build-args: |
+            PYTHON_VERSION=${{ env.PYTHON_VERSION }}
+
+      # Scan container image for vulnerabilities
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ matrix.service }}:${{ steps.version.outputs.version }}
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: ${{ env.TRIVY_SEVERITY }}
+
+      - name: Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+  # Deploy to Kubernetes
+  deploy:
+    name: Deploy to Kubernetes
+    needs: [changes, build]
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/development'
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || (github.ref == 'refs/heads/main' && 'staging' || 'development') }}
+    strategy:
+      matrix:
+        service: ${{ fromJson(format('["%s"]', needs.changes.outputs.service_name)) }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # Extract version from previous job
+      - name: Set environment variables
+        run: |
+          echo "ENVIRONMENT=${{ github.event.inputs.environment || (github.ref == 'refs/heads/main' && 'staging' || 'development') }}" >> $GITHUB_ENV
+
+      # Configure kubectl
+      - name: Configure kubectl
+        uses: azure/k8s-set-context@v3
+        with:
+          method: kubeconfig
+          kubeconfig: ${{ secrets.KUBECONFIG }}
+
+      # Install Helm
+      - name: Install Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: 'v3.13.3'
+
+      # Deploy with Helm
+      - name: Deploy to Kubernetes with Helm
+        run: |
+          # Get the image tag from the build job
+          IMAGE_TAG=$(git rev-parse --short HEAD)
+          SERVICE_VERSION=$(grep -m 1 'version' ${{ matrix.service }}/pyproject.toml | awk -F '"' '{print $2}')
+          
+          # Deploy using Helm
+          helm upgrade --install ${{ matrix.service }}-${{ env.ENVIRONMENT }} \
+            ./infrastructure/kubernetes/charts/${{ matrix.service }} \
+            --namespace ${{ env.ENVIRONMENT }} \
+            --create-namespace \
+            --set image.repository=${{ env.REGISTRY }}/${{ matrix.service }} \
+            --set image.tag=${SERVICE_VERSION}-${IMAGE_TAG} \
+            --set environment=${{ env.ENVIRONMENT }} \
+            --values ./infrastructure/kubernetes/charts/${{ matrix.service }}/values-${{ env.ENVIRONMENT }}.yaml
+
+      # Verify deployment
+      - name: Verify deployment
+        run: |
+          # Wait for deployment to be ready
+          kubectl rollout status deployment/${{ matrix.service }}-${{ env.ENVIRONMENT }} -n ${{ env.ENVIRONMENT }} --timeout=300s
+          
+          # Check if service is healthy
+          kubectl exec deploy/${{ matrix.service }}-${{ env.ENVIRONMENT }} -n ${{ env.ENVIRONMENT }} -- curl -s http://localhost:8000/health | grep -q '"status":"UP"'
+          
+          echo "Deployment of ${{ matrix.service }} to ${{ env.ENVIRONMENT }} completed successfully"
