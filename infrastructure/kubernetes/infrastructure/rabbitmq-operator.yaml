@@ -1,0 +1,388 @@
+---
+# Namespace for RabbitMQ Operator
+# This operator enables declarative management of RabbitMQ clusters in Kubernetes
+# for the MCA Application Processing System's asynchronous communication needs
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: rabbitmq-system
+  labels:
+    app.kubernetes.io/component: rabbitmq-operator
+    app.kubernetes.io/part-of: rabbitmq
+    app.kubernetes.io/managed-by: terraform
+    environment: production
+---
+# Custom Resource Definition for RabbitMQ clusters
+# This CRD defines the schema for RabbitmqCluster resources that will be used to deploy
+# RabbitMQ clusters for the MCA Application Processing System's messaging needs
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: rabbitmqclusters.rabbitmq.com
+  labels:
+    app.kubernetes.io/component: rabbitmq-operator
+    app.kubernetes.io/part-of: rabbitmq
+    app.kubernetes.io/managed-by: terraform
+    environment: production
+spec:
+  group: rabbitmq.com
+  names:
+    kind: RabbitmqCluster
+    listKind: RabbitmqClusterList
+    plural: rabbitmqclusters
+    singular: rabbitmqcluster
+    shortNames:
+      - rmq
+  scope: Namespaced
+  versions:
+    - name: v1beta1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+        scale:
+          specReplicasPath: .spec.replicas
+          statusReplicasPath: .status.replicas
+      additionalPrinterColumns:
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+        - name: Status
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].reason
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                replicas:
+                  type: integer
+                  minimum: 1
+                  default: 3
+                  description: Number of nodes in the RabbitMQ cluster
+                image:
+                  type: string
+                  description: RabbitMQ container image
+                rabbitmq:
+                  type: object
+                  properties:
+                    additionalConfig:
+                      type: string
+                      description: Additional RabbitMQ configuration
+                    additionalPlugins:
+                      type: array
+                      items:
+                        type: string
+                      description: List of additional RabbitMQ plugins to enable
+                resources:
+                  type: object
+                  properties:
+                    requests:
+                      type: object
+                      properties:
+                        cpu:
+                          type: string
+                          pattern: '^([0-9]+(\.[0-9]+)?(m|Mi|Gi)?)$'
+                        memory:
+                          type: string
+                          pattern: '^([0-9]+(\.[0-9]+)?(m|Mi|Gi)?)$'
+                    limits:
+                      type: object
+                      properties:
+                        cpu:
+                          type: string
+                          pattern: '^([0-9]+(\.[0-9]+)?(m|Mi|Gi)?)$'
+                        memory:
+                          type: string
+                          pattern: '^([0-9]+(\.[0-9]+)?(m|Mi|Gi)?)$'
+                persistence:
+                  type: object
+                  properties:
+                    storageClassName:
+                      type: string
+                    storage:
+                      type: string
+                      pattern: '^([0-9]+(\.[0-9]+)?(m|Mi|Gi)?)$'
+            status:
+              type: object
+              properties:
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                replicas:
+                  type: integer
+                observedGeneration:
+                  type: integer
+---
+# Service Account for the RabbitMQ Operator
+# This service account is used by the operator to manage RabbitMQ resources
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: rabbitmq-cluster-operator
+  namespace: rabbitmq-system
+  labels:
+    app.kubernetes.io/component: rabbitmq-operator
+    app.kubernetes.io/part-of: rabbitmq
+    app.kubernetes.io/managed-by: terraform
+    environment: production
+---
+# Cluster Role for the RabbitMQ Operator
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: rabbitmq-cluster-operator-role
+  labels:
+    app.kubernetes.io/component: rabbitmq-operator
+    app.kubernetes.io/part-of: rabbitmq
+rules:
+  # Framework: watch and manage CustomResourceDefinitions
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get", "list", "watch"]
+  # Framework: watch and manage Deployments, StatefulSets, Services, ConfigMaps, Secrets, and PersistentVolumeClaims
+  - apiGroups: ["apps"]
+    resources: ["statefulsets", "deployments"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets", "services", "events", "persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Framework: watch and manage ServiceAccounts and RoleBindings
+  - apiGroups: [""]
+    resources: ["serviceaccounts"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["roles", "rolebindings"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Framework: watch and manage Pods
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "delete"]
+  # Framework: watch and manage RabbitmqClusters
+  - apiGroups: ["rabbitmq.com"]
+    resources: ["rabbitmqclusters", "rabbitmqclusters/status", "rabbitmqclusters/finalizers"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Metrics: allow the operator to create and manage ServiceMonitors for Prometheus integration
+  - apiGroups: ["monitoring.coreos.com"]
+    resources: ["servicemonitors"]
+    verbs: ["get", "create", "update"]
+---
+# Cluster Role Binding for the RabbitMQ Operator
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: rabbitmq-cluster-operator-rolebinding
+  labels:
+    app.kubernetes.io/component: rabbitmq-operator
+    app.kubernetes.io/part-of: rabbitmq
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: rabbitmq-cluster-operator-role
+subjects:
+  - kind: ServiceAccount
+    name: rabbitmq-cluster-operator
+    namespace: rabbitmq-system
+---
+# Role for leader election
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: rabbitmq-cluster-leader-election-role
+  namespace: rabbitmq-system
+  labels:
+    app.kubernetes.io/component: rabbitmq-operator
+    app.kubernetes.io/part-of: rabbitmq
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+---
+# Role Binding for leader election
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: rabbitmq-cluster-leader-election-rolebinding
+  namespace: rabbitmq-system
+  labels:
+    app.kubernetes.io/component: rabbitmq-operator
+    app.kubernetes.io/part-of: rabbitmq
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: rabbitmq-cluster-leader-election-role
+subjects:
+  - kind: ServiceAccount
+    name: rabbitmq-cluster-operator
+    namespace: rabbitmq-system
+---
+# Deployment for the RabbitMQ Operator
+# This deployment runs the operator controller that manages RabbitMQ clusters
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rabbitmq-cluster-operator
+  namespace: rabbitmq-system
+  labels:
+    app.kubernetes.io/component: rabbitmq-operator
+    app.kubernetes.io/name: rabbitmq-cluster-operator
+    app.kubernetes.io/part-of: rabbitmq
+    app.kubernetes.io/managed-by: terraform
+    environment: production
+spec:
+  # Single replica is sufficient as the operator uses leader election for HA
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rabbitmq-cluster-operator
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: rabbitmq-operator
+        app.kubernetes.io/name: rabbitmq-cluster-operator
+        app.kubernetes.io/part-of: rabbitmq
+        app.kubernetes.io/managed-by: terraform
+        environment: production
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+    spec:
+      serviceAccountName: rabbitmq-cluster-operator
+      containers:
+        - name: operator
+          image: rabbitmqoperator/cluster-operator:1.14.0
+          imagePullPolicy: IfNotPresent
+          command:
+            - /manager
+          env:
+            - name: OPERATOR_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            # Configure default RabbitMQ image
+            - name: DEFAULT_RABBITMQ_IMAGE
+              value: "rabbitmq:3.11-management"
+            # Configure default resource limits as specified in the technical specification
+            # These match the requirements for the MCA Application Processing System
+            - name: DEFAULT_RABBITMQ_RESOURCE_CPU_REQUEST
+              value: "500m"
+            - name: DEFAULT_RABBITMQ_RESOURCE_MEMORY_REQUEST
+              value: "1Gi"
+            - name: DEFAULT_RABBITMQ_RESOURCE_CPU_LIMIT
+              value: "1"
+            - name: DEFAULT_RABBITMQ_RESOURCE_MEMORY_LIMIT
+              value: "2Gi"
+            # Enable metrics collection for monitoring
+            - name: METRICS_PORT
+              value: "8080"
+            # Enable debug logging for troubleshooting
+            - name: LOG_LEVEL
+              value: "info"
+          resources:
+            limits:
+              cpu: 500m
+              memory: 512Mi
+            requests:
+              cpu: 100m
+              memory: 128Mi
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8081
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+# ConfigMap for RabbitMQ default plugins
+# These plugins are enabled by default in all RabbitMQ clusters created by the operator
+# and include support for management, Kubernetes discovery, monitoring, and federation
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rabbitmq-default-plugins
+  namespace: rabbitmq-system
+  labels:
+    app.kubernetes.io/component: rabbitmq-operator
+    app.kubernetes.io/part-of: rabbitmq
+    app.kubernetes.io/managed-by: terraform
+    environment: production
+data:
+  enabled_plugins: |
+    [rabbitmq_management,rabbitmq_peer_discovery_k8s,rabbitmq_prometheus,rabbitmq_shovel,rabbitmq_shovel_management,rabbitmq_federation,rabbitmq_federation_management].
+---
+# ConfigMap for RabbitMQ default configurations
+# This provides the base configuration for all RabbitMQ clusters created by the operator
+# with settings optimized for the MCA Application Processing System's requirements
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rabbitmq-default-configuration
+  namespace: rabbitmq-system
+  labels:
+    app.kubernetes.io/component: rabbitmq-operator
+    app.kubernetes.io/part-of: rabbitmq
+    app.kubernetes.io/managed-by: terraform
+    environment: production
+data:
+  rabbitmq.conf: |
+    # Default configuration for RabbitMQ clusters
+    # High availability settings for mirrored queues
+    cluster_partition_handling = pause_minority
+    queue_master_locator = min-masters
+    ha.mode = all
+    ha.sync.mode = automatic
+    
+    # Message persistence settings
+    disk_free_limit.absolute = 2GB
+    vm_memory_high_watermark.relative = 0.8
+    persistent_statistics = true
+    
+    # Dead letter exchange configuration
+    dead_letter_exchange.enabled = true
+    
+    # Performance tuning
+    channel_max = 2000
+    heartbeat = 60
+    tcp_listen_options.backlog = 4096
+    tcp_listen_options.nodelay = true
+    
+    # Management plugin settings
+    management.rates_mode = detailed
+    management.sample_retention_policies.global.minute = 5
+    management.sample_retention_policies.global.hour = 60
+    management.sample_retention_policies.global.day = 1200
+    
+    # Prometheus metrics for monitoring
+    prometheus.return_per_object_metrics = true
+    
+    # Note: The following exchanges and queues will be created by the Messaging Topology Operator
+    # or through application configuration as specified in the technical specification:
+    # - Exchange: 'mca.documents' (fanout) - For distributing documents to processing services
+    # - Queue: 'document-processing' - For document classification service
+    # - Queue: 'data-extraction' - For OCR extraction service
+    # - Queue: 'notification' - For notification service and webhooks
