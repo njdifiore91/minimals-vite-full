@@ -2,238 +2,226 @@
 
 ## Overview
 
-The Email Service is a Node.js microservice responsible for monitoring email inboxes for incoming Merchant Cash Advance (MCA) applications, extracting documents, and initiating the document processing pipeline. It serves as the primary entry point for document ingestion in the MCA Application Processing System.
+The Email Service is a critical component of the Merchant Cash Advance (MCA) Application Processing System, serving as the primary entry point for document processing. It continuously monitors configured email inboxes, extracts mortgage application documents, and ingests them into the MCA processing pipeline, ensuring reliable and secure document capture from external sources.
 
-### Key Features
+### Key Responsibilities
 
-- Secure IMAP connection to monitor submission inboxes
-- Automatic email filtering and attachment extraction
-- Virus scanning for all attachments
-- Document validation and metadata extraction
-- Secure storage of documents in S3-compatible storage
-- Message publishing to RabbitMQ for downstream processing
-- Comprehensive logging and error handling
-- Retry mechanisms for resilient operation
+- Monitor the submissions@dollarfunding.com inbox via IMAP protocol
+- Extract email metadata and attachments
+- Validate and scan attachments for security threats
+- Store documents in S3-compatible storage with encryption
+- Publish document messages to RabbitMQ for further processing
+- Maintain stateful tracking of processed emails to prevent duplicates
 
 ## Architecture
 
-The Email Service is built using Node.js v18.x LTS with TypeScript for type safety. It uses the following key libraries:
+The Email Service is built as a Node.js microservice using TypeScript for type safety. It follows a modular architecture with clear separation of concerns:
 
-- **nodemailer** (v6.9.8): For email processing with TLS enforcement
-- **imap-simple** (v6.0.0): For IMAP access with TLS required
-- **amqplib** (v0.10.3): For RabbitMQ messaging with TLS enforcement
-- **@aws-sdk/client-s3**: For S3-compatible storage integration
+### Core Components
 
-### Email Monitoring Workflow
+- **Email Monitor**: Connects to IMAP servers and polls for new emails
+- **Attachment Processor**: Extracts and validates email attachments
+- **Virus Scanner**: Scans attachments for security threats
+- **Storage Service**: Stores attachments in S3-compatible storage
+- **Message Queue Service**: Publishes messages to RabbitMQ
 
-The service implements the following workflow:
+### Workflow
+
+The Email Monitoring & Ingestion workflow operates as a continuous process:
+
+1. Service initializes and establishes connections to configured IMAP servers
+2. Service enters a polling loop, checking for new emails at configured intervals (typically 1-5 minutes)
+3. When a new email is detected, attachments are extracted and validated
+4. Attachments are scanned for viruses; infected files are quarantined
+5. Valid attachments are stored in S3-compatible storage with encryption
+6. Document metadata and storage location are published to RabbitMQ
+7. Email is marked as processed to prevent reprocessing
+8. Service continues monitoring for new emails
 
 ```
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│                 │     │                 │     │                 │
-│  IMAP Server    │────▶│  Email Service  │────▶│  RabbitMQ       │
-│  (Submissions)  │     │                 │     │  (mca.documents) │
-│                 │     │                 │     │                 │
-└─────────────────┘     └─────────────────┘     └─────────────────┘
-                               │                          │
-                               │                          │
-                               ▼                          ▼
-                        ┌─────────────────┐     ┌─────────────────┐
-                        │                 │     │                 │
-                        │  S3 Storage     │     │  Document       │
-                        │  (Documents)    │     │  Service        │
-                        │                 │     │                 │
-                        └─────────────────┘     └─────────────────┘
+Email Inbox → Email Service → Virus Scan → S3 Storage → RabbitMQ → Document Service
 ```
 
-1. **Email Monitoring**: The service connects to the configured IMAP server and polls for new emails at regular intervals.
-2. **Email Filtering**: Emails are filtered based on configurable rules (sender domains, subject patterns).
-3. **Attachment Extraction**: Attachments are extracted from emails and validated for supported document types.
-4. **Virus Scanning**: All attachments are scanned for viruses before processing.
-5. **Document Storage**: Valid attachments are stored in S3-compatible storage with AES-256 encryption.
-6. **Message Publishing**: Document metadata and storage location are published to RabbitMQ for further processing.
-7. **Email Marking**: Processed emails are marked to prevent reprocessing.
+### Integration with Other Services
 
-## Setup and Configuration
+The Email Service integrates with several other components in the MCA system:
 
-### Prerequisites
+- **Document Service**: Receives document messages from RabbitMQ for classification
+- **S3-compatible Storage**: Stores email attachments with encryption
+- **RabbitMQ**: Facilitates asynchronous communication between services
 
-- Node.js v18.x LTS or higher
-- Access to an IMAP email server
-- RabbitMQ server with TLS support
-- S3-compatible storage service
-- Docker (for containerized deployment)
+## Configuration
 
-### Installation
+The Email Service is configured using environment variables, making it suitable for containerized deployment.
 
-```bash
-# Clone the repository
-git clone <repository-url>
-cd email-service
+### Environment Variables
 
-# Install dependencies
-npm install
+#### IMAP Configuration
 
-# Build the service
-npm run build
-
-# Start the service
-npm start
+```
+IMAP_SERVER=mail.dollarfunding.com
+IMAP_PORT=993
+IMAP_USER=submissions@dollarfunding.com
+IMAP_PASSWORD=your-secure-password
+IMAP_TLS_ENABLED=true
+IMAP_POLL_INTERVAL=300000  # 5 minutes in milliseconds
+IMAP_MAILBOX=INBOX
 ```
 
-### Configuration
+#### RabbitMQ Configuration
 
-The service is configured using environment variables. Create a `.env` file based on the provided `.env.example` template:
-
-```bash
-# Copy the example environment file
-cp .env.example .env
-
-# Edit the configuration
-nano .env
+```
+RABBITMQ_HOST=rabbitmq.dollarfunding.com
+RABBITMQ_PORT=5671
+RABBITMQ_USER=email-service
+RABBITMQ_PASSWORD=your-secure-password
+RABBITMQ_VHOST=mca
+RABBITMQ_EXCHANGE=mca.documents
+RABBITMQ_ROUTING_KEY=document.new
+RABBITMQ_TLS_ENABLED=true
+RABBITMQ_CERT_PATH=/path/to/client/certificate
+RABBITMQ_KEY_PATH=/path/to/client/key
+RABBITMQ_CA_PATH=/path/to/ca/certificate
 ```
 
-## Integration with Other Services
+#### S3 Storage Configuration
 
-### RabbitMQ Integration
-
-The Email Service publishes messages to the `mca.documents` exchange in RabbitMQ with the routing key `document.new`. The message payload includes:
-
-- Document binary location in S3
-- File type and metadata
-- Sender information
-- Subject line
-- Received timestamp
-- Email message ID
-- Attachment metadata
-
-Example message format:
-
-```json
-{
-  "documentId": "doc-123456",
-  "storageLocation": "s3://mca-documents-production/2025/05/21/doc-123456.pdf",
-  "fileType": "application/pdf",
-  "fileName": "business_application.pdf",
-  "fileSize": 1024567,
-  "metadata": {
-    "sender": "applicant@example.com",
-    "recipient": "submissions@dollarfunding.com",
-    "subject": "Business Funding Application",
-    "receivedAt": "2025-05-21T14:30:45.123Z",
-    "messageId": "<message-id-123456@mail.example.com>"
-  }
-}
+```
+S3_ENDPOINT=s3.dollarfunding.com
+S3_REGION=us-east-1
+S3_ACCESS_KEY=your-access-key
+S3_SECRET_KEY=your-secret-key
+S3_BUCKET=mca-documents-production
+S3_ENCRYPTION_ENABLED=true
+S3_TLS_ENABLED=true
 ```
 
-### S3 Storage Integration
+#### Application Configuration
 
-The Email Service stores documents in S3-compatible storage with the following configuration:
+```
+NODE_ENV=production
+LOG_LEVEL=info
+SERVICE_PORT=3000
+HEALTH_CHECK_PATH=/health
+MAX_ATTACHMENT_SIZE=25000000  # 25MB in bytes
+ALLOWED_FILE_TYPES=application/pdf,image/tiff,image/png,image/jpeg
+```
 
-- Bucket: `mca-documents-production` or `mca-documents-staging` (environment-dependent)
-- Path format: `YYYY/MM/DD/document-id.extension`
-- Encryption: AES-256 for data at rest
-- TLS: Required for data in transit
+### Security Considerations
 
-## Security Considerations
+The Email Service implements several security measures to protect sensitive data:
 
-### IMAP Security
-
-- TLS 1.2+ is enforced for all IMAP connections
-- Certificate validation is mandatory
-- STARTTLS connections are rejected to prevent downgrade attacks
-- Credentials are stored securely in environment variables
-
-### RabbitMQ Security
-
-- TLS 1.3 is enforced for all RabbitMQ connections
-- Client certificate authentication is used
-- Service-specific users and virtual hosts maintain connection isolation
-- Credentials are stored in secure environment-specific vaults
-
-### Document Security
-
-- All attachments are scanned for viruses before processing
-- Malicious files are quarantined and administrators are notified
-- Document metadata is stripped to remove potentially sensitive information
-- AES-256 encryption is used for document storage
-
-## Environment Variables
-
-| Variable | Description | Default | Required |
-|----------|-------------|---------|----------|
-| `NODE_ENV` | Environment (development, staging, production) | `development` | Yes |
-| `LOG_LEVEL` | Logging level (error, warn, info, debug) | `info` | No |
-| `IMAP_HOST` | IMAP server hostname | - | Yes |
-| `IMAP_PORT` | IMAP server port | `993` | No |
-| `IMAP_USER` | IMAP username | - | Yes |
-| `IMAP_PASSWORD` | IMAP password | - | Yes |
-| `IMAP_TLS` | Enforce TLS for IMAP | `true` | No |
-| `IMAP_REJECT_UNAUTHORIZED` | Reject unauthorized certificates | `true` | No |
-| `IMAP_MAILBOX` | Mailbox to monitor | `INBOX` | No |
-| `IMAP_POLL_INTERVAL` | Polling interval in milliseconds | `60000` | No |
-| `RABBITMQ_HOST` | RabbitMQ hostname | - | Yes |
-| `RABBITMQ_PORT` | RabbitMQ port | `5671` | No |
-| `RABBITMQ_USER` | RabbitMQ username | - | Yes |
-| `RABBITMQ_PASSWORD` | RabbitMQ password | - | Yes |
-| `RABBITMQ_VHOST` | RabbitMQ virtual host | `/` | No |
-| `RABBITMQ_EXCHANGE` | RabbitMQ exchange name | `mca.documents` | No |
-| `RABBITMQ_ROUTING_KEY` | RabbitMQ routing key | `document.new` | No |
-| `RABBITMQ_TLS` | Enforce TLS for RabbitMQ | `true` | No |
-| `RABBITMQ_CERT_PATH` | Path to client certificate | - | No |
-| `RABBITMQ_KEY_PATH` | Path to client key | - | No |
-| `RABBITMQ_CA_PATH` | Path to CA certificate | - | No |
-| `S3_ENDPOINT` | S3 endpoint URL | - | Yes |
-| `S3_REGION` | S3 region | `us-east-1` | No |
-| `S3_ACCESS_KEY` | S3 access key | - | Yes |
-| `S3_SECRET_KEY` | S3 secret key | - | Yes |
-| `S3_BUCKET` | S3 bucket name | - | Yes |
-| `S3_USE_SSL` | Use SSL for S3 connections | `true` | No |
-| `VIRUS_SCAN_ENABLED` | Enable virus scanning | `true` | No |
-| `VIRUS_SCAN_HOST` | Virus scanner hostname | `localhost` | No |
-| `VIRUS_SCAN_PORT` | Virus scanner port | `3310` | No |
-| `MAX_ATTACHMENT_SIZE` | Maximum attachment size in bytes | `10485760` | No |
-| `ALLOWED_FILE_TYPES` | Comma-separated list of allowed file types | `pdf,tiff,png,jpeg,jpg` | No |
+1. **TLS Encryption**: All IMAP connections enforce TLS 1.2+ with certificate validation
+2. **Virus Scanning**: All attachments are scanned for viruses before processing
+3. **Document Encryption**: AES-256 encryption is used for document storage
+4. **Secure Credentials**: Sensitive credentials are managed securely and rotated regularly
+5. **TLS for RabbitMQ**: All RabbitMQ connections use TLS with client certificate authentication
 
 ## Deployment
 
+### Prerequisites
+
+- Node.js v18.x LTS
+- Access to IMAP email server
+- RabbitMQ cluster
+- S3-compatible storage (AWS S3 or MinIO)
+- Docker (for containerized deployment)
+- Kubernetes (for orchestrated deployment)
+
 ### Docker Deployment
 
-The service includes a Dockerfile for containerized deployment:
+A Dockerfile is provided for containerized deployment:
+
+```dockerfile
+FROM node:18-alpine
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm ci --only=production
+
+COPY dist/ ./dist/
+
+EXPOSE 3000
+
+CMD ["node", "dist/index.js"]
+```
+
+Build and run the Docker image:
 
 ```bash
-# Build the Docker image
-docker build -t email-service .
+# Build the image
+docker build -t email-service:latest .
 
 # Run the container
-docker run -d --name email-service \
-  --env-file .env \
+docker run -d \
+  --name email-service \
   -p 3000:3000 \
-  email-service
+  --env-file .env \
+  email-service:latest
 ```
 
 ### Kubernetes Deployment
 
-The service can be deployed to Kubernetes using the provided Helm chart:
+A sample Kubernetes deployment manifest is provided in the `infrastructure/kubernetes/charts/email-service/templates/` directory. The service can be deployed using Helm:
 
 ```bash
-# Deploy using Helm
-helm upgrade --install email-service \
-  ./infrastructure/kubernetes/charts/email-service \
-  --namespace mca-system \
+helm upgrade --install email-service ./infrastructure/kubernetes/charts/email-service \
+  --namespace mca \
   --values ./infrastructure/kubernetes/charts/email-service/values-production.yaml
 ```
 
-## Monitoring and Logging
+### Health Checks
 
-The Email Service implements comprehensive logging with the following log levels:
+The Email Service exposes a health check endpoint at `/health` that returns the service status. This endpoint can be used for Kubernetes liveness and readiness probes:
 
-- **ERROR**: Processing failures and critical issues
-- **WARN**: Potential issues that don't prevent operation
-- **INFO**: Normal operations and status updates
-- **DEBUG**: Detailed information for troubleshooting (development only)
+```yaml
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 3000
+  initialDelaySeconds: 30
+  periodSeconds: 10
 
-Logs include timestamp, service name, and context information for effective troubleshooting.
+readinessProbe:
+  httpGet:
+    path: /health
+    port: 3000
+  initialDelaySeconds: 5
+  periodSeconds: 5
+```
+
+## Development
+
+### Local Setup
+
+1. Clone the repository
+2. Install dependencies: `npm install`
+3. Create a `.env.local` file with required environment variables
+4. Start the service in development mode: `npm run dev`
+
+### Building
+
+```bash
+# Build the service
+npm run build
+
+# Run the built service
+node dist/index.js
+```
+
+### Testing
+
+```bash
+# Run unit tests
+npm test
+
+# Run integration tests
+npm run test:integration
+
+# Run all tests with coverage
+npm run test:coverage
+```
 
 ## Troubleshooting
 
@@ -241,51 +229,48 @@ Logs include timestamp, service name, and context information for effective trou
 
 #### IMAP Connection Failures
 
-- Verify IMAP server hostname and port
+- Verify IMAP server address and port
 - Check credentials and permissions
 - Ensure TLS settings are correct
-- Verify network connectivity and firewall rules
+- Check network connectivity and firewall rules
 
 #### RabbitMQ Connection Issues
 
-- Verify RabbitMQ server hostname and port
-- Check credentials and permissions
-- Ensure TLS settings and certificates are correct
-- Verify exchange and queue existence
+- Verify RabbitMQ server address and port
+- Check credentials and vhost permissions
+- Ensure TLS certificates are valid and accessible
+- Verify exchange and queue configurations
 
-#### S3 Storage Problems
+#### Document Processing Failures
 
-- Verify S3 endpoint and credentials
-- Check bucket existence and permissions
-- Ensure TLS settings are correct
-- Verify network connectivity
-
-#### Document Processing Errors
-
-- Check allowed file types configuration
-- Verify virus scanner configuration
 - Check attachment size limits
-- Review logs for specific error messages
+- Verify allowed file types
+- Ensure S3 storage is accessible
+- Check virus scanner configuration
 
-### Diagnostic Commands
+### Logging
 
-```bash
-# Check service status
-docker ps | grep email-service
+The Email Service uses structured logging with the following levels:
 
-# View logs
-docker logs email-service
+- **ERROR**: Processing failures and critical issues
+- **WARN**: Potential issues that don't prevent processing
+- **INFO**: Normal operations and status updates
+- **DEBUG**: Detailed information for troubleshooting (development only)
 
-# Check IMAP connectivity
-nc -zv $IMAP_HOST $IMAP_PORT
+Logs are output to stdout/stderr in JSON format for easy integration with log aggregation systems like ELK Stack or Datadog.
 
-# Check RabbitMQ connectivity
-nc -zv $RABBITMQ_HOST $RABBITMQ_PORT
+### Monitoring
 
-# Check S3 connectivity
-aws s3 ls s3://$S3_BUCKET --endpoint-url $S3_ENDPOINT
-```
+The Email Service exposes metrics for monitoring:
+
+- Email processing rate and latency
+- Attachment extraction success/failure rates
+- Queue publishing success/failure rates
+- Storage operation success/failure rates
+- Virus detection rates
+
+These metrics can be collected using Prometheus and visualized with Grafana.
 
 ## License
 
-[Proprietary] - Dollar Funding, Inc.
+Copyright © 2025 Dollar Funding, Inc. All rights reserved.
