@@ -1,32 +1,45 @@
-# Test dependencies for Document Service
-
-# Core testing framework
-pytest==8.0.0
+# Testing Framework
+pytest==7.4.3
 pytest-cov==4.1.0
-pytest-mock==3.14.0
-pytest-asyncio==0.26.0
+pytest-mock==3.12.0
+pytest-asyncio==0.21.1
+pytest-xdist==3.3.1  # For parallel test execution
+pytest-timeout==2.2.0  # For test timeouts
+pytest-env==0.8.2  # For environment variable management during tests
 
-# RabbitMQ testing
-pytest-rabbitmq==3.1.1
-pika==1.3.2
+# AWS Mocking
+moto==4.2.7  # For mocking AWS services including S3
 
-# AWS mocking
-moto==4.2.7
+# RabbitMQ Testing
+pytest-rabbitmq==2.2.1  # For RabbitMQ testing
+pika-mock==0.2.2  # For mocking RabbitMQ connections
 
-# Machine learning testing
-scikit-learn==1.4.1
-numpy==1.26.3
-pandas==2.2.0
+# Coverage and Reporting
+coverage==7.3.2
+coverage-badge==1.1.0  # For generating coverage badges
 
-# Coverage reporting
-coverage==7.4.1
+# HTTP Testing
+httpx==0.25.1  # For async HTTP client testing
+requests-mock==1.11.0  # For mocking HTTP requests
 
-# HTTP client for API testing
-requests==2.31.0
+# Test Data Generation
+faker==19.13.0  # For generating test data
 
-# Async testing
-asynctest==0.13.1
+# ML Testing Dependencies
+scikit-learn==1.4.1  # Same version as in main requirements
+numpy==1.24.3  # For numerical operations in tests
+pandas==2.0.3  # For data manipulation in tests
+joblib==1.3.2  # For model serialization testing
 
-# Type checking for tests
-mypy==1.8.0
-types-requests==2.31.0.20240125
+# API Testing
+fastapi==0.104.1  # For API testing
+httpx==0.25.1  # For async HTTP client testing
+
+# Mocking and Fixtures
+freezes==6.0.1  # For freezing time in tests
+pytest-freezegun==0.4.2  # For time-dependent tests
+
+# Test Utilities
+parameterized==0.9.0  # For parameterized tests
+pytest-benchmark==4.0.0  # For performance testing
+pytest-html==4.1.1  # For HTML test reports
