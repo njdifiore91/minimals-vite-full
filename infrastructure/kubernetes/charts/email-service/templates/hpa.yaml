@@ -1,0 +1,125 @@
+{{- /*
+HorizontalPodAutoscaler template for Email Service.
+
+This template defines the HorizontalPodAutoscaler for the Email Service with specific configurations.
+The Email Service monitors submissions inbox using IMAP protocol and processes incoming emails,
+so it needs appropriate scaling configurations to handle varying email loads.
+
+Key configurations:
+- CPU-based scaling for email processing workload
+- Memory-based scaling for handling email attachments
+- Environment-specific replica counts
+- Stable scaling behavior to prevent flapping
+*/}}
+
+{{- $fullName := include "common.fullname" . -}}
+
+{{- /* Set default values for Email Service autoscaling */}}
+{{- $values := .Values.autoscaling | default dict -}}
+{{- $_ := set $values "enabled" (default true $values.enabled) -}}
+{{- $_ := set $values "targetCPUUtilizationPercentage" (default 80 $values.targetCPUUtilizationPercentage) -}}
+{{- $_ := set $values "targetMemoryUtilizationPercentage" (default 80 $values.targetMemoryUtilizationPercentage) -}}
+
+{{- /* Set environment-specific replica counts based on environment and replicaCount */}}
+{{- if eq .Values.global.environment "production" -}}
+  {{- $_ := set $values "minReplicas" (default (default 3 .Values.environments.production.replicaCount) $values.minReplicas) -}}
+  {{- $_ := set $values "maxReplicas" (default 15 $values.maxReplicas) -}}
+  {{- /* Add annotations for production environment */}}
+  {{- $annotations := $values.annotations | default dict -}}
+  {{- $_ := set $annotations "email-service.kubernetes.io/scaling-policy" "production" -}}
+  {{- $_ := set $values "annotations" $annotations -}}
+{{- else if eq .Values.global.environment "staging" -}}
+  {{- $_ := set $values "minReplicas" (default (default 2 .Values.environments.staging.replicaCount) $values.minReplicas) -}}
+  {{- $_ := set $values "maxReplicas" (default 8 $values.maxReplicas) -}}
+  {{- /* Add annotations for staging environment */}}
+  {{- $annotations := $values.annotations | default dict -}}
+  {{- $_ := set $annotations "email-service.kubernetes.io/scaling-policy" "staging" -}}
+  {{- $_ := set $values "annotations" $annotations -}}
+{{- else -}}
+  {{- $_ := set $values "minReplicas" (default (default 1 .Values.environments.development.replicaCount) $values.minReplicas) -}}
+  {{- $_ := set $values "maxReplicas" (default 5 $values.maxReplicas) -}}
+  {{- /* Add annotations for development environment */}}
+  {{- $annotations := $values.annotations | default dict -}}
+  {{- $_ := set $annotations "email-service.kubernetes.io/scaling-policy" "development" -}}
+  {{- $_ := set $values "annotations" $annotations -}}
+  
+  {{- /* Disable autoscaling in development by default, as specified in values.yaml */}}
+  {{- if hasKey .Values.environments.development "autoscaling" -}}
+    {{- if hasKey .Values.environments.development.autoscaling "enabled" -}}
+      {{- $_ := set $values "enabled" .Values.environments.development.autoscaling.enabled -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+
+{{- /* Configure Email Service specific scaling behavior */}}
+{{- if not $values.behavior -}}
+{{- $_ := set $values "behavior" (dict 
+  "scaleDown" (dict 
+    "stabilizationWindowSeconds" 300 
+    "policies" (list 
+      (dict "type" "Percent" "value" 10 "periodSeconds" 60) 
+      (dict "type" "Pods" "value" 2 "periodSeconds" 60)
+    )
+    "selectPolicy" "Min"
+  )
+  "scaleUp" (dict 
+    "stabilizationWindowSeconds" 0 
+    "policies" (list 
+      (dict "type" "Percent" "value" 100 "periodSeconds" 60) 
+      (dict "type" "Pods" "value" 4 "periodSeconds" 60)
+    )
+    "selectPolicy" "Max"
+  )
+) -}}
+{{- end -}}
+
+{{- /* Set the updated values back to .Values.autoscaling */}}
+{{- $_ := set .Values "autoscaling" $values -}}
+
+{{- /* Create the HorizontalPodAutoscaler resource */}}
+{{- if and .Values.autoscaling.enabled (not (empty .Values.autoscaling)) }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ $fullName }}
+  labels:
+    {{- include "common.labels" . | nindent 4 }}
+  annotations:
+    description: "Email Service HorizontalPodAutoscaler for automatic scaling based on CPU and memory utilization"
+    {{- with .Values.autoscaling.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: {{ .Values.autoscaling.scaleTargetRef.kind | default "Deployment" }}
+    name: {{ .Values.autoscaling.scaleTargetRef.name | default $fullName }}
+  minReplicas: {{ .Values.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.autoscaling.maxReplicas }}
+  {{- if or .Values.autoscaling.targetCPUUtilizationPercentage .Values.autoscaling.targetMemoryUtilizationPercentage .Values.autoscaling.metrics }}
+  metrics:
+    {{- if .Values.autoscaling.targetCPUUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.autoscaling.targetCPUUtilizationPercentage }}
+    {{- end }}
+    {{- if .Values.autoscaling.targetMemoryUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.autoscaling.targetMemoryUtilizationPercentage }}
+    {{- end }}
+    {{- if .Values.autoscaling.metrics }}
+    {{- toYaml .Values.autoscaling.metrics | nindent 4 }}
+    {{- end }}
+  {{- end }}
+  {{- if .Values.autoscaling.behavior }}
+  behavior:
+    {{- toYaml .Values.autoscaling.behavior | nindent 4 }}
+  {{- end }}
+{{- end }}
