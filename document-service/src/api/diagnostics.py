@@ -1,471 +1,655 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
 """
-Diagnostic endpoints for the Document Service.
+Diagnostic API endpoints for the Document Service.
 
-This module provides API endpoints for retrieving logs, checking configuration,
-and performing diagnostic tests. These endpoints are used by operations staff
-to troubleshoot issues with the service and verify its configuration.
+This module provides diagnostic endpoints for troubleshooting the Document Service.
+It includes endpoints for retrieving logs, checking configuration, and performing
+diagnostic tests. These endpoints are secured with JWT authentication and are
+intended for use by operations staff.
+
+Endpoints:
+    - GET /diagnostics/logs: Retrieve recent logs with filtering options
+    - GET /diagnostics/config: Check current service configuration
+    - POST /diagnostics/test: Run diagnostic tests on the service
+
+Security:
+    All endpoints require a valid JWT token with appropriate permissions.
+    Operations Staff role is required for access to these endpoints.
 """
 
-import logging
 import os
-import platform
-import sys
-import time
-from datetime import datetime, timedelta
+import json
+import logging
+import datetime
 from typing import Dict, List, Optional, Any, Union
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Security, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status, Request, Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
 
-# Import application dependencies
-from app import get_application
-from config import app_config
-from utils.logging_utils import get_logs, log_with_context
-from utils.security_utils import validate_token, check_permissions
-from utils.error_utils import create_error_response
-from utils.time_utils import format_timestamp
-from utils.s3_utils import test_s3_connection
-from utils.rabbitmq_utils import test_rabbitmq_connection
-from utils.ml_utils import get_model_info
+# Import service-specific modules
+from ..config import app_config, logging_config
+from ..utils.validation_utils import validate_jwt_token
 
 # Set up logger
-logger = logging.getLogger(__name__)
-
-# Set up security
-security = HTTPBearer()
+logger = logging_config.get_logger(__name__)
 
 # Create router
-diagnostics_router = APIRouter(
+router = APIRouter(
+    prefix="/diagnostics",
     tags=["diagnostics"],
+    dependencies=[],
     responses={
-        status.HTTP_401_UNAUTHORIZED: {"description": "Unauthorized"},
-        status.HTTP_403_FORBIDDEN: {"description": "Forbidden"},
-        status.HTTP_500_INTERNAL_SERVER_ERROR: {"description": "Internal Server Error"},
-    },
+        401: {"description": "Unauthorized"},
+        403: {"description": "Forbidden"},
+        500: {"description": "Internal Server Error"}
+    }
 )
 
+# Security scheme
+security = HTTPBearer()
 
-# Define response models
+
+# Models for request/response
 class LogEntry(BaseModel):
-    """Model for a log entry."""
-    timestamp: str = Field(..., description="Timestamp of the log entry")
+    """Model representing a log entry."""
+    timestamp: str = Field(..., description="Log timestamp in ISO format")
     level: str = Field(..., description="Log level (ERROR, WARN, INFO, DEBUG)")
+    service: str = Field(..., description="Service name")
     message: str = Field(..., description="Log message")
-    context: Optional[Dict[str, Any]] = Field(None, description="Additional context information")
+    correlation_id: Optional[str] = Field(None, description="Correlation ID for request tracking")
+    request_id: Optional[str] = Field(None, description="Request ID")
+    environment: str = Field(..., description="Environment (development, staging, production)")
+    additional_data: Optional[Dict[str, Any]] = Field(None, description="Additional log data")
 
 
 class LogsResponse(BaseModel):
     """Response model for logs endpoint."""
     logs: List[LogEntry] = Field(..., description="List of log entries")
-    count: int = Field(..., description="Total number of log entries returned")
-    start_time: Optional[str] = Field(None, description="Start time filter")
-    end_time: Optional[str] = Field(None, description="End time filter")
-    level: Optional[str] = Field(None, description="Log level filter")
-
-
-class ConfigValue(BaseModel):
-    """Model for a configuration value."""
-    name: str = Field(..., description="Configuration parameter name")
-    value: Any = Field(..., description="Configuration parameter value")
-    source: str = Field(..., description="Source of the configuration (env, default, etc.)")
-    sensitive: bool = Field(False, description="Whether the value is sensitive")
+    total_count: int = Field(..., description="Total number of log entries matching filter")
+    filtered_count: int = Field(..., description="Number of log entries returned after pagination")
 
 
 class ConfigResponse(BaseModel):
     """Response model for configuration endpoint."""
-    service: Dict[str, Any] = Field(..., description="Service configuration")
-    rabbitmq: Dict[str, Any] = Field(..., description="RabbitMQ configuration")
-    s3: Dict[str, Any] = Field(..., description="S3 storage configuration")
-    model: Dict[str, Any] = Field(..., description="Model configuration")
+    app_config: Dict[str, Any] = Field(..., description="Application configuration")
     environment: str = Field(..., description="Current environment")
+    version: str = Field(..., description="Service version")
+    dependencies: Dict[str, str] = Field(..., description="Dependency versions")
 
 
-class ConnectionStatus(BaseModel):
-    """Model for connection status."""
-    connected: bool = Field(..., description="Whether the connection is established")
-    latency_ms: Optional[float] = Field(None, description="Connection latency in milliseconds")
-    details: Optional[str] = Field(None, description="Additional details")
-    error: Optional[str] = Field(None, description="Error message if connection failed")
+class DiagnosticTestRequest(BaseModel):
+    """Request model for diagnostic test endpoint."""
+    test_type: str = Field(..., description="Type of diagnostic test to run")
+    parameters: Optional[Dict[str, Any]] = Field(None, description="Test parameters")
 
 
-class ModelStatus(BaseModel):
-    """Model for ML model status."""
-    loaded: bool = Field(..., description="Whether the model is loaded")
-    version: str = Field(..., description="Model version")
-    accuracy: float = Field(..., description="Model accuracy")
-    last_trained: str = Field(..., description="When the model was last trained")
-    document_types: List[str] = Field(..., description="Supported document types")
+class DiagnosticTestResult(BaseModel):
+    """Model representing a diagnostic test result."""
+    test_name: str = Field(..., description="Name of the test")
+    status: str = Field(..., description="Test status (success, warning, failure)")
+    message: str = Field(..., description="Test result message")
+    details: Optional[Dict[str, Any]] = Field(None, description="Additional test details")
 
 
 class DiagnosticTestResponse(BaseModel):
     """Response model for diagnostic test endpoint."""
-    timestamp: str = Field(..., description="Timestamp of the test")
-    system: Dict[str, Any] = Field(..., description="System information")
-    rabbitmq: ConnectionStatus = Field(..., description="RabbitMQ connection status")
-    s3: ConnectionStatus = Field(..., description="S3 connection status")
-    model: ModelStatus = Field(..., description="Model status")
-    overall_status: str = Field(..., description="Overall service status")
+    test_results: List[DiagnosticTestResult] = Field(..., description="List of test results")
+    overall_status: str = Field(..., description="Overall test status")
+    execution_time: float = Field(..., description="Test execution time in seconds")
+
+
+# Authentication dependency
+async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """
+    Verify JWT token and check if user has Operations Staff role.
+    
+    Args:
+        credentials: HTTP Authorization credentials containing the JWT token
+        
+    Returns:
+        dict: Decoded token payload if valid
+        
+    Raises:
+        HTTPException: If token is invalid or user doesn't have required role
+    """
+    try:
+        token = credentials.credentials
+        payload = validate_jwt_token(token)
+        
+        # Check if user has Operations Staff role
+        if "roles" not in payload or "operations_staff" not in payload["roles"]:
+            logger.warning(f"User {payload.get('sub', 'unknown')} attempted to access diagnostics without proper role")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Insufficient permissions. Operations Staff role required."
+            )
+        
+        return payload
+    except Exception as e:
+        logger.error(f"Authentication error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication credentials",
+            headers={"WWW-Authenticate": "Bearer"}
+        )
+
+
+@router.get("/logs", response_model=LogsResponse, summary="Retrieve recent logs")
+async def get_logs(
+    request: Request,
+    level: Optional[str] = Query(None, description="Filter by log level"),
+    start_time: Optional[str] = Query(None, description="Start time in ISO format"),
+    end_time: Optional[str] = Query(None, description="End time in ISO format"),
+    correlation_id: Optional[str] = Query(None, description="Filter by correlation ID"),
+    limit: int = Query(100, description="Maximum number of logs to return"),
+    offset: int = Query(0, description="Number of logs to skip"),
+    token_payload: Dict = Depends(verify_token)
+):
+    """
+    Retrieve recent logs with filtering options.
+    
+    This endpoint allows operations staff to retrieve and filter logs for troubleshooting.
+    Logs can be filtered by level, time range, and correlation ID.
+    
+    Args:
+        level: Filter logs by level (ERROR, WARN, INFO, DEBUG)
+        start_time: Filter logs after this time (ISO format)
+        end_time: Filter logs before this time (ISO format)
+        correlation_id: Filter logs by correlation ID
+        limit: Maximum number of logs to return
+        offset: Number of logs to skip (for pagination)
+        token_payload: JWT token payload from authentication
+        
+    Returns:
+        LogsResponse: Filtered logs with pagination information
+    """
+    try:
+        logger.info(
+            f"Retrieving logs with filters: level={level}, "
+            f"start_time={start_time}, end_time={end_time}, "
+            f"correlation_id={correlation_id}, limit={limit}, offset={offset}"
+        )
+        
+        # Get log file path
+        log_dir = os.environ.get("LOG_DIR", "/var/log/document-service")
+        log_file = os.path.join(log_dir, "document-service.log")
+        
+        # Check if log file exists
+        if not os.path.exists(log_file):
+            logger.warning(f"Log file not found: {log_file}")
+            return LogsResponse(logs=[], total_count=0, filtered_count=0)
+        
+        # Parse and filter logs
+        logs = []
+        total_count = 0
+        
+        # Convert time strings to datetime objects if provided
+        start_datetime = None
+        end_datetime = None
+        
+        if start_time:
+            start_datetime = datetime.datetime.fromisoformat(start_time)
+        
+        if end_time:
+            end_datetime = datetime.datetime.fromisoformat(end_time)
+        
+        # Read log file and filter entries
+        with open(log_file, "r") as f:
+            for line in f:
+                try:
+                    # Parse JSON log entry
+                    log_entry = json.loads(line)
+                    total_count += 1
+                    
+                    # Apply filters
+                    if level and log_entry.get("level") != level:
+                        continue
+                    
+                    if correlation_id and log_entry.get("correlation_id") != correlation_id:
+                        continue
+                    
+                    if start_datetime:
+                        log_time = datetime.datetime.fromisoformat(log_entry.get("timestamp", ""))
+                        if log_time < start_datetime:
+                            continue
+                    
+                    if end_datetime:
+                        log_time = datetime.datetime.fromisoformat(log_entry.get("timestamp", ""))
+                        if log_time > end_datetime:
+                            continue
+                    
+                    # Add to filtered logs (respecting pagination)
+                    if len(logs) < limit and total_count > offset:
+                        # Extract standard fields
+                        standard_fields = {
+                            "timestamp", "level", "service", "message", 
+                            "correlation_id", "request_id", "environment"
+                        }
+                        
+                        # Create log entry with standard fields
+                        entry = {
+                            key: log_entry.get(key, "") 
+                            for key in standard_fields 
+                            if key in log_entry
+                        }
+                        
+                        # Add remaining fields as additional_data
+                        additional_data = {
+                            key: value 
+                            for key, value in log_entry.items() 
+                            if key not in standard_fields
+                        }
+                        
+                        if additional_data:
+                            entry["additional_data"] = additional_data
+                        
+                        logs.append(LogEntry(**entry))
+                    
+                except json.JSONDecodeError:
+                    # Skip non-JSON lines
+                    continue
+                except Exception as e:
+                    logger.error(f"Error parsing log entry: {str(e)}")
+                    continue
+        
+        logger.info(f"Retrieved {len(logs)} logs out of {total_count} total entries")
+        return LogsResponse(
+            logs=logs,
+            total_count=total_count,
+            filtered_count=len(logs)
+        )
+    
+    except Exception as e:
+        logger.error(f"Error retrieving logs: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error retrieving logs: {str(e)}"
+        )
+
+
+@router.get("/config", response_model=ConfigResponse, summary="Get service configuration")
+async def get_config(token_payload: Dict = Depends(verify_token)):
+    """
+    Retrieve current service configuration.
+    
+    This endpoint returns the current configuration of the Document Service,
+    including environment settings, version information, and dependency versions.
+    Sensitive information like credentials and keys are redacted.
+    
+    Args:
+        token_payload: JWT token payload from authentication
+        
+    Returns:
+        ConfigResponse: Current service configuration
+    """
+    try:
+        logger.info("Retrieving service configuration")
+        
+        # Get configuration (excluding sensitive information)
+        config_dict = app_config.get_safe_config()
+        
+        # Get environment
+        environment = os.environ.get("ENVIRONMENT", "development")
+        
+        # Get service version
+        version = os.environ.get("SERVICE_VERSION", "unknown")
+        
+        # Get dependency versions
+        dependencies = {
+            "scikit-learn": _get_package_version("scikit-learn"),
+            "fastapi": _get_package_version("fastapi"),
+            "pydantic": _get_package_version("pydantic"),
+            "pika": _get_package_version("pika"),
+            "boto3": _get_package_version("boto3"),
+            "python": _get_python_version()
+        }
+        
+        logger.info(f"Retrieved configuration for environment: {environment}, version: {version}")
+        return ConfigResponse(
+            app_config=config_dict,
+            environment=environment,
+            version=version,
+            dependencies=dependencies
+        )
+    
+    except Exception as e:
+        logger.error(f"Error retrieving configuration: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error retrieving configuration: {str(e)}"
+        )
+
+
+@router.post("/test", response_model=DiagnosticTestResponse, summary="Run diagnostic tests")
+async def run_diagnostic_tests(
+    request: DiagnosticTestRequest,
+    token_payload: Dict = Depends(verify_token)
+):
+    """
+    Run diagnostic tests on the Document Service.
+    
+    This endpoint allows operations staff to run diagnostic tests on the service
+    to verify its functionality and connectivity to dependencies.
+    
+    Available test types:
+    - "all": Run all available tests
+    - "rabbitmq": Test RabbitMQ connectivity
+    - "s3": Test S3 storage connectivity
+    - "model": Test document classification models
+    - "system": Test system resources (CPU, memory, disk)
+    
+    Args:
+        request: Test request containing test type and parameters
+        token_payload: JWT token payload from authentication
+        
+    Returns:
+        DiagnosticTestResponse: Results of the diagnostic tests
+    """
+    try:
+        test_type = request.test_type.lower()
+        parameters = request.parameters or {}
+        
+        logger.info(f"Running diagnostic tests of type: {test_type} with parameters: {parameters}")
+        
+        # Start timer for execution time measurement
+        start_time = datetime.datetime.now()
+        
+        # Initialize test results
+        test_results = []
+        
+        # Run requested tests
+        if test_type == "all" or test_type == "rabbitmq":
+            rabbitmq_result = _test_rabbitmq_connection(parameters)
+            test_results.append(rabbitmq_result)
+        
+        if test_type == "all" or test_type == "s3":
+            s3_result = _test_s3_connection(parameters)
+            test_results.append(s3_result)
+        
+        if test_type == "all" or test_type == "model":
+            model_result = _test_classification_models(parameters)
+            test_results.append(model_result)
+        
+        if test_type == "all" or test_type == "system":
+            system_result = _test_system_resources(parameters)
+            test_results.append(system_result)
+        
+        # Calculate execution time
+        end_time = datetime.datetime.now()
+        execution_time = (end_time - start_time).total_seconds()
+        
+        # Determine overall status
+        if any(result.status == "failure" for result in test_results):
+            overall_status = "failure"
+        elif any(result.status == "warning" for result in test_results):
+            overall_status = "warning"
+        else:
+            overall_status = "success"
+        
+        logger.info(
+            f"Completed {len(test_results)} diagnostic tests with overall status: {overall_status} "
+            f"in {execution_time:.2f} seconds"
+        )
+        
+        return DiagnosticTestResponse(
+            test_results=test_results,
+            overall_status=overall_status,
+            execution_time=execution_time
+        )
+    
+    except Exception as e:
+        logger.error(f"Error running diagnostic tests: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error running diagnostic tests: {str(e)}"
+        )
 
 
 # Helper functions
-async def check_admin_permissions(credentials: HTTPAuthorizationCredentials = Security(security)):
-    """Check if the user has admin permissions.
+def _get_package_version(package_name: str) -> str:
+    """
+    Get the version of an installed Python package.
     
     Args:
-        credentials: The HTTP authorization credentials
+        package_name: Name of the package
         
     Returns:
-        dict: The decoded token payload if valid
-        
-    Raises:
-        HTTPException: If the token is invalid or the user doesn't have admin permissions
+        str: Package version or "not installed" if not found
     """
     try:
-        token = credentials.credentials
-        payload = await validate_token(token)
+        import importlib.metadata
+        return importlib.metadata.version(package_name)
+    except (ImportError, importlib.metadata.PackageNotFoundError):
+        try:
+            # Fallback for Python < 3.8
+            import pkg_resources
+            return pkg_resources.get_distribution(package_name).version
+        except (ImportError, pkg_resources.DistributionNotFound):
+            return "not installed"
+
+
+def _get_python_version() -> str:
+    """
+    Get the current Python version.
+    
+    Returns:
+        str: Python version
+    """
+    import sys
+    return f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+
+
+def _test_rabbitmq_connection(parameters: Dict[str, Any]) -> DiagnosticTestResult:
+    """
+    Test RabbitMQ connection and functionality.
+    
+    Args:
+        parameters: Test parameters
         
-        # Check if user has admin role
-        if not check_permissions(payload, ["System Admin"]):
-            logger.warning(f"User {payload.get('sub')} attempted to access diagnostics without admin permissions")
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Admin permissions required"
+    Returns:
+        DiagnosticTestResult: Test result
+    """
+    try:
+        from ..utils.rabbitmq_utils import test_connection
+        
+        # Test connection with timeout
+        timeout = parameters.get("timeout", 5)  # Default 5 seconds timeout
+        connection_result = test_connection(timeout=timeout)
+        
+        if connection_result["connected"]:
+            return DiagnosticTestResult(
+                test_name="RabbitMQ Connection",
+                status="success",
+                message="Successfully connected to RabbitMQ",
+                details=connection_result
             )
-        
-        return payload
-    except Exception as e:
-        logger.error(f"Authentication error: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication credentials"
-        )
-
-
-async def check_operations_permissions(credentials: HTTPAuthorizationCredentials = Security(security)):
-    """Check if the user has operations staff permissions.
-    
-    Args:
-        credentials: The HTTP authorization credentials
-        
-    Returns:
-        dict: The decoded token payload if valid
-        
-    Raises:
-        HTTPException: If the token is invalid or the user doesn't have operations permissions
-    """
-    try:
-        token = credentials.credentials
-        payload = await validate_token(token)
-        
-        # Check if user has operations staff or admin role
-        if not check_permissions(payload, ["Operations Staff", "System Admin"]):
-            logger.warning(f"User {payload.get('sub')} attempted to access diagnostics without operations permissions")
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Operations Staff or Admin permissions required"
-            )
-        
-        return payload
-    except Exception as e:
-        logger.error(f"Authentication error: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication credentials"
-        )
-
-
-# Endpoints
-@diagnostics_router.get(
-    "/logs",
-    response_model=LogsResponse,
-    summary="Retrieve recent logs",
-    description="Retrieve recent logs from the Document Service with optional filtering by time range and log level."
-)
-async def get_recent_logs(
-    limit: int = Query(100, description="Maximum number of log entries to return", ge=1, le=1000),
-    level: Optional[str] = Query(None, description="Filter by log level (ERROR, WARN, INFO, DEBUG)"),
-    hours: Optional[int] = Query(None, description="Filter logs from the last N hours", ge=1, le=72),
-    start_time: Optional[str] = Query(None, description="Filter logs starting from this time (ISO format)"),
-    end_time: Optional[str] = Query(None, description="Filter logs until this time (ISO format)"),
-    _: Dict = Depends(check_operations_permissions)
-):
-    """Retrieve recent logs from the Document Service.
-    
-    Args:
-        limit: Maximum number of log entries to return
-        level: Filter by log level (ERROR, WARN, INFO, DEBUG)
-        hours: Filter logs from the last N hours
-        start_time: Filter logs starting from this time (ISO format)
-        end_time: Filter logs until this time (ISO format)
-        _: Dependency to check operations permissions
-        
-    Returns:
-        LogsResponse: The log entries matching the criteria
-    """
-    try:
-        log_with_context(logger.info, "Retrieving recent logs", {
-            "limit": limit,
-            "level": level,
-            "hours": hours,
-            "start_time": start_time,
-            "end_time": end_time
-        })
-        
-        # Calculate time range if hours is provided
-        if hours is not None:
-            end = datetime.now()
-            start = end - timedelta(hours=hours)
-            start_time = start.isoformat() if start_time is None else start_time
-            end_time = end.isoformat() if end_time is None else end_time
-        
-        # Get logs
-        logs = await get_logs(limit=limit, level=level, start_time=start_time, end_time=end_time)
-        
-        return LogsResponse(
-            logs=logs,
-            count=len(logs),
-            start_time=start_time,
-            end_time=end_time,
-            level=level
-        )
-    except Exception as e:
-        log_with_context(logger.error, f"Error retrieving logs: {str(e)}", {"error": str(e)})
-        return create_error_response(str(e), status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-
-@diagnostics_router.get(
-    "/config",
-    response_model=ConfigResponse,
-    summary="Get current configuration",
-    description="Retrieve the current configuration of the Document Service with sensitive values masked."
-)
-async def get_current_config(_: Dict = Depends(check_admin_permissions)):
-    """Get the current configuration of the Document Service.
-    
-    Args:
-        _: Dependency to check admin permissions
-        
-    Returns:
-        ConfigResponse: The current configuration
-    """
-    try:
-        log_with_context(logger.info, "Retrieving current configuration")
-        
-        # Get configuration
-        config = app_config.load_config()
-        
-        # Mask sensitive values
-        masked_rabbitmq = {
-            k: "*****" if k in ["username", "password", "client_cert", "client_key"] else v
-            for k, v in config.rabbitmq.__dict__.items()
-        }
-        
-        masked_s3 = {
-            k: "*****" if k in ["access_key", "secret_key", "encryption_key"] else v
-            for k, v in config.s3.__dict__.items()
-        }
-        
-        # Return masked configuration
-        return ConfigResponse(
-            service={
-                "name": config.service_name,
-                "version": config.version,
-                "port": config.port,
-                "host": config.host,
-                "debug": config.debug
-            },
-            rabbitmq=masked_rabbitmq,
-            s3=masked_s3,
-            model=config.model.__dict__,
-            environment=config.environment
-        )
-    except Exception as e:
-        log_with_context(logger.error, f"Error retrieving configuration: {str(e)}", {"error": str(e)})
-        return create_error_response(str(e), status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-
-@diagnostics_router.get(
-    "/test",
-    response_model=DiagnosticTestResponse,
-    summary="Run diagnostic tests",
-    description="Run diagnostic tests to verify the Document Service is functioning correctly."
-)
-async def run_diagnostic_tests(_: Dict = Depends(check_operations_permissions)):
-    """Run diagnostic tests to verify the Document Service is functioning correctly.
-    
-    Args:
-        _: Dependency to check operations permissions
-        
-    Returns:
-        DiagnosticTestResponse: The results of the diagnostic tests
-    """
-    try:
-        log_with_context(logger.info, "Running diagnostic tests")
-        
-        # Get application instance
-        app = get_application()
-        
-        # System information
-        system_info = {
-            "python_version": sys.version,
-            "platform": platform.platform(),
-            "hostname": platform.node(),
-            "cpu_count": os.cpu_count(),
-            "memory_info": {"available": "N/A"},  # Would use psutil in a real implementation
-            "uptime_seconds": int(time.time() - app.start_time) if hasattr(app, 'start_time') else 0
-        }
-        
-        # Test RabbitMQ connection
-        rabbitmq_status = await test_rabbitmq_connection(app.queue_service)
-        
-        # Test S3 connection
-        s3_status = await test_s3_connection(app.storage_service)
-        
-        # Get model information
-        model_info = await get_model_info(app.classification_service)
-        
-        # Determine overall status
-        if rabbitmq_status["connected"] and s3_status["connected"] and model_info["loaded"]:
-            overall_status = "healthy"
-        elif not rabbitmq_status["connected"] or not s3_status["connected"]:
-            overall_status = "critical"
         else:
-            overall_status = "degraded"
-        
-        return DiagnosticTestResponse(
-            timestamp=format_timestamp(datetime.now()),
-            system=system_info,
-            rabbitmq=ConnectionStatus(
-                connected=rabbitmq_status["connected"],
-                latency_ms=rabbitmq_status.get("latency_ms"),
-                details=rabbitmq_status.get("details"),
-                error=rabbitmq_status.get("error")
-            ),
-            s3=ConnectionStatus(
-                connected=s3_status["connected"],
-                latency_ms=s3_status.get("latency_ms"),
-                details=s3_status.get("details"),
-                error=s3_status.get("error")
-            ),
-            model=ModelStatus(
-                loaded=model_info["loaded"],
-                version=model_info["version"],
-                accuracy=model_info["accuracy"],
-                last_trained=model_info["last_trained"],
-                document_types=model_info["document_types"]
-            ),
-            overall_status=overall_status
-        )
+            return DiagnosticTestResult(
+                test_name="RabbitMQ Connection",
+                status="failure",
+                message=f"Failed to connect to RabbitMQ: {connection_result['error']}",
+                details=connection_result
+            )
+    
     except Exception as e:
-        log_with_context(logger.error, f"Error running diagnostic tests: {str(e)}", {"error": str(e)})
-        return create_error_response(str(e), status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        logger.error(f"Error testing RabbitMQ connection: {str(e)}")
+        return DiagnosticTestResult(
+            test_name="RabbitMQ Connection",
+            status="failure",
+            message=f"Error testing RabbitMQ connection: {str(e)}",
+            details={"error": str(e), "error_type": type(e).__name__}
+        )
 
 
-@diagnostics_router.post(
-    "/test/rabbitmq",
-    response_model=ConnectionStatus,
-    summary="Test RabbitMQ connection",
-    description="Test the connection to RabbitMQ and verify message publishing."
-)
-async def test_rabbitmq(_: Dict = Depends(check_operations_permissions)):
-    """Test the connection to RabbitMQ and verify message publishing.
+def _test_s3_connection(parameters: Dict[str, Any]) -> DiagnosticTestResult:
+    """
+    Test S3 storage connection and functionality.
     
     Args:
-        _: Dependency to check operations permissions
+        parameters: Test parameters
         
     Returns:
-        ConnectionStatus: The status of the RabbitMQ connection
+        DiagnosticTestResult: Test result
     """
     try:
-        log_with_context(logger.info, "Testing RabbitMQ connection")
+        from ..utils.s3_utils import test_connection
         
-        # Get application instance
-        app = get_application()
+        # Test connection with timeout
+        timeout = parameters.get("timeout", 5)  # Default 5 seconds timeout
+        connection_result = test_connection(timeout=timeout)
         
-        # Test RabbitMQ connection
-        status = await test_rabbitmq_connection(app.queue_service, test_publish=True)
-        
-        return ConnectionStatus(
-            connected=status["connected"],
-            latency_ms=status.get("latency_ms"),
-            details=status.get("details"),
-            error=status.get("error")
-        )
+        if connection_result["connected"]:
+            return DiagnosticTestResult(
+                test_name="S3 Storage Connection",
+                status="success",
+                message="Successfully connected to S3 storage",
+                details=connection_result
+            )
+        else:
+            return DiagnosticTestResult(
+                test_name="S3 Storage Connection",
+                status="failure",
+                message=f"Failed to connect to S3 storage: {connection_result['error']}",
+                details=connection_result
+            )
+    
     except Exception as e:
-        log_with_context(logger.error, f"Error testing RabbitMQ connection: {str(e)}", {"error": str(e)})
-        return create_error_response(str(e), status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        logger.error(f"Error testing S3 connection: {str(e)}")
+        return DiagnosticTestResult(
+            test_name="S3 Storage Connection",
+            status="failure",
+            message=f"Error testing S3 connection: {str(e)}",
+            details={"error": str(e), "error_type": type(e).__name__}
+        )
 
 
-@diagnostics_router.post(
-    "/test/s3",
-    response_model=ConnectionStatus,
-    summary="Test S3 connection",
-    description="Test the connection to S3 storage and verify read/write operations."
-)
-async def test_s3(_: Dict = Depends(check_operations_permissions)):
-    """Test the connection to S3 storage and verify read/write operations.
+def _test_classification_models(parameters: Dict[str, Any]) -> DiagnosticTestResult:
+    """
+    Test document classification models.
     
     Args:
-        _: Dependency to check operations permissions
+        parameters: Test parameters
         
     Returns:
-        ConnectionStatus: The status of the S3 connection
+        DiagnosticTestResult: Test result
     """
     try:
-        log_with_context(logger.info, "Testing S3 connection")
+        from ..utils.ml_utils import test_models
         
-        # Get application instance
-        app = get_application()
+        # Test models with sample data if provided
+        sample_data = parameters.get("sample_data", None)
+        model_result = test_models(sample_data=sample_data)
         
-        # Test S3 connection
-        status = await test_s3_connection(app.storage_service, test_write=True)
-        
-        return ConnectionStatus(
-            connected=status["connected"],
-            latency_ms=status.get("latency_ms"),
-            details=status.get("details"),
-            error=status.get("error")
-        )
+        if model_result["loaded"] and model_result["functional"]:
+            return DiagnosticTestResult(
+                test_name="Classification Models",
+                status="success",
+                message="Classification models loaded and functional",
+                details=model_result
+            )
+        elif model_result["loaded"] and not model_result["functional"]:
+            return DiagnosticTestResult(
+                test_name="Classification Models",
+                status="warning",
+                message="Classification models loaded but test prediction failed",
+                details=model_result
+            )
+        else:
+            return DiagnosticTestResult(
+                test_name="Classification Models",
+                status="failure",
+                message="Failed to load classification models",
+                details=model_result
+            )
+    
     except Exception as e:
-        log_with_context(logger.error, f"Error testing S3 connection: {str(e)}", {"error": str(e)})
-        return create_error_response(str(e), status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        logger.error(f"Error testing classification models: {str(e)}")
+        return DiagnosticTestResult(
+            test_name="Classification Models",
+            status="failure",
+            message=f"Error testing classification models: {str(e)}",
+            details={"error": str(e), "error_type": type(e).__name__}
+        )
 
 
-@diagnostics_router.post(
-    "/test/model",
-    response_model=ModelStatus,
-    summary="Test classification model",
-    description="Test the document classification model and verify it's functioning correctly."
-)
-async def test_model(_: Dict = Depends(check_operations_permissions)):
-    """Test the document classification model and verify it's functioning correctly.
+def _test_system_resources(parameters: Dict[str, Any]) -> DiagnosticTestResult:
+    """
+    Test system resources (CPU, memory, disk).
     
     Args:
-        _: Dependency to check operations permissions
+        parameters: Test parameters
         
     Returns:
-        ModelStatus: The status of the classification model
+        DiagnosticTestResult: Test result
     """
     try:
-        log_with_context(logger.info, "Testing classification model")
+        import psutil
+        import os
         
-        # Get application instance
-        app = get_application()
+        # Get CPU usage
+        cpu_percent = psutil.cpu_percent(interval=1)
         
-        # Test model
-        model_info = await get_model_info(app.classification_service, run_test=True)
+        # Get memory usage
+        memory = psutil.virtual_memory()
+        memory_percent = memory.percent
         
-        return ModelStatus(
-            loaded=model_info["loaded"],
-            version=model_info["version"],
-            accuracy=model_info["accuracy"],
-            last_trained=model_info["last_trained"],
-            document_types=model_info["document_types"]
+        # Get disk usage for the log directory
+        log_dir = os.environ.get("LOG_DIR", "/var/log/document-service")
+        disk = psutil.disk_usage(log_dir)
+        disk_percent = disk.percent
+        
+        # Get open file descriptors
+        open_files = len(psutil.Process().open_files())
+        
+        # Check if any resource is above warning threshold
+        cpu_warning = parameters.get("cpu_warning_threshold", 80)
+        memory_warning = parameters.get("memory_warning_threshold", 80)
+        disk_warning = parameters.get("disk_warning_threshold", 80)
+        
+        details = {
+            "cpu": {
+                "percent": cpu_percent,
+                "warning_threshold": cpu_warning
+            },
+            "memory": {
+                "percent": memory_percent,
+                "total_gb": memory.total / (1024 ** 3),
+                "available_gb": memory.available / (1024 ** 3),
+                "warning_threshold": memory_warning
+            },
+            "disk": {
+                "percent": disk_percent,
+                "total_gb": disk.total / (1024 ** 3),
+                "free_gb": disk.free / (1024 ** 3),
+                "path": log_dir,
+                "warning_threshold": disk_warning
+            },
+            "open_files": open_files
+        }
+        
+        # Determine status based on thresholds
+        if cpu_percent > cpu_warning or memory_percent > memory_warning or disk_percent > disk_warning:
+            status = "warning"
+            message = "System resources approaching critical levels"
+        else:
+            status = "success"
+            message = "System resources within normal parameters"
+        
+        return DiagnosticTestResult(
+            test_name="System Resources",
+            status=status,
+            message=message,
+            details=details
         )
+    
     except Exception as e:
-        log_with_context(logger.error, f"Error testing classification model: {str(e)}", {"error": str(e)})
-        return create_error_response(str(e), status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        logger.error(f"Error testing system resources: {str(e)}")
+        return DiagnosticTestResult(
+            test_name="System Resources",
+            status="failure",
+            message=f"Error testing system resources: {str(e)}",
+            details={"error": str(e), "error_type": type(e).__name__}
+        )
