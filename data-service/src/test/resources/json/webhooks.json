@@ -1,0 +1,265 @@
+[
+  {
+    "id": "wh-001",
+    "name": "Application Status Webhook",
+    "targetUrl": "https://api.externalcrm.com/webhooks/mca-status",
+    "events": [
+      "application.created",
+      "application.updated",
+      "application.completed",
+      "application.approved",
+      "application.rejected"
+    ],
+    "headers": {
+      "Authorization": "Bearer ${AUTH_TOKEN}",
+      "Content-Type": "application/json",
+      "X-Webhook-Source": "dollarfunding-mca"
+    },
+    "active": true,
+    "retryConfig": {
+      "maxRetries": 5,
+      "initialBackoffSeconds": 30,
+      "backoffMultiplier": 2.0,
+      "maxBackoffSeconds": 3600
+    },
+    "createdAt": "2025-01-15T10:30:00Z",
+    "updatedAt": "2025-01-15T10:30:00Z"
+  },
+  {
+    "id": "wh-002",
+    "name": "Document Processing Webhook",
+    "targetUrl": "https://api.documentprocessor.com/callbacks/mca",
+    "events": [
+      "document.received",
+      "document.classified",
+      "document.processed",
+      "document.error"
+    ],
+    "headers": {
+      "X-API-Key": "${DOC_API_KEY}",
+      "Content-Type": "application/json",
+      "X-Webhook-Source": "dollarfunding-mca"
+    },
+    "active": true,
+    "retryConfig": {
+      "maxRetries": 3,
+      "initialBackoffSeconds": 60,
+      "backoffMultiplier": 1.5,
+      "maxBackoffSeconds": 1800
+    },
+    "createdAt": "2025-01-16T14:22:00Z",
+    "updatedAt": "2025-01-16T14:22:00Z"
+  },
+  {
+    "id": "wh-003",
+    "name": "Funding Partner Integration",
+    "targetUrl": "https://api.fundingpartner.com/integrations/dollar-funding",
+    "events": [
+      "application.approved",
+      "application.funded",
+      "application.rejected"
+    ],
+    "headers": {
+      "Authorization": "Bearer ${PARTNER_TOKEN}",
+      "Content-Type": "application/json",
+      "X-Partner-ID": "DF-PARTNER-001",
+      "X-Webhook-Source": "dollarfunding-mca"
+    },
+    "active": true,
+    "retryConfig": {
+      "maxRetries": 7,
+      "initialBackoffSeconds": 45,
+      "backoffMultiplier": 2.0,
+      "maxBackoffSeconds": 7200
+    },
+    "createdAt": "2025-01-20T09:15:00Z",
+    "updatedAt": "2025-02-05T11:30:00Z"
+  },
+  {
+    "id": "wh-004",
+    "name": "Internal Notification System",
+    "targetUrl": "https://notifications.dollarfunding.com/internal/mca",
+    "events": [
+      "application.created",
+      "application.updated",
+      "application.completed",
+      "application.approved",
+      "application.rejected",
+      "document.received",
+      "document.error",
+      "system.alert"
+    ],
+    "headers": {
+      "X-Internal-Auth": "${INTERNAL_AUTH_KEY}",
+      "Content-Type": "application/json"
+    },
+    "active": true,
+    "retryConfig": {
+      "maxRetries": 10,
+      "initialBackoffSeconds": 15,
+      "backoffMultiplier": 1.5,
+      "maxBackoffSeconds": 1800
+    },
+    "createdAt": "2025-01-10T08:00:00Z",
+    "updatedAt": "2025-01-10T08:00:00Z"
+  },
+  {
+    "id": "wh-005",
+    "name": "Compliance Reporting Webhook",
+    "targetUrl": "https://compliance.dollarfunding.com/api/mca-events",
+    "events": [
+      "application.created",
+      "application.approved",
+      "application.rejected",
+      "application.funded",
+      "document.classified"
+    ],
+    "headers": {
+      "Authorization": "Bearer ${COMPLIANCE_TOKEN}",
+      "Content-Type": "application/json",
+      "X-Webhook-Source": "dollarfunding-mca"
+    },
+    "active": true,
+    "retryConfig": {
+      "maxRetries": 5,
+      "initialBackoffSeconds": 60,
+      "backoffMultiplier": 2.0,
+      "maxBackoffSeconds": 3600
+    },
+    "createdAt": "2025-01-25T13:45:00Z",
+    "updatedAt": "2025-01-25T13:45:00Z"
+  },
+  {
+    "id": "wh-006",
+    "name": "Audit Logging System",
+    "targetUrl": "https://audit.dollarfunding.com/api/log",
+    "events": [
+      "application.created",
+      "application.updated",
+      "application.completed",
+      "application.approved",
+      "application.rejected",
+      "application.funded",
+      "document.received",
+      "document.classified",
+      "document.processed",
+      "document.error",
+      "system.alert",
+      "system.error"
+    ],
+    "headers": {
+      "X-Audit-Key": "${AUDIT_KEY}",
+      "Content-Type": "application/json"
+    },
+    "active": true,
+    "retryConfig": {
+      "maxRetries": 8,
+      "initialBackoffSeconds": 30,
+      "backoffMultiplier": 1.5,
+      "maxBackoffSeconds": 3600
+    },
+    "createdAt": "2025-01-05T16:20:00Z",
+    "updatedAt": "2025-02-10T09:15:00Z"
+  },
+  {
+    "id": "wh-007",
+    "name": "Marketing Automation Integration",
+    "targetUrl": "https://marketing.example.com/api/webhooks/mca",
+    "events": [
+      "application.created",
+      "application.approved",
+      "application.rejected"
+    ],
+    "headers": {
+      "X-API-Key": "${MARKETING_API_KEY}",
+      "Content-Type": "application/json",
+      "X-Webhook-Source": "dollarfunding-mca"
+    },
+    "active": false,
+    "retryConfig": {
+      "maxRetries": 3,
+      "initialBackoffSeconds": 60,
+      "backoffMultiplier": 2.0,
+      "maxBackoffSeconds": 1800
+    },
+    "createdAt": "2025-02-01T11:30:00Z",
+    "updatedAt": "2025-02-15T14:45:00Z"
+  },
+  {
+    "id": "wh-008",
+    "name": "Analytics Platform Integration",
+    "targetUrl": "https://analytics.dollarfunding.com/ingest/mca-events",
+    "events": [
+      "application.created",
+      "application.completed",
+      "application.approved",
+      "application.rejected",
+      "application.funded",
+      "document.processed"
+    ],
+    "headers": {
+      "Authorization": "Bearer ${ANALYTICS_TOKEN}",
+      "Content-Type": "application/json"
+    },
+    "active": true,
+    "retryConfig": {
+      "maxRetries": 5,
+      "initialBackoffSeconds": 30,
+      "backoffMultiplier": 1.5,
+      "maxBackoffSeconds": 1800
+    },
+    "createdAt": "2025-01-18T10:00:00Z",
+    "updatedAt": "2025-01-18T10:00:00Z"
+  },
+  {
+    "id": "wh-009",
+    "name": "Legacy System Integration",
+    "targetUrl": "https://legacy.dollarfunding.com/api/v1/integrations/mca",
+    "events": [
+      "application.created",
+      "application.updated",
+      "application.completed",
+      "application.approved",
+      "application.rejected"
+    ],
+    "headers": {
+      "X-Legacy-Auth": "${LEGACY_AUTH_KEY}",
+      "Content-Type": "application/json",
+      "X-System-Source": "mca-system"
+    },
+    "active": false,
+    "retryConfig": {
+      "maxRetries": 3,
+      "initialBackoffSeconds": 60,
+      "backoffMultiplier": 2.0,
+      "maxBackoffSeconds": 1800
+    },
+    "createdAt": "2025-01-05T09:30:00Z",
+    "updatedAt": "2025-02-20T15:45:00Z"
+  },
+  {
+    "id": "wh-010",
+    "name": "Mobile App Notification Service",
+    "targetUrl": "https://push.dollarfunding.com/api/notifications",
+    "events": [
+      "application.approved",
+      "application.rejected",
+      "application.funded",
+      "document.error",
+      "system.alert"
+    ],
+    "headers": {
+      "X-Push-API-Key": "${PUSH_API_KEY}",
+      "Content-Type": "application/json"
+    },
+    "active": true,
+    "retryConfig": {
+      "maxRetries": 5,
+      "initialBackoffSeconds": 15,
+      "backoffMultiplier": 1.5,
+      "maxBackoffSeconds": 900
+    },
+    "createdAt": "2025-02-10T13:20:00Z",
+    "updatedAt": "2025-02-10T13:20:00Z"
+  }
+]
