@@ -24,7 +24,7 @@ import { ILoggerConfig, IRedisConfig, IAppConfig } from '../types/config';
 
 // Import middleware components
 import { default as correlationMiddleware } from './correlation-middleware';
-import { default as loggingMiddleware } from './logging-middleware';
+import { loggingMiddleware, responseBodyCaptureMiddleware, errorLoggingMiddleware } from './logging-middleware';
 import { default as errorMiddleware } from './error-middleware';
 import { default as authMiddleware } from './auth-middleware';
 import { default as validationMiddleware } from './validation-middleware';
@@ -35,6 +35,8 @@ import { default as hmacMiddleware } from './hmac-middleware';
 export {
   correlationMiddleware,
   loggingMiddleware,
+  responseBodyCaptureMiddleware,
+  errorLoggingMiddleware,
   errorMiddleware,
   authMiddleware,
   validationMiddleware,
@@ -166,7 +168,19 @@ export function registerMiddleware(
   preRouteMiddleware.push(correlationMiddleware());
 
   // Add logging middleware
-  preRouteMiddleware.push(loggingMiddleware(config.loggerConfig));
+  preRouteMiddleware.push(loggingMiddleware({
+    sensitiveFields: ['password', 'token', 'authorization', 'apiKey', 'secret', 'x-api-key', 'api-key'],
+    logRequestBody: config.environment !== 'production', // Only log request bodies in non-production
+    logResponseBody: config.environment === 'development', // Only log response bodies in development
+    maxBodyLength: 1024,
+    correlationIdHeader: 'x-correlation-id',
+    includeTimingInfo: true,
+  }));
+  
+  // Add response body capture middleware if in development
+  if (config.environment === 'development') {
+    preRouteMiddleware.push(responseBodyCaptureMiddleware());
+  }
 
   // Add rate limiting middleware if enabled
   if (config.enableRateLimiting) {
@@ -186,6 +200,9 @@ export function registerMiddleware(
     });
   });
 
+  // Add error logging middleware
+  errorMiddlewareHandlers.push(errorLoggingMiddleware());
+  
   // Add error middleware (should be last)
   errorMiddlewareHandlers.push(errorMiddleware());
 
