@@ -1,469 +1,276 @@
-import json
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+RabbitMQ message handling service for the Document Service microservice.
+
+This module provides functionality for connecting to RabbitMQ, consuming messages
+from the 'document-processing' queue, and publishing classification results to
+downstream services. It serves as the messaging interface for the Document Service.
+
+The service handles:
+- Secure connection to RabbitMQ with TLS and client certificate authentication
+- Consumption of document messages from the Email Service
+- Publishing of classification results to the OCR Service
+- Error handling and connection recovery
+- Standardized message format validation and transformation
+"""
+
 import logging
-import ssl
 import time
-from typing import Any, Callable, Dict, Optional, Union
+import uuid
+from typing import Dict, Any, Callable, Optional, List, Union
 
-import pika
-from pika.adapters.blocking_connection import BlockingChannel, BlockingConnection
-from pika.exceptions import AMQPConnectionError, AMQPChannelError
-
-from ..config import rabbitmq_config
-from ..types.messages import (
-    MessagePayload, MessageHeaders, PublishOptions, ConsumeOptions,
-    ExchangeConfig, QueueConfig, BindingConfig, DeliveryMode, ExchangeType
+# Import configuration
+from config.rabbitmq_config import (
+    rabbitmq_client, get_rabbitmq_client, consume_messages,
+    deserialize_message, serialize_message, EXCHANGE_NAME
 )
-from ..types.errors import ServiceError, MessagingError, Result
 
+# Configure logger
 logger = logging.getLogger(__name__)
+
 
 class QueueService:
     """
     Service for handling RabbitMQ message queue operations.
     
-    This service provides functionality for connecting to RabbitMQ,
-    consuming messages from the 'document-processing' queue, and
-    publishing classification results to the 'data-extraction' queue.
-    
-    Attributes:
-        connection (Optional[BlockingConnection]): The RabbitMQ connection
-        channel (Optional[BlockingChannel]): The RabbitMQ channel
-        is_connected (bool): Flag indicating if the service is connected to RabbitMQ
-        config (Dict): RabbitMQ configuration parameters
+    This service provides high-level methods for consuming messages from the
+    document-processing queue and publishing classification results to the
+    data-extraction queue for OCR processing.
     """
     
-    def __init__(self, config: Dict = None):
+    def __init__(self):
         """
-        Initialize the QueueService with RabbitMQ configuration.
+        Initialize the QueueService with a RabbitMQ client.
+        """
+        self.client = get_rabbitmq_client()
+        self.processing_handlers: Dict[str, Callable[[Dict[str, Any]], None]] = {}
+    
+    def register_document_handler(self, handler: Callable[[Dict[str, Any]], None]) -> None:
+        """
+        Register a handler function for processing document messages.
         
         Args:
-            config (Dict, optional): RabbitMQ configuration parameters.
-                If not provided, loads from rabbitmq_config.
+            handler: Function that processes document messages. Should accept a message
+                    dictionary as its argument.
         """
-        self.connection: Optional[BlockingConnection] = None
-        self.channel: Optional[BlockingChannel] = None
-        self.is_connected: bool = False
-        self.config = config or rabbitmq_config.RABBITMQ_CONFIG
-        
-        # Initialize connection parameters
-        self._connection_params = None
-        self._setup_connection_params()
+        self.processing_handlers['document_processing'] = handler
+        logger.info("Document processing handler registered")
     
-    def _setup_connection_params(self) -> None:
-        """
-        Set up RabbitMQ connection parameters with TLS configuration.
-        
-        This method configures the connection to RabbitMQ with TLS and client
-        certificate authentication as required in the technical specification.
-        """
-        try:
-            # Create SSL context for TLS connection
-            ssl_context = ssl.create_default_context(
-                cafile=self.config['tls']['ca_cert_path']
-            )
-            ssl_context.verify_mode = ssl.CERT_REQUIRED
-            ssl_context.load_cert_chain(
-                certfile=self.config['tls']['client_cert_path'],
-                keyfile=self.config['tls']['client_key_path']
-            )
-            
-            # Create SSL options for pika
-            ssl_options = pika.SSLOptions(
-                context=ssl_context,
-                server_hostname=self.config['host']
-            )
-            
-            # Set up connection parameters
-            self._connection_params = pika.ConnectionParameters(
-                host=self.config['host'],
-                port=self.config['port'],
-                virtual_host=self.config['virtual_host'],
-                credentials=pika.PlainCredentials(
-                    username=self.config['username'],
-                    password=self.config['password']
-                ),
-                ssl_options=ssl_options,
-                heartbeat=self.config['heartbeat'],
-                connection_attempts=self.config['connection_attempts'],
-                retry_delay=self.config['retry_delay'],
-                client_properties={
-                    "product": "Document Service",
-                    "platform": "Python",
-                    "connection_name": "document-service-rabbitmq"
-                }
-            )
-            
-            logger.info("RabbitMQ connection parameters configured with TLS")
-        except Exception as e:
-            logger.error(f"Failed to set up RabbitMQ connection parameters: {str(e)}")
-            raise ServiceError(
-                message="RabbitMQ connection setup failed",
-                context={"host": self.config['host'], "port": self.config['port']},
-                original_exception=e
-            )
-    
-    def connect(self) -> bool:
-        """
-        Establish connection to RabbitMQ server with TLS.
-        
-        This method connects to RabbitMQ, declares the exchange and queues,
-        and binds the queues to the exchange as specified in the technical
-        specification.
-        
-        Returns:
-            bool: True if connection is successful, False otherwise
-        
-        Raises:
-            ServiceError: If connection fails after all retry attempts
-        """
-        if self.is_connected:
-            return True
-        
-        try:
-            logger.info(f"Connecting to RabbitMQ at {self.config['host']}:{self.config['port']}")
-            self.connection = pika.BlockingConnection(self._connection_params)
-            self.channel = self.connection.channel()
-            
-            # Declare exchange
-            exchange_config = ExchangeConfig.document_exchange()
-            self.channel.exchange_declare(
-                exchange=exchange_config.name,
-                exchange_type=exchange_config.exchange_type.value,
-                durable=exchange_config.durable,
-                auto_delete=exchange_config.auto_delete,
-                arguments=exchange_config.arguments
-            )
-            
-            # Declare document processing queue
-            doc_queue = QueueConfig.document_processing_queue()
-            self.channel.queue_declare(
-                queue=doc_queue.name,
-                durable=doc_queue.durable,
-                exclusive=doc_queue.exclusive,
-                auto_delete=doc_queue.auto_delete,
-                arguments=doc_queue.arguments
-            )
-            
-            # Declare data extraction queue
-            data_queue = QueueConfig.classification_results_queue()
-            self.channel.queue_declare(
-                queue=data_queue.name,
-                durable=data_queue.durable,
-                exclusive=data_queue.exclusive,
-                auto_delete=data_queue.auto_delete,
-                arguments=data_queue.arguments
-            )
-            
-            # Bind queues to exchange
-            doc_binding = BindingConfig.document_processing_binding()
-            self.channel.queue_bind(
-                exchange=doc_binding.exchange,
-                queue=doc_binding.queue,
-                routing_key=doc_binding.routing_key,
-                arguments=doc_binding.arguments
-            )
-            
-            data_binding = BindingConfig.classification_results_binding()
-            self.channel.queue_bind(
-                exchange=data_binding.exchange,
-                queue=data_binding.queue,
-                routing_key=data_binding.routing_key,
-                arguments=data_binding.arguments
-            )
-            
-            self.is_connected = True
-            logger.info("Successfully connected to RabbitMQ")
-            return True
-        except AMQPConnectionError as e:
-            logger.error(f"Failed to connect to RabbitMQ: {str(e)}")
-            self.is_connected = False
-            raise ServiceError(
-                message="RabbitMQ connection failed",
-                context={"host": self.config['host'], "port": self.config['port']},
-                original_exception=e
-            )
-    
-    def disconnect(self) -> None:
-        """
-        Close the RabbitMQ connection and channel.
-        
-        This method gracefully closes the RabbitMQ connection and channel
-        to ensure proper cleanup of resources.
-        """
-        try:
-            if self.channel and self.channel.is_open:
-                logger.info("Closing RabbitMQ channel")
-                self.channel.close()
-            
-            if self.connection and self.connection.is_open:
-                logger.info("Closing RabbitMQ connection")
-                self.connection.close()
-        except Exception as e:
-            logger.warning(f"Error during RabbitMQ disconnect: {str(e)}")
-        finally:
-            self.channel = None
-            self.connection = None
-            self.is_connected = False
-    
-    def consume_messages(self, callback: Callable[[MessagePayload, MessageHeaders], None], 
-                         options: Optional[ConsumeOptions] = None) -> None:
+    def start_consuming(self) -> None:
         """
         Start consuming messages from the document-processing queue.
         
-        This method sets up a consumer for the document-processing queue
-        and processes incoming messages with the provided callback function.
-        
-        Args:
-            callback: Function to call when a message is received
-            options: Optional consume options
+        This method starts a blocking consumer that processes messages using the
+        registered document handler. It automatically handles reconnection and
+        error recovery.
         
         Raises:
-            ServiceError: If consumption fails
+            RuntimeError: If no document handler is registered
         """
-        if not self.is_connected:
-            self.connect()
+        if 'document_processing' not in self.processing_handlers:
+            raise RuntimeError("No document processing handler registered")
         
-        # Use default options if not provided
-        if options is None:
-            options = ConsumeOptions.for_document_processing(
-                prefetch_count=self.config.get('prefetch_count', 10)
-            )
+        logger.info("Starting to consume messages from document-processing queue")
         
-        try:
-            def message_handler(ch, method, properties, body):
-                try:
-                    # Parse message body
-                    message_str = body.decode('utf-8')
-                    message = MessagePayload.from_json(message_str)
-                    
-                    # Extract headers from properties
-                    headers = MessageHeaders(properties.headers or {})
-                    
-                    logger.info(f"Received message from queue: {options.queue}")
-                    logger.debug(f"Message content: {message}")
-                    
-                    # Process message with callback
-                    callback(message, headers)
-                    
-                    # Acknowledge message
-                    ch.basic_ack(delivery_tag=method.delivery_tag)
-                except json.JSONDecodeError as e:
-                    logger.error(f"Failed to decode message: {str(e)}")
-                    # Reject message with requeue=False to avoid infinite loop
-                    ch.basic_reject(delivery_tag=method.delivery_tag, requeue=False)
-                except Exception as e:
-                    logger.error(f"Error processing message: {str(e)}")
-                    # Reject message with requeue=True to retry later
-                    ch.basic_reject(delivery_tag=method.delivery_tag, requeue=True)
+        def message_callback(message: Dict[str, Any], method: Any, properties: Any) -> None:
+            """
+            Process incoming messages and route to appropriate handler.
             
-            # Set prefetch count to limit number of unacknowledged messages
-            self.channel.basic_qos(prefetch_count=options.prefetch_count)
-            
-            # Start consuming messages
-            self.channel.basic_consume(
-                queue=options.queue,
-                on_message_callback=message_handler,
-                auto_ack=options.no_ack,
-                exclusive=options.exclusive,
-                consumer_tag=options.consumer_tag,
-                arguments=options.arguments
-            )
-            
-            logger.info(f"Started consuming messages from queue: {options.queue}")
-            logger.info("Waiting for messages. To exit press CTRL+C")
-            
-            # Start consuming (blocks until channel is closed)
-            self.channel.start_consuming()
-        except AMQPChannelError as e:
-            logger.error(f"Channel error: {str(e)}")
-            raise ServiceError(
-                message="RabbitMQ channel error",
-                context={"queue": options.queue},
-                original_exception=e
-            )
-        except Exception as e:
-            logger.error(f"Failed to consume messages: {str(e)}")
-            raise ServiceError(
-                message="Message consumption failed",
-                context={"queue": options.queue},
-                original_exception=e
-            )
-    
-    def publish_message(self, 
-                       message: Union[Dict[str, Any], MessagePayload], 
-                       options: Optional[PublishOptions] = None) -> bool:
-        """
-        Publish a message to the data-extraction queue.
-        
-        This method publishes a message to the data-extraction queue for
-        processing by the OCR Service.
-        
-        Args:
-            message: Message payload to publish
-            options: Optional publishing options
-        
-        Returns:
-            bool: True if message was published successfully
-        
-        Raises:
-            ServiceError: If publishing fails
-        """
-        if not self.is_connected:
-            self.connect()
-        
-        # Use default options if not provided
-        if options is None:
-            options = PublishOptions.for_classification_result()
-        
-        try:
-            # Convert message to MessagePayload if it's a dict
-            if isinstance(message, dict) and not isinstance(message, MessagePayload):
-                message = MessagePayload(message)
-            
-            # Prepare message properties
-            properties = pika.BasicProperties(
-                delivery_mode=options.headers.get('delivery_mode', DeliveryMode.PERSISTENT.value),
-                content_type=options.headers.get('content_type', 'application/json'),
-                content_encoding=options.headers.get('content_encoding', 'utf-8'),
-                headers=dict(options.headers),
-                message_id=options.headers.get('message_id'),
-                correlation_id=options.headers.get('correlation_id'),
-                reply_to=options.headers.get('reply_to'),
-                expiration=options.headers.get('expiration'),
-                timestamp=options.headers.get('timestamp'),
-                app_id=options.headers.get('app_id', 'document-service'),
-                priority=options.headers.get('priority', 0)
-            )
-            
-            # Serialize message to JSON
-            message_body = message.to_json().encode('utf-8')
-            
-            # Publish message to exchange with routing key
-            self.channel.basic_publish(
-                exchange=options.exchange,
-                routing_key=options.routing_key,
-                body=message_body,
-                properties=properties,
-                mandatory=options.mandatory
-            )
-            
-            logger.info(f"Published message to exchange: {options.exchange} with routing key: {options.routing_key}")
-            logger.debug(f"Message content: {message}")
-            return True
-        except AMQPChannelError as e:
-            logger.error(f"Channel error during publish: {str(e)}")
-            # Try to reconnect and retry once
-            if self.reconnect():
-                try:
-                    # Retry publish after reconnection
-                    self.channel.basic_publish(
-                        exchange=options.exchange,
-                        routing_key=options.routing_key,
-                        body=message.to_json().encode('utf-8'),
-                        properties=properties,
-                        mandatory=options.mandatory
-                    )
-                    logger.info(f"Successfully republished message after reconnection")
-                    return True
-                except Exception as retry_e:
-                    logger.error(f"Failed to republish message after reconnection: {str(retry_e)}")
-                    raise MessagingError(
-                        message="Message publishing failed after reconnection",
-                        context={
-                            "exchange": options.exchange,
-                            "routing_key": options.routing_key
-                        },
-                        original_exception=retry_e
-                    )
-            else:
-                raise MessagingError(
-                    message="Failed to reconnect for message republishing",
-                    context={
-                        "exchange": options.exchange,
-                        "routing_key": options.routing_key
-                    },
-                    original_exception=e
-                )
-        except Exception as e:
-            logger.error(f"Failed to publish message: {str(e)}")
-            raise MessagingError(
-                message="Message publishing failed",
-                context={
-                    "exchange": options.exchange,
-                    "routing_key": options.routing_key
-                },
-                original_exception=e
-            )
-    
-    def publish_classification_result(self, message: MessagePayload, correlation_id: Optional[str] = None) -> bool:
-        """
-        Publish a classification result to the data-extraction queue.
-        
-        This is a convenience method that wraps publish_message with the appropriate
-        options for publishing classification results.
-        
-        Args:
-            message: Classification result payload
-            correlation_id: Optional correlation ID for tracking related messages
-            
-        Returns:
-            bool: True if message was published successfully
-            
-        Raises:
-            ServiceError: If publishing fails
-        """
-        options = PublishOptions.for_classification_result(correlation_id=correlation_id)
-        return self.publish_message(message, options)
-    
-    def reconnect(self) -> bool:
-        """
-        Reconnect to RabbitMQ after connection failure.
-        
-        This method implements an exponential backoff strategy for reconnection
-        attempts to avoid overwhelming the RabbitMQ server during outages.
-        
-        Returns:
-            bool: True if reconnection is successful
-        """
-        logger.info("Attempting to reconnect to RabbitMQ")
-        self.disconnect()
-        
-        # Implement exponential backoff for reconnection attempts
-        max_attempts = self.config.get('reconnect_attempts', 5)
-        retry_delay = self.config.get('retry_delay', 1)
-        
-        for attempt in range(1, max_attempts + 1):
+            Args:
+                message: Deserialized message content
+                method: RabbitMQ delivery information
+                properties: RabbitMQ message properties
+            """
             try:
-                logger.info(f"Reconnection attempt {attempt}/{max_attempts}")
-                self.connect()
-                return True
-            except ServiceError as e:
-                logger.warning(f"Reconnection attempt {attempt} failed: {str(e)}")
-                if attempt < max_attempts:
-                    # Exponential backoff with jitter
-                    delay = retry_delay * (2 ** (attempt - 1))
-                    # Add jitter to avoid thundering herd problem
-                    delay = delay * (0.8 + 0.4 * (time.time() % 1))
-                    time.sleep(delay)
+                # Log message receipt
+                correlation_id = properties.correlation_id or str(uuid.uuid4())
+                logger.info(f"Received message with correlation ID: {correlation_id}")
+                
+                # Validate message format
+                if not self._validate_message(message):
+                    logger.error(f"Invalid message format: {message}")
+                    return
+                
+                # Add correlation ID if not present
+                if 'correlation_id' not in message:
+                    message['correlation_id'] = correlation_id
+                
+                # Add processing timestamp
+                message['processing_timestamp'] = int(time.time())
+                
+                # Process message with registered handler
+                start_time = time.time()
+                self.processing_handlers['document_processing'](message)
+                processing_time = time.time() - start_time
+                
+                logger.info(f"Processed message in {processing_time:.2f} seconds")
+                
+            except Exception as e:
+                logger.error(f"Error processing message: {str(e)}", exc_info=True)
+                # Message will be negatively acknowledged by the wrapped_callback in rabbitmq_config
         
-        logger.error(f"Failed to reconnect after {max_attempts} attempts")
-        return False
+        # Start consuming with the callback
+        consume_messages(message_callback)
     
-    def __enter__(self):
+    def publish_classification_result(self, result: Dict[str, Any], routing_key: str = 'data-extraction') -> bool:
         """
-        Context manager entry point.
+        Publish classification result to the OCR Service for data extraction.
         
-        Allows using the QueueService with a 'with' statement for automatic
-        connection management.
+        Args:
+            result: Classification result dictionary
+            routing_key: Routing key for the message (default: 'data-extraction')
+            
+        Returns:
+            bool: True if message was published successfully, False otherwise
+            
+        Raises:
+            ValueError: If result is missing required fields
         """
-        self.connect()
-        return self
+        # Validate required fields
+        required_fields = ['document_id', 'document_type', 'confidence', 'correlation_id']
+        for field in required_fields:
+            if field not in result:
+                raise ValueError(f"Missing required field in classification result: {field}")
+        
+        # Add metadata
+        result['source'] = 'document-service'
+        result['timestamp'] = int(time.time())
+        result['message_type'] = 'classification_result'
+        
+        try:
+            # Publish message
+            self.client.publish(result, routing_key)
+            logger.info(f"Published classification result for document {result['document_id']} "
+                       f"with type {result['document_type']} and confidence {result['confidence']}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to publish classification result: {str(e)}", exc_info=True)
+            return False
     
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def _validate_message(self, message: Dict[str, Any]) -> bool:
         """
-        Context manager exit point.
+        Validate incoming message format.
         
-        Ensures the RabbitMQ connection is properly closed when exiting
-        the 'with' block, even if an exception occurs.
+        Args:
+            message: Message to validate
+            
+        Returns:
+            bool: True if message is valid, False otherwise
         """
-        self.disconnect()
+        # Check for required fields
+        required_fields = ['document_id', 'document_url', 'metadata']
+        for field in required_fields:
+            if field not in message:
+                logger.error(f"Missing required field in message: {field}")
+                return False
+        
+        # Validate metadata structure if present
+        if 'metadata' in message and not isinstance(message['metadata'], dict):
+            logger.error("Metadata must be a dictionary")
+            return False
+        
+        return True
+
+
+class MessageSchema:
+    """
+    Defines the standard message schemas for document processing.
+    
+    This class provides static methods for creating properly formatted messages
+    for different stages of the document processing pipeline.
+    """
+    
+    @staticmethod
+    def create_classification_result(document_id: str, document_type: str, 
+                                    confidence: float, needs_review: bool,
+                                    probabilities: Dict[str, float],
+                                    metadata: Dict[str, Any],
+                                    correlation_id: str) -> Dict[str, Any]:
+        """
+        Create a standardized classification result message.
+        
+        Args:
+            document_id: Unique identifier for the document
+            document_type: Classified document type
+            confidence: Classification confidence score (0.0 to 1.0)
+            needs_review: Whether the document needs manual review
+            probabilities: Dictionary of class probabilities
+            metadata: Additional metadata about the document
+            correlation_id: Correlation ID for request tracing
+            
+        Returns:
+            Dict[str, Any]: Formatted classification result message
+        """
+        return {
+            'document_id': document_id,
+            'document_type': document_type,
+            'confidence': confidence,
+            'needs_review': needs_review,
+            'probabilities': probabilities,
+            'metadata': metadata,
+            'correlation_id': correlation_id,
+            'timestamp': int(time.time()),
+            'source': 'document-service',
+            'message_type': 'classification_result'
+        }
+    
+    @staticmethod
+    def validate_incoming_document(message: Dict[str, Any]) -> List[str]:
+        """
+        Validate an incoming document message and return any validation errors.
+        
+        Args:
+            message: Document message to validate
+            
+        Returns:
+            List[str]: List of validation error messages (empty if valid)
+        """
+        errors = []
+        
+        # Check required fields
+        required_fields = ['document_id', 'document_url', 'metadata']
+        for field in required_fields:
+            if field not in message:
+                errors.append(f"Missing required field: {field}")
+        
+        # Validate field types
+        if 'document_id' in message and not isinstance(message['document_id'], str):
+            errors.append("document_id must be a string")
+            
+        if 'document_url' in message and not isinstance(message['document_url'], str):
+            errors.append("document_url must be a string")
+            
+        if 'metadata' in message and not isinstance(message['metadata'], dict):
+            errors.append("metadata must be a dictionary")
+        
+        # Validate metadata fields if present
+        if 'metadata' in message and isinstance(message['metadata'], dict):
+            metadata = message['metadata']
+            
+            # Check for email metadata if source is email
+            if metadata.get('source') == 'email':
+                if 'email_id' not in metadata:
+                    errors.append("Missing email_id in metadata for email source")
+                if 'sender' not in metadata:
+                    errors.append("Missing sender in metadata for email source")
+                if 'received_at' not in metadata:
+                    errors.append("Missing received_at in metadata for email source")
+        
+        return errors
+
+
+# Create a singleton instance for use throughout the application
+queue_service = QueueService()
+
+
+def get_queue_service() -> QueueService:
+    """
+    Get the QueueService singleton instance.
+    
+    Returns:
+        QueueService: Singleton instance of the QueueService
+    """
+    return queue_service
