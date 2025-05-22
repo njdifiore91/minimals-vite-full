@@ -1,634 +1,801 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
 """
 Document Classifier for the Document Service.
 
-This module implements the main document classifier that orchestrates the document
-classification process in the Document Service. It provides a high-level interface
-for document classification, combining feature extraction, model selection,
-prediction, and confidence scoring.
+This module implements the main document classifier that orchestrates the document classification
+process in the Document Service. It provides a high-level interface for document classification,
+combining feature extraction, model selection, prediction, and confidence scoring.
 
-The DocumentClassifier class uses an ensemble approach, combining predictions from
-SVM and Random Forest classifiers to achieve 99% classification accuracy. It handles
-the complete classification workflow, from feature extraction to document routing,
-and provides comprehensive logging and monitoring for classification performance.
+The DocumentClassifier uses an ensemble approach, combining SVM and Random Forest classifiers
+to achieve high accuracy in document classification. It provides confidence scoring based on
+the ensemble predictions and includes methods for routing documents to appropriate OCR processors.
 
 Example usage:
     # Initialize the classifier
     classifier = DocumentClassifier()
     
-    # Train the classifier on documents
-    classifier.fit(training_documents, training_labels)
+    # Train the classifier on document features
+    classifier.fit(features, labels)
     
-    # Classify a document
-    result = classifier.classify_document(document)
+    # Classify a document with confidence scoring
+    document_type, confidence = classifier.classify(features)
     
     # Get routing information for OCR processing
-    routing_info = classifier.get_routing_info(document)
-    
-    # Evaluate classifier performance
-    metrics = classifier.evaluate(test_documents, test_labels)
-    
-    # Save the trained classifier
-    classifier.save('/path/to/save/model')
+    routing_info = classifier.get_routing_info(document_type, confidence)
 """
 
 import logging
 import time
-from datetime import datetime
-from typing import Dict, List, Optional, Tuple, Union, Any
-
 import numpy as np
-from sklearn.base import BaseEstimator
-from sklearn.ensemble import RandomForestClassifier, VotingClassifier
-from sklearn.svm import SVC
+from datetime import datetime
+from typing import Dict, List, Optional, Tuple, Union, Any, cast
 
-from ..config import model_config
+# Import base model and specific classifiers
+from .base_model import BaseModel, T
+from .svm_classifier import SVMClassifier
+from .random_forest_classifier import RandomForestClassifier
+
+# Import types
 from ..types.classification import (
-    ClassificationMetrics,
     ClassificationModel,
+    FeatureVector,
     ClassificationResult,
     ConfidenceScore,
-    DocumentType,
-    FeatureExtractor,
-    FeatureNames,
-    FeatureVector,
-    ModelConfig,
+    ModelParameters,
+    ClassificationMetrics
 )
-from ..types.documents import Document, ProcessingStatus
-from ..models.svm_classifier import SVMClassifier
-from ..models.random_forest_classifier import RandomForestClassifier as RFClassifier
+from ..types.documents import DocumentType
+from ..types.config import ModelConfig
+from ..types.errors import Result
 
-# Configure logger
+# Set up logging
 logger = logging.getLogger(__name__)
 
 
-class DocumentClassifier:
-    """Main document classifier that orchestrates the classification process.
+class DocumentClassifier(BaseModel['DocumentClassifier']):
+    """
+    Main document classifier that orchestrates the document classification process.
     
-    This class combines multiple classification models (SVM and Random Forest)
-    using an ensemble approach to achieve high accuracy document classification.
-    It handles feature extraction, model selection, prediction, confidence scoring,
-    and document routing.
+    This class combines multiple classification models (SVM and Random Forest) in an
+    ensemble approach to achieve high accuracy in document classification. It provides
+    methods for training, prediction, confidence scoring, and document routing.
+    
+    The classifier uses a weighted voting scheme to combine predictions from different
+    models, with weights determined by model performance and confidence scores.
+    
+    Attributes:
+        config (ModelConfig): Configuration parameters for the classifier.
+        svm_classifier (SVMClassifier): SVM classifier instance.
+        rf_classifier (RandomForestClassifier): Random Forest classifier instance.
+        ensemble_weights (Dict[str, float]): Weights for each classifier in the ensemble.
+        model_name (str): Name of the model for identification and logging.
+        model_version (str): Version of the model for tracking and compatibility.
+        classes_ (Optional[np.ndarray]): Array of class labels known to the classifier.
+        trained (bool): Flag indicating whether the model has been trained.
+        feature_names (Optional[List[str]]): Names of features used by the model.
     """
     
-    def __init__(
-        self,
-        svm_model: Optional[ClassificationModel] = None,
-        random_forest_model: Optional[ClassificationModel] = None,
-        feature_extractors: Optional[List[FeatureExtractor]] = None,
-        confidence_threshold: float = 0.75,
-        model_config_path: Optional[str] = None,
-    ):
-        """Initialize the DocumentClassifier.
+    def __init__(self, config: ModelConfig):
+        """
+        Initialize the document classifier with configuration parameters.
         
         Args:
-            svm_model: Pre-trained SVM model (optional)
-            random_forest_model: Pre-trained Random Forest model (optional)
-            feature_extractors: List of feature extractors (optional)
-            confidence_threshold: Threshold for classification confidence (default: 0.75)
+            config (ModelConfig): Configuration parameters for the classifier.
         """
-        self.svm_model = svm_model
-        self.random_forest_model = random_forest_model
-        self.feature_extractors = feature_extractors or []
-        self.confidence_threshold = confidence_threshold
-        self.model_config_path = model_config_path
-        self.ensemble_model: Optional[VotingClassifier] = None
-        self.document_type_mapping: Dict[int, DocumentType] = {}
-        self.feature_names: List[str] = []
+        super().__init__(config)
         
-        # Load model configuration if path is provided
-        if self.model_config_path:
-            self._load_model_config()
+        # Initialize component classifiers
+        self.svm_classifier = SVMClassifier(self._get_svm_params())
+        self.rf_classifier = RandomForestClassifier(self._get_rf_params())
         
-        # Initialize models if not provided
-        if not self.svm_model or not self.random_forest_model:
-            self._initialize_models()
+        # Set default ensemble weights
+        self.ensemble_weights = {
+            'svm': config.get('svm_weight', 0.5),
+            'random_forest': config.get('rf_weight', 0.5)
+        }
         
-        # Build ensemble model
-        self._build_ensemble_model()
+        # Normalize weights to sum to 1
+        weight_sum = sum(self.ensemble_weights.values())
+        if weight_sum > 0:
+            self.ensemble_weights = {k: v / weight_sum for k, v in self.ensemble_weights.items()}
         
-        logger.info(
-            "DocumentClassifier initialized with confidence threshold: %f",
-            self.confidence_threshold
-        )
+        # Initialize performance metrics
+        self.metrics = {
+            'accuracy': 0.0,
+            'precision': {},
+            'recall': {},
+            'f1_score': {},
+            'confusion_matrix': None,
+            'classification_time': 0.0
+        }
+        
+        logger.info(f"Initialized DocumentClassifier with ensemble weights: {self.ensemble_weights}")
     
-    def _load_model_config(self) -> None:
-        """Load model configuration from the specified path."""
-        try:
-            logger.info(f"Loading model configuration from {self.model_config_path}")
-            # In a real implementation, this would load configuration from a file
-            # For now, we'll use default values from model_config module
-            self.confidence_threshold = model_config.DEFAULT_CONFIDENCE_THRESHOLD
+    def _get_svm_params(self) -> ModelParameters:
+        """
+        Get SVM-specific parameters from the configuration.
+        
+        Returns:
+            ModelParameters: Parameters for the SVM classifier.
+        """
+        svm_params = self.config.get('svm_params', {})
+        
+        # Set default SVM parameters if not specified
+        default_params = {
+            "C": 1.0,
+            "kernel": "rbf",
+            "gamma": "scale",
+            "probability": True,
+            "class_weight": "balanced",
+            "random_state": 42
+        }
+        
+        # Update defaults with provided parameters
+        default_params.update(svm_params)
+        
+        return default_params
+    
+    def _get_rf_params(self) -> ModelParameters:
+        """
+        Get Random Forest-specific parameters from the configuration.
+        
+        Returns:
+            ModelParameters: Parameters for the Random Forest classifier.
+        """
+        rf_params = self.config.get('rf_params', {})
+        
+        # Set default Random Forest parameters if not specified
+        default_params = {
+            "n_estimators": 100,
+            "max_depth": None,
+            "min_samples_split": 2,
+            "min_samples_leaf": 1,
+            "max_features": "sqrt",
+            "bootstrap": True,
+            "oob_score": True,
+            "n_jobs": -1,
+            "random_state": 42,
+            "class_weight": "balanced"
+        }
+        
+        # Update defaults with provided parameters
+        default_params.update(rf_params)
+        
+        return default_params
+    
+    def fit(self, X: FeatureVector, y: np.ndarray) -> 'DocumentClassifier':
+        """
+        Train the document classifier on the provided data.
+        
+        This method trains both the SVM and Random Forest classifiers on the provided
+        feature vectors and target labels, then updates the ensemble weights based on
+        their performance.
+        
+        Args:
+            X (FeatureVector): Feature vectors for training.
+            y (np.ndarray): Target labels for training.
             
-            # Load feature extractors if not already provided
-            if not self.feature_extractors:
-                self.feature_extractors = model_config.DEFAULT_FEATURE_EXTRACTORS
+        Returns:
+            DocumentClassifier: The trained classifier instance (self) for method chaining.
+            
+        Raises:
+            ValueError: If input data is invalid or incompatible with the model.
+            RuntimeError: If training fails due to internal errors.
+        """
+        # Validate input data
+        self._validate_input(X, y)
+        
+        start_time = time.time()
+        logger.info(f"Training DocumentClassifier on {X.shape[0]} samples with {X.shape[1]} features")
+        
+        # Store class labels before training to ensure consistency
+        self.classes_ = np.unique(y)
+        
+        # Train SVM classifier
+        logger.info("Training SVM classifier...")
+        self.svm_classifier.fit(X, y)
+        
+        # Train Random Forest classifier
+        logger.info("Training Random Forest classifier...")
+        self.rf_classifier.fit(X, y)
+        
+        # Ensure both classifiers have the same class mapping
+        # This is important for consistent ensemble predictions
+        if hasattr(self.svm_classifier, 'class_mapping') and hasattr(self.rf_classifier, 'class_mapping'):
+            # Verify class mappings are consistent
+            svm_classes = set(self.svm_classifier.class_mapping.values())
+            rf_classes = set(self.rf_classifier.class_mapping.values())
+            if svm_classes != rf_classes:
+                logger.warning("Class mappings between SVM and RF classifiers are inconsistent")
+                # Use SVM mapping as the reference
+                self.rf_classifier.class_mapping = self.svm_classifier.class_mapping.copy()
+                self.rf_classifier.inverse_class_mapping = self.svm_classifier.inverse_class_mapping.copy()
+        
+        # Update ensemble weights based on performance if auto-weighting is enabled
+        if self.config.get('auto_weighting', True):
+            self._update_ensemble_weights(X, y)
+        
+        # Set trained flag
+        self.trained = True
+        
+        # Store feature names if available
+        if hasattr(X, 'columns'):
+            self.feature_names = list(X.columns)
+            # Also set feature names for component classifiers
+            if hasattr(self.svm_classifier, 'set_feature_names'):
+                self.svm_classifier.set_feature_names(self.feature_names)
+            if hasattr(self.rf_classifier, 'set_feature_names'):
+                self.rf_classifier.set_feature_names(self.feature_names)
+        
+        # Calculate and log training time
+        training_time = time.time() - start_time
+        logger.info(f"DocumentClassifier training completed in {training_time:.2f} seconds")
+        logger.info(f"Updated ensemble weights: {self.ensemble_weights}")
+        
+        return self
+    
+    def _update_ensemble_weights(self, X: FeatureVector, y: np.ndarray) -> None:
+        """
+        Update ensemble weights based on classifier performance.
+        
+        This method evaluates each classifier on the training data and updates
+        the ensemble weights based on their accuracy.
+        
+        Args:
+            X (FeatureVector): Feature vectors for evaluation.
+            y (np.ndarray): Target labels for evaluation.
+        """
+        # Evaluate SVM classifier
+        svm_metrics = self.svm_classifier.evaluate(X, y)
+        svm_accuracy = svm_metrics['accuracy']
+        
+        # Evaluate Random Forest classifier
+        rf_metrics = self.rf_classifier.evaluate(X, y)
+        rf_accuracy = rf_metrics['accuracy']
+        
+        # Calculate weights based on accuracy
+        total_accuracy = svm_accuracy + rf_accuracy
+        if total_accuracy > 0:
+            self.ensemble_weights['svm'] = svm_accuracy / total_accuracy
+            self.ensemble_weights['random_forest'] = rf_accuracy / total_accuracy
+        
+        logger.info(f"SVM accuracy: {svm_accuracy:.4f}, RF accuracy: {rf_accuracy:.4f}")
+        logger.info(f"Updated ensemble weights: {self.ensemble_weights}")
+    
+    def predict(self, X: FeatureVector) -> np.ndarray:
+        """
+        Predict class labels for the provided data.
+        
+        This method combines predictions from the SVM and Random Forest classifiers
+        using the ensemble weights to make the final prediction.
+        
+        Args:
+            X (FeatureVector): Feature vectors for prediction.
+            
+        Returns:
+            np.ndarray: Predicted class labels.
+            
+        Raises:
+            ValueError: If input data is invalid or incompatible with the model.
+            RuntimeError: If prediction fails due to internal errors.
+            RuntimeError: If the model has not been trained.
+        """
+        if not self.trained:
+            raise RuntimeError("Model has not been trained. Call fit() before predict().")
+        
+        # Validate input data
+        self._validate_input(X, for_prediction=True)
+        
+        # Get predictions from each classifier
+        svm_predictions = self.svm_classifier.predict(X)
+        rf_predictions = self.rf_classifier.predict(X)
+        
+        # Get probabilities from each classifier
+        svm_probas = self.svm_classifier.predict_proba(X)
+        rf_probas = self.rf_classifier.predict_proba(X)
+        
+        # Ensure consistent document type representation
+        svm_predictions = self.ensure_consistent_document_types(svm_predictions)
+        rf_predictions = self.ensure_consistent_document_types(rf_predictions)
+        
+        # Combine predictions using weighted voting
+        final_predictions = []
+        for i in range(len(X)):
+            # Get the predicted class and its probability from each classifier
+            svm_pred = svm_predictions[i]
+            rf_pred = rf_predictions[i]
+            
+            # If both classifiers agree, use that prediction
+            if svm_pred == rf_pred:
+                final_predictions.append(svm_pred)
+                continue
+            
+            # If classifiers disagree, use weighted probabilities
+            svm_proba = svm_probas[i]
+            rf_proba = rf_probas[i]
+            
+            # Combine probabilities using ensemble weights
+            combined_proba = {}
+            for j, cls in enumerate(self.classes_):
+                # Ensure we're using the same class mapping for both classifiers
+                svm_cls_proba = svm_proba[j] * self.ensemble_weights['svm']
+                rf_cls_proba = rf_proba[j] * self.ensemble_weights['random_forest']
+                combined_proba[cls] = svm_cls_proba + rf_cls_proba
+            
+            # Select the class with the highest combined probability
+            final_pred = max(combined_proba.items(), key=lambda x: x[1])[0]
+            final_predictions.append(final_pred)
+        
+        # Ensure all predictions are DocumentType instances
+        return self.ensure_consistent_document_types(np.array(final_predictions))
+    
+    def predict_proba(self, X: FeatureVector) -> np.ndarray:
+        """
+        Predict class probabilities for the provided data.
+        
+        This method combines probability predictions from the SVM and Random Forest
+        classifiers using the ensemble weights to make the final probability prediction.
+        
+        Args:
+            X (FeatureVector): Feature vectors for prediction.
+            
+        Returns:
+            np.ndarray: Predicted class probabilities, where each row sums to 1.
+            
+        Raises:
+            ValueError: If input data is invalid or incompatible with the model.
+            RuntimeError: If prediction fails due to internal errors.
+            RuntimeError: If the model has not been trained.
+        """
+        if not self.trained:
+            raise RuntimeError("Model has not been trained. Call fit() before predict_proba().")
+        
+        # Validate input data
+        self._validate_input(X, for_prediction=True)
+        
+        # Get probabilities from each classifier
+        svm_probas = self.svm_classifier.predict_proba(X)
+        rf_probas = self.rf_classifier.predict_proba(X)
+        
+        # Combine probabilities using ensemble weights
+        combined_probas = []
+        for i in range(len(X)):
+            svm_proba = svm_probas[i]
+            rf_proba = rf_probas[i]
+            
+            # Combine probabilities using ensemble weights
+            combined_proba = svm_proba * self.ensemble_weights['svm'] + rf_proba * self.ensemble_weights['random_forest']
+            
+            # Normalize to ensure probabilities sum to 1
+            combined_proba = combined_proba / np.sum(combined_proba)
+            
+            combined_probas.append(combined_proba)
+        
+        return np.array(combined_probas)
+    
+    def evaluate(self, X: FeatureVector, y: np.ndarray) -> ClassificationMetrics:
+        """
+        Evaluate the classifier on the provided data.
+        
+        This method evaluates the ensemble classifier's performance on the provided
+        feature vectors and target labels, calculating metrics such as accuracy,
+        precision, recall, and F1 score.
+        
+        Args:
+            X (FeatureVector): Feature vectors for evaluation.
+            y (np.ndarray): True target labels for evaluation.
+            
+        Returns:
+            ClassificationMetrics: Dictionary of evaluation metrics including accuracy,
+                precision, recall, F1 score, and confusion matrix.
                 
-            logger.info(f"Loaded configuration with confidence threshold: {self.confidence_threshold}")
-        except Exception as e:
-            logger.error(f"Error loading model configuration: {str(e)}", exc_info=True)
-            # Fall back to defaults if configuration loading fails
-            self.confidence_threshold = 0.75
-    
-    def _initialize_models(self) -> None:
-        """Initialize SVM and Random Forest models with default configurations."""
-        # Initialize SVM model if not provided
-        if not self.svm_model:
-            logger.info("Initializing default SVM model")
-            # Use our custom SVMClassifier that extends the base model interface
-            self.svm_model = SVMClassifier()
-        
-        # Initialize Random Forest model if not provided
-        if not self.random_forest_model:
-            logger.info("Initializing default Random Forest model")
-            # Use our custom RandomForestClassifier that extends the base model interface
-            self.random_forest_model = RFClassifier()
-    
-    def _build_ensemble_model(self) -> None:
-        """Build the ensemble model combining SVM and Random Forest."""
-        logger.info("Building ensemble model")
-        
-        # Get the underlying scikit-learn models from our custom model classes
-        svm_estimator = self.svm_model.model if hasattr(self.svm_model, 'model') else self.svm_model
-        rf_estimator = self.random_forest_model.model if hasattr(self.random_forest_model, 'model') else self.random_forest_model
-        
-        # Create the voting classifier with the scikit-learn models
-        self.ensemble_model = VotingClassifier(
-            estimators=[
-                ('svm', svm_estimator),
-                ('rf', rf_estimator),
-            ],
-            voting='soft',  # Use probability estimates for voting
-            weights=[1, 1],  # Equal weights for both models
-        )
-        
-        logger.debug("Ensemble model created with estimators: SVM and Random Forest")
-    
-    def extract_features(self, document: Document) -> FeatureVector:
-        """Extract features from a document using configured feature extractors.
-        
-        Args:
-            document: Document to extract features from
-            
-        Returns:
-            Feature vector extracted from the document
-            
         Raises:
-            ValueError: If document content is not available
+            ValueError: If input data is invalid or incompatible with the model.
+            RuntimeError: If evaluation fails due to internal errors.
+            RuntimeError: If the model has not been trained.
         """
-        if not document.content:
-            raise ValueError("Document content is required for feature extraction")
+        if not self.trained:
+            raise RuntimeError("Model has not been trained. Call fit() before evaluate().")
         
+        # Validate input data
+        self._validate_input(X, y)
+        
+        # Get predictions
         start_time = time.time()
+        y_pred = self.predict(X)
         
-        # Collect feature vectors from all extractors
-        feature_vectors = []
-        self.feature_names = []
+        # Calculate metrics
+        from sklearn.metrics import accuracy_score, precision_recall_fscore_support, confusion_matrix
         
-        for extractor in self.feature_extractors:
-            logger.debug(
-                "Extracting features using %s extractor", 
-                extractor.name
-            )
-            features = extractor.extract(document.content)
-            feature_vectors.append(features)
-            self.feature_names.extend(extractor.feature_names)
+        accuracy = accuracy_score(y, y_pred)
+        precision, recall, f1, _ = precision_recall_fscore_support(y, y_pred, average=None)
+        cm = confusion_matrix(y, y_pred)
         
-        # Combine feature vectors
-        if not feature_vectors:
-            # If no feature extractors are configured, use the feature_extraction module
-            from ..models.feature_extraction import extract_document_features
-            
-            logger.debug("No feature extractors configured, using default feature extraction")
-            features, feature_names = extract_document_features(document.content)
-            feature_vectors.append(features)
-            self.feature_names.extend(feature_names)
-            
-            if not feature_vectors:
-                raise ValueError("No features extracted from document")
+        # Create metrics dictionaries
+        precision_dict = {}
+        recall_dict = {}
+        f1_dict = {}
         
-        combined_features = np.concatenate(feature_vectors)
+        for i, cls in enumerate(np.unique(y)):
+            class_type = self._convert_to_document_type(cls)
+            precision_dict[class_type] = float(precision[i])
+            recall_dict[class_type] = float(recall[i])
+            f1_dict[class_type] = float(f1[i])
         
-        elapsed_time = time.time() - start_time
-        logger.debug(
-            "Feature extraction completed in %.3f seconds. Extracted %d features.",
-            elapsed_time,
-            len(combined_features)
-        )
+        # Calculate evaluation time
+        eval_time = time.time() - start_time
         
-        return combined_features
-    
-    def fit(
-        self, 
-        documents: List[Document], 
-        document_types: List[DocumentType]
-    ) -> None:
-        """Fit the classifier to the training data.
-        
-        Args:
-            documents: List of documents for training
-            document_types: List of document types (labels) for training
-            
-        Raises:
-            ValueError: If documents and document_types have different lengths
-        """
-        if len(documents) != len(document_types):
-            raise ValueError(
-                "Number of documents and document types must match"
-            )
-        
-        logger.info("Fitting classifier to %d documents", len(documents))
-        start_time = time.time()
-        
-        # Extract features from all documents
-        X = np.vstack([self.extract_features(doc) for doc in documents])
-        
-        # Convert document types to numeric labels
-        unique_types = list(set(document_types))
-        self.document_type_mapping = {i: doc_type for i, doc_type in enumerate(unique_types)}
-        y = np.array([unique_types.index(doc_type) for doc_type in document_types])
-        
-        # Fit individual models
-        logger.debug("Fitting SVM model")
-        self.svm_model.fit(X, y)
-        
-        logger.debug("Fitting Random Forest model")
-        self.random_forest_model.fit(X, y)
-        
-        # Fit ensemble model
-        logger.debug("Fitting ensemble model")
-        self.ensemble_model.fit(X, y)
-        
-        elapsed_time = time.time() - start_time
-        logger.info(
-            "Model training completed in %.3f seconds",
-            elapsed_time
-        )
-    
-    def predict(
-        self, 
-        document: Document
-    ) -> Tuple[DocumentType, ConfidenceScore]:
-        """Predict the document type for a single document.
-        
-        Args:
-            document: Document to classify
-            
-        Returns:
-            Tuple of (predicted document type, confidence score)
-            
-        Raises:
-            ValueError: If the model has not been trained
-        """
-        if not self.ensemble_model or not hasattr(self.ensemble_model, 'classes_'):
-            raise ValueError("Model has not been trained")
-        
-        # Extract features
-        X = self.extract_features(document).reshape(1, -1)
-        
-        # Get predictions from ensemble model
-        y_pred = self.ensemble_model.predict(X)[0]
-        probas = self.ensemble_model.predict_proba(X)[0]
-        
-        # Get confidence score (probability of predicted class)
-        confidence = probas[y_pred]
-        
-        # Map numeric label back to DocumentType
-        document_type = self.document_type_mapping[y_pred]
-        
-        return document_type, confidence
-    
-    def classify_document(self, document: Document) -> ClassificationResult:
-        """Classify a document and return detailed classification results.
-        
-        This method orchestrates the complete document classification process:
-        1. Updates document status to CLASSIFYING
-        2. Extracts features from the document
-        3. Applies the ensemble classification model
-        4. Calculates confidence scores and feature importance
-        5. Determines if human review is required based on confidence threshold
-        6. Updates the document with classification results
-        7. Logs classification performance metrics
-        
-        Args:
-            document: Document to classify
-            
-        Returns:
-            Classification result with document type, confidence, and metadata
-        """
-        logger.info(
-            "Classifying document: %s", 
-            document.metadata.get('id', 'unknown')
-        )
-        start_time = time.time()
-        
-        # Update document status
-        document.update_status(ProcessingStatus.CLASSIFYING)
-        
-        try:
-            # Get prediction and confidence
-            document_type, confidence = self.predict(document)
-            
-            # Calculate feature importance if using Random Forest
-            feature_importance = {}
-            if hasattr(self.random_forest_model, 'feature_importances_'):
-                importances = self.random_forest_model.feature_importances_
-                if len(self.feature_names) == len(importances):
-                    feature_importance = {
-                        name: float(imp) 
-                        for name, imp in zip(self.feature_names, importances)
-                    }
-            
-            # Create classification result
-            result = ClassificationResult(
-                document_id=document.metadata.get('id', ''),
-                document_type=document_type,
-                confidence=confidence,
-                requires_review=confidence < self.confidence_threshold,
-                prediction_time=datetime.now(),
-                feature_importance=feature_importance,
-            )
-            
-            # Update document with classification result
-            document.set_classification_result({
-                'document_type': document_type,
-                'confidence': confidence,
-                'confidence_scores': self._get_confidence_scores(document),
-                'features_used': self.feature_names,
-                'model_version': getattr(self.ensemble_model, 'version', '1.0.0'),
-                'classified_at': datetime.now(),
-                'requires_review': confidence < self.confidence_threshold,
-            })
-            
-            elapsed_time = time.time() - start_time
-            logger.info(
-                "Document classified as %s with confidence %.3f in %.3f seconds",
-                document_type.value,
-                confidence,
-                elapsed_time
-            )
-            
-            return result
-            
-        except Exception as e:
-            elapsed_time = time.time() - start_time
-            logger.error(
-                "Error classifying document: %s (%.3f seconds)",
-                str(e),
-                elapsed_time,
-                exc_info=True
-            )
-            
-            # Update document status to error
-            document.set_error({
-                'error_code': 'CLASSIFICATION_ERROR',
-                'error_message': str(e),
-                'error_timestamp': datetime.now(),
-                'error_location': 'document_classifier.classify_document',
-                'error_details': {'elapsed_time': elapsed_time},
-                'retry_count': 0,
-                'is_recoverable': True,
-            })
-            
-            # Return a default classification result with low confidence
-            return ClassificationResult(
-                document_id=document.metadata.get('id', ''),
-                document_type=DocumentType.OTHER,
-                confidence=0.0,
-                requires_review=True,
-                prediction_time=datetime.now(),
-            )
-    
-    def _get_confidence_scores(self, document: Document) -> Dict[str, float]:
-        """Get confidence scores for all document types.
-        
-        Args:
-            document: Document to classify
-            
-        Returns:
-            Dictionary mapping document type names to confidence scores
-        """
-        if not self.ensemble_model or not hasattr(self.ensemble_model, 'classes_'):
-            return {}
-        
-        # Extract features
-        X = self.extract_features(document).reshape(1, -1)
-        
-        # Get probabilities from ensemble model
-        probas = self.ensemble_model.predict_proba(X)[0]
-        
-        # Map class indices to document types
-        return {
-            self.document_type_mapping[i].value: float(prob)
-            for i, prob in enumerate(probas)
-        }
-    
-    def get_routing_info(self, document: Document) -> Dict[str, Any]:
-        """Get routing information for a classified document.
-        
-        This method determines the appropriate OCR processing strategy based on
-        document type, classification confidence, and document characteristics.
-        It implements the document routing logic required by the Document Service
-        to route documents to the appropriate OCR processors.
-        
-        The routing information includes:
-        - OCR pipeline to use (application_form, tax_document, bank_statement, etc.)
-        - Processing priority (high, normal)
-        - Review flag for low-confidence classifications
-        - Document characteristics that affect OCR processing
-        
-        Args:
-            document: Classified document
-            
-        Returns:
-            Dictionary with routing information for OCR processing
-            
-        Raises:
-            ValueError: If document has not been classified
-        """
-        if not document.document_type or not document.classification_result:
-            raise ValueError("Document must be classified before routing")
-        
-        document_type = document.document_type
-        confidence = document.classification_result['confidence']
-        requires_review = document.classification_result['requires_review']
-        
-        # Base routing information
-        routing_info = {
-            'document_id': document.metadata.get('id', ''),
-            'document_type': document_type.value,
-            'confidence': confidence,
-            'requires_review': requires_review,
-            'ocr_pipeline': 'standard',  # Default pipeline
-            'priority': 'normal',  # Default priority
+        # Create metrics object
+        metrics = {
+            'accuracy': float(accuracy),
+            'precision': precision_dict,
+            'recall': recall_dict,
+            'f1_score': f1_dict,
+            'confusion_matrix': cm.tolist(),
+            'evaluation_time': eval_time
         }
         
-        # Determine OCR pipeline based on document type
-        if document_type == DocumentType.APPLICATION:
-            routing_info['ocr_pipeline'] = 'application_form'
-            routing_info['priority'] = 'high'
-        elif document_type == DocumentType.TAX_RETURN:
-            routing_info['ocr_pipeline'] = 'tax_document'
-        elif document_type == DocumentType.BANK_STATEMENT:
-            routing_info['ocr_pipeline'] = 'bank_statement'
-        elif document_type == DocumentType.PAY_STUB:
-            routing_info['ocr_pipeline'] = 'pay_stub'
-        elif document_type == DocumentType.ID_DOCUMENT:
-            routing_info['ocr_pipeline'] = 'identity_document'
-            routing_info['priority'] = 'high'
+        # Store metrics for later use
+        self.metrics = metrics
         
-        # Adjust for low confidence
-        if requires_review:
-            routing_info['ocr_pipeline'] += '_review'
-        
-        # Add document characteristics that might affect OCR processing
-        if 'page_count' in document.metadata and document.metadata['page_count']:
-            routing_info['page_count'] = document.metadata['page_count']
-            
-            # Large documents might need special handling
-            if document.metadata['page_count'] > 20:
-                routing_info['large_document'] = True
-        
-        # Add file format information
-        if 'mime_type' in document.metadata and document.metadata['mime_type']:
-            routing_info['mime_type'] = document.metadata['mime_type']
-            
-            # Image-based documents might need different OCR approach
-            if document.metadata['mime_type'].startswith('image/'):
-                routing_info['image_based'] = True
-        
-        logger.info(
-            "Routing document %s to OCR pipeline: %s (priority: %s)",
-            document.metadata.get('id', 'unknown'),
-            routing_info['ocr_pipeline'],
-            routing_info['priority']
-        )
-        
-        return routing_info
-    
-    def evaluate(
-        self, 
-        test_documents: List[Document], 
-        true_document_types: List[DocumentType]
-    ) -> ClassificationMetrics:
-        """Evaluate the classifier on test data.
-        
-        Args:
-            test_documents: List of documents for testing
-            true_document_types: List of true document types for testing
-            
-        Returns:
-            Classification metrics including accuracy, precision, recall, and F1 score
-            
-        Raises:
-            ValueError: If test_documents and true_document_types have different lengths
-        """
-        if len(test_documents) != len(true_document_types):
-            raise ValueError(
-                "Number of test documents and true document types must match"
-            )
-        
-        logger.info("Evaluating classifier on %d documents", len(test_documents))
-        start_time = time.time()
-        
-        # Use the model_evaluation module for more comprehensive evaluation
-        from ..models.model_evaluation import evaluate_classifier
-        
-        # Get predictions for all test documents
-        predicted_types = []
-        confidence_scores = []
-        for doc in test_documents:
-            doc_type, confidence = self.predict(doc)
-            predicted_types.append(doc_type)
-            confidence_scores.append(confidence)
-        
-        # Use the evaluation module to calculate metrics
-        metrics = evaluate_classifier(
-            true_labels=true_document_types,
-            predicted_labels=predicted_types,
-            confidence_scores=confidence_scores,
-            label_names=[dt.value for dt in DocumentType]
-        )
-        
-        elapsed_time = time.time() - start_time
-        logger.info(
-            "Evaluation completed in %.3f seconds. Accuracy: %.3f",
-            elapsed_time,
-            metrics.accuracy
-        )
-        
-        # Log detailed metrics
-        for doc_type, precision_val in metrics.precision.items():
-            recall_val = metrics.recall[doc_type]
-            f1_val = metrics.f1_score[doc_type]
-            logger.info(
-                "Document type %s: Precision=%.3f, Recall=%.3f, F1=%.3f",
-                doc_type.value if isinstance(doc_type, DocumentType) else doc_type,
-                precision_val,
-                recall_val,
-                f1_val
-            )
+        logger.info(f"Evaluation completed in {eval_time:.2f} seconds")
+        logger.info(f"Accuracy: {accuracy:.4f}")
         
         return metrics
     
-    def save(self, path: str) -> None:
-        """Save the classifier to disk.
-        
-        Args:
-            path: Path to save the classifier to
+    def classify(self, features: FeatureVector) -> Tuple[DocumentType, Dict[str, float]]:
         """
-        from ..models.model_serialization import save_model
+        Classify a document based on its features.
         
-        logger.info("Saving classifier to %s", path)
-        
-        # Create metadata for the model
-        metadata = {
-            'model_type': 'ensemble',
-            'version': '1.0.0',
-            'created_at': datetime.now().isoformat(),
-            'confidence_threshold': self.confidence_threshold,
-            'feature_names': self.feature_names,
-            'document_type_mapping': {str(k): v.value for k, v in self.document_type_mapping.items()},
-            'components': ['svm', 'random_forest'],
-        }
-        
-        # Save the model with metadata
-        save_model(self, path, metadata=metadata)
-    
-    @classmethod
-    def load(cls, path: str) -> 'DocumentClassifier':
-        """Load a classifier from disk.
+        This is a high-level method that combines prediction and confidence scoring
+        to classify a document and provide confidence scores for all possible types.
         
         Args:
-            path: Path to load the classifier from
+            features (FeatureVector): Feature vector representing the document.
             
         Returns:
-            Loaded DocumentClassifier instance
+            Tuple containing the predicted document type and a dictionary of confidence
+            scores for all document types.
+            
+        Raises:
+            ValueError: If input data is invalid or incompatible with the model.
+            RuntimeError: If classification fails due to internal errors.
+            RuntimeError: If the model has not been trained.
         """
-        from ..models.model_serialization import load_model
+        if not self.trained:
+            raise RuntimeError("Model has not been trained. Call fit() before classify().")
         
-        logger.info("Loading classifier from %s", path)
-        classifier, metadata = load_model(path)
+        # Validate input data
+        self._validate_input(features, for_prediction=True)
         
-        if metadata:
-            logger.info(
-                "Loaded classifier version %s created at %s",
-                metadata.get('version', 'unknown'),
-                metadata.get('created_at', 'unknown')
-            )
+        # Reshape features if needed (for single sample)
+        if len(features.shape) == 1:
+            features = features.reshape(1, -1)
         
-        return classifier
+        # Get prediction and probabilities
+        start_time = time.time()
+        prediction = self.predict(features)[0]
+        probabilities = self.predict_proba(features)[0]
         
-    def get_model_info(self) -> Dict[str, Any]:
-        """Get information about the classifier.
+        # prediction should already be a DocumentType instance from predict()
+        # but let's ensure it just to be safe
+        if not isinstance(prediction, DocumentType):
+            doc_type = self._convert_to_document_type(prediction)
+        else:
+            doc_type = prediction
+        
+        # Create confidence scores dictionary
+        confidence_scores = {}
+        for i, cls in enumerate(self.classes_):
+            # Convert class to DocumentType if needed
+            if not isinstance(cls, DocumentType):
+                class_type = self._convert_to_document_type(cls)
+            else:
+                class_type = cls
+                
+            # Use the string value as the key in the confidence scores dictionary
+            confidence_scores[str(class_type.value)] = float(probabilities[i])
+        
+        # Log classification time
+        classification_time = time.time() - start_time
+        logger.debug(f"Document classified as {doc_type} in {classification_time:.4f} seconds")
+        
+        return doc_type, confidence_scores
+    
+    def get_routing_info(self, document_type: DocumentType, confidence_scores: Dict[str, float]) -> Dict[str, Any]:
+        """
+        Get routing information for OCR processing based on document type and confidence.
+        
+        This method determines the appropriate OCR processing strategy based on the
+        document type, classification confidence, and document characteristics.
+        
+        Args:
+            document_type (DocumentType): The classified document type.
+            confidence_scores (Dict[str, float]): Confidence scores for all document types.
+            
+        Returns:
+            Dict[str, Any]: Routing information for OCR processing.
+        """
+        # Get primary confidence score for the predicted type
+        primary_confidence = confidence_scores.get(str(document_type.value), 0.0)
+        
+        # Determine if human review is required based on confidence threshold
+        confidence_threshold = self.config.get('confidence_threshold', 0.7)
+        requires_review = primary_confidence < confidence_threshold
+        
+        # Determine OCR processor based on document type
+        ocr_processor = self._get_ocr_processor_for_type(document_type)
+        
+        # Determine processing priority based on confidence
+        if primary_confidence > 0.9:
+            priority = "high"
+        elif primary_confidence > 0.7:
+            priority = "medium"
+        else:
+            priority = "low"
+        
+        # Create routing information
+        routing_info = {
+            "document_type": str(document_type.value),
+            "ocr_processor": ocr_processor,
+            "confidence": primary_confidence,
+            "requires_review": requires_review,
+            "processing_priority": priority,
+            "routing_timestamp": datetime.now().isoformat(),
+            "routing_version": self.model_version
+        }
+        
+        logger.info(f"Document routed to {ocr_processor} processor with {priority} priority")
+        if requires_review:
+            logger.info(f"Document requires human review due to low confidence ({primary_confidence:.2f})")
+        
+        return routing_info
+    
+    def _get_ocr_processor_for_type(self, document_type: DocumentType) -> str:
+        """
+        Determine the appropriate OCR processor for a document type.
+        
+        Args:
+            document_type (DocumentType): The document type to route.
+            
+        Returns:
+            str: Name of the OCR processor to use.
+        """
+        # Define OCR processor mapping based on document type
+        processor_mapping = {
+            DocumentType.APPLICATION: "form_processor",
+            DocumentType.TAX_RETURN: "financial_processor",
+            DocumentType.BANK_STATEMENT: "financial_processor",
+            DocumentType.PAY_STUB: "financial_processor",
+            DocumentType.ID_DOCUMENT: "id_processor",
+            DocumentType.OTHER: "general_processor"
+        }
+        
+        # Get processor for the document type, defaulting to general processor
+        return processor_mapping.get(document_type, "general_processor")
+    
+    def get_feature_importance(self) -> Dict[str, Dict[str, float]]:
+        """
+        Get feature importance rankings from all classifiers.
         
         Returns:
-            Dictionary with classifier information
+            Dict[str, Dict[str, float]]: Dictionary mapping classifier names to
+            feature importance dictionaries.
+            
+        Raises:
+            RuntimeError: If the model has not been trained.
         """
-        return {
-            'model_type': 'ensemble',
-            'components': ['svm', 'random_forest'],
-            'confidence_threshold': self.confidence_threshold,
-            'feature_count': len(self.feature_names) if self.feature_names else 0,
-            'document_types': [dt.value for dt in DocumentType],
-            'trained': hasattr(self.ensemble_model, 'classes_') if self.ensemble_model else False,
+        if not self.trained:
+            raise RuntimeError("Model has not been trained. Call fit() before get_feature_importance().")
+        
+        # Get feature importance from each classifier
+        svm_importance = self.svm_classifier.get_feature_importance()
+        rf_importance = self.rf_classifier.get_feature_importance()
+        
+        # Combine feature importance from all classifiers
+        importance = {
+            'svm': svm_importance,
+            'random_forest': rf_importance
         }
+        
+        return importance
+    
+    def get_performance_metrics(self) -> Dict[str, Any]:
+        """
+        Get performance metrics for monitoring.
+        
+        Returns:
+            Dict[str, Any]: Dictionary of performance metrics.
+            
+        Raises:
+            RuntimeError: If the model has not been evaluated.
+        """
+        if not self.metrics:
+            logger.warning("Model has not been evaluated. Call evaluate() to get performance metrics.")
+            return {}
+        
+        return self.metrics
+    
+    def get_model_info(self) -> Dict[str, Any]:
+        """
+        Get information about the classifier.
+        
+        Returns:
+            Dict[str, Any]: Dictionary with classifier information.
+        """
+        info = {
+            "model_name": self.model_name,
+            "model_version": self.model_version,
+            "ensemble_weights": self.ensemble_weights,
+            "trained": self.trained,
+            "component_models": {
+                "svm": self.svm_classifier.get_model_info(),
+                "random_forest": self.rf_classifier.get_model_info()
+            },
+            "config": self.config
+        }
+        
+        # Add performance metrics if available
+        if self.metrics:
+            info["performance_metrics"] = self.metrics
+        
+        return info
+        
+    def ensure_consistent_document_types(self, predictions: np.ndarray) -> np.ndarray:
+        """
+        Ensure all predictions are converted to DocumentType instances consistently.
+        
+        This method ensures that all predictions are properly converted to DocumentType
+        instances using the _convert_to_document_type method, which handles different
+        input formats (string, int, enum).
+        
+        Args:
+            predictions (np.ndarray): Array of predictions that may be of different types.
+            
+        Returns:
+            np.ndarray: Array of DocumentType instances.
+        """
+        # Convert each prediction to a DocumentType instance
+        converted_predictions = []
+        for pred in predictions:
+            # Skip if already a DocumentType
+            if isinstance(pred, DocumentType):
+                converted_predictions.append(pred)
+            else:
+                # Convert to DocumentType using the base method
+                doc_type = self._convert_to_document_type(pred)
+                converted_predictions.append(doc_type)
+        
+        return np.array(converted_predictions)
+        
+    def save_ensemble(self, base_path: str) -> Result[Dict[str, str]]:
+        """
+        Save the ensemble classifier and its component models to disk.
+        
+        Args:
+            base_path (str): Base path where models should be saved.
+            
+        Returns:
+            Result[Dict[str, str]]: Success result with paths where models were saved,
+                or error result if saving failed.
+        """
+        if not self.trained:
+            return Result.failure("Model has not been trained. Call fit() before saving.")
+        
+        try:
+            import os
+            import json
+            
+            # Create directory if it doesn't exist
+            os.makedirs(base_path, exist_ok=True)
+            
+            # Save component models
+            svm_path = os.path.join(base_path, "svm_classifier.pkl")
+            rf_path = os.path.join(base_path, "rf_classifier.pkl")
+            
+            svm_result = self.svm_classifier.save(svm_path)
+            if not svm_result.success:
+                return Result.failure(f"Failed to save SVM classifier: {svm_result.error}")
+                
+            rf_result = self.rf_classifier.save(rf_path)
+            if not rf_result.success:
+                return Result.failure(f"Failed to save Random Forest classifier: {rf_result.error}")
+            
+            # Save ensemble metadata
+            metadata = {
+                "model_name": self.model_name,
+                "model_version": self.model_version,
+                "ensemble_weights": self.ensemble_weights,
+                "config": self.config,
+                "classes": [str(cls) for cls in self.classes_] if self.classes_ is not None else None,
+                "feature_names": self.feature_names,
+                "metrics": self.metrics,
+                "trained": self.trained,
+                "component_models": {
+                    "svm": svm_path,
+                    "random_forest": rf_path
+                }
+            }
+            
+            metadata_path = os.path.join(base_path, "ensemble_metadata.json")
+            with open(metadata_path, 'w') as f:
+                json.dump(metadata, f, indent=2)
+            
+            # Save the ensemble model using the parent class method
+            ensemble_path = os.path.join(base_path, "document_classifier.pkl")
+            ensemble_result = super().save(ensemble_path)
+            if not ensemble_result.success:
+                return Result.failure(f"Failed to save ensemble model: {ensemble_result.error}")
+            
+            logger.info(f"Ensemble model saved to {base_path}")
+            return Result.success({
+                "ensemble": ensemble_path,
+                "svm": svm_path,
+                "random_forest": rf_path,
+                "metadata": metadata_path
+            })
+        except Exception as e:
+            error_msg = f"Failed to save ensemble model: {str(e)}"
+            logger.error(error_msg)
+            return Result.failure(error_msg)
+    
+    @classmethod
+    def load_ensemble(cls, base_path: str) -> Result['DocumentClassifier']:
+        """
+        Load an ensemble classifier and its component models from disk.
+        
+        Args:
+            base_path (str): Base path from which to load models.
+            
+        Returns:
+            Result['DocumentClassifier']: Success result with the loaded model instance,
+                or error result if loading failed.
+        """
+        try:
+            import os
+            import json
+            
+            # Load ensemble metadata
+            metadata_path = os.path.join(base_path, "ensemble_metadata.json")
+            with open(metadata_path, 'r') as f:
+                metadata = json.load(f)
+            
+            # Create a new instance with the saved configuration
+            instance = cls(metadata["config"])
+            
+            # Load component models
+            svm_path = metadata["component_models"]["svm"]
+            rf_path = metadata["component_models"]["random_forest"]
+            
+            svm_result = SVMClassifier.load(svm_path)
+            if not svm_result.success:
+                return Result.failure(f"Failed to load SVM classifier: {svm_result.error}")
+                
+            rf_result = RandomForestClassifier.load(rf_path)
+            if not rf_result.success:
+                return Result.failure(f"Failed to load Random Forest classifier: {rf_result.error}")
+            
+            # Set component models
+            instance.svm_classifier = svm_result.value
+            instance.rf_classifier = rf_result.value
+            
+            # Restore ensemble attributes
+            instance.model_name = metadata["model_name"]
+            instance.model_version = metadata["model_version"]
+            instance.ensemble_weights = metadata["ensemble_weights"]
+            instance.metrics = metadata["metrics"]
+            instance.trained = metadata["trained"]
+            
+            # Restore class labels and feature names
+            if metadata["classes"] is not None:
+                instance.classes_ = np.array([DocumentType(cls) for cls in metadata["classes"]])
+            instance.feature_names = metadata["feature_names"]
+            
+            logger.info(f"Ensemble model loaded from {base_path}")
+            return Result.success(instance)
+        except Exception as e:
+            error_msg = f"Failed to load ensemble model: {str(e)}"
+            logger.error(error_msg)
+            return Result.failure(error_msg)
