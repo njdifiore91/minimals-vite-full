@@ -1,0 +1,190 @@
+# OCR Service Build Pipeline
+# This workflow builds the OCR Service microservice with Python, Poetry, and TensorFlow
+# Includes code quality checks, testing, Docker image creation with CUDA support, and security scanning
+
+name: OCR Service Build
+
+on:
+  push:
+    branches: [ main, development ]
+    paths:
+      - 'ocr-service/**'
+      - 'infrastructure/ci/services/ocr-service/**'
+  pull_request:
+    branches: [ main, development ]
+    paths:
+      - 'ocr-service/**'
+      - 'infrastructure/ci/services/ocr-service/**'
+  workflow_dispatch:
+
+env:
+  PYTHON_VERSION: '3.13.3'
+  POETRY_VERSION: '1.7.1'
+  DOCKER_REGISTRY: ${{ secrets.DOCKER_REGISTRY }}
+  IMAGE_NAME: ocr-service
+  TRIVY_SEVERITY: 'CRITICAL,HIGH'
+
+jobs:
+  build:
+    name: Build and Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+        with:
+          version: ${{ env.POETRY_VERSION }}
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+          installer-parallel: true
+
+      - name: Load cached dependencies
+        id: cached-poetry-dependencies
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-${{ hashFiles('**/poetry.lock') }}
+
+      - name: Install dependencies
+        if: steps.cached-poetry-dependencies.outputs.cache-hit != 'true'
+        run: |
+          cd ocr-service
+          poetry install --no-interaction --no-root
+
+      - name: Code quality checks
+        run: |
+          cd ocr-service
+          poetry run flake8 src tests
+          poetry run mypy src
+
+      - name: Run unit tests
+        run: |
+          cd ocr-service
+          poetry run pytest tests/unit --cov=src --cov-report=xml
+
+      - name: Run TensorFlow model validation tests
+        run: |
+          cd ocr-service
+          poetry run pytest tests/models --cov=src --cov-report=xml --cov-append
+
+      - name: Upload test coverage
+        uses: codecov/codecov-action@v4
+        with:
+          file: ocr-service/coverage.xml
+          fail_ci_if_error: false
+
+  docker:
+    name: Build Docker Image
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.DOCKER_REGISTRY }}
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Extract metadata for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,format=short
+            type=ref,event=branch
+            type=ref,event=tag
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./ocr-service
+          file: ./ocr-service/Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            PYTHON_VERSION=${{ env.PYTHON_VERSION }}
+            CUDA_VERSION=12.1.0
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          format: 'table'
+          exit-code: 1
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: ${{ env.TRIVY_SEVERITY }}
+
+  matrix-test:
+    name: Test with Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.13.3', '3.14.0']
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+        with:
+          version: ${{ env.POETRY_VERSION }}
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+          installer-parallel: true
+
+      - name: Install dependencies
+        run: |
+          cd ocr-service
+          poetry install --no-interaction --no-root
+
+      - name: Run tests
+        run: |
+          cd ocr-service
+          poetry run pytest tests/unit
+
+  notify:
+    name: Notify on completion
+    needs: [build, docker, matrix-test]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check build status
+        if: ${{ needs.build.result == 'failure' || needs.docker.result == 'failure' || needs.matrix-test.result == 'failure' }}
+        run: exit 1
+
+      - name: Send notification
+        if: ${{ github.event_name != 'pull_request' }}
+        uses: rtCamp/action-slack-notify@v2
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+          SLACK_CHANNEL: ci-builds
+          SLACK_COLOR: ${{ job.status }}
+          SLACK_TITLE: OCR Service Build
+          SLACK_MESSAGE: 'Build completed for OCR Service'
+          SLACK_FOOTER: 'Merchant Cash Advance Application Processing System'
