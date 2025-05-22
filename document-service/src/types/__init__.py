@@ -1,129 +1,150 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
 """
-Types package for the Document Service.
+Document Service Type Definitions Package.
 
-This package provides type definitions used throughout the Document Service application.
-It exports all type classes, interfaces, and enums from individual modules, providing
-a clean import interface for the application.
+This package provides type definitions for the Document Service, ensuring type safety
+and consistent interfaces across the application. It exports all type classes, interfaces,
+and type aliases from individual modules for easy importing throughout the codebase.
 
-Example:
+Example usage:
     ```python
-    from document_service.types import DocumentMetadata, ClassificationResult
+    # Import specific types
+    from document_service.types import DocumentType, ClassificationResult, StorageMetadata
+    
+    # Use imported types
+    result: ClassificationResult = classify_document(document_bytes)
+    metadata: StorageMetadata = create_metadata(result, document_id)
     ```
 
-Rather than:
-    ```python
-    from document_service.types.documents import DocumentMetadata
-    from document_service.types.classification import ClassificationResult
-    ```
+This package helps maintain a clean import interface and prevents circular dependencies
+by centralizing all type definitions in one place.
 """
 
-# Import and re-export types from errors module
-from .errors import (
-    ServiceError,
-    ErrorDetails,
-    LogEntry,
-    ErrorCategory,
-    MonitoringAlert,
-    Result,
-)
-
-# Import and re-export types from classification module
+# Classification types
 from .classification import (
-    ClassificationModel,
+    # Type aliases
     FeatureVector,
-    ClassificationResult,
+    FeatureMatrix,
+    ProbabilityVector,
+    LabelVector,
     ConfidenceScore,
-    ModelParameters,
-    ClassificationMetrics,
-)
-
-# Import and re-export types from storage module
-from .storage import (
-    S3ClientConfig,
-    StorageOptions,
-    StorageMetadata,
-    BucketConfig,
-    StorageResult,
-    StorageKey,
-)
-
-# Import and re-export types from documents module
-from .documents import (
-    DocumentMetadata,
-    DocumentContent,
+    FeatureExtractor,
+    SerializedModel,
+    
+    # Enums
     DocumentType,
-    ProcessingStatus,
-    DocumentSource,
-    Document,
+    
+    # Classes and Protocols
+    ModelParameters,
+    ClassificationResult,
+    ClassificationMetrics,
+    ClassificationModel,
+    ModelVersion
 )
 
-# Import and re-export types from messages module
-from .messages import (
-    MessagePayload,
-    MessageHeaders,
-    ExchangeConfig,
-    QueueConfig,
-    PublishOptions,
-    ConsumeOptions,
+# Storage types
+from .storage import (
+    # Configuration types
+    S3Credentials,
+    S3ClientConfig,
+    EncryptionConfig,
+    StorageOptions,
+    
+    # Document metadata types
+    DocumentClassification,
+    StorageMetadata,
+    
+    # Lifecycle management types
+    LifecycleTransition,
+    LifecycleExpiration,
+    LifecycleRule,
+    
+    # Bucket configuration types
+    BucketConfig,
+    EnvironmentBuckets,
+    
+    # Error handling types
+    StorageErrorDetail,
+    StorageError,
+    StorageResult,
+    
+    # Storage operation types
+    StorageKey,
+    RetryConfig,
+    StorageOperations,
+    StorageKeyGenerator,
+    
+    # Callback types
+    UploadFileCallback,
+    DownloadFileCallback
 )
 
-# Import and re-export types from config module
+# Configuration types
 from .config import (
+    # Type aliases
     ConfigDict,
+    EnvironmentType,
+    
+    # Configuration classes
     ServiceConfig,
     ModelConfig,
     RabbitMQConfig,
     S3Config,
     LoggingConfig,
+    AppConfig,
+    
+    # Helper functions
+    validate_config
 )
 
-# Define __all__ to explicitly specify what is exported from this package
 __all__ = [
-    # From errors.py
-    'ServiceError',
-    'ErrorDetails',
-    'LogEntry',
-    'ErrorCategory',
-    'MonitoringAlert',
-    'Result',
-    
-    # From classification.py
-    'ClassificationModel',
+    # Classification types
     'FeatureVector',
-    'ClassificationResult',
+    'FeatureMatrix',
+    'ProbabilityVector',
+    'LabelVector',
     'ConfidenceScore',
+    'FeatureExtractor',
+    'SerializedModel',
+    'DocumentType',
     'ModelParameters',
+    'ClassificationResult',
     'ClassificationMetrics',
+    'ClassificationModel',
+    'ModelVersion',
     
-    # From storage.py
+    # Storage types
+    'S3Credentials',
     'S3ClientConfig',
+    'EncryptionConfig',
     'StorageOptions',
+    'DocumentClassification',
     'StorageMetadata',
+    'LifecycleTransition',
+    'LifecycleExpiration',
+    'LifecycleRule',
     'BucketConfig',
+    'EnvironmentBuckets',
+    'StorageErrorDetail',
+    'StorageError',
     'StorageResult',
     'StorageKey',
+    'RetryConfig',
+    'StorageOperations',
+    'StorageKeyGenerator',
+    'UploadFileCallback',
+    'DownloadFileCallback',
     
-    # From documents.py
-    'DocumentMetadata',
-    'DocumentContent',
-    'DocumentType',
-    'ProcessingStatus',
-    'DocumentSource',
-    'Document',
-    
-    # From messages.py
-    'MessagePayload',
-    'MessageHeaders',
-    'ExchangeConfig',
-    'QueueConfig',
-    'PublishOptions',
-    'ConsumeOptions',
-    
-    # From config.py
+    # Configuration types
     'ConfigDict',
+    'EnvironmentType',
     'ServiceConfig',
     'ModelConfig',
     'RabbitMQConfig',
     'S3Config',
     'LoggingConfig',
+    'AppConfig',
+    'validate_config'
 ]
