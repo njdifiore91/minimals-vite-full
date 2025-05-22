@@ -1,42 +1,29 @@
-# =========================================================
 # Build stage
-# =========================================================
 FROM node:20-alpine as build
-
-# Set working directory
 WORKDIR /app
 
-# Copy package files for dependency installation
+# Copy package files and install dependencies
 COPY package*.json ./
-
-# Install all dependencies (including dev dependencies for build)
 RUN npm ci
 
 # Copy source code
 COPY . .
 
-# Build TypeScript code
+# Build the application
 RUN npm run build
 
-# =========================================================
 # Production stage
-# =========================================================
 FROM node:20-alpine
-
-# Set working directory
 WORKDIR /app
 
-# Copy built application from build stage
+# Copy built application and package files from build stage
 COPY --from=build /app/dist ./dist
-
-# Copy package files for production dependencies
 COPY --from=build /app/package*.json ./
 
 # Install only production dependencies
-RUN npm ci --only=production && \
-    npm cache clean --force
+RUN npm ci --only=production
 
-# Create and use non-root user for security
+# Set up non-root user for security
 RUN addgroup -g 1001 -S nodejs && \
     adduser -S nodejs -u 1001 -G nodejs
 
