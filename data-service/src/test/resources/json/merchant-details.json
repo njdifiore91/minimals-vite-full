@@ -1,0 +1,242 @@
+[
+  {
+    "id": 1,
+    "application_id": 1,
+    "legalName": "Acme Retail Solutions, Inc.",
+    "dbaName": "Acme Retail",
+    "ein": "47-1234567",
+    "address": {
+      "street": "123 Commerce Blvd, Suite 400",
+      "city": "Phoenix",
+      "state": "AZ",
+      "zip": "85007",
+      "country": "United States"
+    },
+    "industry": "445110 - Supermarkets and Grocery Stores",
+    "revenue": 2750000.00
+  },
+  {
+    "id": 2,
+    "application_id": 2,
+    "legalName": "Bright Future Solar Technologies, LLC",
+    "dbaName": "Bright Solar",
+    "ein": "83-4567890",
+    "address": {
+      "street": "789 Sunshine Way",
+      "city": "San Diego",
+      "state": "CA",
+      "zip": "92101",
+      "country": "United States"
+    },
+    "industry": "221114 - Solar Electric Power Generation",
+    "revenue": 1850000.00
+  },
+  {
+    "id": 3,
+    "application_id": 3,
+    "legalName": "Metropolitan Medical Services, P.C.",
+    "dbaName": "Metro Med",
+    "ein": "56-7890123",
+    "address": {
+      "street": "456 Health Avenue, Floor 3",
+      "city": "Chicago",
+      "state": "IL",
+      "zip": "60611",
+      "country": "United States"
+    },
+    "industry": "621111 - Offices of Physicians (except Mental Health Specialists)",
+    "revenue": 3200000.00
+  },
+  {
+    "id": 4,
+    "application_id": 4,
+    "legalName": "Gourmet Delights Catering, Inc.",
+    "dbaName": "Gourmet Delights",
+    "ein": "32-5678901",
+    "address": {
+      "street": "234 Culinary Lane",
+      "city": "Atlanta",
+      "state": "GA",
+      "zip": "30308",
+      "country": "United States"
+    },
+    "industry": "722320 - Caterers",
+    "revenue": 950000.00
+  },
+  {
+    "id": 5,
+    "application_id": 5,
+    "legalName": "Precision Manufacturing Solutions, Inc.",
+    "dbaName": "Precision Manufacturing",
+    "ein": "91-2345678",
+    "address": {
+      "street": "567 Industrial Parkway",
+      "city": "Detroit",
+      "state": "MI",
+      "zip": "48201",
+      "country": "United States"
+    },
+    "industry": "332710 - Machine Shops",
+    "revenue": 4500000.00
+  },
+  {
+    "id": 6,
+    "application_id": 6,
+    "legalName": "Digital Marketing Experts, LLC",
+    "dbaName": "DigiMarketing",
+    "ein": "45-6789012",
+    "address": {
+      "street": "890 Tech Boulevard, Suite 200",
+      "city": "Austin",
+      "state": "TX",
+      "zip": "78701",
+      "country": "United States"
+    },
+    "industry": "541810 - Advertising Agencies",
+    "revenue": 1250000.00
+  },
+  {
+    "id": 7,
+    "application_id": 7,
+    "legalName": "Fresh Harvest Organic Farms, LLC",
+    "dbaName": "Fresh Harvest",
+    "ein": "78-9012345",
+    "address": {
+      "street": "1234 Rural Route 5",
+      "city": "Portland",
+      "state": "OR",
+      "zip": "97201",
+      "country": "United States"
+    },
+    "industry": "111998 - All Other Miscellaneous Crop Farming",
+    "revenue": 875000.00
+  },
+  {
+    "id": 8,
+    "application_id": 8,
+    "legalName": "Urban Construction & Development, Inc.",
+    "dbaName": "Urban Construction",
+    "ein": "23-4567890",
+    "address": {
+      "street": "678 Builder's Way",
+      "city": "New York",
+      "state": "NY",
+      "zip": "10001",
+      "country": "United States"
+    },
+    "industry": "236220 - Commercial and Institutional Building Construction",
+    "revenue": 7500000.00
+  },
+  {
+    "id": 9,
+    "application_id": 9,
+    "legalName": "Coastal Seafood Distributors, Inc.",
+    "dbaName": "Coastal Seafood",
+    "ein": "67-8901234",
+    "address": {
+      "street": "345 Harbor Drive",
+      "city": "Boston",
+      "state": "MA",
+      "zip": "02210",
+      "country": "United States"
+    },
+    "industry": "424460 - Fish and Seafood Merchant Wholesalers",
+    "revenue": 3100000.00
+  },
+  {
+    "id": 10,
+    "application_id": 10,
+    "legalName": "Premier Auto Repair & Service, LLC",
+    "dbaName": "Premier Auto",
+    "ein": "89-0123456",
+    "address": {
+      "street": "901 Mechanic Street",
+      "city": "Denver",
+      "state": "CO",
+      "zip": "80202",
+      "country": "United States"
+    },
+    "industry": "811111 - General Automotive Repair",
+    "revenue": 1100000.00
+  },
+  {
+    "id": 11,
+    "application_id": 11,
+    "legalName": "Innovative Software Solutions, Inc.",
+    "dbaName": "InnoSoft",
+    "ein": "34-5678901",
+    "address": {
+      "street": "123 Tech Park Drive, Building C",
+      "city": "Seattle",
+      "state": "WA",
+      "zip": "98101",
+      "country": "United States"
+    },
+    "industry": "541511 - Custom Computer Programming Services",
+    "revenue": 5200000.00
+  },
+  {
+    "id": 12,
+    "application_id": 12,
+    "legalName": "Luxury Boutique Hotels, Inc.",
+    "dbaName": "LBH Collection",
+    "ein": "56-7890123",
+    "address": {
+      "street": "789 Hospitality Avenue",
+      "city": "Miami",
+      "state": "FL",
+      "zip": "33139",
+      "country": "United States"
+    },
+    "industry": "721110 - Hotels (except Casino Hotels) and Motels",
+    "revenue": 6800000.00
+  },
+  {
+    "id": 13,
+    "application_id": 13,
+    "legalName": "Evergreen Landscaping Services, LLC",
+    "dbaName": "Evergreen Landscapes",
+    "ein": "78-9012345",
+    "address": {
+      "street": "456 Garden Way",
+      "city": "Nashville",
+      "state": "TN",
+      "zip": "37203",
+      "country": "United States"
+    },
+    "industry": "561730 - Landscaping Services",
+    "revenue": 925000.00
+  },
+  {
+    "id": 14,
+    "application_id": 14,
+    "legalName": "Advanced Educational Resources, Inc.",
+    "dbaName": "AER Learning",
+    "ein": "90-1234567",
+    "address": {
+      "street": "234 Scholar Lane",
+      "city": "Philadelphia",
+      "state": "PA",
+      "zip": "19103",
+      "country": "United States"
+    },
+    "industry": "611710 - Educational Support Services",
+    "revenue": 1750000.00
+  },
+  {
+    "id": 15,
+    "application_id": 15,
+    "legalName": "Wellness Fitness Centers, LLC",
+    "dbaName": "Wellness Fitness",
+    "ein": "12-3456789",
+    "address": {
+      "street": "567 Health Boulevard",
+      "city": "Los Angeles",
+      "state": "CA",
+      "zip": "90001",
+      "country": "United States"
+    },
+    "industry": "713940 - Fitness and Recreational Sports Centers",
+    "revenue": 2100000.00
+  }
+]
