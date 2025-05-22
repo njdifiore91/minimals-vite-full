@@ -1,104 +1,126 @@
-/**
- * Common Types
- * 
- * This file defines shared TypeScript type definitions used across the Notification Service.
- * It provides common interfaces for date handling, logging context, error responses,
- * service status, and retry options.
- */
+import type { Dayjs } from 'dayjs';
+
+// ----------------------------------------------------------------------
 
 /**
  * Interface for consistent date representation across the service
+ * Can be a string (ISO format), number (timestamp) or null
  */
-export interface IDateValue {
-  /** ISO 8601 formatted date string */
-  iso: string;
-  /** Unix timestamp in milliseconds */
-  timestamp: number;
-  /** JavaScript Date object */
-  date: Date;
-}
+export type IDateValue = string | number | null;
+
+/**
+ * Interface for date picker control using Day.js
+ */
+export type IDatePickerControl = Dayjs | null;
 
 /**
  * Interface for structured logging with correlation IDs and metadata
+ * Used for cross-service tracing as specified in section 3.2.3
  */
 export interface ILogContext {
-  /** Correlation ID for distributed tracing */
-  correlationId?: string;
-  /** Request ID for individual request tracking */
-  requestId?: string;
-  /** HTTP method of the request */
-  method?: string;
-  /** Request path */
-  path?: string;
-  /** Client IP address */
-  ip?: string;
-  /** User agent string */
-  userAgent?: string;
-  /** Additional context metadata */
-  [key: string]: any;
+  /** Unique request identifier for cross-service tracing */
+  correlationId: string;
+  /** Service name generating the log */
+  serviceName: string;
+  /** Optional user identifier if request is authenticated */
+  userId?: string;
+  /** Timestamp when the log was created */
+  timestamp: IDateValue;
+  /** Additional metadata for the log entry */
+  metadata?: Record<string, unknown>;
 }
 
 /**
  * Interface for standardized error responses
+ * Provides consistent error format across all API endpoints
  */
 export interface IErrorResponse {
   /** HTTP status code */
-  status: number;
-  /** Error code for client-side error handling */
-  code: string;
-  /** Human-readable error message */
+  statusCode: number;
+  /** Error message */
   message: string;
-  /** Additional error details */
-  details?: any;
-  /** Request ID for error tracking */
-  requestId?: string;
-  /** Timestamp of the error */
-  timestamp?: string;
+  /** Error code for client-side error handling */
+  errorCode: string;
+  /** Correlation ID for tracing the request */
+  correlationId: string;
+  /** Timestamp when the error occurred */
+  timestamp: IDateValue;
+  /** Optional additional details about the error */
+  details?: Record<string, unknown>;
 }
 
 /**
  * Interface for health check responses
+ * Used for Kubernetes probes as specified in section 3.2.3
  */
 export interface IServiceStatus {
   /** Service name */
   service: string;
-  /** Service status (up, down, degraded) */
-  status: 'up' | 'down' | 'degraded';
-  /** Service version */
+  /** Service status: 'healthy', 'degraded', or 'unhealthy' */
+  status: 'healthy' | 'degraded' | 'unhealthy';
+  /** Version of the service */
   version: string;
-  /** Uptime in seconds */
-  uptime: number;
   /** Timestamp of the status check */
-  timestamp: string;
-  /** Additional status details */
-  details?: {
-    /** Database connection status */
-    database?: 'up' | 'down' | 'degraded';
-    /** Message queue connection status */
-    messageQueue?: 'up' | 'down' | 'degraded';
-    /** Cache connection status */
-    cache?: 'up' | 'down' | 'degraded';
-    /** Additional service-specific status details */
-    [key: string]: any;
-  };
+  timestamp: IDateValue;
+  /** Optional details about service dependencies */
+  dependencies?: {
+    /** Name of the dependency */
+    name: string;
+    /** Status of the dependency */
+    status: 'healthy' | 'degraded' | 'unhealthy';
+    /** Optional details about the dependency */
+    details?: string;
+  }[];
 }
 
 /**
  * Interface for configuring retry behavior with backoff settings
+ * Used for webhook delivery retry mechanism as specified in section 4.1.10
  */
 export interface IRetryOptions {
   /** Maximum number of retry attempts */
   maxRetries: number;
   /** Initial delay in milliseconds before the first retry */
   initialDelayMs: number;
-  /** Backoff factor for exponential backoff */
-  backoffFactor: number;
   /** Maximum delay in milliseconds between retries */
   maxDelayMs: number;
-  /** Whether to add jitter to retry delays */
-  jitter: boolean;
-  /** Specific status codes that should trigger a retry */
-  retryableStatusCodes?: number[];
-  /** Specific error types that should trigger a retry */
-  retryableErrors?: string[];
+  /** Backoff factor for exponential backoff calculation */
+  backoffFactor: number;
+  /** Whether to add jitter to the delay to prevent thundering herd */
+  useJitter: boolean;
+  /** Optional timeout in milliseconds for each retry attempt */
+  timeoutMs?: number;
 }
+
+/**
+ * Interface for payment card information
+ */
+export type IPaymentCard = {
+  id: string;
+  cardType: string;
+  primary?: boolean;
+  cardNumber: string;
+};
+
+/**
+ * Interface for address information
+ */
+export type IAddressItem = {
+  id?: string;
+  name: string;
+  company?: string;
+  primary?: boolean;
+  fullAddress: string;
+  phoneNumber?: string;
+  addressType?: string;
+};
+
+/**
+ * Interface for social media links
+ */
+export type ISocialLink = {
+  twitter: string;
+  facebook: string;
+  linkedin: string;
+  instagram: string;
+};
