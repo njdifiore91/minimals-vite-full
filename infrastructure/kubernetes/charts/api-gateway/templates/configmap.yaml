@@ -1,0 +1,403 @@
+{{- /*
+ConfigMap for Kong API Gateway configuration.
+
+This ConfigMap contains the declarative configuration for Kong API Gateway in DB-less mode.
+It includes:
+- Environment variables for Kong configuration
+- Declarative configuration for services, routes, and plugins
+- JWT authentication configuration with RS256 algorithm
+- Rate limiting configuration with Redis backend
+- CORS settings for frontend access
+- Logging configuration
+
+The configuration is templated to use values from the chart's values.yaml file.
+*/}}
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "api-gateway.fullname" . }}-config
+  labels:
+    {{- include "api-gateway.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    {{- if .Values.annotations }}
+    {{- toYaml .Values.annotations | nindent 4 }}
+    {{- end }}
+data:
+  # Kong environment variables
+  kong.env: |
+    # DB-less mode configuration
+    KONG_DATABASE=off
+    KONG_DECLARATIVE_CONFIG=/kong/declarative/kong.yaml
+    KONG_PROXY_LISTEN=0.0.0.0:8000, 0.0.0.0:8443 ssl http2
+    KONG_ADMIN_LISTEN=0.0.0.0:8001, 0.0.0.0:8444 ssl
+    
+    # Logging configuration
+    KONG_LOG_LEVEL={{ .Values.kong.logLevel | default "notice" }}
+    
+    # SSL configuration
+    KONG_SSL_CIPHER_SUITE=intermediate
+    KONG_SSL_CIPHERS=ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384
+    KONG_SSL_PROTOCOLS=TLSv1.2 TLSv1.3
+    
+    # Performance tuning
+    KONG_NGINX_WORKER_PROCESSES={{ .Values.kong.workerProcesses | default "auto" }}
+    KONG_NGINX_WORKER_CONNECTIONS={{ .Values.kong.workerConnections | default 1024 }}
+    
+    # Trusted IPs for real IP detection
+    KONG_REAL_IP_HEADER=X-Forwarded-For
+    KONG_TRUSTED_IPS=0.0.0.0/0,::/0
+    
+    # Additional environment variables
+    {{- range $key, $value := .Values.kong.env }}
+    {{ $key }}={{ $value }}
+    {{- end }}
+
+  # Kong declarative configuration
+  kong.yaml: |
+    _format_version: "3.0"
+    _transform: {{ .Values.kong.transform | default true }}
+
+    # Services configuration
+    services:
+      # Email Service
+      - name: email-service
+        url: http://{{ .Values.services.email.host }}:{{ .Values.services.email.port }}
+        connect_timeout: 60000
+        read_timeout: 60000
+        write_timeout: 60000
+        retries: 5
+        tags:
+          - mca
+          - email
+        routes:
+          - name: email-service-route
+            paths:
+              - /api/v1/email
+            strip_path: true
+            preserve_host: false
+            protocols:
+              - http
+              - https
+            https_redirect_status_code: 426
+            regex_priority: 0
+            tags:
+              - mca
+              - email
+
+      # Document Service
+      - name: document-service
+        url: http://{{ .Values.services.document.host }}:{{ .Values.services.document.port }}
+        connect_timeout: 60000
+        read_timeout: 60000
+        write_timeout: 60000
+        retries: 5
+        tags:
+          - mca
+          - document
+        routes:
+          - name: document-service-route
+            paths:
+              - /api/v1/documents
+            strip_path: true
+            preserve_host: false
+            protocols:
+              - http
+              - https
+            https_redirect_status_code: 426
+            regex_priority: 0
+            tags:
+              - mca
+              - document
+
+      # OCR Service
+      - name: ocr-service
+        url: http://{{ .Values.services.ocr.host }}:{{ .Values.services.ocr.port }}
+        connect_timeout: 120000  # Longer timeout for OCR processing
+        read_timeout: 120000
+        write_timeout: 120000
+        retries: 3
+        tags:
+          - mca
+          - ocr
+        routes:
+          - name: ocr-service-route
+            paths:
+              - /api/v1/ocr
+            strip_path: true
+            preserve_host: false
+            protocols:
+              - http
+              - https
+            https_redirect_status_code: 426
+            regex_priority: 0
+            tags:
+              - mca
+              - ocr
+
+      # Data Service
+      - name: data-service
+        url: http://{{ .Values.services.data.host }}:{{ .Values.services.data.port }}
+        connect_timeout: 60000
+        read_timeout: 60000
+        write_timeout: 60000
+        retries: 5
+        tags:
+          - mca
+          - data
+        routes:
+          - name: data-service-route
+            paths:
+              - /api/v1/applications
+            strip_path: true
+            preserve_host: false
+            protocols:
+              - http
+              - https
+            https_redirect_status_code: 426
+            regex_priority: 0
+            tags:
+              - mca
+              - data
+          - name: data-service-route-options
+            methods:
+              - OPTIONS
+            paths:
+              - /api/v1/applications
+            strip_path: true
+            preserve_host: false
+            protocols:
+              - http
+              - https
+            tags:
+              - mca
+              - data
+              - cors
+
+      # Notification Service
+      - name: notification-service
+        url: http://{{ .Values.services.notification.host }}:{{ .Values.services.notification.port }}
+        connect_timeout: 60000
+        read_timeout: 60000
+        write_timeout: 60000
+        retries: 5
+        tags:
+          - mca
+          - notification
+        routes:
+          - name: notification-service-route
+            paths:
+              - /api/v1/webhooks
+            strip_path: true
+            preserve_host: false
+            protocols:
+              - http
+              - https
+            https_redirect_status_code: 426
+            regex_priority: 0
+            tags:
+              - mca
+              - notification
+          - name: notification-service-route-options
+            methods:
+              - OPTIONS
+            paths:
+              - /api/v1/webhooks
+            strip_path: true
+            preserve_host: false
+            protocols:
+              - http
+              - https
+            tags:
+              - mca
+              - notification
+              - cors
+
+    # Global plugins configuration
+    plugins:
+      # Rate limiting plugin with Redis backend
+      - name: rate-limiting
+        tags:
+          - mca
+          - security
+        config:
+          second: {{ .Values.plugins.rateLimit.second | default 5 }}
+          minute: {{ .Values.plugins.rateLimit.minute | default 60 }}
+          hour: {{ .Values.plugins.rateLimit.hour | default 1000 }}
+          day: {{ .Values.plugins.rateLimit.day | default 10000 }}
+          policy: redis
+          redis_host: {{ .Values.redis.host }}
+          redis_port: {{ .Values.redis.port }}
+          redis_password: {{ .Values.redis.password }}
+          redis_timeout: 2000
+          redis_database: {{ .Values.redis.database | default 0 }}
+          hide_client_headers: false
+          fault_tolerant: true
+          sync_rate: {{ .Values.plugins.rateLimit.syncRate | default 10 }}
+
+      # JWT authentication plugin
+      - name: jwt
+        tags:
+          - mca
+          - security
+          - authentication
+        config:
+          claims_to_verify:
+            - exp
+          key_claim_name: iss
+          secret_is_base64: false
+          run_on_preflight: true
+          maximum_expiration: 7200
+          header_names:
+            - Authorization
+          uri_param_names:
+            - jwt
+          cookie_names: []
+          {{- if .Values.plugins.jwt.anonymous }}
+          anonymous: {{ .Values.plugins.jwt.anonymous }}
+          {{- end }}
+
+      # CORS plugin for frontend access
+      - name: cors
+        tags:
+          - mca
+          - security
+        config:
+          origins:
+            {{- range .Values.plugins.cors.origins }}
+            - {{ . | quote }}
+            {{- end }}
+          methods:
+            - GET
+            - POST
+            - PUT
+            - PATCH
+            - DELETE
+            - OPTIONS
+          headers:
+            - Accept
+            - Accept-Version
+            - Authorization
+            - Content-Length
+            - Content-Type
+            - X-Auth-Token
+            - X-Requested-With
+            - X-Forwarded-For
+            - X-Real-IP
+            - X-Forwarded-Proto
+            - X-Forwarded-Host
+          exposed_headers:
+            - X-Auth-Token
+            - X-RateLimit-Limit-Second
+            - X-RateLimit-Remaining-Second
+            - X-RateLimit-Limit-Minute
+            - X-RateLimit-Remaining-Minute
+          credentials: true
+          max_age: 3600
+          preflight_continue: false
+
+      # Request ID plugin
+      - name: correlation-id
+        tags:
+          - mca
+          - observability
+        config:
+          header_name: Kong-Request-ID
+          generator: uuid
+          echo_downstream: true
+
+      # IP restriction plugin for admin API
+      - name: ip-restriction
+        tags:
+          - mca
+          - security
+        service: admin-api
+        config:
+          whitelist:
+            {{- range .Values.plugins.ipRestriction.whitelist }}
+            - {{ . | quote }}
+            {{- end }}
+
+      # Logging plugin
+      - name: file-log
+        tags:
+          - mca
+          - observability
+        config:
+          path: /dev/stdout
+          reopen: true
+          
+      # Request transformer plugin
+      - name: request-transformer
+        tags:
+          - mca
+          - transformation
+        config:
+          add:
+            headers:
+              - X-Forwarded-Path:${request_uri}
+          append: {}
+          remove: {}
+          replace: {}
+          rename: {}
+
+    # JWT credentials configuration
+    jwt_secrets:
+      - consumer: system-admin
+        key: {{ .Values.jwt.issuer }}
+        algorithm: RS256
+        rsa_public_key: |
+{{ .Values.jwt.publicKey | indent 10 }}
+      - consumer: operations-staff
+        key: {{ .Values.jwt.issuer }}
+        algorithm: RS256
+        rsa_public_key: |
+{{ .Values.jwt.publicKey | indent 10 }}
+
+    # Consumers configuration
+    consumers:
+      - username: system-admin
+        custom_id: system-admin
+        tags:
+          - mca
+          - admin
+      - username: operations-staff
+        custom_id: operations-staff
+        tags:
+          - mca
+          - operations
+      {{- if .Values.plugins.jwt.anonymous }}
+      - username: anonymous
+        custom_id: anonymous
+        tags:
+          - mca
+          - anonymous
+      {{- end }}
+
+    # Upstreams configuration for load balancing
+    upstreams:
+      - name: data-service-upstream
+        algorithm: round-robin
+        tags:
+          - mca
+          - data
+        healthchecks:
+          active:
+            concurrency: 5
+            healthy:
+              interval: 5
+              successes: 1
+            http_path: /health
+            timeout: 1
+            unhealthy:
+              http_failures: 2
+              interval: 5
+              tcp_failures: 2
+              timeouts: 2
+        targets:
+          {{- range .Values.services.data.targets }}
+          - target: {{ . }}
+            weight: 100
+          {{- end }}
