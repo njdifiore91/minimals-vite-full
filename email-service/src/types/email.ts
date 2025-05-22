@@ -3,180 +3,129 @@ import type { IDateValue } from './common';
 // ----------------------------------------------------------------------
 
 /**
- * Email sender or recipient information
+ * Interface representing an email sender or recipient
+ * Used for tracking the source and destination of email messages
  */
-export interface IEmailParticipant {
-  /** Full name of the email participant */
-  name: string;
-  /** Email address of the participant */
-  email: string;
+export interface IEmailSender {
+  name: string;          // Display name of the sender/recipient
+  email: string;         // Email address of the sender/recipient
+  domain?: string;       // Domain portion of the email address (for filtering)
 }
 
 /**
- * Processing status for email messages and attachments
- */
-export enum EmailProcessingStatus {
-  /** Email has been received but not yet processed */
-  RECEIVED = 'received',
-  /** Email is currently being processed */
-  PROCESSING = 'processing',
-  /** Email has been successfully processed */
-  PROCESSED = 'processed',
-  /** Email processing has failed */
-  FAILED = 'failed',
-  /** Email has been quarantined due to security concerns */
-  QUARANTINED = 'quarantined',
-}
-
-/**
- * Metadata for email messages
+ * Interface representing metadata about an email message
+ * Contains essential information about the email without the content or attachments
  */
 export interface IEmailMetadata {
-  /** Unique identifier for the email message */
-  messageId: string;
-  /** Email subject line */
-  subject: string;
-  /** Sender information */
-  from: IEmailParticipant;
-  /** Recipients information */
-  to: IEmailParticipant[];
-  /** Carbon copy recipients */
-  cc?: IEmailParticipant[];
-  /** Blind carbon copy recipients */
-  bcc?: IEmailParticipant[];
-  /** Date when the email was received */
-  receivedDate: IDateValue;
-  /** Date when the email was sent */
-  sentDate: IDateValue;
-  /** Current processing status */
-  status: EmailProcessingStatus;
-  /** Error message if processing failed */
-  errorMessage?: string;
-  /** Number of processing attempts */
-  processingAttempts: number;
-  /** Maximum number of processing attempts before giving up */
-  maxProcessingAttempts: number;
-  /** Priority level for processing (higher number = higher priority) */
-  priority: number;
+  messageId: string;     // Unique identifier for the email message
+  subject: string;       // Subject line of the email
+  from: IEmailSender;    // Sender information
+  to: IEmailSender[];    // List of recipients
+  cc?: IEmailSender[];   // Carbon copy recipients (optional)
+  receivedAt: IDateValue; // Timestamp when the email was received
+  processedAt?: IDateValue; // Timestamp when the email was processed
+  folderPath: string;    // IMAP folder path where the email is stored
+  isProcessed: boolean;  // Flag indicating if the email has been processed
+  processingStatus?: 'pending' | 'processing' | 'completed' | 'failed'; // Current processing status
+  processingErrors?: string[]; // List of errors encountered during processing
 }
 
 /**
- * Document classification confidence scores
- */
-export interface IDocumentClassification {
-  /** Predicted document type */
-  documentType: string;
-  /** Confidence score (0-1) for the classification */
-  confidenceScore: number;
-  /** Alternative document types with their confidence scores */
-  alternatives?: Array<{
-    documentType: string;
-    confidenceScore: number;
-  }>;
-}
-
-/**
- * Email attachment information
+ * Interface representing an email attachment
+ * Adapted from IMailAttachment but specialized for document processing needs
  */
 export interface IEmailAttachment {
-  /** Unique identifier for the attachment */
-  id: string;
-  /** Original filename of the attachment */
-  name: string;
-  /** Size of the attachment in bytes */
-  size: number;
-  /** MIME type of the attachment */
-  contentType: string;
-  /** Content ID for inline attachments */
-  contentId?: string;
-  /** Path to the attachment in temporary storage */
-  tempPath: string;
-  /** Path to the attachment in S3-compatible storage (after processing) */
-  storagePath?: string;
-  /** Document classification information (after processing) */
-  classification?: IDocumentClassification;
-  /** Current processing status */
-  status: EmailProcessingStatus;
-  /** Error message if processing failed */
-  errorMessage?: string;
-  /** Virus scan result (true = clean, false = infected) */
-  isClean?: boolean;
-  /** Date when the attachment was created */
-  createdAt: IDateValue;
-  /** Date when the attachment was last modified */
-  modifiedAt: IDateValue;
-  /** Checksum for file integrity verification */
-  checksum: string;
-  /** Metadata extracted from the attachment */
-  metadata?: Record<string, unknown>;
+  id: string;            // Unique identifier for the attachment
+  name: string;          // Original filename of the attachment
+  size: number;          // Size of the attachment in bytes
+  type: string;          // MIME type of the attachment
+  contentId?: string;    // Content ID for inline attachments
+  content?: Buffer;      // Binary content of the attachment
+  storagePath?: string;  // Path where the attachment is stored in S3
+  createdAt: IDateValue; // Timestamp when the attachment was created
+  processedAt?: IDateValue; // Timestamp when the attachment was processed
+  
+  // Document processing specific fields
+  documentType?: string; // Classified document type (loan application, tax return, etc.)
+  classificationConfidence?: number; // Confidence score of document classification (0-1)
+  isValid?: boolean;     // Flag indicating if the attachment is a valid document
+  scanStatus?: 'pending' | 'scanning' | 'clean' | 'infected'; // Virus scan status
+  processingStatus?: 'pending' | 'processing' | 'completed' | 'failed'; // Processing status
+  processingErrors?: string[]; // List of errors encountered during processing
 }
 
 /**
- * Complete email message with metadata and attachments
+ * Interface representing a complete email message with metadata and attachments
+ * Used for processing incoming emails in the Email Service
  */
 export interface IEmailMessage {
-  /** Email metadata */
-  metadata: IEmailMetadata;
-  /** Email body content (plain text) */
-  textContent?: string;
-  /** Email body content (HTML) */
-  htmlContent?: string;
-  /** Email attachments */
-  attachments: IEmailAttachment[];
-  /** Current processing status */
-  status: EmailProcessingStatus;
-  /** Date when processing started */
-  processingStartedAt?: IDateValue;
-  /** Date when processing completed */
-  processingCompletedAt?: IDateValue;
-  /** Processing duration in milliseconds */
-  processingDuration?: number;
-  /** Unique identifier for the application (if identified) */
-  applicationId?: string;
-  /** Tags for categorization and filtering */
-  tags?: string[];
+  metadata: IEmailMetadata; // Email metadata
+  body?: string;         // Plain text body of the email (if available)
+  htmlBody?: string;     // HTML body of the email (if available)
+  attachments: IEmailAttachment[]; // List of attachments
+  
+  // Processing information
+  hasAttachments: boolean; // Flag indicating if the email has attachments
+  isValid: boolean;      // Flag indicating if the email is valid for processing
+  isProcessed: boolean;  // Flag indicating if the email has been processed
+  processingStatus: 'pending' | 'processing' | 'completed' | 'failed'; // Current processing status
+  processingErrors?: string[]; // List of errors encountered during processing
+  processingStartedAt?: IDateValue; // Timestamp when processing started
+  processingCompletedAt?: IDateValue; // Timestamp when processing completed
 }
 
 /**
- * Email processing result
+ * Interface representing a message to be published to RabbitMQ
+ * Contains document information and routing details
  */
-export interface IEmailProcessingResult {
-  /** Success status of the processing operation */
-  success: boolean;
-  /** Email message that was processed */
-  message: IEmailMessage;
-  /** Error message if processing failed */
-  error?: string;
-  /** Detailed error information if processing failed */
-  errorDetails?: Record<string, unknown>;
-  /** Number of attachments successfully processed */
-  processedAttachments: number;
-  /** Number of attachments that failed processing */
-  failedAttachments: number;
-  /** Processing status */
-  status: EmailProcessingStatus;
+export interface IEmailDocumentMessage {
+  messageId: string;     // Unique identifier for the message
+  emailMessageId: string; // Reference to the original email message ID
+  documentType: string;  // Classified document type
+  sender: IEmailSender;  // Original sender information
+  subject: string;       // Original email subject
+  receivedAt: IDateValue; // Timestamp when the email was received
+  attachment: {
+    id: string;          // Attachment ID
+    name: string;        // Original filename
+    size: number;        // Size in bytes
+    type: string;        // MIME type
+    storagePath: string; // S3 storage path
+    classificationConfidence?: number; // Confidence score (0-1)
+  };
+  metadata: Record<string, any>; // Additional metadata for processing
+  createdAt: IDateValue; // Timestamp when the message was created
 }
 
 /**
- * Email search criteria for IMAP queries
+ * Interface representing IMAP connection configuration
+ * Used for connecting to email servers
  */
-export interface IEmailSearchCriteria {
-  /** Search for emails from a specific sender */
-  from?: string;
-  /** Search for emails to a specific recipient */
-  to?: string;
-  /** Search for emails with a specific subject */
-  subject?: string;
-  /** Search for emails received since a specific date */
-  since?: Date;
-  /** Search for emails received before a specific date */
-  before?: Date;
-  /** Search for emails with specific flags */
-  flags?: string[];
-  /** Search for emails with specific keywords */
-  keywords?: string[];
-  /** Search for emails with attachments */
-  hasAttachments?: boolean;
-  /** Custom IMAP search criteria */
-  custom?: string[];
+export interface IIMAPConfig {
+  host: string;          // IMAP server hostname
+  port: number;          // IMAP server port
+  user: string;          // Username for authentication
+  password: string;      // Password for authentication
+  tls: boolean;          // Whether to use TLS
+  tlsOptions?: Record<string, any>; // TLS connection options
+  authTimeout?: number;  // Authentication timeout in milliseconds
+  keepalive?: boolean;   // Whether to keep the connection alive
+  mailbox?: string;      // Default mailbox to open
+  searchFilter?: string[]; // IMAP search criteria
+  markSeen?: boolean;    // Whether to mark emails as seen when fetched
+}
+
+/**
+ * Interface representing email monitoring configuration
+ * Used for configuring the email monitoring service
+ */
+export interface IEmailMonitoringConfig {
+  enabled: boolean;      // Whether email monitoring is enabled
+  pollingInterval: number; // Polling interval in milliseconds
+  maxConcurrent: number; // Maximum number of concurrent email processing
+  maxRetries: number;    // Maximum number of retries for failed processing
+  retryDelay: number;    // Delay between retries in milliseconds
+  folders: string[];     // List of folders to monitor
+  allowedDomains?: string[]; // List of allowed sender domains (if any)
+  allowedEmailAddresses?: string[]; // List of allowed sender email addresses (if any)
 }
