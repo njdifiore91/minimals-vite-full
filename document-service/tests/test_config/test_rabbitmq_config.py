@@ -1,975 +1,425 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+"""
+Unit tests for the Document Service's rabbitmq_config.py module.
+
+These tests verify that RabbitMQ configuration correctly sets up connection parameters,
+exchange and queue configurations, message consumption options, and security settings.
+Ensures that messaging works correctly for document processing.
+
+Test coverage includes:
+- RabbitMQ connection configuration with TLS
+- Exchange and queue configuration
+- Message consumption option configuration
+- Connection error handling and recovery configuration
+- Message serialization configuration
+"""
+
 import os
-import ssl
 import json
+import ssl
 import pytest
-import time
-from unittest.mock import patch, MagicMock, call
-from pika.adapters.blocking_connection import BlockingConnection
-from pika.connection import ConnectionParameters, SSLOptions
-from pika.credentials import ExternalCredentials
-from pika.exceptions import (
-    AMQPConnectionError,
-    ConnectionClosed,
-    ConnectionClosedByBroker,
-    ConnectionBlockedTimeout,
-    ChannelClosed,
-    ChannelClosedByBroker
-)
+from unittest.mock import patch, MagicMock
+from pathlib import Path
 
 # Import the module to test
-from src.config import rabbitmq_config
+from src.config.rabbitmq_config import (
+    get_rabbitmq_config,
+    get_rabbitmq_connection_parameters,
+    get_rabbitmq_exchange_config,
+    get_rabbitmq_queue_config,
+    get_rabbitmq_consumer_config,
+    get_rabbitmq_publisher_config,
+    get_rabbitmq_retry_config,
+    get_message_serializer,
+    get_message_deserializer
+)
+
+# Import configuration types
+from src.types.config import RabbitMQConfig
 
 
-# ===== Test SSL Context Creation =====
+# ===== Test RabbitMQ Configuration Loading =====
 
-@patch('ssl.create_default_context')
-@patch('ssl.SSLContext.load_verify_locations')
-@patch('ssl.SSLContext.load_cert_chain')
-@patch('ssl.SSLContext.set_ciphers')
-def test_create_ssl_context(mock_set_ciphers, mock_load_cert_chain, 
-                           mock_load_verify_locations, mock_create_default_context):
-    """Test that create_ssl_context creates a properly configured SSL context."""
-    # Setup mock context
-    mock_context = MagicMock()
-    mock_create_default_context.return_value = mock_context
-    
-    # Call the function
-    context = rabbitmq_config.create_ssl_context()
-    
-    # Verify the context was created correctly
-    mock_create_default_context.assert_called_once_with(ssl.Purpose.SERVER_AUTH)
-    assert mock_context.verify_mode == ssl.CERT_REQUIRED
-    mock_load_verify_locations.assert_called_once_with(cafile=rabbitmq_config.CA_CERT_PATH)
-    mock_load_cert_chain.assert_called_once_with(
-        certfile=rabbitmq_config.CLIENT_CERT_PATH, 
-        keyfile=rabbitmq_config.CLIENT_KEY_PATH
-    )
-    assert mock_context.minimum_version == ssl.TLSVersion.TLSv1_2
-    mock_set_ciphers.assert_called_once_with('HIGH:!aNULL:!MD5:!RC4')
-    
-    # Verify the context is returned
-    assert context == mock_context
+def test_get_rabbitmq_config_defaults():
+    """Test that default RabbitMQ configuration is loaded correctly."""
+    with patch.dict(os.environ, {}, clear=True):
+        config = get_rabbitmq_config()
+        
+        # Verify default values
+        assert config["host"] == "localhost"
+        assert config["port"] == 5671  # Default to TLS port
+        assert config["username"] == "guest"
+        assert config["password"] == "guest"
+        assert config["vhost"] == "/"
+        assert config["exchange"] == "mca.documents"
+        assert config["queue_document_processing"] == "document-processing"
+        assert config["queue_data_extraction"] == "data-extraction"
+        assert config["routing_key"] == "document.new"
+        assert config["ssl"] is True  # Default to enabled
+        assert config["heartbeat"] == 60
+        assert config["connection_timeout"] == 30
+        assert config["prefetch_count"] == 10
 
 
-@patch('ssl.create_default_context')
-def test_create_ssl_context_file_not_found(mock_create_default_context):
-    """Test that create_ssl_context handles FileNotFoundError correctly."""
-    # Setup mock to raise FileNotFoundError
-    mock_context = MagicMock()
-    mock_create_default_context.return_value = mock_context
-    mock_context.load_verify_locations.side_effect = FileNotFoundError("Certificate file not found")
-    
-    # Call the function and check that it raises the exception
-    with pytest.raises(FileNotFoundError) as excinfo:
-        rabbitmq_config.create_ssl_context()
-    
-    # Verify the exception message
-    assert "Certificate file not found" in str(excinfo.value)
+def test_get_rabbitmq_config_with_env_vars():
+    """Test that RabbitMQ configuration can be overridden with environment variables."""
+    with patch.dict(os.environ, {
+        "RABBITMQ_HOST": "rabbitmq.example.com",
+        "RABBITMQ_PORT": "5672",
+        "RABBITMQ_USERNAME": "test-user",
+        "RABBITMQ_PASSWORD": "test-password",
+        "RABBITMQ_VHOST": "/test",
+        "RABBITMQ_EXCHANGE": "test-exchange",
+        "RABBITMQ_QUEUE_DOCUMENT_PROCESSING": "test-document-processing",
+        "RABBITMQ_QUEUE_DATA_EXTRACTION": "test-data-extraction",
+        "RABBITMQ_ROUTING_KEY": "test.document.new",
+        "RABBITMQ_SSL": "false",
+        "RABBITMQ_HEARTBEAT": "30",
+        "RABBITMQ_CONNECTION_TIMEOUT": "15",
+        "RABBITMQ_PREFETCH_COUNT": "5"
+    }):
+        config = get_rabbitmq_config()
+        
+        # Verify overridden values
+        assert config["host"] == "rabbitmq.example.com"
+        assert config["port"] == 5672
+        assert config["username"] == "test-user"
+        assert config["password"] == "test-password"
+        assert config["vhost"] == "/test"
+        assert config["exchange"] == "test-exchange"
+        assert config["queue_document_processing"] == "test-document-processing"
+        assert config["queue_data_extraction"] == "test-data-extraction"
+        assert config["routing_key"] == "test.document.new"
+        assert config["ssl"] is False
+        assert config["heartbeat"] == 30
+        assert config["connection_timeout"] == 15
+        assert config["prefetch_count"] == 5
 
 
-@patch('ssl.create_default_context')
-def test_create_ssl_context_ssl_error(mock_create_default_context):
-    """Test that create_ssl_context handles SSLError correctly."""
-    # Setup mock to raise SSLError
-    mock_context = MagicMock()
-    mock_create_default_context.return_value = mock_context
-    mock_context.load_cert_chain.side_effect = ssl.SSLError("Invalid certificate")
+def test_get_rabbitmq_config_ssl_validation():
+    """Test that SSL configuration is validated correctly."""
+    # Test with SSL enabled but missing certificate paths
+    with patch.dict(os.environ, {
+        "RABBITMQ_SSL": "true",
+        "RABBITMQ_SSL_CERT_PATH": "",
+        "RABBITMQ_SSL_KEY_PATH": "",
+        "RABBITMQ_SSL_CA_CERTS": ""
+    }):
+        with pytest.raises(ValueError, match="SSL is enabled but certificate paths are not properly configured"):
+            get_rabbitmq_config()
     
-    # Call the function and check that it raises the exception
-    with pytest.raises(ssl.SSLError) as excinfo:
-        rabbitmq_config.create_ssl_context()
-    
-    # Verify the exception message
-    assert "Invalid certificate" in str(excinfo.value)
+    # Test with SSL enabled and valid certificate paths
+    with patch.dict(os.environ, {
+        "RABBITMQ_SSL": "true",
+        "RABBITMQ_SSL_CERT_PATH": "/path/to/cert.pem",
+        "RABBITMQ_SSL_KEY_PATH": "/path/to/key.pem",
+        "RABBITMQ_SSL_CA_CERTS": "/path/to/ca.pem"
+    }):
+        config = get_rabbitmq_config()
+        assert config["ssl"] is True
+        assert config["ssl_cert_path"] == "/path/to/cert.pem"
+        assert config["ssl_key_path"] == "/path/to/key.pem"
+        assert config["ssl_ca_certs"] == "/path/to/ca.pem"
 
 
-# ===== Test Connection Parameters =====
+# ===== Test RabbitMQ Connection Parameters =====
 
-@patch('src.config.rabbitmq_config.create_ssl_context')
-def test_get_connection_parameters(mock_create_ssl_context):
-    """Test that get_connection_parameters returns correctly configured parameters."""
-    # Setup mock SSL context
-    mock_context = MagicMock()
-    mock_create_ssl_context.return_value = mock_context
+def test_get_rabbitmq_connection_parameters_without_ssl():
+    """Test that connection parameters are correctly configured without SSL."""
+    config = {
+        "host": "localhost",
+        "port": 5672,
+        "vhost": "/",
+        "username": "guest",
+        "password": "guest",
+        "ssl": False,
+        "heartbeat": 60,
+        "connection_timeout": 30
+    }
     
-    # Call the function
-    params = rabbitmq_config.get_connection_parameters()
+    params = get_rabbitmq_connection_parameters(config)
     
-    # Verify the parameters
-    assert isinstance(params, ConnectionParameters)
-    assert params.host == rabbitmq_config.RABBITMQ_HOST
-    assert params.port == rabbitmq_config.RABBITMQ_PORT
-    assert params.virtual_host == rabbitmq_config.RABBITMQ_VHOST
-    assert isinstance(params.credentials, ExternalCredentials)
-    assert isinstance(params.ssl_options, SSLOptions)
-    assert params.heartbeat == rabbitmq_config.RABBITMQ_HEARTBEAT
-    assert params.blocked_connection_timeout == rabbitmq_config.RABBITMQ_BLOCKED_CONNECTION_TIMEOUT
-    assert params.connection_attempts == 3
-    assert params.retry_delay == 1.0
-    assert params.socket_timeout == rabbitmq_config.RABBITMQ_CONNECTION_TIMEOUT
-
-
-# ===== Test Connection Creation =====
-
-@patch('src.config.rabbitmq_config.get_connection_parameters')
-@patch('pika.adapters.blocking_connection.BlockingConnection')
-def test_create_rabbitmq_connection(mock_blocking_connection, mock_get_connection_parameters):
-    """Test that create_rabbitmq_connection creates a connection correctly."""
-    # Setup mocks
-    mock_params = MagicMock()
-    mock_get_connection_parameters.return_value = mock_params
-    mock_connection = MagicMock()
-    mock_blocking_connection.return_value = mock_connection
-    
-    # Call the function
-    connection = rabbitmq_config.create_rabbitmq_connection()
-    
-    # Verify the connection was created correctly
-    mock_get_connection_parameters.assert_called_once()
-    mock_blocking_connection.assert_called_once_with(mock_params)
-    assert connection == mock_connection
+    # Verify connection parameters
+    assert params["host"] == "localhost"
+    assert params["port"] == 5672
+    assert params["virtual_host"] == "/"
+    assert params["credentials"]["username"] == "guest"
+    assert params["credentials"]["password"] == "guest"
+    assert params["heartbeat"] == 60
+    assert params["connection_timeout"] == 30
+    assert "client_properties" in params
+    assert params["client_properties"]["connection_name"] == "document-service"
+    assert "ssl_options" not in params
 
 
-@patch('src.config.rabbitmq_config.get_connection_parameters')
-@patch('pika.adapters.blocking_connection.BlockingConnection')
-@patch('time.sleep')
-def test_create_rabbitmq_connection_with_retry(mock_sleep, mock_blocking_connection, 
-                                              mock_get_connection_parameters):
-    """Test that create_rabbitmq_connection retries on connection failure."""
-    # Setup mocks
-    mock_params = MagicMock()
-    mock_get_connection_parameters.return_value = mock_params
-    mock_connection = MagicMock()
+def test_get_rabbitmq_connection_parameters_with_ssl():
+    """Test that connection parameters are correctly configured with SSL."""
+    # Mock SSL context
+    mock_ssl_context = MagicMock(spec=ssl.SSLContext)
     
-    # Make the first attempt fail, then succeed
-    mock_blocking_connection.side_effect = [
-        AMQPConnectionError("Connection refused"),
-        mock_connection
-    ]
-    
-    # Call the function
-    connection = rabbitmq_config.create_rabbitmq_connection()
-    
-    # Verify the connection was created correctly after retry
-    assert mock_get_connection_parameters.call_count == 2
-    assert mock_blocking_connection.call_count == 2
-    mock_sleep.assert_called_once_with(rabbitmq_config.INITIAL_RETRY_DELAY)
-    assert connection == mock_connection
-
-
-@patch('src.config.rabbitmq_config.get_connection_parameters')
-@patch('pika.adapters.blocking_connection.BlockingConnection')
-@patch('time.sleep')
-def test_create_rabbitmq_connection_max_retries(mock_sleep, mock_blocking_connection, 
-                                               mock_get_connection_parameters):
-    """Test that create_rabbitmq_connection raises exception after max retries."""
-    # Setup mocks
-    mock_params = MagicMock()
-    mock_get_connection_parameters.return_value = mock_params
-    
-    # Make all connection attempts fail
-    error = AMQPConnectionError("Connection refused")
-    mock_blocking_connection.side_effect = [error] * (rabbitmq_config.MAX_RETRIES + 1)
-    
-    # Call the function and check that it raises the exception
-    with pytest.raises(AMQPConnectionError) as excinfo:
-        rabbitmq_config.create_rabbitmq_connection()
-    
-    # Verify the retry behavior
-    assert mock_get_connection_parameters.call_count == rabbitmq_config.MAX_RETRIES + 1
-    assert mock_blocking_connection.call_count == rabbitmq_config.MAX_RETRIES + 1
-    assert mock_sleep.call_count == rabbitmq_config.MAX_RETRIES
-    
-    # Verify the exception message
-    assert "Connection refused" in str(excinfo.value)
-
-
-# ===== Test Channel Setup =====
-
-def test_setup_rabbitmq_channel():
-    """Test that setup_rabbitmq_channel configures the channel correctly."""
-    # Setup mock connection and channel
-    mock_connection = MagicMock()
-    mock_channel = MagicMock()
-    mock_connection.channel.return_value = mock_channel
-    
-    # Call the function
-    channel = rabbitmq_config.setup_rabbitmq_channel(mock_connection)
-    
-    # Verify the channel was set up correctly
-    mock_connection.channel.assert_called_once()
-    mock_channel.basic_qos.assert_called_once_with(prefetch_count=rabbitmq_config.PREFETCH_COUNT)
-    
-    # Verify dead letter exchange setup
-    mock_channel.exchange_declare.assert_any_call(
-        exchange=rabbitmq_config.DEAD_LETTER_EXCHANGE,
-        exchange_type='direct',
-        durable=True
-    )
-    
-    # Verify dead letter queue setup
-    mock_channel.queue_declare.assert_any_call(
-        queue=rabbitmq_config.DEAD_LETTER_QUEUE,
-        durable=True
-    )
-    
-    # Verify dead letter binding
-    mock_channel.queue_bind.assert_any_call(
-        queue=rabbitmq_config.DEAD_LETTER_QUEUE,
-        exchange=rabbitmq_config.DEAD_LETTER_EXCHANGE,
-        routing_key=rabbitmq_config.QUEUE_NAME
-    )
-    
-    # Verify main exchange setup
-    mock_channel.exchange_declare.assert_any_call(
-        exchange=rabbitmq_config.EXCHANGE_NAME,
-        exchange_type=rabbitmq_config.EXCHANGE_TYPE,
-        durable=True
-    )
-    
-    # Verify main queue setup with dead letter configuration
-    mock_channel.queue_declare.assert_any_call(
-        queue=rabbitmq_config.QUEUE_NAME,
-        durable=True,
-        arguments={
-            'x-dead-letter-exchange': rabbitmq_config.DEAD_LETTER_EXCHANGE,
-            'x-dead-letter-routing-key': rabbitmq_config.QUEUE_NAME,
-            'x-message-ttl': 1000 * 60 * 60 * 24  # 24 hours in milliseconds
+    with patch("ssl.create_default_context", return_value=mock_ssl_context) as mock_create_context:
+        config = {
+            "host": "rabbitmq.example.com",
+            "port": 5671,
+            "vhost": "/",
+            "username": "test-user",
+            "password": "test-password",
+            "ssl": True,
+            "ssl_cert_path": "/path/to/cert.pem",
+            "ssl_key_path": "/path/to/key.pem",
+            "ssl_ca_certs": "/path/to/ca.pem",
+            "heartbeat": 60,
+            "connection_timeout": 30
         }
-    )
-    
-    # Verify main binding
-    mock_channel.queue_bind.assert_any_call(
-        queue=rabbitmq_config.QUEUE_NAME,
-        exchange=rabbitmq_config.EXCHANGE_NAME
-    )
-    
-    # Verify the channel is returned
-    assert channel == mock_channel
+        
+        params = get_rabbitmq_connection_parameters(config)
+        
+        # Verify connection parameters
+        assert params["host"] == "rabbitmq.example.com"
+        assert params["port"] == 5671
+        assert params["virtual_host"] == "/"
+        assert params["credentials"]["username"] == "test-user"
+        assert params["credentials"]["password"] == "test-password"
+        assert params["heartbeat"] == 60
+        assert params["connection_timeout"] == 30
+        assert "client_properties" in params
+        assert params["client_properties"]["connection_name"] == "document-service"
+        
+        # Verify SSL options
+        assert "ssl_options" in params
+        assert params["ssl_options"]["context"] == mock_ssl_context
+        
+        # Verify SSL context configuration
+        mock_create_context.assert_called_once_with(cafile="/path/to/ca.pem")
+        mock_ssl_context.load_cert_chain.assert_called_once_with(
+            certfile="/path/to/cert.pem",
+            keyfile="/path/to/key.pem"
+        )
+        assert mock_ssl_context.check_hostname is True
+        assert mock_ssl_context.verify_mode == ssl.CERT_REQUIRED
 
 
-def test_setup_rabbitmq_channel_error():
-    """Test that setup_rabbitmq_channel handles channel errors correctly."""
-    # Setup mock connection and channel
-    mock_connection = MagicMock()
-    mock_channel = MagicMock()
-    mock_connection.channel.return_value = mock_channel
+# ===== Test RabbitMQ Exchange Configuration =====
+
+def test_get_rabbitmq_exchange_config():
+    """Test that exchange configuration is correctly configured."""
+    config = {
+        "exchange": "mca.documents"
+    }
     
-    # Make the channel setup fail
-    mock_channel.exchange_declare.side_effect = ChannelClosed("Channel closed")
+    exchange_config = get_rabbitmq_exchange_config(config)
     
-    # Call the function and check that it raises the exception
-    with pytest.raises(ChannelClosed) as excinfo:
-        rabbitmq_config.setup_rabbitmq_channel(mock_connection)
+    # Verify exchange configuration
+    assert exchange_config["exchange"] == "mca.documents"
+    assert exchange_config["exchange_type"] == "fanout"  # As specified in the technical spec
+    assert exchange_config["durable"] is True
+    assert exchange_config["auto_delete"] is False
+
+
+def test_get_rabbitmq_exchange_config_custom():
+    """Test that exchange configuration can be customized."""
+    config = {
+        "exchange": "custom.exchange"
+    }
     
-    # Verify the exception message
-    assert "Channel closed" in str(excinfo.value)
+    exchange_config = get_rabbitmq_exchange_config(config)
+    
+    # Verify exchange configuration
+    assert exchange_config["exchange"] == "custom.exchange"
+    assert exchange_config["exchange_type"] == "fanout"
+    assert exchange_config["durable"] is True
+    assert exchange_config["auto_delete"] is False
+
+
+# ===== Test RabbitMQ Queue Configuration =====
+
+def test_get_rabbitmq_queue_config():
+    """Test that queue configuration is correctly configured."""
+    config = {
+        "exchange": "mca.documents",
+        "queue_document_processing": "document-processing",
+        "queue_data_extraction": "data-extraction"
+    }
+    
+    queue_config = get_rabbitmq_queue_config(config)
+    
+    # Verify document processing queue configuration
+    assert "document_processing" in queue_config
+    assert queue_config["document_processing"]["queue"] == "document-processing"
+    assert queue_config["document_processing"]["durable"] is True
+    assert queue_config["document_processing"]["exclusive"] is False
+    assert queue_config["document_processing"]["auto_delete"] is False
+    assert "arguments" in queue_config["document_processing"]
+    assert queue_config["document_processing"]["arguments"]["x-dead-letter-exchange"] == "mca.documents.dlx"
+    assert queue_config["document_processing"]["arguments"]["x-message-ttl"] == 1000 * 60 * 60 * 24  # 24 hours
+    
+    # Verify data extraction queue configuration
+    assert "data_extraction" in queue_config
+    assert queue_config["data_extraction"]["queue"] == "data-extraction"
+    assert queue_config["data_extraction"]["durable"] is True
+    assert queue_config["data_extraction"]["exclusive"] is False
+    assert queue_config["data_extraction"]["auto_delete"] is False
+    assert "arguments" in queue_config["data_extraction"]
+    assert queue_config["data_extraction"]["arguments"]["x-dead-letter-exchange"] == "mca.documents.dlx"
+    assert queue_config["data_extraction"]["arguments"]["x-message-ttl"] == 1000 * 60 * 60 * 24  # 24 hours
+
+
+def test_get_rabbitmq_queue_config_custom():
+    """Test that queue configuration can be customized."""
+    config = {
+        "exchange": "custom.exchange",
+        "queue_document_processing": "custom-document-processing",
+        "queue_data_extraction": "custom-data-extraction"
+    }
+    
+    queue_config = get_rabbitmq_queue_config(config)
+    
+    # Verify document processing queue configuration
+    assert queue_config["document_processing"]["queue"] == "custom-document-processing"
+    assert queue_config["document_processing"]["arguments"]["x-dead-letter-exchange"] == "custom.exchange.dlx"
+    
+    # Verify data extraction queue configuration
+    assert queue_config["data_extraction"]["queue"] == "custom-data-extraction"
+    assert queue_config["data_extraction"]["arguments"]["x-dead-letter-exchange"] == "custom.exchange.dlx"
+
+
+# ===== Test RabbitMQ Consumer Configuration =====
+
+def test_get_rabbitmq_consumer_config():
+    """Test that consumer configuration is correctly configured."""
+    config = {
+        "prefetch_count": 10
+    }
+    
+    consumer_config = get_rabbitmq_consumer_config(config)
+    
+    # Verify consumer configuration
+    assert consumer_config["prefetch_count"] == 10
+    assert consumer_config["no_ack"] is False  # Require explicit acknowledgement
+
+
+def test_get_rabbitmq_consumer_config_custom():
+    """Test that consumer configuration can be customized."""
+    config = {
+        "prefetch_count": 20
+    }
+    
+    consumer_config = get_rabbitmq_consumer_config(config)
+    
+    # Verify consumer configuration
+    assert consumer_config["prefetch_count"] == 20
+    assert consumer_config["no_ack"] is False
+
+
+# ===== Test RabbitMQ Publisher Configuration =====
+
+def test_get_rabbitmq_publisher_config():
+    """Test that publisher configuration is correctly configured."""
+    config = {}
+    
+    publisher_config = get_rabbitmq_publisher_config(config)
+    
+    # Verify publisher configuration
+    assert publisher_config["mandatory"] is True  # Raise exception if message cannot be routed
+    assert "properties" in publisher_config
+    assert publisher_config["properties"]["delivery_mode"] == 2  # Persistent
+    assert publisher_config["properties"]["content_type"] == "application/json"  # JSON serialization
+
+
+# ===== Test RabbitMQ Retry Configuration =====
+
+def test_get_rabbitmq_retry_config_defaults():
+    """Test that retry configuration defaults are correctly configured."""
+    with patch.dict(os.environ, {}, clear=True):
+        retry_config = get_rabbitmq_retry_config()
+        
+        # Verify retry configuration defaults
+        assert retry_config["max_retries"] == 5
+        assert retry_config["initial_delay"] == 1.0
+        assert retry_config["max_delay"] == 30.0
+        assert retry_config["backoff_factor"] == 2.0
+
+
+def test_get_rabbitmq_retry_config_with_env_vars():
+    """Test that retry configuration can be overridden with environment variables."""
+    with patch.dict(os.environ, {
+        "RABBITMQ_MAX_RETRIES": "10",
+        "RABBITMQ_INITIAL_DELAY": "2.0",
+        "RABBITMQ_MAX_DELAY": "60.0",
+        "RABBITMQ_BACKOFF_FACTOR": "3.0"
+    }):
+        retry_config = get_rabbitmq_retry_config()
+        
+        # Verify overridden values
+        assert retry_config["max_retries"] == 10
+        assert retry_config["initial_delay"] == 2.0
+        assert retry_config["max_delay"] == 60.0
+        assert retry_config["backoff_factor"] == 3.0
 
 
 # ===== Test Message Serialization =====
 
-def test_serialize_message():
-    """Test that serialize_message correctly converts a dictionary to JSON bytes."""
-    # Test message
-    message = {
-        "document_id": "test-123",
-        "metadata": {
-            "filename": "test.pdf",
-            "size": 1024,
-            "content_type": "application/pdf"
-        },
-        "status": "received"
-    }
+def test_get_message_serializer():
+    """Test that message serializer correctly serializes messages to JSON bytes."""
+    serializer = get_message_serializer()
     
-    # Call the function
-    serialized = rabbitmq_config.serialize_message(message)
+    # Test with a simple message
+    message = {"id": "123", "type": "invoice", "metadata": {"pages": 2}}
+    serialized = serializer(message)
     
-    # Verify the result is bytes
+    # Verify serialization
     assert isinstance(serialized, bytes)
+    assert json.loads(serialized.decode("utf-8")) == message
     
-    # Verify the content is correct by deserializing
-    deserialized = json.loads(serialized.decode('utf-8'))
-    assert deserialized == message
-
-
-def test_serialize_message_with_unicode():
-    """Test that serialize_message handles Unicode characters correctly."""
-    # Test message with Unicode
-    message = {
-        "document_id": "test-123",
-        "metadata": {
-            "filename": "test_üñíçødé.pdf",
-            "size": 1024,
-            "content_type": "application/pdf"
-        },
-        "status": "received"
-    }
+    # Test with a message containing non-serializable objects
+    message_with_date = {"id": "123", "created_at": MagicMock()}
+    serialized = serializer(message_with_date)
     
-    # Call the function
-    serialized = rabbitmq_config.serialize_message(message)
-    
-    # Verify the result is bytes
+    # Verify serialization (should convert non-serializable objects to strings)
     assert isinstance(serialized, bytes)
-    
-    # Verify the content is correct by deserializing
-    deserialized = json.loads(serialized.decode('utf-8'))
-    assert deserialized == message
-    assert deserialized["metadata"]["filename"] == "test_üñíçødé.pdf"
+    deserialized = json.loads(serialized.decode("utf-8"))
+    assert deserialized["id"] == "123"
+    assert isinstance(deserialized["created_at"], str)
 
 
-def test_serialize_message_error():
-    """Test that serialize_message handles serialization errors correctly."""
-    # Create a message that can't be serialized (contains a function)
-    message = {
-        "document_id": "test-123",
-        "callback": lambda x: x  # Functions can't be serialized to JSON
-    }
+def test_get_message_deserializer():
+    """Test that message deserializer correctly deserializes JSON bytes to Python objects."""
+    deserializer = get_message_deserializer()
     
-    # Call the function and check that it raises the exception
-    with pytest.raises(TypeError) as excinfo:
-        rabbitmq_config.serialize_message(message)
+    # Test with a simple message
+    message = {"id": "123", "type": "invoice", "metadata": {"pages": 2}}
+    serialized = json.dumps(message).encode("utf-8")
+    deserialized = deserializer(serialized)
     
-    # Verify the exception message indicates a serialization error
-    assert "not JSON serializable" in str(excinfo.value)
-
-
-def test_deserialize_message():
-    """Test that deserialize_message correctly converts JSON bytes to a dictionary."""
-    # Test message
-    message = {
-        "document_id": "test-123",
-        "metadata": {
-            "filename": "test.pdf",
-            "size": 1024,
-            "content_type": "application/pdf"
-        },
-        "status": "received"
-    }
-    
-    # Serialize the message
-    serialized = json.dumps(message).encode('utf-8')
-    
-    # Call the function
-    deserialized = rabbitmq_config.deserialize_message(serialized)
-    
-    # Verify the result is a dictionary
-    assert isinstance(deserialized, dict)
-    
-    # Verify the content is correct
-    assert deserialized == message
-
-
-def test_deserialize_message_with_unicode():
-    """Test that deserialize_message handles Unicode characters correctly."""
-    # Test message with Unicode
-    message = {
-        "document_id": "test-123",
-        "metadata": {
-            "filename": "test_üñíçødé.pdf",
-            "size": 1024,
-            "content_type": "application/pdf"
-        },
-        "status": "received"
-    }
-    
-    # Serialize the message
-    serialized = json.dumps(message).encode('utf-8')
-    
-    # Call the function
-    deserialized = rabbitmq_config.deserialize_message(serialized)
-    
-    # Verify the result is a dictionary
-    assert isinstance(deserialized, dict)
-    
-    # Verify the content is correct
-    assert deserialized == message
-    assert deserialized["metadata"]["filename"] == "test_üñíçødé.pdf"
-
-
-def test_deserialize_message_invalid_json():
-    """Test that deserialize_message handles invalid JSON correctly."""
-    # Create invalid JSON
-    invalid_json = b'{"document_id": "test-123", invalid}'  # Missing quotes around 'invalid'
-    
-    # Call the function and check that it raises the exception
-    with pytest.raises(ValueError) as excinfo:
-        rabbitmq_config.deserialize_message(invalid_json)
-    
-    # Verify the exception message indicates a deserialization error
-    assert "Invalid message format" in str(excinfo.value)
-
-
-def test_deserialize_message_invalid_encoding():
-    """Test that deserialize_message handles invalid encoding correctly."""
-    # Create bytes with invalid UTF-8 encoding
-    invalid_bytes = b'\x80\x81\x82'  # Invalid UTF-8 bytes
-    
-    # Call the function and check that it raises the exception
-    with pytest.raises(ValueError) as excinfo:
-        rabbitmq_config.deserialize_message(invalid_bytes)
-    
-    # Verify the exception message indicates a deserialization error
-    assert "Invalid message format" in str(excinfo.value)
-
-
-# ===== Test Message Publishing =====
-
-def test_publish_message():
-    """Test that publish_message correctly publishes a message to RabbitMQ."""
-    # Setup mock channel
-    mock_channel = MagicMock()
-    
-    # Test message
-    message = {
-        "document_id": "test-123",
-        "metadata": {
-            "filename": "test.pdf",
-            "size": 1024,
-            "content_type": "application/pdf"
-        },
-        "status": "received"
-    }
-    
-    # Call the function
-    rabbitmq_config.publish_message(mock_channel, message)
-    
-    # Verify the message was published correctly
-    mock_channel.basic_publish.assert_called_once()
-    call_args = mock_channel.basic_publish.call_args[1]
-    
-    # Verify exchange and routing key
-    assert call_args["exchange"] == rabbitmq_config.EXCHANGE_NAME
-    assert call_args["routing_key"] == ''  # Default for fanout exchange
-    
-    # Verify the body is serialized correctly
-    body = call_args["body"]
-    assert isinstance(body, bytes)
-    deserialized = json.loads(body.decode('utf-8'))
+    # Verify deserialization
     assert deserialized == message
     
-    # Verify the properties
-    properties = call_args["properties"]
-    assert properties.content_type == rabbitmq_config.CONTENT_TYPE
-    assert properties.delivery_mode == rabbitmq_config.DELIVERY_MODE
-    assert properties.app_id == 'document-service'
+    # Test with invalid JSON
+    with pytest.raises(json.JSONDecodeError):
+        deserializer(b"invalid json")
 
 
-def test_publish_message_with_routing_key():
-    """Test that publish_message uses the provided routing key."""
-    # Setup mock channel
-    mock_channel = MagicMock()
-    
-    # Test message
-    message = {"test": "message"}
-    routing_key = "test.routing.key"
-    
-    # Call the function
-    rabbitmq_config.publish_message(mock_channel, message, routing_key)
-    
-    # Verify the routing key was used
-    mock_channel.basic_publish.assert_called_once()
-    assert mock_channel.basic_publish.call_args[1]["routing_key"] == routing_key
+# ===== Test Integration Between Serializer and Deserializer =====
 
-
-def test_publish_message_connection_closed():
-    """Test that publish_message handles connection closed errors correctly."""
-    # Setup mock channel
-    mock_channel = MagicMock()
-    mock_channel.basic_publish.side_effect = ConnectionClosed("Connection closed")
+def test_serializer_deserializer_integration():
+    """Test that serializer and deserializer work together correctly."""
+    serializer = get_message_serializer()
+    deserializer = get_message_deserializer()
     
-    # Test message
-    message = {"test": "message"}
-    
-    # Call the function and check that it raises the exception
-    with pytest.raises(ConnectionClosed) as excinfo:
-        rabbitmq_config.publish_message(mock_channel, message)
-    
-    # Verify the exception message
-    assert "Connection closed" in str(excinfo.value)
-
-
-# ===== Test RabbitMQ Client =====
-
-def test_rabbitmq_client_init():
-    """Test that RabbitMQClient initializes correctly."""
-    # Create a client
-    client = rabbitmq_config.RabbitMQClient()
-    
-    # Verify the initial state
-    assert client.connection is None
-    assert client.channel is None
-
-
-@patch('src.config.rabbitmq_config.create_rabbitmq_connection')
-@patch('src.config.rabbitmq_config.setup_rabbitmq_channel')
-def test_rabbitmq_client_connect(mock_setup_channel, mock_create_connection):
-    """Test that RabbitMQClient.connect establishes a connection and channel."""
-    # Setup mocks
-    mock_connection = MagicMock()
-    mock_channel = MagicMock()
-    mock_create_connection.return_value = mock_connection
-    mock_setup_channel.return_value = mock_channel
-    
-    # Create a client and connect
-    client = rabbitmq_config.RabbitMQClient()
-    client.connect()
-    
-    # Verify the connection was established
-    mock_create_connection.assert_called_once()
-    mock_setup_channel.assert_called_once_with(mock_connection)
-    assert client.connection == mock_connection
-    assert client.channel == mock_channel
-
-
-@patch('src.config.rabbitmq_config.create_rabbitmq_connection')
-@patch('src.config.rabbitmq_config.setup_rabbitmq_channel')
-def test_rabbitmq_client_connect_already_connected(mock_setup_channel, mock_create_connection):
-    """Test that RabbitMQClient.connect doesn't reconnect if already connected."""
-    # Setup mocks
-    mock_connection = MagicMock()
-    mock_connection.is_closed = False
-    mock_channel = MagicMock()
-    
-    # Create a client with an existing connection
-    client = rabbitmq_config.RabbitMQClient()
-    client.connection = mock_connection
-    client.channel = mock_channel
-    
-    # Connect again
-    client.connect()
-    
-    # Verify no new connection was created
-    mock_create_connection.assert_not_called()
-    mock_setup_channel.assert_not_called()
-    assert client.connection == mock_connection
-    assert client.channel == mock_channel
-
-
-@patch('src.config.rabbitmq_config.create_rabbitmq_connection')
-@patch('src.config.rabbitmq_config.setup_rabbitmq_channel')
-def test_rabbitmq_client_connect_closed_connection(mock_setup_channel, mock_create_connection):
-    """Test that RabbitMQClient.connect reconnects if the connection is closed."""
-    # Setup mocks
-    old_connection = MagicMock()
-    old_connection.is_closed = True
-    old_channel = MagicMock()
-    
-    new_connection = MagicMock()
-    new_connection.is_closed = False
-    new_channel = MagicMock()
-    
-    mock_create_connection.return_value = new_connection
-    mock_setup_channel.return_value = new_channel
-    
-    # Create a client with a closed connection
-    client = rabbitmq_config.RabbitMQClient()
-    client.connection = old_connection
-    client.channel = old_channel
-    
-    # Connect again
-    client.connect()
-    
-    # Verify a new connection was created
-    mock_create_connection.assert_called_once()
-    mock_setup_channel.assert_called_once_with(new_connection)
-    assert client.connection == new_connection
-    assert client.channel == new_channel
-
-
-def test_rabbitmq_client_close():
-    """Test that RabbitMQClient.close closes the connection and channel correctly."""
-    # Setup mock connection and channel
-    mock_connection = MagicMock()
-    mock_connection.is_open = True
-    mock_channel = MagicMock()
-    mock_channel.is_open = True
-    
-    # Create a client with an open connection
-    client = rabbitmq_config.RabbitMQClient()
-    client.connection = mock_connection
-    client.channel = mock_channel
-    
-    # Close the connection
-    client.close()
-    
-    # Verify the channel and connection were closed
-    mock_channel.close.assert_called_once()
-    mock_connection.close.assert_called_once()
-
-
-def test_rabbitmq_client_close_no_connection():
-    """Test that RabbitMQClient.close handles the case when there is no connection."""
-    # Create a client with no connection
-    client = rabbitmq_config.RabbitMQClient()
-    client.connection = None
-    client.channel = None
-    
-    # Close the connection (should not raise an exception)
-    client.close()
-
-
-def test_rabbitmq_client_close_closed_connection():
-    """Test that RabbitMQClient.close handles the case when the connection is already closed."""
-    # Setup mock connection that is already closed
-    mock_connection = MagicMock()
-    mock_connection.is_open = False
-    
-    # Create a client with a closed connection
-    client = rabbitmq_config.RabbitMQClient()
-    client.connection = mock_connection
-    client.channel = None
-    
-    # Close the connection (should not try to close it again)
-    client.close()
-    
-    # Verify the connection was not closed again
-    mock_connection.close.assert_not_called()
-
-
-def test_rabbitmq_client_close_error():
-    """Test that RabbitMQClient.close handles errors during closing."""
-    # Setup mock connection that raises an exception when closed
-    mock_connection = MagicMock()
-    mock_connection.is_open = True
-    mock_connection.close.side_effect = Exception("Error closing connection")
-    
-    mock_channel = MagicMock()
-    mock_channel.is_open = True
-    mock_channel.close.side_effect = Exception("Error closing channel")
-    
-    # Create a client with a problematic connection
-    client = rabbitmq_config.RabbitMQClient()
-    client.connection = mock_connection
-    client.channel = mock_channel
-    
-    # Close the connection (should not raise an exception)
-    client.close()
-    
-    # Verify close was attempted
-    mock_channel.close.assert_called_once()
-    mock_connection.close.assert_called_once()
-
-
-@patch.object(rabbitmq_config.RabbitMQClient, 'connect')
-@patch('src.config.rabbitmq_config.publish_message')
-def test_rabbitmq_client_publish(mock_publish_message, mock_connect):
-    """Test that RabbitMQClient.publish correctly publishes a message."""
-    # Setup mocks
-    mock_channel = MagicMock()
-    
-    # Create a client with a channel
-    client = rabbitmq_config.RabbitMQClient()
-    client.channel = mock_channel
-    
-    # Test message
-    message = {"test": "message"}
-    routing_key = "test.routing.key"
-    
-    # Publish a message
-    client.publish(message, routing_key)
-    
-    # Verify the connection was established and the message was published
-    mock_connect.assert_called_once()
-    mock_publish_message.assert_called_once_with(mock_channel, message, routing_key)
-
-
-@patch.object(rabbitmq_config.RabbitMQClient, 'connect')
-@patch('src.config.rabbitmq_config.publish_message')
-def test_rabbitmq_client_publish_connection_error(mock_publish_message, mock_connect):
-    """Test that RabbitMQClient.publish handles connection errors correctly."""
-    # Setup mocks
-    mock_channel = MagicMock()
-    
-    # Make the first publish attempt fail, then succeed
-    mock_publish_message.side_effect = [
-        ConnectionClosed("Connection closed"),
-        None  # Success
+    # Test with various message types
+    messages = [
+        {"id": "123", "type": "invoice"},
+        {"id": "456", "type": "bank_statement", "metadata": {"pages": 5, "account": "12345"}},
+        [1, 2, 3, 4, 5],
+        "simple string",
+        123,
+        True,
+        None
     ]
     
-    # Create a client with a channel
-    client = rabbitmq_config.RabbitMQClient()
-    client.channel = mock_channel
-    
-    # Test message
-    message = {"test": "message"}
-    
-    # Publish a message
-    client.publish(message)
-    
-    # Verify the connection was established twice and the message was published twice
-    assert mock_connect.call_count == 2
-    assert mock_publish_message.call_count == 2
-    assert client.connection is None  # Connection should be reset for reconnection
-
-
-@patch.object(rabbitmq_config.RabbitMQClient, 'connect')
-def test_rabbitmq_client_consume(mock_connect):
-    """Test that RabbitMQClient.consume correctly sets up message consumption."""
-    # Setup mock channel
-    mock_channel = MagicMock()
-    
-    # Create a client with a channel
-    client = rabbitmq_config.RabbitMQClient()
-    client.channel = mock_channel
-    
-    # Test callback
-    def test_callback(message, method, properties):
-        pass
-    
-    # Start consuming
-    client.consume(test_callback)
-    
-    # Verify the connection was established and consumption was set up
-    mock_connect.assert_called_once()
-    mock_channel.basic_consume.assert_called_once()
-    mock_channel.start_consuming.assert_called_once()
-    
-    # Verify the queue name
-    assert mock_channel.basic_consume.call_args[1]["queue"] == rabbitmq_config.QUEUE_NAME
-
-
-@patch.object(rabbitmq_config.RabbitMQClient, 'connect')
-@patch.object(rabbitmq_config.RabbitMQClient, 'close')
-def test_rabbitmq_client_consume_keyboard_interrupt(mock_close, mock_connect):
-    """Test that RabbitMQClient.consume handles keyboard interrupts correctly."""
-    # Setup mock channel
-    mock_channel = MagicMock()
-    mock_channel.start_consuming.side_effect = KeyboardInterrupt()
-    
-    # Create a client with a channel
-    client = rabbitmq_config.RabbitMQClient()
-    client.channel = mock_channel
-    
-    # Test callback
-    def test_callback(message, method, properties):
-        pass
-    
-    # Start consuming (should handle the KeyboardInterrupt)
-    client.consume(test_callback)
-    
-    # Verify the connection was established and consumption was set up
-    mock_connect.assert_called_once()
-    mock_channel.basic_consume.assert_called_once()
-    mock_channel.start_consuming.assert_called_once()
-    mock_channel.stop_consuming.assert_called_once()
-    mock_close.assert_called_once()
-
-
-@patch.object(rabbitmq_config.RabbitMQClient, 'connect')
-def test_rabbitmq_client_consume_connection_closed(mock_connect):
-    """Test that RabbitMQClient.consume handles connection closed errors correctly."""
-    # Setup mock channel
-    mock_channel = MagicMock()
-    mock_channel.start_consuming.side_effect = ConnectionClosed("Connection closed")
-    
-    # Create a client with a channel
-    client = rabbitmq_config.RabbitMQClient()
-    client.channel = mock_channel
-    
-    # Test callback
-    def test_callback(message, method, properties):
-        pass
-    
-    # Start consuming (should raise the ConnectionClosed exception)
-    with pytest.raises(ConnectionClosed) as excinfo:
-        client.consume(test_callback)
-    
-    # Verify the exception message
-    assert "Connection closed" in str(excinfo.value)
-    
-    # Verify the connection was established and consumption was set up
-    mock_connect.assert_called_once()
-    mock_channel.basic_consume.assert_called_once()
-    mock_channel.start_consuming.assert_called_once()
-
-
-# ===== Test Callback Wrapper =====
-
-def test_consume_callback_wrapper():
-    """Test that the callback wrapper in consume correctly processes messages."""
-    # Setup mock channel, method, and properties
-    mock_channel = MagicMock()
-    mock_method = MagicMock()
-    mock_method.delivery_tag = "test-tag"
-    mock_properties = MagicMock()
-    
-    # Test message
-    message_dict = {"test": "message"}
-    message_body = json.dumps(message_dict).encode('utf-8')
-    
-    # Test callback that records the received message
-    received_messages = []
-    def test_callback(message, method, properties):
-        received_messages.append((message, method, properties))
-    
-    # Create a client and get the wrapped callback
-    client = rabbitmq_config.RabbitMQClient()
-    client.channel = mock_channel
-    
-    # Extract the wrapped callback from the consume method
-    with patch.object(client.channel, 'basic_consume') as mock_basic_consume:
-        client.consume(test_callback)
-        wrapped_callback = mock_basic_consume.call_args[1]['on_message_callback']
-    
-    # Call the wrapped callback
-    wrapped_callback(mock_channel, mock_method, mock_properties, message_body)
-    
-    # Verify the original callback was called with the correct arguments
-    assert len(received_messages) == 1
-    received_message, received_method, received_properties = received_messages[0]
-    assert received_message == message_dict
-    assert received_method == mock_method
-    assert received_properties == mock_properties
-    
-    # Verify the message was acknowledged
-    mock_channel.basic_ack.assert_called_once_with(delivery_tag=mock_method.delivery_tag)
-
-
-def test_consume_callback_wrapper_deserialization_error():
-    """Test that the callback wrapper handles deserialization errors correctly."""
-    # Setup mock channel, method, and properties
-    mock_channel = MagicMock()
-    mock_method = MagicMock()
-    mock_method.delivery_tag = "test-tag"
-    mock_properties = MagicMock()
-    
-    # Invalid message body
-    invalid_body = b'{"test": invalid}'  # Missing quotes around 'invalid'
-    
-    # Test callback that should not be called
-    def test_callback(message, method, properties):
-        pytest.fail("Callback should not be called with invalid message")
-    
-    # Create a client and get the wrapped callback
-    client = rabbitmq_config.RabbitMQClient()
-    client.channel = mock_channel
-    
-    # Extract the wrapped callback from the consume method
-    with patch.object(client.channel, 'basic_consume') as mock_basic_consume:
-        client.consume(test_callback)
-        wrapped_callback = mock_basic_consume.call_args[1]['on_message_callback']
-    
-    # Call the wrapped callback with invalid message
-    wrapped_callback(mock_channel, mock_method, mock_properties, invalid_body)
-    
-    # Verify the message was rejected without requeuing
-    mock_channel.basic_nack.assert_called_once_with(delivery_tag=mock_method.delivery_tag, requeue=False)
-
-
-def test_consume_callback_wrapper_processing_error():
-    """Test that the callback wrapper handles processing errors correctly."""
-    # Setup mock channel, method, and properties
-    mock_channel = MagicMock()
-    mock_method = MagicMock()
-    mock_method.delivery_tag = "test-tag"
-    mock_properties = MagicMock()
-    
-    # Test message
-    message_dict = {"test": "message"}
-    message_body = json.dumps(message_dict).encode('utf-8')
-    
-    # Test callback that raises an exception
-    def test_callback(message, method, properties):
-        raise RuntimeError("Processing error")
-    
-    # Create a client and get the wrapped callback
-    client = rabbitmq_config.RabbitMQClient()
-    client.channel = mock_channel
-    
-    # Extract the wrapped callback from the consume method
-    with patch.object(client.channel, 'basic_consume') as mock_basic_consume:
-        client.consume(test_callback)
-        wrapped_callback = mock_basic_consume.call_args[1]['on_message_callback']
-    
-    # Call the wrapped callback
-    wrapped_callback(mock_channel, mock_method, mock_properties, message_body)
-    
-    # Verify the message was rejected with requeuing
-    mock_channel.basic_nack.assert_called_once_with(delivery_tag=mock_method.delivery_tag, requeue=True)
-
-
-# ===== Test Helper Functions =====
-
-def test_get_rabbitmq_client():
-    """Test that get_rabbitmq_client returns the singleton instance."""
-    # Get the client
-    client1 = rabbitmq_config.get_rabbitmq_client()
-    client2 = rabbitmq_config.get_rabbitmq_client()
-    
-    # Verify it's the same instance
-    assert client1 is client2
-    assert isinstance(client1, rabbitmq_config.RabbitMQClient)
-
-
-@patch.object(rabbitmq_config.RabbitMQClient, 'consume')
-@patch('src.config.rabbitmq_config.get_rabbitmq_client')
-@patch('time.sleep')
-def test_consume_messages(mock_sleep, mock_get_client, mock_consume):
-    """Test that consume_messages correctly sets up message consumption with retry logic."""
-    # Setup mocks
-    mock_client = MagicMock()
-    mock_get_client.return_value = mock_client
-    
-    # Make the first consume attempt fail, then succeed, then raise KeyboardInterrupt
-    mock_consume.side_effect = [
-        ConnectionClosed("Connection closed"),
-        None,  # Success
-        KeyboardInterrupt()
-    ]
-    
-    # Test callback
-    def test_callback(message, method, properties):
-        pass
-    
-    # Start consuming
-    rabbitmq_config.consume_messages(test_callback)
-    
-    # Verify the client was retrieved and consume was called multiple times
-    assert mock_get_client.call_count == 3
-    assert mock_consume.call_count == 3
-    
-    # Verify sleep was called after the connection error
-    mock_sleep.assert_called_once_with(rabbitmq_config.INITIAL_RETRY_DELAY)
-
-
-@patch.object(rabbitmq_config.RabbitMQClient, 'consume')
-@patch('src.config.rabbitmq_config.get_rabbitmq_client')
-@patch('time.sleep')
-def test_consume_messages_unexpected_error(mock_sleep, mock_get_client, mock_consume):
-    """Test that consume_messages handles unexpected errors correctly."""
-    # Setup mocks
-    mock_client = MagicMock()
-    mock_get_client.return_value = mock_client
-    
-    # Make consume raise an unexpected error
-    mock_consume.side_effect = RuntimeError("Unexpected error")
-    
-    # Test callback
-    def test_callback(message, method, properties):
-        pass
-    
-    # Start consuming (should raise the unexpected error)
-    with pytest.raises(RuntimeError) as excinfo:
-        rabbitmq_config.consume_messages(test_callback)
-    
-    # Verify the exception message
-    assert "Unexpected error" in str(excinfo.value)
-    
-    # Verify the client was retrieved and consume was called
-    mock_get_client.assert_called_once()
-    mock_consume.assert_called_once()
-    
-    # Verify sleep was not called
-    mock_sleep.assert_not_called()
-
-
-# ===== Test Module Initialization =====
-
-def test_module_initialization():
-    """Test that the module initializes the RabbitMQ client singleton correctly."""
-    # Verify the singleton instance was created
-    assert isinstance(rabbitmq_config.rabbitmq_client, rabbitmq_config.RabbitMQClient)
-    
-    # Verify the helper function returns the singleton
-    client = rabbitmq_config.get_rabbitmq_client()
-    assert client is rabbitmq_config.rabbitmq_client
+    for message in messages:
+        serialized = serializer(message)
+        deserialized = deserializer(serialized)
+        assert deserialized == message
