@@ -1,0 +1,456 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: postgresclusters.postgres-operator.dollarfunding.com
+  labels:
+    app.kubernetes.io/name: postgres-operator
+    app.kubernetes.io/part-of: mca-application-system
+    app.kubernetes.io/version: "1.0.0"
+spec:
+  group: postgres-operator.dollarfunding.com
+  names:
+    kind: PostgresCluster
+    listKind: PostgresClusterList
+    plural: postgresclusters
+    singular: postgrescluster
+    shortNames:
+      - pgcluster
+      - pgclusters
+    categories:
+      - all
+      - database
+  scope: Namespaced
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      additionalPrinterColumns:
+        - name: Version
+          type: string
+          jsonPath: .spec.postgresVersion
+          description: PostgreSQL version
+        - name: Instances
+          type: integer
+          jsonPath: .spec.instances
+          description: Number of PostgreSQL instances
+        - name: ReadReplicas
+          type: integer
+          jsonPath: .spec.readReplicas
+          description: Number of read replicas
+        - name: Status
+          type: string
+          jsonPath: .status.phase
+          description: Current status of the cluster
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+            spec:
+              type: object
+              required:
+                - postgresVersion
+                - instances
+                - storage
+                - environment
+              properties:
+                postgresVersion:
+                  type: string
+                  enum:
+                    - "14"
+                  description: "PostgreSQL version to deploy (currently only 14 is supported)"
+                instances:
+                  type: integer
+                  minimum: 1
+                  description: "Number of PostgreSQL instances in the cluster"
+                readReplicas:
+                  type: integer
+                  minimum: 0
+                  description: "Number of read replicas to deploy"
+                environment:
+                  type: string
+                  enum:
+                    - "production"
+                    - "staging"
+                    - "development"
+                  description: "Environment type which determines the number of read replicas"
+                storage:
+                  type: object
+                  required:
+                    - size
+                    - storageClass
+                  properties:
+                    size:
+                      type: string
+                      pattern: '^[0-9]+(Gi|Ti)$'
+                      description: "Size of the persistent volume claim"
+                    storageClass:
+                      type: string
+                      description: "Storage class to use for the persistent volume claim"
+                    iops:
+                      type: integer
+                      minimum: 1000
+                      description: "IOPS for the storage (if supported by the storage class)"
+                resources:
+                  type: object
+                  properties:
+                    requests:
+                      type: object
+                      properties:
+                        cpu:
+                          type: string
+                          pattern: '^[0-9]+(m|)$'
+                          description: "CPU request for PostgreSQL containers"
+                        memory:
+                          type: string
+                          pattern: '^[0-9]+(Mi|Gi)$'
+                          description: "Memory request for PostgreSQL containers"
+                    limits:
+                      type: object
+                      properties:
+                        cpu:
+                          type: string
+                          pattern: '^[0-9]+(m|)$'
+                          description: "CPU limit for PostgreSQL containers"
+                        memory:
+                          type: string
+                          pattern: '^[0-9]+(Mi|Gi)$'
+                          description: "Memory limit for PostgreSQL containers"
+                highAvailability:
+                  type: object
+                  properties:
+                    enabled:
+                      type: boolean
+                      description: "Enable high availability for the PostgreSQL cluster"
+                    automaticFailover:
+                      type: boolean
+                      description: "Enable automatic failover for the PostgreSQL cluster"
+                    maxSyncReplicas:
+                      type: integer
+                      minimum: 0
+                      maximum: 5
+                      description: "Maximum number of synchronous replicas"
+                    synchronousMode:
+                      type: string
+                      enum:
+                        - "strict"
+                        - "quorum"
+                      description: "Synchronous replication mode"
+                connectionPooling:
+                  type: object
+                  properties:
+                    enabled:
+                      type: boolean
+                      description: "Enable connection pooling for the PostgreSQL cluster"
+                    maxConnections:
+                      type: integer
+                      minimum: 10
+                      maximum: 1000
+                      description: "Maximum number of connections in the pool"
+                    minConnections:
+                      type: integer
+                      minimum: 1
+                      maximum: 100
+                      description: "Minimum number of connections in the pool"
+                    connectionTimeout:
+                      type: integer
+                      minimum: 5
+                      maximum: 300
+                      description: "Connection timeout in seconds"
+                backup:
+                  type: object
+                  properties:
+                    enabled:
+                      type: boolean
+                      description: "Enable automated backups for the PostgreSQL cluster"
+                    schedule:
+                      type: string
+                      description: "Cron schedule for backups"
+                    retentionPolicy:
+                      type: object
+                      properties:
+                        days:
+                          type: integer
+                          minimum: 1
+                          description: "Number of days to retain backups"
+                        weeks:
+                          type: integer
+                          minimum: 1
+                          description: "Number of weeks to retain weekly backups"
+                        months:
+                          type: integer
+                          minimum: 1
+                          description: "Number of months to retain monthly backups"
+                        years:
+                          type: integer
+                          minimum: 1
+                          description: "Number of years to retain yearly backups"
+                    archival:
+                      type: object
+                      properties:
+                        enabled:
+                          type: boolean
+                          description: "Enable long-term archival of backups"
+                        retentionYears:
+                          type: integer
+                          minimum: 1
+                          maximum: 10
+                          description: "Number of years to retain archived backups"
+                        storageClass:
+                          type: string
+                          description: "Storage class to use for archived backups"
+                security:
+                  type: object
+                  properties:
+                    encryption:
+                      type: object
+                      properties:
+                        enabled:
+                          type: boolean
+                          description: "Enable encryption for the PostgreSQL cluster"
+                        tls:
+                          type: boolean
+                          description: "Enable TLS for PostgreSQL connections"
+                        dataAtRest:
+                          type: boolean
+                          description: "Enable encryption for data at rest"
+                        fieldLevelEncryption:
+                          type: boolean
+                          description: "Enable field-level encryption for PII data"
+                        keyRotationDays:
+                          type: integer
+                          minimum: 30
+                          maximum: 365
+                          description: "Number of days between key rotations"
+                    networkPolicies:
+                      type: boolean
+                      description: "Enable network policies for the PostgreSQL cluster"
+                monitoring:
+                  type: object
+                  properties:
+                    enabled:
+                      type: boolean
+                      description: "Enable monitoring for the PostgreSQL cluster"
+                    prometheus:
+                      type: boolean
+                      description: "Enable Prometheus metrics for the PostgreSQL cluster"
+                    customQueries:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          name:
+                            type: string
+                            description: "Name of the custom query"
+                          query:
+                            type: string
+                            description: "SQL query to execute"
+                          schedule:
+                            type: string
+                            description: "Schedule for the custom query"
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  description: "Current phase of the PostgreSQL cluster"
+                message:
+                  type: string
+                  description: "Human-readable message indicating details about the current status"
+                readyReplicas:
+                  type: integer
+                  description: "Number of ready replicas"
+                primaryInstance:
+                  type: string
+                  description: "Name of the current primary instance"
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - type
+                      - status
+                    properties:
+                      type:
+                        type: string
+                        description: "Type of the condition"
+                      status:
+                        type: string
+                        description: "Status of the condition"
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                        description: "Last time the condition transitioned from one status to another"
+                      reason:
+                        type: string
+                        description: "Reason for the condition's last transition"
+                      message:
+                        type: string
+                        description: "Human-readable message indicating details about the last transition"
+      subresources:
+        status: {}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: postgres-operator
+  namespace: default
+  labels:
+    app.kubernetes.io/name: postgres-operator
+    app.kubernetes.io/part-of: mca-application-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: postgres-operator
+  labels:
+    app.kubernetes.io/name: postgres-operator
+    app.kubernetes.io/part-of: mca-application-system
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - pods
+      - services
+      - endpoints
+      - persistentvolumeclaims
+      - events
+      - configmaps
+      - secrets
+    verbs:
+      - "*"
+  - apiGroups:
+      - apps
+    resources:
+      - deployments
+      - statefulsets
+    verbs:
+      - "*"
+  - apiGroups:
+      - batch
+    resources:
+      - jobs
+      - cronjobs
+    verbs:
+      - "*"
+  - apiGroups:
+      - policy
+    resources:
+      - poddisruptionbudgets
+    verbs:
+      - "*"
+  - apiGroups:
+      - postgres-operator.dollarfunding.com
+    resources:
+      - postgresclusters
+      - postgresclusters/status
+      - postgresclusters/finalizers
+    verbs:
+      - "*"
+  - apiGroups:
+      - networking.k8s.io
+    resources:
+      - networkpolicies
+    verbs:
+      - "*"
+  - apiGroups:
+      - monitoring.coreos.com
+    resources:
+      - servicemonitors
+    verbs:
+      - get
+      - create
+      - update
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: postgres-operator
+  labels:
+    app.kubernetes.io/name: postgres-operator
+    app.kubernetes.io/part-of: mca-application-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: postgres-operator
+subjects:
+  - kind: ServiceAccount
+    name: postgres-operator
+    namespace: default
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres-operator
+  namespace: default
+  labels:
+    app.kubernetes.io/name: postgres-operator
+    app.kubernetes.io/part-of: mca-application-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres-operator
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgres-operator
+    spec:
+      serviceAccountName: postgres-operator
+      containers:
+        - name: postgres-operator
+          image: dollarfunding/postgres-operator:1.0.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+              name: metrics
+          env:
+            - name: WATCH_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: OPERATOR_NAME
+              value: "postgres-operator"
+            - name: POSTGRES_VERSION
+              value: "14"
+            - name: ENABLE_FIELD_ENCRYPTION
+              value: "true"
+            - name: ENABLE_ARCHIVAL
+              value: "true"
+            - name: ARCHIVAL_RETENTION_YEARS
+              value: "7"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
