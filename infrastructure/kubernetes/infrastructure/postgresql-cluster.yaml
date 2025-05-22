@@ -1,0 +1,203 @@
+---
+# PostgreSQL Cluster Custom Resource Definition
+# This manifest defines a PostgreSQL 14 cluster with primary-replica configuration
+# for the MCA Application Processing System
+# 
+# Note: This is a template that should be used with environment-specific values
+# Use with Kustomize or Helm to apply environment-specific configurations
+
+apiVersion: postgres-operator.crunchydata.com/v1beta1
+kind: PostgresCluster
+metadata:
+  name: mca-postgres-cluster
+  # Namespace should be set by environment-specific overlay
+  labels:
+    app: mca-application-processing
+    component: database
+    # Environment label should be set by environment-specific overlay
+spec:
+  # PostgreSQL 14 version
+  image: registry.developers.crunchydata.com/crunchydata/crunchy-postgres:ubi8-14.9-0
+  postgresVersion: 14
+  
+  # Production configuration - for staging, use an overlay to change replicas to 2
+  instances:
+    - name: primary-replicas
+      replicas: 3  # 3 for production (1 primary + 2 replicas)
+      dataVolumeClaimSpec:
+        accessModes:
+          - "ReadWriteOnce"
+        resources:
+          requests:
+            storage: 50Gi
+        storageClassName: "managed-premium"  # Use high-performance storage class
+      # Distribute pods across availability zones for high availability
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    postgres-operator.crunchydata.com/cluster: mca-postgres-cluster
+                    postgres-operator.crunchydata.com/instance-set: primary-replicas
+                topologyKey: "topology.kubernetes.io/zone"
+  
+  # Resource allocation for PostgreSQL instances
+  resources:
+    limits:
+      cpu: 2000m
+      memory: 4Gi
+    requests:
+      cpu: 1000m
+      memory: 2Gi
+  
+  # PostgreSQL configuration
+  patroni:
+    dynamicConfiguration:
+      postgresql:
+        parameters:
+          # Connection settings
+          max_connections: 200
+          shared_buffers: 1GB
+          effective_cache_size: 3GB
+          # WAL settings
+          wal_level: replica
+          max_wal_senders: 10
+          max_replication_slots: 10
+          # Performance settings
+          random_page_cost: 1.1
+          effective_io_concurrency: 200
+          work_mem: 4MB
+          maintenance_work_mem: 256MB
+          # Logging settings
+          log_min_duration_statement: 1000
+          log_checkpoints: on
+          log_connections: on
+          log_disconnections: on
+          log_lock_waits: on
+          log_temp_files: 0
+          log_autovacuum_min_duration: 0
+          # Replication settings
+          hot_standby: on
+          hot_standby_feedback: on
+  
+  # Connection pooling configuration using PgBouncer
+  proxy:
+    pgBouncer:
+      replicas: 2  # 2 for production, use overlay to change to 1 for staging
+      resources:
+        limits:
+          cpu: 500m
+          memory: 512Mi
+        requests:
+          cpu: 200m
+          memory: 256Mi
+      config:
+        # PgBouncer configuration
+        default_pool_size: 20
+        max_client_conn: 1000
+        pool_mode: transaction
+        # Additional connection pooling settings for efficient database connections
+        max_db_connections: 0  # Unlimited
+        min_pool_size: 5
+        reserve_pool_size: 10
+        reserve_pool_timeout: 5
+        max_user_connections: 0  # Unlimited
+  
+  # Backup and recovery configuration
+  backups:
+    pgbackrest:
+      # Configure multiple backup repositories for redundancy
+      repos:
+        # Primary backup repository using volume
+        - name: repo1
+          volume:
+            volumeClaimSpec:
+              accessModes:
+                - "ReadWriteOnce"
+              resources:
+                requests:
+                  storage: 100Gi
+              storageClassName: "managed-premium"
+          # Regular backup schedule with retention policy
+          schedules:
+            # Full backup weekly
+            full: "0 0 * * 0"
+            # Incremental backup daily
+            incremental: "0 0 * * 1-6"
+            # Differential backup every 3 days
+            differential: "0 0 */3 * *"
+        # Secondary backup repository using S3-compatible storage for off-site backup
+        - name: repo2
+          s3:
+            bucket: "mca-postgres-backups"
+            endpoint: "s3.amazonaws.com"
+            region: "us-east-1"
+            # Credentials should be provided via a Secret
+            credentialsSecretName: "postgres-s3-creds"
+          # Regular backup schedule with retention policy
+          schedules:
+            # Full backup weekly
+            full: "0 0 * * 0"
+            # Incremental backup daily
+            incremental: "0 0 * * 1-6"
+      # Global configuration for pgBackRest
+      global:
+        # Retention policy for backups
+        repo1-retention-full: "30"
+        repo1-retention-full-type: "count"
+        repo2-retention-full: "90"
+        repo2-retention-full-type: "count"
+        # Enable archive logging for point-in-time recovery
+        archive-push-queue-max: "4GiB"
+        # Enable parallel operations for faster backups and restores
+        process-max: 8
+        # Enable point-in-time recovery
+        archive-mode: "on"
+        archive-check: "on"
+        # Compression settings
+        compress-level: 6
+        compress-type: "lz4"
+  
+  # User management
+  users:
+    # Application user for the MCA application
+    - name: mca-app
+      databases:
+        - mca_application_db
+      options: "CREATEDB"
+    # Read-only user for reporting
+    - name: mca-readonly
+      databases:
+        - mca_application_db
+      options: "NOSUPERUSER,NOCREATEDB"
+  
+  # Database initialization
+  databaseInitSQL:
+    key: init-sql
+    name: mca-postgres-init
+  
+  # Monitoring configuration
+  monitoring:
+    pgmonitor:
+      exporter:
+        enabled: true
+        # Configure Prometheus metrics exporter
+        resources:
+          limits:
+            cpu: 200m
+            memory: 256Mi
+          requests:
+            cpu: 100m
+            memory: 128Mi
+        # Enable additional metrics collection
+        configuration:
+          queries:
+            # Custom queries for application-specific metrics
+            custom:
+              mca_application_metrics: |
+                SELECT COUNT(*) AS active_applications FROM mca_application_db.applications WHERE status = 'active';
+                SELECT AVG(processing_time) AS avg_processing_time FROM mca_application_db.applications WHERE created_at > NOW() - INTERVAL '24 hours';
+              mca_document_metrics: |
+                SELECT COUNT(*) AS total_documents, SUM(CASE WHEN classification IS NOT NULL THEN 1 ELSE 0 END) AS classified_documents FROM mca_application_db.documents;
