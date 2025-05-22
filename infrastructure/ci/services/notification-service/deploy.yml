@@ -1,0 +1,382 @@
+# Notification Service Deployment Workflow
+# This workflow handles the deployment of the Notification Service to Kubernetes environments
+# It includes environment selection, Helm chart deployment, post-deployment validation, and rollback procedures
+
+name: Deploy Notification Service
+
+# Trigger on workflow_dispatch for manual deployments
+# Also trigger on successful build of the notification-service
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment Environment'
+        required: true
+        default: 'development'
+        type: choice
+        options:
+          - development
+          - staging
+          - production
+      version:
+        description: 'Service Version (leave empty for latest)'
+        required: false
+        type: string
+  
+  workflow_run:
+    workflows: ['Build Notification Service']
+    types:
+      - completed
+    branches:
+      - development
+      - main
+      - 'release/**'
+
+# Environment variables used across jobs
+env:
+  SERVICE_NAME: notification-service
+  CHART_PATH: infrastructure/kubernetes/charts/notification-service
+  REGISTRY: ${CONTAINER_REGISTRY_URL}
+  IMAGE_NAME: notification-service
+
+jobs:
+  # Determine deployment parameters based on trigger
+  prepare-deployment:
+    name: Prepare Deployment
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.set-env.outputs.environment }}
+      version: ${{ steps.set-version.outputs.version }}
+      namespace: ${{ steps.set-env.outputs.namespace }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+      
+      - name: Set environment
+        id: set-env
+        run: |
+          # Set environment based on trigger
+          if [ '${{ github.event_name }}' == 'workflow_dispatch' ]; then
+            echo "environment=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
+          elif [ '${{ github.event_name }}' == 'workflow_run' ]; then
+            if [ '${{ github.ref }}' == 'refs/heads/development' ]; then
+              echo "environment=development" >> $GITHUB_OUTPUT
+            elif [ '${{ github.ref }}' == 'refs/heads/main' ]; then
+              echo "environment=staging" >> $GITHUB_OUTPUT
+            elif [[ '${{ github.ref }}' == refs/heads/release/* ]]; then
+              echo "environment=production" >> $GITHUB_OUTPUT
+            else
+              echo "environment=development" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "environment=development" >> $GITHUB_OUTPUT
+          fi
+          
+          # Set namespace based on environment
+          if [ "$(echo "environment=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT)" == "production" ]; then
+            echo "namespace=mca-production" >> $GITHUB_OUTPUT
+          elif [ "$(echo "environment=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT)" == "staging" ]; then
+            echo "namespace=mca-staging" >> $GITHUB_OUTPUT
+          else
+            echo "namespace=mca-development" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Set version
+        id: set-version
+        run: |
+          # Set version based on input or latest tag
+          if [ '${{ github.event_name }}' == 'workflow_dispatch' ] && [ -n '${{ github.event.inputs.version }}' ]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            # Get latest version from container registry or git tags
+            LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.1.0")
+            echo "version=${LATEST_TAG#v}" >> $GITHUB_OUTPUT
+          fi
+
+  # Deploy to the selected environment
+  deploy:
+    name: Deploy to ${{ needs.prepare-deployment.outputs.environment }}
+    needs: prepare-deployment
+    runs-on: ubuntu-latest
+    environment: ${{ needs.prepare-deployment.outputs.environment }}
+    # Add approval gate for production deployments
+    concurrency:
+      group: deploy-${{ needs.prepare-deployment.outputs.environment }}-${{ env.SERVICE_NAME }}
+      cancel-in-progress: false
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: 'v3.11.1'
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'v1.26.0'
+
+      - name: Configure Kubernetes context
+        uses: azure/k8s-set-context@v3
+        with:
+          method: kubeconfig
+          kubeconfig: ${{ secrets.KUBECONFIG }}
+          context: ${{ needs.prepare-deployment.outputs.environment }}
+
+      - name: Login to container registry
+        uses: docker/login-action@v2
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      - name: Get deployment history
+        id: history
+        run: |
+          # Get current release revision for potential rollback
+          REVISION=$(helm history ${{ env.SERVICE_NAME }} -n ${{ needs.prepare-deployment.outputs.namespace }} | tail -1 | awk '{print $1}')
+          echo "revision=$REVISION" >> $GITHUB_OUTPUT
+        continue-on-error: true
+
+      - name: Deploy with Helm
+        id: deploy
+        run: |
+          # Set image tag for the deployment
+          IMAGE_TAG=${{ needs.prepare-deployment.outputs.version }}
+          
+          # Deploy using Helm with environment-specific values
+          helm upgrade --install ${{ env.SERVICE_NAME }} ${{ env.CHART_PATH }} \
+            --namespace ${{ needs.prepare-deployment.outputs.namespace }} \
+            --create-namespace \
+            --set image.repository=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }} \
+            --set image.tag=$IMAGE_TAG \
+            --set environment=${{ needs.prepare-deployment.outputs.environment }} \
+            --set replicaCount=$([ "${{ needs.prepare-deployment.outputs.environment }}" == "production" ] && echo "3" || echo "1") \
+            --set webhookSecret=${{ secrets.WEBHOOK_SIGNATURE_SECRET }} \
+            --set rabbitmq.host=${{ secrets.RABBITMQ_HOST }} \
+            --set rabbitmq.username=${{ secrets.RABBITMQ_USERNAME }} \
+            --set rabbitmq.password=${{ secrets.RABBITMQ_PASSWORD }} \
+            --set rabbitmq.vhost=${{ needs.prepare-deployment.outputs.environment }} \
+            --set serviceAccount.annotations."eks\.amazonaws\.com/role-arn"=${{ secrets.AWS_ROLE_ARN }} \
+            --atomic \
+            --timeout 5m
+          
+          echo "deployed=true" >> $GITHUB_OUTPUT
+
+      # Send deployment notification
+      - name: Send deployment notification
+        uses: ./.github/actions/notification
+        with:
+          event: deployment
+          service: ${{ env.SERVICE_NAME }}
+          environment: ${{ needs.prepare-deployment.outputs.environment }}
+          status: ${{ steps.deploy.outcome }}
+          version: ${{ needs.prepare-deployment.outputs.version }}
+        if: always()
+
+  # Validate the deployment
+  validate:
+    name: Validate Deployment
+    needs: [prepare-deployment, deploy]
+    runs-on: ubuntu-latest
+    environment: ${{ needs.prepare-deployment.outputs.environment }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'v1.26.0'
+
+      - name: Configure Kubernetes context
+        uses: azure/k8s-set-context@v3
+        with:
+          method: kubeconfig
+          kubeconfig: ${{ secrets.KUBECONFIG }}
+          context: ${{ needs.prepare-deployment.outputs.environment }}
+
+      - name: Wait for deployment to be ready
+        run: |
+          kubectl rollout status deployment/${{ env.SERVICE_NAME }} -n ${{ needs.prepare-deployment.outputs.namespace }} --timeout=3m
+
+      - name: Verify service health
+        id: health-check
+        run: |
+          # Get service endpoint
+          SERVICE_IP=$(kubectl get svc ${{ env.SERVICE_NAME }} -n ${{ needs.prepare-deployment.outputs.namespace }} -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+          SERVICE_PORT=$(kubectl get svc ${{ env.SERVICE_NAME }} -n ${{ needs.prepare-deployment.outputs.namespace }} -o jsonpath='{.spec.ports[0].port}')
+          
+          # Check health endpoint
+          HEALTH_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://${SERVICE_IP}:${SERVICE_PORT}/health)
+          
+          if [ "$HEALTH_STATUS" == "200" ]; then
+            echo "Health check passed"
+            echo "health_status=passed" >> $GITHUB_OUTPUT
+          else
+            echo "Health check failed with status $HEALTH_STATUS"
+            echo "health_status=failed" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+      - name: Verify webhook functionality
+        id: webhook-test
+        run: |
+          # Test webhook delivery functionality
+          # This uses a test endpoint to verify the webhook delivery system
+          
+          # Get pod name
+          POD_NAME=$(kubectl get pods -n ${{ needs.prepare-deployment.outputs.namespace }} -l app=${{ env.SERVICE_NAME }} -o jsonpath='{.items[0].metadata.name}')
+          
+          # Execute test command in the pod
+          TEST_RESULT=$(kubectl exec $POD_NAME -n ${{ needs.prepare-deployment.outputs.namespace }} -- node /app/dist/test/webhook-test.js)
+          
+          if [[ $TEST_RESULT == *"Webhook test successful"* ]]; then
+            echo "Webhook functionality verified"
+            echo "webhook_status=passed" >> $GITHUB_OUTPUT
+          else
+            echo "Webhook functionality test failed"
+            echo "webhook_status=failed" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+      - name: Verify retry mechanism
+        id: retry-test
+        run: |
+          # Test webhook retry mechanism
+          # This simulates a failed webhook delivery to verify retry logic
+          
+          # Get pod name
+          POD_NAME=$(kubectl get pods -n ${{ needs.prepare-deployment.outputs.namespace }} -l app=${{ env.SERVICE_NAME }} -o jsonpath='{.items[0].metadata.name}')
+          
+          # Execute retry test command in the pod
+          RETRY_RESULT=$(kubectl exec $POD_NAME -n ${{ needs.prepare-deployment.outputs.namespace }} -- node /app/dist/test/retry-test.js)
+          
+          if [[ $RETRY_RESULT == *"Retry mechanism verified"* ]]; then
+            echo "Retry mechanism working correctly"
+            echo "retry_status=passed" >> $GITHUB_OUTPUT
+          else
+            echo "Retry mechanism test failed"
+            echo "retry_status=failed" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          
+      # Send validation notification
+      - name: Send validation notification
+        uses: ./.github/actions/notification
+        with:
+          event: validation
+          service: ${{ env.SERVICE_NAME }}
+          environment: ${{ needs.prepare-deployment.outputs.environment }}
+          status: ${{ steps.health-check.outcome == 'success' && steps.webhook-test.outcome == 'success' && steps.retry-test.outcome == 'success' }}
+          version: ${{ needs.prepare-deployment.outputs.version }}
+        if: always()
+
+  # Rollback if validation fails
+  rollback:
+    name: Rollback Deployment
+    needs: [prepare-deployment, deploy, validate]
+    runs-on: ubuntu-latest
+    environment: ${{ needs.prepare-deployment.outputs.environment }}
+    if: needs.validate.result == 'failure' && needs.deploy.outputs.deployed == 'true'
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: 'v3.11.1'
+
+      - name: Configure Kubernetes context
+        uses: azure/k8s-set-context@v3
+        with:
+          method: kubeconfig
+          kubeconfig: ${{ secrets.KUBECONFIG }}
+          context: ${{ needs.prepare-deployment.outputs.environment }}
+
+      - name: Rollback deployment
+        id: rollback
+        run: |
+          # Rollback to previous revision
+          if [ -n "${{ needs.deploy.outputs.revision }}" ]; then
+            helm rollback ${{ env.SERVICE_NAME }} ${{ needs.deploy.outputs.revision }} -n ${{ needs.prepare-deployment.outputs.namespace }}
+            echo "Rolled back to revision ${{ needs.deploy.outputs.revision }}"
+          else
+            # If no previous revision, uninstall the release
+            helm uninstall ${{ env.SERVICE_NAME }} -n ${{ needs.prepare-deployment.outputs.namespace }}
+            echo "No previous revision found, uninstalled the release"
+          fi
+
+      # Send rollback notification
+      - name: Send rollback notification
+        uses: ./.github/actions/notification
+        with:
+          event: rollback
+          service: ${{ env.SERVICE_NAME }}
+          environment: ${{ needs.prepare-deployment.outputs.environment }}
+          status: ${{ steps.rollback.outcome }}
+          version: ${{ needs.prepare-deployment.outputs.version }}
+        if: always()
+
+  # Update monitoring and documentation
+  update-monitoring:
+    name: Update Monitoring
+    needs: [prepare-deployment, deploy, validate]
+    runs-on: ubuntu-latest
+    if: |
+      always() && 
+      needs.deploy.result == 'success' && 
+      (needs.validate.result == 'success' || needs.validate.result == 'skipped')
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Update Datadog dashboard
+        run: |
+          # Update Datadog dashboard with new version information
+          # This is a placeholder for the actual implementation
+          echo "Updating Datadog dashboard for ${{ env.SERVICE_NAME }} version ${{ needs.prepare-deployment.outputs.version }}"
+          
+          # Example: Use AWS SSM to store the current version for monitoring
+          aws ssm put-parameter \
+            --name "/mca/${{ needs.prepare-deployment.outputs.environment }}/${{ env.SERVICE_NAME }}/version" \
+            --value "${{ needs.prepare-deployment.outputs.version }}" \
+            --type "String" \
+            --overwrite
+
+      - name: Update deployment history
+        run: |
+          # Record deployment in deployment history database
+          # This is a placeholder for the actual implementation
+          echo "Recording deployment of ${{ env.SERVICE_NAME }} version ${{ needs.prepare-deployment.outputs.version }} to ${{ needs.prepare-deployment.outputs.environment }}"
+          
+          # Example: Use AWS DynamoDB to store deployment history
+          aws dynamodb put-item \
+            --table-name "mca-deployments" \
+            --item "{
+              \"service\": {\"S\": \"${{ env.SERVICE_NAME }}\"},
+              \"version\": {\"S\": \"${{ needs.prepare-deployment.outputs.version }}\"},
+              \"environment\": {\"S\": \"${{ needs.prepare-deployment.outputs.environment }}\"},
+              \"timestamp\": {\"S\": \"$(date -u +\"%Y-%m-%dT%H:%M:%SZ\")\"},
+              \"status\": {\"S\": \"${{ needs.validate.result == 'success' && 'success' || 'failed' }}\"},
+              \"deployer\": {\"S\": \"${{ github.actor }}\"}
+            }"
+          # Set environment based on trigger
+          if [ '${{ github.event_name }}' == 'workflow_dispatch' ]; then
+            echo 
