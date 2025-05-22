@@ -6,26 +6,20 @@ Document Routing Service for the Document Service microservice.
 
 This module handles the routing of classified documents to appropriate OCR processors
 based on document type, classification confidence, and document characteristics.
-It determines the optimal OCR processing strategy and creates routing metadata for
-downstream OCR processors.
+It determines the optimal OCR processing strategy and creates routing metadata
+for downstream OCR processors.
 """
 
 import logging
-from typing import Dict, List, Optional, Tuple, Any, Union
+import time
+from typing import Dict, Any, Optional, List, Tuple
 
-# Import types
-from ..types.documents import Document, DocumentType, ProcessingStatus
 from ..types.classification import ClassificationResult, ConfidenceScore
-from ..types.messages import MessagePayload, MessageHeaders
-from ..types.errors import ServiceError, Result
+from ..config import model_config
+from ..utils import validation_utils
 
-# Import utilities
-from ..utils.logging_utils import log_with_context
-from ..utils.time_utils import get_current_timestamp
-from ..utils.error_utils import create_service_error
-
-# Import configuration
-from ..config.model_config import CONFIDENCE_THRESHOLDS
+# Configure logger
+logger = logging.getLogger(__name__)
 
 
 class DocumentRoutingService:
@@ -34,418 +28,405 @@ class DocumentRoutingService:
     
     This service determines the optimal OCR processing strategy based on document type,
     classification confidence, and document characteristics. It creates routing metadata
-    for downstream OCR processors and implements fallback strategies for uncertain
+    for downstream OCR processors and implements fallback strategies for low-confidence
     classifications.
     """
     
-    def __init__(self, queue_service=None, storage_service=None):
+    # Document type to OCR processor mapping
+    DOCUMENT_TYPE_PROCESSORS = {
+        'loan_application': 'form_ocr',
+        'tax_return': 'financial_ocr',
+        'bank_statement': 'financial_ocr',
+        'pay_stub': 'financial_ocr',
+        'identity_document': 'id_ocr',
+        'invoice': 'financial_ocr',
+        'utility_bill': 'general_ocr',
+        'business_license': 'general_ocr',
+        'insurance_document': 'general_ocr',
+        'credit_report': 'financial_ocr',
+        'lease_agreement': 'contract_ocr',
+        'articles_of_incorporation': 'contract_ocr',
+        'bank_letter': 'general_ocr',
+        'financial_statement': 'financial_ocr',
+        'other': 'general_ocr'
+    }
+    
+    # Document type to content type mapping (typed, handwritten, mixed)
+    DOCUMENT_CONTENT_TYPES = {
+        'loan_application': 'mixed',
+        'tax_return': 'typed',
+        'bank_statement': 'typed',
+        'pay_stub': 'typed',
+        'identity_document': 'mixed',
+        'invoice': 'typed',
+        'utility_bill': 'typed',
+        'business_license': 'typed',
+        'insurance_document': 'typed',
+        'credit_report': 'typed',
+        'lease_agreement': 'typed',
+        'articles_of_incorporation': 'typed',
+        'bank_letter': 'typed',
+        'financial_statement': 'typed',
+        'other': 'mixed'
+    }
+    
+    # Confidence thresholds for routing decisions
+    HIGH_CONFIDENCE_THRESHOLD = 0.85  # 85% confidence for automatic processing
+    MEDIUM_CONFIDENCE_THRESHOLD = 0.75  # 75% confidence for specialized processing with review flag
+    LOW_CONFIDENCE_THRESHOLD = 0.60  # 60% confidence for fallback processing with mandatory review
+    
+    def __init__(self, config: Optional[Dict[str, Any]] = None):
         """
         Initialize the DocumentRoutingService.
         
         Args:
-            queue_service: Service for publishing messages to RabbitMQ
-            storage_service: Service for storing documents and metadata in S3
+            config: Optional configuration dictionary to override default settings.
         """
-        self.logger = logging.getLogger(__name__)
-        self.queue_service = queue_service
-        self.storage_service = storage_service
+        self.config = config or {}
         
-        # Default confidence threshold (can be overridden by config)
-        self.confidence_threshold = 0.75
+        # Override default thresholds if provided in config
+        self.high_confidence_threshold = self.config.get(
+            'high_confidence_threshold', 
+            model_config.CLASSIFICATION_HIGH_CONFIDENCE_THRESHOLD
+        )
+        self.medium_confidence_threshold = self.config.get(
+            'medium_confidence_threshold', 
+            model_config.CLASSIFICATION_MEDIUM_CONFIDENCE_THRESHOLD
+        )
+        self.low_confidence_threshold = self.config.get(
+            'low_confidence_threshold', 
+            model_config.CLASSIFICATION_LOW_CONFIDENCE_THRESHOLD
+        )
         
-        # Load confidence thresholds from configuration
-        self._load_confidence_thresholds()
-        
-        # OCR processor routing map
-        self.ocr_processor_map = {
-            DocumentType.APPLICATION: "application_processor",
-            DocumentType.TAX_RETURN: "tax_document_processor",
-            DocumentType.BANK_STATEMENT: "financial_document_processor",
-            DocumentType.PAY_STUB: "financial_document_processor",
-            DocumentType.ID_DOCUMENT: "identity_document_processor",
-            DocumentType.OTHER: "general_document_processor"
+        # Initialize routing metrics
+        self.routing_metrics = {
+            'total_routed': 0,
+            'high_confidence_routes': 0,
+            'medium_confidence_routes': 0,
+            'low_confidence_routes': 0,
+            'fallback_routes': 0,
+            'routing_errors': 0,
+            'avg_routing_time_ms': 0,
+            'total_routing_time_ms': 0
         }
         
-        # Document characteristics map for OCR strategy selection
-        self.document_characteristics_map = {
-            "typed": "typed_text_ocr",
-            "handwritten": "handwritten_text_ocr",
-            "mixed": "hybrid_ocr",
-            "default": "hybrid_ocr"  # Default to most comprehensive OCR
-        }
+        logger.info("DocumentRoutingService initialized with confidence thresholds: "
+                   f"high={self.high_confidence_threshold}, "
+                   f"medium={self.medium_confidence_threshold}, "
+                   f"low={self.low_confidence_threshold}")
     
-    def _load_confidence_thresholds(self) -> None:
-        """
-        Load confidence thresholds from configuration.
-        
-        This method loads document type-specific confidence thresholds from the
-        configuration, falling back to the default threshold if not specified.
-        """
-        try:
-            # Get default threshold from configuration
-            if hasattr(CONFIDENCE_THRESHOLDS, 'DEFAULT'):
-                self.confidence_threshold = CONFIDENCE_THRESHOLDS.DEFAULT
-                
-            # Get document type-specific thresholds
-            self.type_confidence_thresholds = {}
-            for doc_type in DocumentType:
-                threshold_key = f"{doc_type.name}_THRESHOLD"
-                if hasattr(CONFIDENCE_THRESHOLDS, threshold_key):
-                    self.type_confidence_thresholds[doc_type] = getattr(CONFIDENCE_THRESHOLDS, threshold_key)
-                else:
-                    self.type_confidence_thresholds[doc_type] = self.confidence_threshold
-        except Exception as e:
-            self.logger.warning(f"Failed to load confidence thresholds from configuration: {str(e)}. Using defaults.")
-            # Set default thresholds if configuration loading fails
-            self.type_confidence_thresholds = {doc_type: self.confidence_threshold for doc_type in DocumentType}
-    
-    def route_document(self, document: Document, classification_result: ClassificationResult) -> Result[Dict[str, Any]]:
+    def route_document(self, 
+                      document_id: str, 
+                      classification_result: ClassificationResult, 
+                      document_metadata: Dict[str, Any]) -> Dict[str, Any]:
         """
         Route a classified document to the appropriate OCR processor.
         
-        This method determines the optimal OCR processing strategy based on document type,
-        classification confidence, and document characteristics. It creates routing metadata
-        for downstream OCR processors and implements fallback strategies for uncertain
-        classifications.
-        
         Args:
-            document: The document to route
-            classification_result: The classification result from the classification service
+            document_id: Unique identifier for the document
+            classification_result: Result of document classification
+            document_metadata: Metadata about the document (size, format, etc.)
             
         Returns:
-            Result containing routing metadata or error
+            Dictionary containing routing information for downstream OCR processing
         """
+        start_time = time.time()
+        
         try:
-            self.logger.info(f"Routing document {document.id} with classification {classification_result.document_type}")
+            # Validate inputs
+            if not document_id or not classification_result or not document_metadata:
+                raise ValueError("Missing required parameters for document routing")
             
             # Extract document type and confidence from classification result
-            doc_type = classification_result.document_type
-            confidence = classification_result.confidence
+            document_type = classification_result.document_type
+            confidence_score = classification_result.confidence
             
-            # Get confidence threshold for this document type
-            threshold = self.type_confidence_thresholds.get(doc_type, self.confidence_threshold)
+            # Validate document type
+            if not validation_utils.is_valid_document_type(document_type):
+                logger.warning(f"Invalid document type: {document_type}. Using fallback routing.")
+                document_type = 'other'
+                confidence_score = ConfidenceScore(0.0)  # Force fallback routing
             
-            # Determine if human review is needed based on confidence
-            needs_human_review = confidence < threshold
-            
-            # Determine document characteristics for OCR strategy selection
-            doc_characteristics = self._determine_document_characteristics(document, classification_result)
-            
-            # Select OCR processor based on document type
-            ocr_processor = self.ocr_processor_map.get(doc_type, "general_document_processor")
-            
-            # Select OCR strategy based on document characteristics
-            ocr_strategy = self.document_characteristics_map.get(
-                doc_characteristics, 
-                self.document_characteristics_map["default"]
+            # Determine OCR processor based on document type and confidence
+            ocr_processor, review_required, processing_priority = self._determine_ocr_processor(
+                document_type, confidence_score, document_metadata
             )
+            
+            # Determine content type (typed, handwritten, mixed)
+            content_type = self._determine_content_type(document_type, document_metadata)
             
             # Create routing metadata
             routing_metadata = self._create_routing_metadata(
-                document=document,
-                classification_result=classification_result,
-                ocr_processor=ocr_processor,
-                ocr_strategy=ocr_strategy,
-                needs_human_review=needs_human_review,
-                doc_characteristics=doc_characteristics
+                document_id, document_type, ocr_processor, 
+                confidence_score, review_required, processing_priority,
+                content_type, document_metadata
             )
             
-            # Log routing decision
-            log_with_context(
-                self.logger,
-                "info",
-                f"Document {document.id} routed to {ocr_processor} using {ocr_strategy}",
-                extra={
-                    "document_id": document.id,
-                    "document_type": doc_type.name if doc_type else "UNKNOWN",
-                    "confidence": confidence,
-                    "ocr_processor": ocr_processor,
-                    "ocr_strategy": ocr_strategy,
-                    "needs_human_review": needs_human_review
-                }
-            )
+            # Update routing metrics
+            self._update_routing_metrics(confidence_score, start_time)
             
-            # Update document metadata with routing information
-            if self.storage_service:
-                self._update_document_metadata(document, routing_metadata)
+            logger.info(f"Document {document_id} routed to {ocr_processor} processor "
+                       f"with confidence {confidence_score.value:.2f}, "
+                       f"review_required={review_required}, "
+                       f"priority={processing_priority}")
             
-            # Publish routing message to OCR service
-            if self.queue_service:
-                self._publish_routing_message(document, routing_metadata)
-            
-            return Result.success(routing_metadata)
+            return routing_metadata
             
         except Exception as e:
-            error = create_service_error(
-                service="DocumentRoutingService",
-                operation="route_document",
-                message=f"Failed to route document {document.id}: {str(e)}",
-                exception=e
+            logger.error(f"Error routing document {document_id}: {str(e)}")
+            self.routing_metrics['routing_errors'] += 1
+            
+            # Create fallback routing metadata for error cases
+            return self._create_fallback_routing_metadata(
+                document_id, document_metadata
             )
-            self.logger.error(f"Error routing document: {error}")
-            return Result.failure(error)
     
-    def _determine_document_characteristics(self, document: Document, classification_result: ClassificationResult) -> str:
+    def _determine_ocr_processor(self, 
+                                document_type: str, 
+                                confidence_score: ConfidenceScore,
+                                document_metadata: Dict[str, Any]) -> Tuple[str, bool, str]:
         """
-        Determine document characteristics for OCR strategy selection.
-        
-        This method analyzes the document and classification result to determine
-        the document characteristics (typed, handwritten, mixed) for selecting
-        the appropriate OCR strategy.
+        Determine the appropriate OCR processor based on document type and confidence.
         
         Args:
-            document: The document to analyze
-            classification_result: The classification result
+            document_type: Type of document as determined by classification
+            confidence_score: Confidence score of the classification
+            document_metadata: Metadata about the document
             
         Returns:
-            Document characteristics ("typed", "handwritten", "mixed", or "default")
+            Tuple containing (ocr_processor, review_required, processing_priority)
         """
-        # Extract document characteristics from classification result if available
-        if hasattr(classification_result, 'document_characteristics'):
-            return classification_result.document_characteristics
+        # Get the default OCR processor for this document type
+        default_processor = self.DOCUMENT_TYPE_PROCESSORS.get(document_type, 'general_ocr')
         
-        # Default characteristics based on document type
-        doc_type = classification_result.document_type
+        # Determine if review is required based on confidence score
+        if confidence_score.value >= self.high_confidence_threshold:
+            # High confidence - use specialized processor without review
+            return default_processor, False, 'high'
         
-        # Default characteristics mapping
-        type_to_characteristics = {
-            DocumentType.APPLICATION: "mixed",  # Applications often contain both typed and handwritten content
-            DocumentType.TAX_RETURN: "typed",  # Tax returns are typically typed/printed
-            DocumentType.BANK_STATEMENT: "typed",  # Bank statements are typically typed/printed
-            DocumentType.PAY_STUB: "typed",  # Pay stubs are typically typed/printed
-            DocumentType.ID_DOCUMENT: "mixed",  # ID documents often contain both typed and handwritten content
-            DocumentType.OTHER: "mixed"  # Default to mixed for unknown document types
-        }
+        elif confidence_score.value >= self.medium_confidence_threshold:
+            # Medium confidence - use specialized processor with review flag
+            return default_processor, True, 'medium'
         
-        # Get default characteristics for this document type
-        return type_to_characteristics.get(doc_type, "mixed")
+        elif confidence_score.value >= self.low_confidence_threshold:
+            # Low confidence - use specialized processor with mandatory review
+            return default_processor, True, 'low'
+        
+        else:
+            # Very low confidence - use general OCR with mandatory review
+            return 'general_ocr', True, 'low'
     
-    def _create_routing_metadata(self, document: Document, classification_result: ClassificationResult, 
-                               ocr_processor: str, ocr_strategy: str, needs_human_review: bool,
-                               doc_characteristics: str) -> Dict[str, Any]:
+    def _determine_content_type(self, 
+                              document_type: str, 
+                              document_metadata: Dict[str, Any]) -> str:
         """
-        Create routing metadata for downstream OCR processors.
-        
-        This method creates a metadata dictionary containing routing information
-        for downstream OCR processors, including document type, confidence scores,
-        processing hints, and routing decisions.
+        Determine the content type (typed, handwritten, mixed) for the document.
         
         Args:
-            document: The document being routed
-            classification_result: The classification result
-            ocr_processor: The selected OCR processor
-            ocr_strategy: The selected OCR strategy
-            needs_human_review: Whether human review is needed
-            doc_characteristics: Document characteristics
+            document_type: Type of document as determined by classification
+            document_metadata: Metadata about the document
             
         Returns:
-            Routing metadata dictionary
+            Content type string ('typed', 'handwritten', or 'mixed')
         """
-        # Create base metadata
-        metadata = {
-            "document_id": document.id,
-            "routing_timestamp": get_current_timestamp(),
-            "routing_service_version": "1.0.0",
-            "routing_decisions": {
-                "ocr_processor": ocr_processor,
-                "ocr_strategy": ocr_strategy,
-                "needs_human_review": needs_human_review,
-                "priority": "high" if needs_human_review else "normal"
-            },
-            "document_metadata": {
-                "document_type": classification_result.document_type.name if classification_result.document_type else "UNKNOWN",
-                "document_characteristics": doc_characteristics,
-                "page_count": getattr(document, 'page_count', 1),
-                "file_size": getattr(document, 'file_size', 0),
-                "mime_type": getattr(document, 'mime_type', "application/pdf")
-            },
-            "classification_metadata": {
-                "confidence": classification_result.confidence,
-                "classification_model": getattr(classification_result, 'model_name', "unknown"),
-                "classification_version": getattr(classification_result, 'model_version', "unknown"),
-                "alternative_types": self._get_alternative_types(classification_result)
-            }
+        # Check if document metadata contains content type information
+        if 'content_type' in document_metadata:
+            content_type = document_metadata['content_type']
+            if content_type in ['typed', 'handwritten', 'mixed']:
+                return content_type
+        
+        # Use default mapping based on document type
+        return self.DOCUMENT_CONTENT_TYPES.get(document_type, 'mixed')
+    
+    def _create_routing_metadata(self,
+                               document_id: str,
+                               document_type: str,
+                               ocr_processor: str,
+                               confidence_score: ConfidenceScore,
+                               review_required: bool,
+                               processing_priority: str,
+                               content_type: str,
+                               document_metadata: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Create routing metadata for downstream OCR processing.
+        
+        Args:
+            document_id: Unique identifier for the document
+            document_type: Type of document as determined by classification
+            ocr_processor: Selected OCR processor
+            confidence_score: Confidence score of the classification
+            review_required: Whether human review is required
+            processing_priority: Priority level for processing
+            content_type: Content type (typed, handwritten, mixed)
+            document_metadata: Original document metadata
+            
+        Returns:
+            Dictionary containing routing metadata
+        """
+        # Extract relevant fields from document metadata
+        file_type = document_metadata.get('file_type', 'unknown')
+        file_size = document_metadata.get('file_size', 0)
+        page_count = document_metadata.get('page_count', 1)
+        source = document_metadata.get('source', 'unknown')
+        
+        # Create routing metadata
+        routing_metadata = {
+            'document_id': document_id,
+            'routing_id': f"route_{document_id}_{int(time.time())}",
+            'document_type': document_type,
+            'ocr_processor': ocr_processor,
+            'classification_confidence': confidence_score.value,
+            'review_required': review_required,
+            'processing_priority': processing_priority,
+            'content_type': content_type,
+            'file_type': file_type,
+            'file_size': file_size,
+            'page_count': page_count,
+            'source': source,
+            'routing_timestamp': int(time.time()),
+            'routing_version': '1.0',
+            'special_instructions': self._generate_special_instructions(
+                document_type, confidence_score, content_type
+            )
         }
         
-        # Add processing hints based on document type
-        metadata["processing_hints"] = self._generate_processing_hints(
-            document_type=classification_result.document_type,
-            doc_characteristics=doc_characteristics,
-            confidence=classification_result.confidence
+        return routing_metadata
+    
+    def _create_fallback_routing_metadata(self,
+                                        document_id: str,
+                                        document_metadata: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Create fallback routing metadata for error cases.
+        
+        Args:
+            document_id: Unique identifier for the document
+            document_metadata: Original document metadata
+            
+        Returns:
+            Dictionary containing fallback routing metadata
+        """
+        # Extract relevant fields from document metadata
+        file_type = document_metadata.get('file_type', 'unknown')
+        file_size = document_metadata.get('file_size', 0)
+        page_count = document_metadata.get('page_count', 1)
+        source = document_metadata.get('source', 'unknown')
+        
+        # Create fallback routing metadata
+        fallback_metadata = {
+            'document_id': document_id,
+            'routing_id': f"fallback_{document_id}_{int(time.time())}",
+            'document_type': 'unknown',
+            'ocr_processor': 'general_ocr',
+            'classification_confidence': 0.0,
+            'review_required': True,
+            'processing_priority': 'low',
+            'content_type': 'mixed',
+            'file_type': file_type,
+            'file_size': file_size,
+            'page_count': page_count,
+            'source': source,
+            'routing_timestamp': int(time.time()),
+            'routing_version': '1.0',
+            'special_instructions': 'FALLBACK_ROUTING: Document classification failed. '
+                                   'Manual review required.'
+        }
+        
+        return fallback_metadata
+    
+    def _generate_special_instructions(self,
+                                     document_type: str,
+                                     confidence_score: ConfidenceScore,
+                                     content_type: str) -> str:
+        """
+        Generate special instructions for OCR processing based on document characteristics.
+        
+        Args:
+            document_type: Type of document
+            confidence_score: Confidence score of the classification
+            content_type: Content type (typed, handwritten, mixed)
+            
+        Returns:
+            String containing special instructions
+        """
+        instructions = []
+        
+        # Add instructions based on confidence score
+        if confidence_score.value < self.low_confidence_threshold:
+            instructions.append("LOW_CONFIDENCE: Classification uncertain. Verify document type.")
+        
+        # Add instructions based on content type
+        if content_type == 'handwritten':
+            instructions.append("HANDWRITTEN: Use handwriting recognition models.")
+        elif content_type == 'mixed':
+            instructions.append("MIXED_CONTENT: Use hybrid OCR approach.")
+        
+        # Add document-specific instructions
+        if document_type == 'loan_application':
+            instructions.append("FORM_EXTRACTION: Extract form fields with labels.")
+        elif document_type == 'tax_return':
+            instructions.append("TABLE_EXTRACTION: Focus on financial tables and totals.")
+        elif document_type == 'identity_document':
+            instructions.append("ID_VERIFICATION: Extract and verify identity fields.")
+        
+        return ' '.join(instructions) if instructions else ''
+    
+    def _update_routing_metrics(self, confidence_score: ConfidenceScore, start_time: float) -> None:
+        """
+        Update routing metrics for monitoring and optimization.
+        
+        Args:
+            confidence_score: Confidence score of the classification
+            start_time: Start time of the routing operation
+        """
+        # Calculate routing time in milliseconds
+        routing_time_ms = (time.time() - start_time) * 1000
+        
+        # Update total metrics
+        self.routing_metrics['total_routed'] += 1
+        self.routing_metrics['total_routing_time_ms'] += routing_time_ms
+        self.routing_metrics['avg_routing_time_ms'] = (
+            self.routing_metrics['total_routing_time_ms'] / self.routing_metrics['total_routed']
         )
         
-        return metadata
+        # Update confidence-based metrics
+        if confidence_score.value >= self.high_confidence_threshold:
+            self.routing_metrics['high_confidence_routes'] += 1
+        elif confidence_score.value >= self.medium_confidence_threshold:
+            self.routing_metrics['medium_confidence_routes'] += 1
+        elif confidence_score.value >= self.low_confidence_threshold:
+            self.routing_metrics['low_confidence_routes'] += 1
+        else:
+            self.routing_metrics['fallback_routes'] += 1
     
-    def _get_alternative_types(self, classification_result: ClassificationResult) -> List[Dict[str, Any]]:
+    def get_routing_metrics(self) -> Dict[str, Any]:
         """
-        Get alternative document types for borderline classifications.
+        Get current routing metrics for monitoring and optimization.
         
-        For low-confidence classifications, this method extracts alternative
-        document types from the classification result to help OCR processors
-        handle borderline cases.
+        Returns:
+            Dictionary containing routing metrics
+        """
+        return self.routing_metrics
+    
+    def get_ocr_processor_for_document_type(self, document_type: str) -> str:
+        """
+        Get the default OCR processor for a given document type.
         
         Args:
-            classification_result: The classification result
+            document_type: Type of document
             
         Returns:
-            List of alternative document types with confidence scores
+            OCR processor name
         """
-        alternatives = []
-        
-        # Check if alternative_types is available in classification_result
-        if hasattr(classification_result, 'alternative_types') and classification_result.alternative_types:
-            for alt_type, alt_confidence in classification_result.alternative_types.items():
-                alternatives.append({
-                    "type": alt_type.name if isinstance(alt_type, DocumentType) else str(alt_type),
-                    "confidence": alt_confidence
-                })
-        
-        return alternatives
+        return self.DOCUMENT_TYPE_PROCESSORS.get(document_type, 'general_ocr')
     
-    def _generate_processing_hints(self, document_type: DocumentType, 
-                                 doc_characteristics: str, confidence: float) -> Dict[str, Any]:
+    def get_content_type_for_document_type(self, document_type: str) -> str:
         """
-        Generate processing hints for OCR processors based on document type and characteristics.
-        
-        This method creates processing hints that help OCR processors optimize their
-        extraction strategies for specific document types and characteristics.
+        Get the default content type for a given document type.
         
         Args:
-            document_type: The document type
-            doc_characteristics: Document characteristics
-            confidence: Classification confidence
+            document_type: Type of document
             
         Returns:
-            Dictionary of processing hints
+            Content type (typed, handwritten, mixed)
         """
-        # Base processing hints
-        hints = {
-            "expected_content_type": doc_characteristics,
-            "confidence_level": "high" if confidence >= 0.9 else "medium" if confidence >= 0.75 else "low"
-        }
-        
-        # Add document type-specific hints
-        if document_type == DocumentType.APPLICATION:
-            hints.update({
-                "form_detection": True,
-                "signature_detection": True,
-                "table_detection": True,
-                "expected_fields": [
-                    "applicant_name", "business_name", "address", "phone", "email",
-                    "tax_id", "requested_amount", "business_type", "signature"
-                ]
-            })
-        elif document_type == DocumentType.TAX_RETURN:
-            hints.update({
-                "form_detection": True,
-                "table_detection": True,
-                "expected_fields": [
-                    "taxpayer_name", "tax_id", "tax_year", "income", "deductions",
-                    "tax_due", "filing_status"
-                ]
-            })
-        elif document_type == DocumentType.BANK_STATEMENT:
-            hints.update({
-                "table_detection": True,
-                "expected_fields": [
-                    "account_holder", "account_number", "bank_name", "statement_period",
-                    "opening_balance", "closing_balance", "transactions"
-                ]
-            })
-        elif document_type == DocumentType.PAY_STUB:
-            hints.update({
-                "table_detection": True,
-                "expected_fields": [
-                    "employee_name", "employer_name", "pay_period", "gross_pay",
-                    "net_pay", "deductions", "year_to_date"
-                ]
-            })
-        elif document_type == DocumentType.ID_DOCUMENT:
-            hints.update({
-                "id_detection": True,
-                "expected_fields": [
-                    "full_name", "id_number", "date_of_birth", "issue_date",
-                    "expiration_date", "address"
-                ]
-            })
-        else:  # DocumentType.OTHER or unknown
-            hints.update({
-                "form_detection": True,
-                "table_detection": True,
-                "general_text_extraction": True
-            })
-        
-        return hints
-    
-    def _update_document_metadata(self, document: Document, routing_metadata: Dict[str, Any]) -> None:
-        """
-        Update document metadata in storage with routing information.
-        
-        This method updates the document metadata in S3 storage with routing
-        information for tracking and audit purposes.
-        
-        Args:
-            document: The document being routed
-            routing_metadata: The routing metadata
-        """
-        try:
-            # Create metadata update with routing information
-            metadata_update = {
-                "routing_info": {
-                    "timestamp": routing_metadata["routing_timestamp"],
-                    "ocr_processor": routing_metadata["routing_decisions"]["ocr_processor"],
-                    "ocr_strategy": routing_metadata["routing_decisions"]["ocr_strategy"],
-                    "needs_human_review": routing_metadata["routing_decisions"]["needs_human_review"]
-                },
-                "processing_status": ProcessingStatus.ROUTING_COMPLETE.name
-            }
-            
-            # Update document metadata in storage
-            self.storage_service.update_document_metadata(document.id, metadata_update)
-            
-            self.logger.debug(f"Updated document {document.id} metadata with routing information")
-        except Exception as e:
-            self.logger.warning(f"Failed to update document {document.id} metadata: {str(e)}")
-    
-    def _publish_routing_message(self, document: Document, routing_metadata: Dict[str, Any]) -> None:
-        """
-        Publish routing message to OCR service via RabbitMQ.
-        
-        This method creates and publishes a message to the OCR service with
-        routing information and document details.
-        
-        Args:
-            document: The document being routed
-            routing_metadata: The routing metadata
-        """
-        try:
-            # Create message payload
-            payload = {
-                "document_id": document.id,
-                "storage_path": getattr(document, 'storage_path', None),
-                "routing_metadata": routing_metadata,
-                "timestamp": get_current_timestamp()
-            }
-            
-            # Create message headers
-            headers = {
-                "document_type": routing_metadata["document_metadata"]["document_type"],
-                "ocr_processor": routing_metadata["routing_decisions"]["ocr_processor"],
-                "ocr_strategy": routing_metadata["routing_decisions"]["ocr_strategy"],
-                "priority": routing_metadata["routing_decisions"]["priority"]
-            }
-            
-            # Determine routing key based on document type and processor
-            routing_key = f"ocr.{routing_metadata['routing_decisions']['ocr_processor']}"
-            
-            # Publish message to OCR service
-            self.queue_service.publish_message(
-                exchange="mca.documents",
-                routing_key=routing_key,
-                payload=payload,
-                headers=headers
-            )
-            
-            self.logger.info(f"Published routing message for document {document.id} to OCR service")
-        except Exception as e:
-            self.logger.error(f"Failed to publish routing message for document {document.id}: {str(e)}")
+        return self.DOCUMENT_CONTENT_TYPES.get(document_type, 'mixed')
