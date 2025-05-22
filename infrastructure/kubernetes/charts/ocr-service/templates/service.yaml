@@ -1,0 +1,30 @@
+{{- /*
+service.yaml: Kubernetes Service template for OCR Service
+
+This template extends the common service template with OCR Service specific configurations.
+It defines the service ports, selector labels, and annotations for the OCR Service.
+
+The OCR Service exposes HTTP endpoints for health checks and metrics, and is accessible
+within the Kubernetes cluster through ClusterIP type.
+*/}}
+
+{{- $serviceValues := dict "enabled" true "type" "ClusterIP" -}}
+
+{{- $ports := list -}}
+{{- $httpPort := dict "name" "http" "port" 8080 "targetPort" 8080 "protocol" "TCP" -}}
+{{- $metricsPort := dict "name" "metrics" "port" 9090 "targetPort" 9090 "protocol" "TCP" -}}
+{{- $ports = append $ports $httpPort -}}
+{{- $ports = append $ports $metricsPort -}}
+
+{{- $_ := set $serviceValues "ports" $ports -}}
+
+{{- $annotations := dict -}}
+{{- $_ := set $annotations "prometheus.io/scrape" "true" -}}
+{{- $_ := set $annotations "prometheus.io/port" "9090" -}}
+{{- $_ := set $annotations "prometheus.io/path" "/metrics" -}}
+
+{{- $_ := set $serviceValues "annotations" $annotations -}}
+
+{{- $_ := set .Values "service" (merge .Values.service $serviceValues) -}}
+
+{{- include "common.templates.service" . -}}
