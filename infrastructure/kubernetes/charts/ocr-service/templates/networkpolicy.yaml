@@ -1,0 +1,89 @@
+{{- /*
+networkpolicy.yaml for OCR Service
+
+This NetworkPolicy template extends the common networkpolicy template with OCR Service-specific
+network rules. It defines the ingress and egress policies for the OCR Service, including
+communication with RabbitMQ, S3 storage, and other required connections.
+
+This template implements the security requirements specified in the MCA Application
+Processing System technical specification, ensuring proper network isolation and security
+for the OCR Service while allowing necessary communication paths.
+*/}}
+
+{{- $fullName := include "common.fullname" . }}
+
+# Define OCR Service-specific network policy values
+{{- $networkPolicy := dict }}
+{{- $_ := set $networkPolicy "enabled" (default true .Values.networkPolicy.enabled) }}
+{{- $_ := set $networkPolicy "podSelector" (dict "matchLabels" (dict "app.kubernetes.io/name" "ocr-service")) }}
+{{- $_ := set $networkPolicy "policyTypes" (list "Ingress" "Egress") }}
+
+# Define ingress rules for OCR Service
+{{- $ingress := list }}
+
+# Allow incoming traffic from RabbitMQ for message consumption
+{{- $rabbitmqIngress := dict "from" (list (dict "namespaceSelector" (dict "matchLabels" (dict "app.kubernetes.io/name" "rabbitmq")) "podSelector" (dict "matchLabels" (dict "app.kubernetes.io/name" "rabbitmq")))) "ports" (list (dict "protocol" "TCP" "port" 5000)) }}
+{{- $ingress = append $ingress $rabbitmqIngress }}
+
+# Allow incoming traffic from Document Service for direct API calls if needed
+{{- $docServiceIngress := dict "from" (list (dict "namespaceSelector" (dict "matchLabels" (dict "app.kubernetes.io/name" "document-service")) "podSelector" (dict "matchLabels" (dict "app.kubernetes.io/name" "document-service")))) "ports" (list (dict "protocol" "TCP" "port" 5000)) }}
+{{- $ingress = append $ingress $docServiceIngress }}
+
+# Allow Prometheus to scrape metrics endpoint
+{{- $prometheusIngress := dict "from" (list (dict "namespaceSelector" (dict "matchLabels" (dict "app.kubernetes.io/name" "monitoring")) "podSelector" (dict "matchLabels" (dict "app.kubernetes.io/name" "prometheus")))) "ports" (list (dict "protocol" "TCP" "port" 9090)) }}
+{{- $ingress = append $ingress $prometheusIngress }}
+
+# Set ingress rules
+{{- $_ := set $networkPolicy "ingress" $ingress }}
+
+# Define egress rules for OCR Service
+{{- $egress := list }}
+
+# Allow outgoing traffic to RabbitMQ for message publishing
+{{- $rabbitmqEgress := dict "to" (list (dict "namespaceSelector" (dict "matchLabels" (dict "app.kubernetes.io/name" "rabbitmq")) "podSelector" (dict "matchLabels" (dict "app.kubernetes.io/name" "rabbitmq")))) "ports" (list (dict "protocol" "TCP" "port" 5672)) }}
+{{- $egress = append $egress $rabbitmqEgress }}
+
+# Allow outgoing traffic to S3 storage for document access
+{{- $s3Egress := dict "to" (list (dict "namespaceSelector" (dict "matchLabels" (dict "app.kubernetes.io/name" "storage")) "podSelector" (dict "matchLabels" (dict "app.kubernetes.io/name" "s3-storage")))) "ports" (list (dict "protocol" "TCP" "port" 443) (dict "protocol" "TCP" "port" 80)) }}
+{{- $egress = append $egress $s3Egress }}
+
+# Allow DNS resolution (required for service discovery)
+{{- $dnsEgress := dict "to" (list (dict "namespaceSelector" (dict "matchLabels" (dict "kubernetes.io/metadata.name" "kube-system")) "podSelector" (dict "matchLabels" (dict "k8s-app" "kube-dns")))) "ports" (list (dict "protocol" "UDP" "port" 53) (dict "protocol" "TCP" "port" 53)) }}
+{{- $egress = append $egress $dnsEgress }}
+
+# Set egress rules
+{{- $_ := set $networkPolicy "egress" $egress }}
+
+# Define allowed services for explicit service communication
+{{- $allowedServices := list }}
+
+# Allow communication with RabbitMQ
+{{- $rabbitmqService := dict "namespaceSelector" (dict "matchLabels" (dict "app.kubernetes.io/name" "rabbitmq")) "podSelector" (dict "matchLabels" (dict "app.kubernetes.io/name" "rabbitmq")) "ports" (list (dict "protocol" "TCP" "port" 5672)) }}
+{{- $allowedServices = append $allowedServices $rabbitmqService }}
+
+# Allow communication with S3 storage
+{{- $s3Service := dict "namespaceSelector" (dict "matchLabels" (dict "app.kubernetes.io/name" "storage")) "podSelector" (dict "matchLabels" (dict "app.kubernetes.io/name" "s3-storage")) "ports" (list (dict "protocol" "TCP" "port" 443) (dict "protocol" "TCP" "port" 80)) }}
+{{- $allowedServices = append $allowedServices $s3Service }}
+
+# Allow communication with Document Service
+{{- $docService := dict "namespaceSelector" (dict "matchLabels" (dict "app.kubernetes.io/name" "document-service")) "podSelector" (dict "matchLabels" (dict "app.kubernetes.io/name" "document-service")) "ports" (list (dict "protocol" "TCP" "port" 5000)) }}
+{{- $allowedServices = append $allowedServices $docService }}
+
+# Allow communication with Data Service
+{{- $dataService := dict "namespaceSelector" (dict "matchLabels" (dict "app.kubernetes.io/name" "data-service")) "podSelector" (dict "matchLabels" (dict "app.kubernetes.io/name" "data-service")) "ports" (list (dict "protocol" "TCP" "port" 8080)) }}
+{{- $allowedServices = append $allowedServices $dataService }}
+
+# Set allowed services
+{{- $_ := set $networkPolicy "allowedServices" $allowedServices }}
+
+# Set namespace isolation to true to enforce namespace segregation
+{{- $_ := set $networkPolicy "namespaceIsolation" true }}
+
+# Set default deny to true to enforce strict network policies
+{{- $_ := set $networkPolicy "defaultDeny" true }}
+
+# Override the network policy values in the parent chart
+{{- $_ := set .Values "networkPolicy" $networkPolicy }}
+
+# Include the common networkpolicy template
+{{- include "common.networkpolicy" . }}
