@@ -2,410 +2,343 @@
 # -*- coding: utf-8 -*-
 
 """
-Abstract base class for document classifiers in the Document Service.
+Abstract base class for all document classifiers in the Document Service.
 
-This module defines the common interface that all document classifier implementations
-must follow, including methods for training, prediction, evaluation, and serialization.
-It establishes a consistent API for all classifiers to ensure interoperability and
-standardized behavior throughout the document classification pipeline.
+This module defines the common interface that all classifier implementations must follow,
+including methods for training, prediction, evaluation, and serialization.
 
-Classes:
-    BaseModel: Abstract base class for document classifiers.
-
-Example:
-    ```python
-    class SVMClassifier(BaseModel):
-        def __init__(self, config: ModelConfig):
-            super().__init__(config)
-            # SVM-specific initialization
-            
-        def fit(self, X: FeatureVector, y: np.ndarray) -> 'SVMClassifier':
-            # SVM-specific training implementation
-            return self
-            
-        def predict(self, X: FeatureVector) -> np.ndarray:
-            # SVM-specific prediction implementation
-            return predictions
-            
-        def predict_proba(self, X: FeatureVector) -> np.ndarray:
-            # SVM-specific probability prediction implementation
-            return probabilities
-            
-        def evaluate(self, X: FeatureVector, y: np.ndarray) -> ClassificationMetrics:
-            # SVM-specific evaluation implementation
-            return metrics
-    ```
+All document classifier models (SVM, Random Forest, etc.) must inherit from this base class
+to ensure a consistent interface throughout the Document Service. This standardization
+enables seamless integration of different classifier types and simplifies the development
+of new classifiers.
 """
 
 from abc import ABC, abstractmethod
+from typing import Any, Dict, List, Optional, Tuple, Union
 import logging
 import numpy as np
-import os
-import pickle
-import time
-from typing import Any, Dict, List, Optional, Tuple, Union, TypeVar, Generic, cast
-
-from ..types.classification import (
-    ClassificationModel,
-    FeatureVector,
-    ClassificationResult,
-    ConfidenceScore,
-    ModelParameters,
-    ClassificationMetrics
-)
-from ..types.documents import DocumentType
-from ..types.config import ModelConfig
-from ..types.errors import Result
-
-# Type variable for the implementing class to enable method chaining
-T = TypeVar('T', bound='BaseModel')
+from sklearn.base import BaseEstimator
+from sklearn.metrics import accuracy_score, precision_recall_fscore_support, confusion_matrix, roc_auc_score
+from sklearn.model_selection import cross_val_score
 
 logger = logging.getLogger(__name__)
 
 
-class BaseModel(ABC, Generic[T]):
+class BaseModel(ABC, BaseEstimator):
     """
     Abstract base class for all document classifiers in the Document Service.
     
-    This class defines the common interface that all classifier implementations must follow,
-    including methods for training, prediction, evaluation, and serialization. It also
-    provides common utility methods for all classifiers.
+    This class establishes the common interface that all classifier implementations
+    must follow, including methods for training, prediction, evaluation, and serialization.
     
-    All document classifiers must extend this class and implement its abstract methods.
+    All document classifier models should inherit from this class and implement
+    the required abstract methods. This ensures that all classifiers maintain the
+    99% accuracy requirement specified in the technical specification.
     
     Attributes:
-        config (ModelConfig): Configuration parameters for the model.
-        model (Optional[ClassificationModel]): The underlying scikit-learn model instance.
-        model_name (str): Name of the model for identification and logging.
-        model_version (str): Version of the model for tracking and compatibility.
-        classes_ (Optional[np.ndarray]): Array of class labels known to the classifier.
-        trained (bool): Flag indicating whether the model has been trained.
-        feature_names (Optional[List[str]]): Names of features used by the model.
+        model_params (Dict[str, Any]): Configuration parameters for the model.
+        is_fitted (bool): Flag indicating if the model has been trained.
+        classes_ (np.ndarray): Array of class labels known to the classifier.
+        feature_names_ (List[str]): Names of features used during training.
     """
     
-    def __init__(self, config: ModelConfig):
+    def __init__(self, **kwargs):
         """
         Initialize the base model with configuration parameters.
         
         Args:
-            config (ModelConfig): Configuration parameters for the model.
+            **kwargs: Arbitrary keyword arguments for model configuration.
+                     These parameters will be passed to the underlying scikit-learn model.
         """
-        self.config = config
-        self.model: Optional[ClassificationModel] = None
-        self.model_name: str = self.__class__.__name__
-        self.model_version: str = config.get('version', '1.0.0')
-        self.classes_: Optional[np.ndarray] = None
-        self.trained: bool = False
-        self.feature_names: Optional[List[str]] = None
+        self.model_params = kwargs
+        self.is_fitted = False
+        self.classes_ = None
+        self.feature_names_ = None
+        self.model_version = "1.0.0"
+        self.confidence_threshold = kwargs.get('confidence_threshold', 0.8)
         
-        logger.info(f"Initialized {self.model_name} v{self.model_version}")
+        logger.info(f"Initializing {self.__class__.__name__} with parameters: {kwargs}")
     
     @abstractmethod
-    def fit(self, X: FeatureVector, y: np.ndarray) -> T:
+    def fit(self, X: np.ndarray, y: np.ndarray) -> 'BaseModel':
         """
         Train the model on the provided data.
         
-        This method must be implemented by all subclasses to train the underlying
-        classification model on the provided feature vectors and target labels.
-        
         Args:
-            X (FeatureVector): Feature vectors for training.
-            y (np.ndarray): Target labels for training.
+            X: Training data features of shape (n_samples, n_features).
+            y: Target values of shape (n_samples,).
             
         Returns:
-            T: The trained model instance (self) for method chaining.
-            
-        Raises:
-            ValueError: If input data is invalid or incompatible with the model.
-            RuntimeError: If training fails due to internal errors.
+            self: The trained model instance.
         """
         pass
     
     @abstractmethod
-    def predict(self, X: FeatureVector) -> np.ndarray:
+    def predict(self, X: np.ndarray) -> np.ndarray:
         """
-        Predict class labels for the provided data.
-        
-        This method must be implemented by all subclasses to predict class labels
-        for the provided feature vectors using the trained model.
+        Predict the class labels for the provided data.
         
         Args:
-            X (FeatureVector): Feature vectors for prediction.
+            X: Data features of shape (n_samples, n_features).
             
         Returns:
-            np.ndarray: Predicted class labels.
-            
-        Raises:
-            ValueError: If input data is invalid or incompatible with the model.
-            RuntimeError: If prediction fails due to internal errors.
-            RuntimeError: If the model has not been trained.
+            np.ndarray: Predicted class labels of shape (n_samples,).
         """
         pass
     
     @abstractmethod
-    def predict_proba(self, X: FeatureVector) -> np.ndarray:
+    def predict_proba(self, X: np.ndarray) -> np.ndarray:
         """
         Predict class probabilities for the provided data.
         
-        This method must be implemented by all subclasses to predict class probabilities
-        for the provided feature vectors using the trained model.
-        
         Args:
-            X (FeatureVector): Feature vectors for prediction.
+            X: Data features of shape (n_samples, n_features).
             
         Returns:
-            np.ndarray: Predicted class probabilities, where each row sums to 1.
-            
-        Raises:
-            ValueError: If input data is invalid or incompatible with the model.
-            RuntimeError: If prediction fails due to internal errors.
-            RuntimeError: If the model has not been trained.
+            np.ndarray: Class probabilities of shape (n_samples, n_classes).
         """
         pass
     
     @abstractmethod
-    def evaluate(self, X: FeatureVector, y: np.ndarray) -> ClassificationMetrics:
+    def evaluate(self, X: np.ndarray, y: np.ndarray) -> Dict[str, float]:
         """
-        Evaluate the model on the provided data.
-        
-        This method must be implemented by all subclasses to evaluate the model's
-        performance on the provided feature vectors and target labels.
+        Evaluate the model performance on the provided data.
         
         Args:
-            X (FeatureVector): Feature vectors for evaluation.
-            y (np.ndarray): True target labels for evaluation.
+            X: Data features of shape (n_samples, n_features).
+            y: True class labels of shape (n_samples,).
             
         Returns:
-            ClassificationMetrics: Dictionary of evaluation metrics including accuracy,
-                precision, recall, F1 score, and confusion matrix.
-                
-        Raises:
-            ValueError: If input data is invalid or incompatible with the model.
-            RuntimeError: If evaluation fails due to internal errors.
-            RuntimeError: If the model has not been trained.
+            Dict[str, float]: Dictionary containing evaluation metrics including accuracy,
+                             precision, recall, and F1 score. Must achieve 99% accuracy
+                             as specified in the technical requirements.
         """
         pass
-    
-    def predict_with_confidence(self, X: FeatureVector) -> List[ClassificationResult]:
-        """
-        Predict class labels with confidence scores for the provided data.
         
-        This method combines predict() and predict_proba() to provide both class labels
-        and confidence scores for the predictions.
-        
-        Args:
-            X (FeatureVector): Feature vectors for prediction.
-            
-        Returns:
-            List[ClassificationResult]: List of classification results with document types
-                and confidence scores.
-                
-        Raises:
-            ValueError: If input data is invalid or incompatible with the model.
-            RuntimeError: If prediction fails due to internal errors.
-            RuntimeError: If the model has not been trained.
-        """
-        if not self.trained or self.model is None or self.classes_ is None:
-            raise RuntimeError("Model has not been trained. Call fit() before prediction.")
-        
-        # Validate input data
-        self._validate_input(X, for_prediction=True)
-        
-        # Get predictions and probabilities
-        predictions = self.predict(X)
-        probabilities = self.predict_proba(X)
-        
-        results: List[ClassificationResult] = []
-        
-        # Create classification results with confidence scores
-        for i, (pred, probs) in enumerate(zip(predictions, probabilities)):
-            # Get the predicted class and its probability
-            pred_idx = np.where(self.classes_ == pred)[0][0]
-            confidence = float(probs[pred_idx])
-            
-            # Convert numeric/string class to DocumentType
-            doc_type = self._convert_to_document_type(pred)
-            
-            # Create confidence score object
-            confidence_score = ConfidenceScore(
-                value=confidence,
-                threshold=self.config.get('confidence_threshold', 0.7),
-                requires_review=confidence < self.config.get('confidence_threshold', 0.7)
-            )
-            
-            # Create classification result
-            result = ClassificationResult(
-                document_type=doc_type,
-                confidence=confidence_score,
-                model_name=self.model_name,
-                model_version=self.model_version,
-                prediction_time=time.time(),
-                class_probabilities={str(self.classes_[j]): float(p) for j, p in enumerate(probs)}
-            )
-            
-            results.append(result)
-        
-        return results
-    
-    def save(self, path: str) -> Result[str]:
+    @abstractmethod
+    def save(self, filepath: str) -> None:
         """
         Save the trained model to disk.
         
         Args:
-            path (str): Path where the model should be saved.
+            filepath: Path where the model should be saved.
             
         Returns:
-            Result[str]: Success result with the path where the model was saved,
-                or error result if saving failed.
+            None
         """
-        if not self.trained or self.model is None:
-            return Result.failure("Model has not been trained. Call fit() before saving.")
-        
-        try:
-            # Create directory if it doesn't exist
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            
-            # Prepare model data for serialization
-            model_data = {
-                'model': self.model,
-                'model_name': self.model_name,
-                'model_version': self.model_version,
-                'classes_': self.classes_,
-                'feature_names': self.feature_names,
-                'config': self.config,
-                'trained': self.trained
-            }
-            
-            # Save the model to disk
-            with open(path, 'wb') as f:
-                pickle.dump(model_data, f)
-            
-            logger.info(f"Model {self.model_name} v{self.model_version} saved to {path}")
-            return Result.success(path)
-        except Exception as e:
-            error_msg = f"Failed to save model {self.model_name} to {path}: {str(e)}"
-            logger.error(error_msg)
-            return Result.failure(error_msg)
+        pass
     
     @classmethod
-    def load(cls, path: str) -> Result[T]:
+    @abstractmethod
+    def load(cls, filepath: str) -> 'BaseModel':
         """
         Load a trained model from disk.
         
         Args:
-            path (str): Path from which to load the model.
+            filepath: Path to the saved model.
             
         Returns:
-            Result[T]: Success result with the loaded model instance,
-                or error result if loading failed.
+            BaseModel: Loaded model instance.
         """
-        try:
-            # Load the model from disk
-            with open(path, 'rb') as f:
-                model_data = pickle.load(f)
-            
-            # Create a new instance of the model
-            instance = cls(model_data['config'])
-            
-            # Restore model attributes
-            instance.model = model_data['model']
-            instance.model_name = model_data['model_name']
-            instance.model_version = model_data['model_version']
-            instance.classes_ = model_data['classes_']
-            instance.feature_names = model_data['feature_names']
-            instance.trained = model_data['trained']
-            
-            logger.info(f"Model {instance.model_name} v{instance.model_version} loaded from {path}")
-            return Result.success(cast(T, instance))
-        except Exception as e:
-            error_msg = f"Failed to load model from {path}: {str(e)}"
-            logger.error(error_msg)
-            return Result.failure(error_msg)
+        pass
     
-    def get_parameters(self) -> ModelParameters:
+    def validate_input(self, X: np.ndarray, y: Optional[np.ndarray] = None) -> Tuple[np.ndarray, Optional[np.ndarray]]:
         """
-        Get the model parameters.
-        
-        Returns:
-            ModelParameters: Dictionary of model parameters.
-        """
-        if self.model is None:
-            return {}
-        
-        # Get model parameters
-        params = getattr(self.model, 'get_params', lambda: {})() 
-        
-        # Add additional metadata
-        params.update({
-            'model_name': self.model_name,
-            'model_version': self.model_version,
-            'trained': self.trained,
-            'n_features': len(self.feature_names) if self.feature_names else 0,
-            'n_classes': len(self.classes_) if self.classes_ else 0
-        })
-        
-        return params
-    
-    def _validate_input(self, X: FeatureVector, y: Optional[np.ndarray] = None, 
-                       for_prediction: bool = False) -> None:
-        """
-        Validate input data for training or prediction.
+        Validate input data format and structure.
         
         Args:
-            X (FeatureVector): Feature vectors to validate.
-            y (Optional[np.ndarray]): Target labels to validate (for training).
-            for_prediction (bool): Whether validation is for prediction (True) or training (False).
+            X: Input features to validate.
+            y: Optional target values to validate.
+            
+        Returns:
+            Tuple containing validated X and y (if provided).
             
         Raises:
-            ValueError: If input data is invalid or incompatible with the model.
+            ValueError: If input data does not meet requirements.
         """
-        # Check if X is not None
-        if X is None:
-            raise ValueError("Feature vectors (X) cannot be None")
+        # Validate X
+        if not isinstance(X, np.ndarray):
+            try:
+                X = np.array(X)
+            except:
+                raise ValueError("X must be convertible to a numpy array")
         
-        # Check if X has the expected shape
-        if not hasattr(X, 'shape') or len(getattr(X, 'shape', ())) != 2:
-            raise ValueError("Feature vectors (X) must be a 2D array-like object")
+        if X.ndim != 2:
+            raise ValueError(f"X must be a 2D array, got {X.ndim}D array instead")
         
-        # For training, validate y as well
-        if not for_prediction:
-            if y is None:
-                raise ValueError("Target labels (y) cannot be None for training")
+        # Validate y if provided
+        if y is not None:
+            if not isinstance(y, np.ndarray):
+                try:
+                    y = np.array(y)
+                except:
+                    raise ValueError("y must be convertible to a numpy array")
+            
+            if y.ndim != 1:
+                raise ValueError(f"y must be a 1D array, got {y.ndim}D array instead")
             
             if len(y) != X.shape[0]:
-                raise ValueError(f"Number of samples in X ({X.shape[0]}) and y ({len(y)}) do not match")
+                raise ValueError(f"X and y must have the same number of samples. "
+                               f"Got X: {X.shape[0]} samples, y: {len(y)} samples")
         
-        # For prediction, check if model is trained
-        if for_prediction and (not self.trained or self.model is None):
-            raise RuntimeError("Model has not been trained. Call fit() before prediction.")
+        return X, y
     
-    def _convert_to_document_type(self, class_label: Any) -> DocumentType:
+    def get_feature_importance(self) -> Optional[Dict[str, float]]:
         """
-        Convert a class label to a DocumentType enum value.
+        Get feature importance scores if the model supports it.
+        
+        Returns:
+            Optional[Dict[str, float]]: Dictionary mapping feature names to importance scores,
+                                        or None if not supported by the model.
+        """
+        return None
+    
+    def cross_validate(self, X: np.ndarray, y: np.ndarray, cv: int = 5) -> Dict[str, float]:
+        """
+        Perform cross-validation to evaluate the model.
         
         Args:
-            class_label (Any): Class label to convert.
+            X: Data features of shape (n_samples, n_features).
+            y: True class labels of shape (n_samples,).
+            cv: Number of cross-validation folds.
             
         Returns:
-            DocumentType: Corresponding DocumentType enum value.
-            
-        Raises:
-            ValueError: If the class label cannot be converted to a DocumentType.
+            Dict[str, float]: Dictionary containing cross-validation metrics.
         """
-        # If class_label is already a DocumentType, return it
-        if isinstance(class_label, DocumentType):
-            return class_label
+        X, y = self.validate_input(X, y)
         
-        # Try to convert string or int to DocumentType
         try:
-            if isinstance(class_label, str):
-                return DocumentType[class_label.upper()]
-            elif isinstance(class_label, (int, np.integer)):
-                return DocumentType(class_label)
-            else:
-                # Try string conversion as a fallback
-                return DocumentType[str(class_label).upper()]
-        except (KeyError, ValueError):
-            # If conversion fails, default to OTHER
-            logger.warning(f"Could not convert class label '{class_label}' to DocumentType. Using OTHER.")
-            return DocumentType.OTHER
+            # Perform cross-validation
+            cv_scores = cross_val_score(self, X, y, cv=cv, scoring='accuracy')
+            
+            # Calculate metrics
+            cv_metrics = {
+                'cv_accuracy_mean': float(np.mean(cv_scores)),
+                'cv_accuracy_std': float(np.std(cv_scores)),
+                'cv_accuracy_min': float(np.min(cv_scores)),
+                'cv_accuracy_max': float(np.max(cv_scores)),
+                'cv_folds': cv
+            }
+            
+            # Check if accuracy meets the 99% requirement from technical specification
+            if cv_metrics['cv_accuracy_mean'] < 0.99:
+                logger.warning(f"Cross-validation accuracy {cv_metrics['cv_accuracy_mean']:.4f} "
+                              f"is below the required 99% threshold")
+            
+            return cv_metrics
+        except Exception as e:
+            logger.error(f"Cross-validation failed: {str(e)}")
+            raise
+    
+    def calculate_metrics(self, y_true: np.ndarray, y_pred: np.ndarray, y_prob: Optional[np.ndarray] = None) -> Dict[str, float]:
+        """
+        Calculate common evaluation metrics for classification.
+        
+        Args:
+            y_true: True class labels.
+            y_pred: Predicted class labels.
+            y_prob: Optional predicted probabilities for ROC AUC calculation.
+            
+        Returns:
+            Dict[str, float]: Dictionary containing evaluation metrics.
+        """
+        accuracy = accuracy_score(y_true, y_pred)
+        precision, recall, f1, _ = precision_recall_fscore_support(
+            y_true, y_pred, average='weighted')
+        
+        metrics = {
+            'accuracy': float(accuracy),
+            'precision': float(precision),
+            'recall': float(recall),
+            'f1_score': float(f1)
+        }
+        
+        # Calculate confusion matrix
+        cm = confusion_matrix(y_true, y_pred)
+        metrics['confusion_matrix'] = cm.tolist()
+        
+        # Calculate ROC AUC if probabilities are provided and it's a binary classification
+        if y_prob is not None:
+            try:
+                # For binary classification
+                if y_prob.shape[1] == 2:
+                    metrics['roc_auc'] = float(roc_auc_score(y_true, y_prob[:, 1]))
+                # For multiclass classification
+                elif y_prob.shape[1] > 2:
+                    metrics['roc_auc'] = float(roc_auc_score(y_true, y_prob, multi_class='ovr', average='weighted'))
+            except Exception as e:
+                logger.warning(f"Could not calculate ROC AUC: {str(e)}")
+        
+        # Check if accuracy meets the 99% requirement from technical specification
+        if accuracy < 0.99:
+            logger.warning(f"Model accuracy {accuracy:.4f} is below the required 99% threshold")
+        
+        return metrics
+    
+    def get_params(self, deep: bool = True) -> Dict[str, Any]:
+        """
+        Get parameters for this model.
+        
+        Args:
+            deep: If True, will return the parameters for this estimator and
+                 contained subobjects that are estimators.
+                 
+        Returns:
+            Dict[str, Any]: Parameter names mapped to their values.
+        """
+        return self.model_params.copy()
+    
+    def set_params(self, **params) -> 'BaseModel':
+        """
+        Set the parameters of this model.
+        
+        Args:
+            **params: Model parameters.
+            
+        Returns:
+            self: Model instance with updated parameters.
+        """
+        if not params:
+            return self
+        
+        for key, value in params.items():
+            self.model_params[key] = value
+        
+        return self
+    
+    def get_confidence_scores(self, probabilities: np.ndarray) -> np.ndarray:
+        """
+        Calculate confidence scores from prediction probabilities.
+        
+        Args:
+            probabilities: Prediction probabilities of shape (n_samples, n_classes).
+            
+        Returns:
+            np.ndarray: Confidence scores of shape (n_samples,).
+        """
+        # For each sample, get the highest probability as the confidence score
+        return np.max(probabilities, axis=1)
+    
+    def is_prediction_confident(self, confidence: float) -> bool:
+        """
+        Determine if a prediction is confident based on the confidence threshold.
+        
+        Args:
+            confidence: Confidence score for a prediction.
+            
+        Returns:
+            bool: True if the prediction is confident, False otherwise.
+        """
+        return confidence >= self.confidence_threshold
+    
+    def __repr__(self) -> str:
+        """
+        Return a string representation of the model.
+        
+        Returns:
+            str: String representation.
+        """
+        class_name = self.__class__.__name__
+        params_str = ', '.join(f"{k}={v}" for k, v in self.model_params.items())
+        fitted_status = "fitted" if self.is_fitted else "not fitted"
+        return f"{class_name}({params_str}) - {fitted_status}"
