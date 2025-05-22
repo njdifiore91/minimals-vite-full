@@ -1,0 +1,72 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "rabbitmq.fullname" . }}-config
+  labels:
+    {{- include "rabbitmq.labels" . | nindent 4 }}
+    app.kubernetes.io/component: message-broker
+data:
+  # Main RabbitMQ configuration file
+  rabbitmq.conf: |
+    # Enable AMQP 0.9.1 protocol
+    listeners.tcp.default = 5672
+    
+    # Enable management plugin
+    management.tcp.port = 15672
+    
+    # Enable TLS 1.3 for secure connections
+    ssl_options.versions.1 = tlsv1.3
+    ssl_options.verify = verify_peer
+    ssl_options.fail_if_no_peer_cert = false
+    
+    # Set default user and vhost
+    default_vhost = /
+    default_user = {{ .Values.auth.username }}
+    default_pass = {{ .Values.auth.password }}
+    default_permissions.configure = .*
+    default_permissions.read = .*
+    default_permissions.write = .*
+    
+    # Memory and disk thresholds
+    vm_memory_high_watermark.relative = 0.8
+    disk_free_limit.absolute = 2GB
+    
+    # Logging configuration
+    log.file.level = info
+    log.console = true
+    log.console.level = info
+    
+    # Connection and channel limits
+    channel_max = 2000
+    connection_max = 1000
+    
+    # Lazy queues for large messages to optimize memory
+    queue_master_locator = min-masters
+    queue.default_lazy = true
+    
+  # RabbitMQ initialization script to create exchanges and queues
+  init.sh: |
+    #!/bin/bash
+    
+    # Wait for RabbitMQ to start
+    until rabbitmqctl status; do
+      echo "Waiting for RabbitMQ to start..."
+      sleep 5
+    done
+    
+    echo "Setting up exchanges and queues for MCA Application Processing System..."
+    
+    # Create the fanout exchange 'mca.documents'
+    rabbitmqadmin declare exchange name=mca.documents type=fanout durable=true
+    
+    # Create queues with lazy mode enabled for large messages
+    rabbitmqadmin declare queue name=document-processing durable=true arguments='{"x-queue-mode":"lazy"}'
+    rabbitmqadmin declare queue name=data-extraction durable=true arguments='{"x-queue-mode":"lazy"}'
+    rabbitmqadmin declare queue name=notification durable=true arguments='{"x-queue-mode":"lazy"}'
+    
+    # Bind queues to the exchange
+    rabbitmqadmin declare binding source=mca.documents destination=document-processing destination_type=queue
+    rabbitmqadmin declare binding source=mca.documents destination=data-extraction destination_type=queue
+    rabbitmqadmin declare binding source=mca.documents destination=notification destination_type=queue
+    
+    echo "RabbitMQ setup completed successfully."
