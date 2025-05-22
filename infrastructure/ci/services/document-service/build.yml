@@ -1,0 +1,315 @@
+# Document Service CI Build Workflow
+# This workflow handles the continuous integration process for the Document Service
+# including dependency management, code quality checks, testing, container building,
+# security scanning, and publishing to the container registry.
+
+name: Document Service CI
+
+on:
+  push:
+    branches: [ main, development ]
+    paths:
+      - 'document-service/**'
+      - 'infrastructure/ci/services/document-service/**'
+  pull_request:
+    branches: [ main, development ]
+    paths:
+      - 'document-service/**'
+      - 'infrastructure/ci/services/document-service/**'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to build for'
+        required: true
+        default: 'development'
+        type: choice
+        options:
+          - development
+          - staging
+          - production
+
+env:
+  PYTHON_VERSION: '3.13.3'
+  REGISTRY: ${CONTAINER_REGISTRY}
+  IMAGE_NAME: document-service
+  DOCKER_BUILDKIT: 1
+  POETRY_VERSION: '1.7.1'
+  FLAKE8_VERSION: '7.0.0'
+  MYPY_VERSION: '1.8.0'
+  PYTEST_VERSION: '8.0.0'
+  COVERAGE_THRESHOLD: 80
+
+jobs:
+  # Validate code quality and run tests
+  validate:
+    name: Validate and Test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.13.3', '3.14.0']
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+
+      - name: Install Poetry
+        run: |
+          curl -sSL https://install.python-poetry.org | python3 - --version ${POETRY_VERSION}
+          poetry config virtualenvs.in-project true
+
+      - name: Cache Poetry dependencies
+        uses: actions/cache@v4
+        with:
+          path: document-service/.venv
+          key: ${{ runner.os }}-poetry-${{ matrix.python-version }}-${{ hashFiles('document-service/poetry.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-poetry-${{ matrix.python-version }}-
+
+      - name: Install dependencies
+        working-directory: document-service
+        run: |
+          poetry install --no-interaction --no-root
+
+      - name: Lint with Flake8
+        working-directory: document-service
+        run: |
+          poetry run flake8 src tests --count --select=E9,F63,F7,F82 --show-source --statistics
+          poetry run flake8 src tests --count --max-complexity=10 --max-line-length=127 --statistics
+
+      - name: Type check with mypy
+        working-directory: document-service
+        run: |
+          poetry run mypy src
+
+      - name: Run unit tests with pytest
+        working-directory: document-service
+        run: |
+          poetry run pytest tests/test_utils tests/test_config tests/test_types --cov=src --cov-report=xml --cov-report=term
+
+      - name: Run service tests
+        working-directory: document-service
+        run: |
+          poetry run pytest tests/test_services --cov=src --cov-append --cov-report=xml --cov-report=term
+
+      - name: Run model validation tests
+        working-directory: document-service
+        run: |
+          poetry run pytest tests/test_models --cov=src --cov-append --cov-report=xml --cov-report=term
+
+      - name: Run API tests
+        working-directory: document-service
+        run: |
+          poetry run pytest tests/test_api --cov=src --cov-append --cov-report=xml --cov-report=term
+
+      - name: Check test coverage threshold
+        working-directory: document-service
+        run: |
+          poetry run coverage report --fail-under=${COVERAGE_THRESHOLD}
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report-${{ matrix.python-version }}
+          path: document-service/coverage.xml
+          retention-days: 7
+
+  # Build and publish Docker image
+  build:
+    name: Build and Publish
+    needs: validate
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      - name: Extract metadata for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=sha,format=short
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: document-service
+          file: document-service/Dockerfile
+          push: false
+          load: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            PYTHON_VERSION=${{ env.PYTHON_VERSION }}
+            BUILDKIT_INLINE_CACHE=1
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          format: 'table'
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: document-service
+          file: document-service/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            PYTHON_VERSION=${{ env.PYTHON_VERSION }}
+            BUILDKIT_INLINE_CACHE=1
+
+      - name: Verify image
+        run: |
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+          docker image inspect ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+
+      - name: Save image digest
+        run: |
+          echo "IMAGE_DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }})" >> $GITHUB_ENV
+
+      - name: Create artifact with image info
+        run: |
+          echo "Image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}" > image-info.txt
+          echo "Digest: ${{ env.IMAGE_DIGEST }}" >> image-info.txt
+          echo "Commit: ${{ github.sha }}" >> image-info.txt
+          echo "Build: ${{ github.run_id }}" >> image-info.txt
+
+      - name: Upload image info
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-info
+          path: image-info.txt
+          retention-days: 7
+
+  # Run integration tests with the built image
+  integration-test:
+    name: Integration Tests
+    needs: build
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install Poetry
+        run: |
+          curl -sSL https://install.python-poetry.org | python3 - --version ${POETRY_VERSION}
+          poetry config virtualenvs.in-project true
+
+      - name: Install test dependencies
+        working-directory: document-service
+        run: |
+          poetry install --no-interaction --no-root
+
+      - name: Pull Docker image
+        run: |
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+
+      - name: Start test dependencies
+        run: |
+          docker-compose -f document-service/docker-compose.test.yml up -d
+
+      - name: Run integration tests
+        working-directory: document-service
+        run: |
+          poetry run pytest tests/integration --cov=src --cov-report=xml --cov-report=term
+
+      - name: Upload integration test results
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-test-results
+          path: document-service/test-results
+          retention-days: 7
+
+      - name: Cleanup test environment
+        if: always()
+        run: |
+          docker-compose -f document-service/docker-compose.test.yml down -v
+
+  # Notify on completion
+  notify:
+    name: Notification
+    needs: [validate, build, integration-test]
+    if: always()
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Check build status
+        id: check
+        run: |
+          if [[ "${{ needs.validate.result }}" == "success" && "${{ needs.build.result }}" == "success" && "${{ needs.integration-test.result }}" == "success" ]]; then
+            echo "status=success" >> $GITHUB_OUTPUT
+          else
+            echo "status=failure" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Send notification
+        uses: slackapi/slack-github-action@v1.25.0
+        if: always()
+        with:
+          payload: |
+            {
+              "text": "Document Service Build: ${{ steps.check.outputs.status == 'success' && 'SUCCESS ✅' || 'FAILURE ❌' }}",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*Document Service Build: ${{ steps.check.outputs.status == 'success' && 'SUCCESS ✅' || 'FAILURE ❌' }}*\n${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                  }
+                },
+                {
+                  "type": "section",
+                  "fields": [
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Commit:*\n${{ github.sha }}"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Branch:*\n${{ github.ref_name }}"
+                    }
+                  ]
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
