@@ -1,871 +1,629 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
 """
-S3 Storage Utilities for Document Service
+S3 Storage Utilities for Document Service.
 
 This module provides utility functions for interacting with S3-compatible storage,
-including connecting to S3, uploading and downloading documents, managing document
-metadata, and generating signed URLs for secure access.
-
-All document storage uses AES-256 encryption for data at rest as required by the
-system security specifications in section 0.2.5 and 3.2.3.
-
-This module is used by the Document Service to store classified documents in S3
-with appropriate metadata as described in section 4.1.7 of the technical specification.
+including document upload, download, metadata management, and secure access through
+signed URLs. It builds on the base S3 configuration to provide document-specific
+functionality for the Document Service.
 """
 
-import logging
 import os
 import json
-from typing import Dict, Optional, Union, BinaryIO, Tuple, List, Any
-from urllib.parse import urlparse
+import uuid
+import logging
+from typing import Dict, Optional, Any, BinaryIO, Union, Tuple, List
+from datetime import datetime, timedelta
+import mimetypes
+import io
 
 import boto3
-from boto3.s3.transfer import TransferConfig
-from botocore.config import Config
 from botocore.exceptions import ClientError
 
-# Try to import from local config, fall back to environment variables if not available
-try:
-    from config.s3_config import (
-        S3_REGION_NAME,
-        S3_ENDPOINT_URL,
-        S3_ACCESS_KEY_ID,
-        S3_SECRET_ACCESS_KEY,
-        S3_BUCKET_NAME,
-        S3_ENCRYPTION_ENABLED
-    )
-except ImportError:
-    # Fall back to environment variables
-    S3_REGION_NAME = os.environ.get('S3_REGION_NAME')
-    S3_ENDPOINT_URL = os.environ.get('S3_ENDPOINT_URL')
-    S3_ACCESS_KEY_ID = os.environ.get('S3_ACCESS_KEY_ID')
-    S3_SECRET_ACCESS_KEY = os.environ.get('S3_SECRET_ACCESS_KEY')
-    S3_BUCKET_NAME = os.environ.get('S3_BUCKET_NAME')
-    S3_ENCRYPTION_ENABLED = os.environ.get('S3_ENCRYPTION_ENABLED', 'true').lower() == 'true'
+from ..config.s3_config import (
+    create_s3_client,
+    create_s3_resource,
+    get_bucket_name,
+    s3_client,
+    s3_resource
+)
 
 # Configure logging
 logger = logging.getLogger(__name__)
 
-# Default expiration time for signed URLs (1 hour)
-DEFAULT_EXPIRATION = 3600
-
-# Document classification metadata key
-CLASSIFICATION_METADATA_KEY = 'document-classification'
-
-# Document confidence score metadata key
-CONFIDENCE_SCORE_METADATA_KEY = 'classification-confidence'
-
-# Default S3 client configuration
-DEFAULT_S3_CONFIG = Config(
-    signature_version='s3v4',  # Use signature version 4 for enhanced security
-    retries={
-        'max_attempts': 3,      # Retry failed operations up to 3 times
-        'mode': 'standard'      # Use standard retry mode
-    }
-)
-
-# Transfer configuration for multipart uploads
-TRANSFER_CONFIG = TransferConfig(
-    multipart_threshold=8 * 1024 * 1024,  # 8MB
-    max_concurrency=10,
-    multipart_chunksize=8 * 1024 * 1024,  # 8MB
-    use_threads=True
-)
+# Constants
+DEFAULT_EXPIRATION = 3600  # Default signed URL expiration in seconds (1 hour)
+DOCUMENT_PREFIX = 'documents/'  # Prefix for document storage in S3
+METADATA_PREFIX = 'metadata/'  # Prefix for metadata storage in S3
 
 
-def get_s3_client(region_name: Optional[str] = None,
-                  endpoint_url: Optional[str] = None,
-                  aws_access_key_id: Optional[str] = None,
-                  aws_secret_access_key: Optional[str] = None,
-                  config: Optional[Config] = None) -> boto3.client:
-    """
-    Create and return an S3 client with the specified configuration.
-    
+def generate_document_key(document_type: str, file_extension: str = None) -> str:
+    """Generate a unique S3 object key for a document.
+
     Args:
-        region_name: AWS region name (e.g., 'us-east-1')
-        endpoint_url: URL for S3-compatible storage endpoint
-        aws_access_key_id: AWS access key ID
-        aws_secret_access_key: AWS secret access key
-        config: Boto3 client configuration
-        
+        document_type (str): Type of document (e.g., 'application', 'tax_return', 'bank_statement').
+        file_extension (str, optional): File extension. Defaults to None.
+
     Returns:
-        boto3.client: Configured S3 client
+        str: Unique S3 object key.
+    """
+    # Generate a UUID for uniqueness
+    unique_id = str(uuid.uuid4())
+    
+    # Generate a timestamp for organization
+    timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+    
+    # Construct the key with proper organization
+    key = f"{DOCUMENT_PREFIX}{document_type}/{timestamp}-{unique_id}"
+    
+    # Add file extension if provided
+    if file_extension:
+        # Ensure extension starts with a dot
+        if not file_extension.startswith('.'):
+            file_extension = f'.{file_extension}'
+        key = f"{key}{file_extension}"
+    
+    return key
+
+
+def upload_document(file_path: str, document_type: str, classification_metadata: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
+    """Upload a document to S3 with classification metadata and AES-256 encryption.
+
+    Args:
+        file_path (str): Path to the document file to upload.
+        document_type (str): Type of document (e.g., 'application', 'tax_return').
+        classification_metadata (Dict[str, Any]): Classification metadata for the document.
+
+    Returns:
+        Tuple[bool, Optional[str]]: Tuple containing success status and object key if successful.
     """
     try:
-        # Use provided config or default
-        client_config = config or DEFAULT_S3_CONFIG
+        # Determine file extension
+        _, file_extension = os.path.splitext(file_path)
         
-        # Create S3 client with provided credentials or use environment/instance profile
-        s3_client = boto3.client(
-            's3',
-            region_name=region_name,
-            endpoint_url=endpoint_url,
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-            config=client_config
-        )
+        # Generate a unique object key
+        object_key = generate_document_key(document_type, file_extension)
         
-        logger.debug("S3 client created successfully")
-        return s3_client
-    
-    except Exception as e:
-        logger.error(f"Failed to create S3 client: {str(e)}")
-        raise
-
-
-def upload_document(s3_client: boto3.client,
-                   bucket_name: str,
-                   object_key: str,
-                   file_obj: Union[BinaryIO, bytes],
-                   metadata: Optional[Dict[str, str]] = None,
-                   content_type: Optional[str] = None,
-                   document_classification: Optional[str] = None,
-                   classification_confidence: Optional[float] = None) -> Dict[str, Any]:
-    """
-    Upload a document to S3 with AES-256 encryption.
-    
-    Args:
-        s3_client: Boto3 S3 client
-        bucket_name: Name of the S3 bucket
-        object_key: Key (path) for the object in S3
-        file_obj: File object or bytes to upload
-        metadata: Optional metadata to attach to the object
-        content_type: MIME type of the document
-        document_classification: Classification of the document (e.g., 'loan_application', 'tax_return')
-        classification_confidence: Confidence score of the classification (0.0 to 1.0)
+        # Determine content type
+        content_type = mimetypes.guess_type(file_path)[0] or 'application/octet-stream'
         
-    Returns:
-        Dict: Response from S3 put_object operation
-    
-    Raises:
-        ClientError: If upload fails
-    """
-    try:
-        # Prepare metadata with classification if provided
-        upload_metadata = metadata or {}
+        # Prepare metadata - convert all values to strings for S3 compatibility
+        string_metadata = {}
+        for key, value in classification_metadata.items():
+            if isinstance(value, (dict, list)):
+                string_metadata[key] = json.dumps(value)
+            else:
+                string_metadata[key] = str(value)
         
-        if document_classification:
-            upload_metadata[CLASSIFICATION_METADATA_KEY] = document_classification
-            
-        if classification_confidence is not None:
-            upload_metadata[CONFIDENCE_SCORE_METADATA_KEY] = str(classification_confidence)
+        # Add document type to metadata
+        string_metadata['document_type'] = document_type
         
-        # Prepare upload parameters
-        upload_args = {
-            'Bucket': bucket_name,
-            'Key': object_key,
-            'Body': file_obj,
-            # Enable AES-256 server-side encryption
-            'ServerSideEncryption': 'AES256',
-            'Metadata': upload_metadata
-        }
+        # Add timestamp to metadata
+        string_metadata['upload_timestamp'] = datetime.now().isoformat()
         
-        # Add content type if provided
-        if content_type:
-            upload_args['ContentType'] = content_type
-        
-        # Upload the file with multipart support for large files
-        response = s3_client.put_object(**upload_args)
-        
-        logger.info(f"Document uploaded successfully to {bucket_name}/{object_key}")
-        logger.debug(f"Upload response: {response}")
-        
-        return response
-    
-    except ClientError as e:
-        logger.error(f"Failed to upload document to {bucket_name}/{object_key}: {str(e)}")
-        raise
-
-
-def upload_document_with_transfer_manager(s3_client: boto3.client,
-                                         bucket_name: str,
-                                         object_key: str,
-                                         file_path: str,
-                                         metadata: Optional[Dict[str, str]] = None,
-                                         content_type: Optional[str] = None,
-                                         document_classification: Optional[str] = None,
-                                         classification_confidence: Optional[float] = None) -> Dict[str, Any]:
-    """
-    Upload a large document to S3 using the transfer manager with AES-256 encryption.
-    
-    This method is optimized for large file uploads with multipart support.
-    
-    Args:
-        s3_client: Boto3 S3 client
-        bucket_name: Name of the S3 bucket
-        object_key: Key (path) for the object in S3
-        file_path: Path to the file to upload
-        metadata: Optional metadata to attach to the object
-        content_type: MIME type of the document
-        document_classification: Classification of the document (e.g., 'loan_application', 'tax_return')
-        classification_confidence: Confidence score of the classification (0.0 to 1.0)
-        
-    Returns:
-        Dict: Response from S3 upload operation
-    
-    Raises:
-        ClientError: If upload fails
-    """
-    try:
-        # Create S3 resource from client for transfer manager
-        s3_resource = boto3.resource('s3', 
-                                    region_name=s3_client.meta.region_name,
-                                    endpoint_url=s3_client.meta.endpoint_url)
-        
-        # Prepare metadata with classification if provided
-        upload_metadata = metadata or {}
-        
-        if document_classification:
-            upload_metadata[CLASSIFICATION_METADATA_KEY] = document_classification
-            
-        if classification_confidence is not None:
-            upload_metadata[CONFIDENCE_SCORE_METADATA_KEY] = str(classification_confidence)
-        
-        # Prepare extra arguments including encryption
-        extra_args = {
-            'ServerSideEncryption': 'AES256',
-            'Metadata': upload_metadata
-        }
-        
-        # Add content type if provided
-        if content_type:
-            extra_args['ContentType'] = content_type
-        
-        # Upload the file with transfer manager
-        response = s3_resource.meta.client.upload_file(
+        # Upload the file with encryption and metadata
+        bucket_name = get_bucket_name()
+        s3_client.upload_file(
             Filename=file_path,
             Bucket=bucket_name,
             Key=object_key,
-            ExtraArgs=extra_args,
-            Config=TRANSFER_CONFIG
+            ExtraArgs={
+                'ServerSideEncryption': 'AES256',  # Enable AES-256 encryption
+                'ContentType': content_type,
+                'Metadata': string_metadata
+            }
         )
         
-        logger.info(f"Large document uploaded successfully to {bucket_name}/{object_key}")
-        
-        # Return object metadata as confirmation
-        return s3_client.head_object(Bucket=bucket_name, Key=object_key)
-    
+        logger.info(f"Successfully uploaded document to {bucket_name}/{object_key} with encryption and metadata")
+        return True, object_key
     except ClientError as e:
-        logger.error(f"Failed to upload large document to {bucket_name}/{object_key}: {str(e)}")
-        raise
+        logger.error(f"Error uploading document to S3: {str(e)}")
+        return False, None
+    except Exception as e:
+        logger.error(f"Unexpected error uploading document to S3: {str(e)}")
+        return False, None
 
 
-def download_document(s3_client: boto3.client,
-                     bucket_name: str,
-                     object_key: str) -> Tuple[bytes, Dict[str, Any]]:
-    """
-    Download a document from S3.
+def upload_document_from_bytes(file_bytes: bytes, document_type: str, file_name: str,
+                               classification_metadata: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
+    """Upload a document from bytes to S3 with classification metadata and AES-256 encryption.
     
+    This is particularly useful when processing documents from memory, such as
+    when receiving documents from message queues or API requests.
+
     Args:
-        s3_client: Boto3 S3 client
-        bucket_name: Name of the S3 bucket
-        object_key: Key (path) for the object in S3
-        
+        file_bytes (bytes): Document content as bytes.
+        document_type (str): Type of document (e.g., 'application', 'tax_return').
+        file_name (str): Original file name (used for content type detection).
+        classification_metadata (Dict[str, Any]): Classification metadata for the document.
+
     Returns:
-        Tuple[bytes, Dict]: Document content and metadata
-    
-    Raises:
-        ClientError: If download fails
+        Tuple[bool, Optional[str]]: Tuple containing success status and object key if successful.
     """
     try:
-        # Get the object from S3
-        response = s3_client.get_object(Bucket=bucket_name, Key=object_key)
+        # Determine file extension
+        _, file_extension = os.path.splitext(file_name)
         
-        # Read the object content
-        content = response['Body'].read()
+        # Generate a unique object key
+        object_key = generate_document_key(document_type, file_extension)
+        
+        # Determine content type
+        content_type = mimetypes.guess_type(file_name)[0] or 'application/octet-stream'
+        
+        # Prepare metadata - convert all values to strings for S3 compatibility
+        string_metadata = {}
+        for key, value in classification_metadata.items():
+            if isinstance(value, (dict, list)):
+                string_metadata[key] = json.dumps(value)
+            else:
+                string_metadata[key] = str(value)
+        
+        # Add document type to metadata
+        string_metadata['document_type'] = document_type
+        string_metadata['original_filename'] = file_name
+        
+        # Add timestamp to metadata
+        string_metadata['upload_timestamp'] = datetime.now().isoformat()
+        
+        # Upload the file with encryption and metadata
+        bucket_name = get_bucket_name()
+        s3_client.put_object(
+            Body=file_bytes,
+            Bucket=bucket_name,
+            Key=object_key,
+            ServerSideEncryption='AES256',  # Enable AES-256 encryption
+            ContentType=content_type,
+            Metadata=string_metadata
+        )
+        
+        logger.info(f"Successfully uploaded document bytes to {bucket_name}/{object_key} with encryption and metadata")
+        return True, object_key
+    except ClientError as e:
+        logger.error(f"Error uploading document bytes to S3: {str(e)}")
+        return False, None
+    except Exception as e:
+        logger.error(f"Unexpected error uploading document bytes to S3: {str(e)}")
+        return False, None
+
+
+def download_document(object_key: str, download_path: str) -> bool:
+    """Download a document from S3 to a local file path.
+
+    Args:
+        object_key (str): S3 object key of the document to download.
+        download_path (str): Local path where the document should be saved.
+
+    Returns:
+        bool: True if download was successful, False otherwise.
+    """
+    try:
+        bucket_name = get_bucket_name()
+        
+        # Create directory if it doesn't exist
+        os.makedirs(os.path.dirname(download_path), exist_ok=True)
+        
+        # Download the file
+        s3_client.download_file(
+            Bucket=bucket_name,
+            Key=object_key,
+            Filename=download_path
+        )
+        
+        logger.info(f"Successfully downloaded {bucket_name}/{object_key} to {download_path}")
+        return True
+    except ClientError as e:
+        logger.error(f"Error downloading document from S3: {str(e)}")
+        return False
+    except Exception as e:
+        logger.error(f"Unexpected error downloading document from S3: {str(e)}")
+        return False
+
+
+def download_document_to_bytes(object_key: str) -> Tuple[bool, Optional[bytes], Optional[Dict[str, str]]]:
+    """Download a document from S3 and return it as bytes along with its metadata.
+
+    Args:
+        object_key (str): S3 object key of the document to download.
+
+    Returns:
+        Tuple[bool, Optional[bytes], Optional[Dict[str, str]]]: 
+            Tuple containing success status, document bytes if successful, and metadata.
+    """
+    try:
+        bucket_name = get_bucket_name()
+        
+        # Get the object and its metadata
+        response = s3_client.get_object(
+            Bucket=bucket_name,
+            Key=object_key
+        )
+        
+        # Read the file content
+        file_content = response['Body'].read()
+        
+        # Get the metadata
+        metadata = response.get('Metadata', {})
+        
+        logger.info(f"Successfully downloaded {bucket_name}/{object_key} to memory")
+        return True, file_content, metadata
+    except ClientError as e:
+        logger.error(f"Error downloading document from S3 to memory: {str(e)}")
+        return False, None, None
+    except Exception as e:
+        logger.error(f"Unexpected error downloading document from S3 to memory: {str(e)}")
+        return False, None, None
+
+
+def get_document_metadata(object_key: str) -> Tuple[bool, Optional[Dict[str, str]]]:
+    """Retrieve metadata for a document stored in S3.
+
+    Args:
+        object_key (str): S3 object key of the document.
+
+    Returns:
+        Tuple[bool, Optional[Dict[str, str]]]: Tuple containing success status and metadata if successful.
+    """
+    try:
+        bucket_name = get_bucket_name()
+        
+        # Get the object metadata
+        response = s3_client.head_object(
+            Bucket=bucket_name,
+            Key=object_key
+        )
         
         # Extract metadata
-        metadata = {
-            'ContentType': response.get('ContentType', 'application/octet-stream'),
-            'ContentLength': response.get('ContentLength', 0),
-            'LastModified': response.get('LastModified'),
-            'ETag': response.get('ETag'),
-            'ServerSideEncryption': response.get('ServerSideEncryption'),
-            'Metadata': response.get('Metadata', {})
+        metadata = response.get('Metadata', {})
+        
+        # Add system metadata
+        system_metadata = {
+            'content_type': response.get('ContentType', 'application/octet-stream'),
+            'content_length': str(response.get('ContentLength', 0)),
+            'last_modified': response.get('LastModified', datetime.now()).isoformat(),
+            'e_tag': response.get('ETag', '').strip('"'),
+            'server_side_encryption': response.get('ServerSideEncryption', 'None')
         }
         
-        logger.info(f"Document downloaded successfully from {bucket_name}/{object_key}")
-        logger.debug(f"Document size: {len(content)} bytes")
+        # Combine user and system metadata
+        combined_metadata = {**metadata, **system_metadata}
         
-        return content, metadata
-    
+        logger.info(f"Successfully retrieved metadata for {bucket_name}/{object_key}")
+        return True, combined_metadata
     except ClientError as e:
-        logger.error(f"Failed to download document from {bucket_name}/{object_key}: {str(e)}")
-        raise
+        logger.error(f"Error retrieving document metadata from S3: {str(e)}")
+        return False, None
+    except Exception as e:
+        logger.error(f"Unexpected error retrieving document metadata from S3: {str(e)}")
+        return False, None
 
 
-def download_document_to_file(s3_client: boto3.client,
-                             bucket_name: str,
-                             object_key: str,
-                             file_path: str) -> Dict[str, Any]:
-    """
-    Download a document from S3 directly to a file.
+def update_document_metadata(object_key: str, metadata: Dict[str, str]) -> bool:
+    """Update metadata for a document stored in S3.
     
-    Args:
-        s3_client: Boto3 S3 client
-        bucket_name: Name of the S3 bucket
-        object_key: Key (path) for the object in S3
-        file_path: Local path to save the file
-        
-    Returns:
-        Dict: Object metadata
-    
-    Raises:
-        ClientError: If download fails
-    """
-    try:
-        # Create S3 resource from client for transfer manager
-        s3_resource = boto3.resource('s3', 
-                                    region_name=s3_client.meta.region_name,
-                                    endpoint_url=s3_client.meta.endpoint_url)
-        
-        # Download the file with transfer manager
-        s3_resource.meta.client.download_file(
-            Bucket=bucket_name,
-            Key=object_key,
-            Filename=file_path,
-            Config=TRANSFER_CONFIG
-        )
-        
-        # Get object metadata
-        metadata = s3_client.head_object(Bucket=bucket_name, Key=object_key)
-        
-        logger.info(f"Document downloaded successfully to {file_path}")
-        
-        return metadata
-    
-    except ClientError as e:
-        logger.error(f"Failed to download document to file {file_path}: {str(e)}")
-        raise
-
-
-def get_document_classification(s3_client: boto3.client,
-                               bucket_name: str,
-                               object_key: str) -> Tuple[Optional[str], Optional[float]]:
-    """
-    Get the classification and confidence score for a document in S3.
-    
-    Args:
-        s3_client: Boto3 S3 client
-        bucket_name: Name of the S3 bucket
-        object_key: Key (path) for the object in S3
-        
-    Returns:
-        Tuple[Optional[str], Optional[float]]: Document classification and confidence score
-        
-    Raises:
-        ClientError: If operation fails
-    """
-    try:
-        # Get object metadata
-        metadata = get_document_metadata(s3_client, bucket_name, object_key)
-        
-        # Extract classification and confidence score
-        classification = metadata.get('Metadata', {}).get(CLASSIFICATION_METADATA_KEY)
-        
-        # Convert confidence score to float if present
-        confidence_str = metadata.get('Metadata', {}).get(CONFIDENCE_SCORE_METADATA_KEY)
-        confidence = float(confidence_str) if confidence_str else None
-        
-        return classification, confidence
-    
-    except ClientError as e:
-        logger.error(f"Failed to get classification for {bucket_name}/{object_key}: {str(e)}")
-        raise
-
-
-def get_document_metadata(s3_client: boto3.client,
-                         bucket_name: str,
-                         object_key: str) -> Dict[str, Any]:
-    """
-    Get metadata for a document in S3 without downloading the content.
-    
-    Args:
-        s3_client: Boto3 S3 client
-        bucket_name: Name of the S3 bucket
-        object_key: Key (path) for the object in S3
-        
-    Returns:
-        Dict: Object metadata
-    
-    Raises:
-        ClientError: If operation fails
-    """
-    try:
-        # Get object metadata
-        response = s3_client.head_object(Bucket=bucket_name, Key=object_key)
-        
-        # Extract and format metadata
-        metadata = {
-            'ContentType': response.get('ContentType', 'application/octet-stream'),
-            'ContentLength': response.get('ContentLength', 0),
-            'LastModified': response.get('LastModified'),
-            'ETag': response.get('ETag'),
-            'ServerSideEncryption': response.get('ServerSideEncryption'),
-            'Metadata': response.get('Metadata', {})
-        }
-        
-        logger.debug(f"Retrieved metadata for {bucket_name}/{object_key}")
-        
-        return metadata
-    
-    except ClientError as e:
-        logger.error(f"Failed to get metadata for {bucket_name}/{object_key}: {str(e)}")
-        raise
-
-
-def update_document_classification(s3_client: boto3.client,
-                                 bucket_name: str,
-                                 object_key: str,
-                                 document_classification: str,
-                                 classification_confidence: float) -> Dict[str, Any]:
-    """
-    Update the classification and confidence score for a document in S3.
-    
-    Args:
-        s3_client: Boto3 S3 client
-        bucket_name: Name of the S3 bucket
-        object_key: Key (path) for the object in S3
-        document_classification: Classification of the document
-        classification_confidence: Confidence score of the classification (0.0 to 1.0)
-        
-    Returns:
-        Dict: Response from S3 copy_object operation
-        
-    Raises:
-        ClientError: If operation fails
-    """
-    try:
-        # Prepare metadata update
-        metadata_update = {
-            CLASSIFICATION_METADATA_KEY: document_classification,
-            CONFIDENCE_SCORE_METADATA_KEY: str(classification_confidence)
-        }
-        
-        # Update document metadata
-        return update_document_metadata(s3_client, bucket_name, object_key, metadata_update)
-    
-    except ClientError as e:
-        logger.error(f"Failed to update classification for {bucket_name}/{object_key}: {str(e)}")
-        raise
-
-
-def update_document_metadata(s3_client: boto3.client,
-                            bucket_name: str,
-                            object_key: str,
-                            metadata: Dict[str, str]) -> Dict[str, Any]:
-    """
-    Update metadata for an existing document in S3.
-    
-    Note: This creates a copy of the object with new metadata as S3 doesn't allow
+    Note: This creates a copy of the object with new metadata, as S3 doesn't allow
     direct metadata updates.
-    
+
     Args:
-        s3_client: Boto3 S3 client
-        bucket_name: Name of the S3 bucket
-        object_key: Key (path) for the object in S3
-        metadata: New metadata to set
-        
+        object_key (str): S3 object key of the document.
+        metadata (Dict[str, str]): New metadata to apply to the document.
+
     Returns:
-        Dict: Response from S3 copy_object operation
-    
-    Raises:
-        ClientError: If operation fails
+        bool: True if update was successful, False otherwise.
     """
     try:
-        # Get current object metadata to preserve non-updated fields
-        current_metadata = get_document_metadata(s3_client, bucket_name, object_key)
+        bucket_name = get_bucket_name()
         
-        # Merge current metadata with new metadata
-        merged_metadata = {**current_metadata.get('Metadata', {}), **metadata}
+        # First, get existing metadata and object info
+        success, existing_metadata = get_document_metadata(object_key)
+        if not success:
+            logger.error(f"Failed to retrieve existing metadata for {bucket_name}/{object_key}")
+            return False
         
-        # Copy object to itself with new metadata
-        response = s3_client.copy_object(
-            Bucket=bucket_name,
+        # Get content type from existing metadata
+        content_type = existing_metadata.get('content_type', 'application/octet-stream')
+        
+        # Prepare metadata - convert all values to strings for S3 compatibility
+        string_metadata = {}
+        for key, value in metadata.items():
+            if isinstance(value, (dict, list)):
+                string_metadata[key] = json.dumps(value)
+            else:
+                string_metadata[key] = str(value)
+        
+        # Copy the object to itself with new metadata
+        s3_client.copy_object(
             CopySource={'Bucket': bucket_name, 'Key': object_key},
+            Bucket=bucket_name,
             Key=object_key,
-            Metadata=merged_metadata,
             MetadataDirective='REPLACE',
+            ContentType=content_type,
+            Metadata=string_metadata,
             ServerSideEncryption='AES256'  # Maintain encryption
         )
         
-        logger.info(f"Updated metadata for {bucket_name}/{object_key}")
-        logger.debug(f"New metadata: {merged_metadata}")
-        
-        return response
-    
+        logger.info(f"Successfully updated metadata for {bucket_name}/{object_key}")
+        return True
     except ClientError as e:
-        logger.error(f"Failed to update metadata for {bucket_name}/{object_key}: {str(e)}")
-        raise
+        logger.error(f"Error updating document metadata in S3: {str(e)}")
+        return False
+    except Exception as e:
+        logger.error(f"Unexpected error updating document metadata in S3: {str(e)}")
+        return False
 
 
-def generate_presigned_url(s3_client: boto3.client,
-                          bucket_name: str,
-                          object_key: str,
-                          expiration: int = DEFAULT_EXPIRATION,
-                          http_method: str = 'GET') -> str:
-    """
-    Generate a presigned URL for secure access to an S3 object.
-    
+def generate_presigned_url(object_key: str, expiration: int = DEFAULT_EXPIRATION, 
+                          http_method: str = 'GET') -> Tuple[bool, Optional[str]]:
+    """Generate a presigned URL for secure access to a document.
+
     Args:
-        s3_client: Boto3 S3 client
-        bucket_name: Name of the S3 bucket
-        object_key: Key (path) for the object in S3
-        expiration: URL expiration time in seconds (default: 1 hour)
-        http_method: HTTP method for the URL ('GET' or 'PUT')
-        
+        object_key (str): S3 object key of the document.
+        expiration (int, optional): URL expiration time in seconds. Defaults to DEFAULT_EXPIRATION (1 hour).
+        http_method (str, optional): HTTP method for the URL. Defaults to 'GET'.
+
     Returns:
-        str: Presigned URL
-    
-    Raises:
-        ClientError: If operation fails
+        Tuple[bool, Optional[str]]: Tuple containing success status and presigned URL if successful.
     """
     try:
-        # Validate HTTP method
-        if http_method not in ['GET', 'PUT']:
-            raise ValueError(f"Unsupported HTTP method: {http_method}. Use 'GET' or 'PUT'.")
+        bucket_name = get_bucket_name()
         
-        # Map HTTP method to S3 client method
-        client_method = 'get_object' if http_method == 'GET' else 'put_object'
-        
-        # Generate presigned URL
+        # Generate the presigned URL
         url = s3_client.generate_presigned_url(
-            ClientMethod=client_method,
+            ClientMethod='get_object',
             Params={
                 'Bucket': bucket_name,
                 'Key': object_key
             },
-            ExpiresIn=expiration
+            ExpiresIn=expiration,
+            HttpMethod=http_method
         )
         
-        logger.info(f"Generated presigned URL for {bucket_name}/{object_key} (expires in {expiration} seconds)")
-        
-        return url
-    
+        logger.info(f"Successfully generated presigned URL for {bucket_name}/{object_key} (expires in {expiration}s)")
+        return True, url
     except ClientError as e:
-        logger.error(f"Failed to generate presigned URL for {bucket_name}/{object_key}: {str(e)}")
-        raise
+        logger.error(f"Error generating presigned URL: {str(e)}")
+        return False, None
+    except Exception as e:
+        logger.error(f"Unexpected error generating presigned URL: {str(e)}")
+        return False, None
 
 
-def get_default_s3_client() -> boto3.client:
-    """
-    Get a default S3 client using configuration from environment or config module.
-    
-    Returns:
-        boto3.client: Configured S3 client
-    """
-    return get_s3_client(
-        region_name=S3_REGION_NAME,
-        endpoint_url=S3_ENDPOINT_URL,
-        aws_access_key_id=S3_ACCESS_KEY_ID,
-        aws_secret_access_key=S3_SECRET_ACCESS_KEY
-    )
+def list_documents_by_type(document_type: str, max_items: int = 1000) -> Tuple[bool, Optional[List[Dict[str, Any]]]]:
+    """List documents of a specific type stored in S3.
 
-
-def generate_presigned_post(s3_client: boto3.client,
-                           bucket_name: str,
-                           object_key: str,
-                           fields: Optional[Dict[str, str]] = None,
-                           conditions: Optional[List[Any]] = None,
-                           expiration: int = DEFAULT_EXPIRATION) -> Dict[str, Any]:
-    """
-    Generate a presigned POST policy for uploading objects to S3.
-    
-    This is the recommended way to allow clients to upload files directly to S3.
-    
     Args:
-        s3_client: Boto3 S3 client
-        bucket_name: Name of the S3 bucket
-        object_key: Key (path) for the object in S3
-        fields: Additional form fields to include
-        conditions: Conditions to include in the policy
-        expiration: URL expiration time in seconds (default: 1 hour)
-        
+        document_type (str): Type of documents to list.
+        max_items (int, optional): Maximum number of items to return. Defaults to 1000.
+
     Returns:
-        Dict: Presigned POST data including URL and fields
-    
-    Raises:
-        ClientError: If operation fails
+        Tuple[bool, Optional[List[Dict[str, Any]]]]: 
+            Tuple containing success status and list of document information if successful.
     """
     try:
-        # Prepare fields with encryption requirement
-        post_fields = fields or {}
-        post_fields['x-amz-server-side-encryption'] = 'AES256'
+        bucket_name = get_bucket_name()
+        prefix = f"{DOCUMENT_PREFIX}{document_type}/"
         
-        # Prepare conditions with encryption requirement
-        post_conditions = conditions or []
-        post_conditions.append({'x-amz-server-side-encryption': 'AES256'})
-        
-        # Generate presigned POST
-        presigned_post = s3_client.generate_presigned_post(
+        # List objects with the specified prefix
+        paginator = s3_client.get_paginator('list_objects_v2')
+        page_iterator = paginator.paginate(
             Bucket=bucket_name,
-            Key=object_key,
-            Fields=post_fields,
-            Conditions=post_conditions,
-            ExpiresIn=expiration
-        )
-        
-        logger.info(f"Generated presigned POST for {bucket_name}/{object_key} (expires in {expiration} seconds)")
-        
-        return presigned_post
-    
-    except ClientError as e:
-        logger.error(f"Failed to generate presigned POST for {bucket_name}/{object_key}: {str(e)}")
-        raise
-
-
-def check_bucket_encryption(s3_client: boto3.client, bucket_name: str) -> bool:
-    """
-    Check if a bucket has default encryption enabled.
-    
-    Args:
-        s3_client: Boto3 S3 client
-        bucket_name: Name of the S3 bucket
-        
-    Returns:
-        bool: True if bucket has AES-256 encryption enabled, False otherwise
-    """
-    try:
-        # Get bucket encryption configuration
-        response = s3_client.get_bucket_encryption(Bucket=bucket_name)
-        
-        # Check if AES-256 encryption is enabled
-        rules = response.get('ServerSideEncryptionConfiguration', {}).get('Rules', [])
-        for rule in rules:
-            default_encryption = rule.get('ApplyServerSideEncryptionByDefault', {})
-            if default_encryption.get('SSEAlgorithm') == 'AES256':
-                logger.info(f"Bucket {bucket_name} has AES-256 encryption enabled")
-                return True
-        
-        logger.warning(f"Bucket {bucket_name} does not have AES-256 encryption enabled")
-        return False
-    
-    except ClientError as e:
-        if e.response['Error']['Code'] == 'ServerSideEncryptionConfigurationNotFoundError':
-            logger.warning(f"Bucket {bucket_name} does not have default encryption configured")
-            return False
-        else:
-            logger.error(f"Failed to check encryption for bucket {bucket_name}: {str(e)}")
-            raise
-
-
-def enable_bucket_encryption(s3_client: boto3.client, bucket_name: str) -> Dict[str, Any]:
-    """
-    Enable AES-256 encryption for a bucket.
-    
-    Args:
-        s3_client: Boto3 S3 client
-        bucket_name: Name of the S3 bucket
-        
-    Returns:
-        Dict: Response from S3 put_bucket_encryption operation
-    
-    Raises:
-        ClientError: If operation fails
-    """
-    try:
-        # Configure AES-256 encryption for the bucket
-        response = s3_client.put_bucket_encryption(
-            Bucket=bucket_name,
-            ServerSideEncryptionConfiguration={
-                'Rules': [
-                    {
-                        'ApplyServerSideEncryptionByDefault': {
-                            'SSEAlgorithm': 'AES256'
-                        },
-                        'BucketKeyEnabled': True
-                    }
-                ]
+            Prefix=prefix,
+            PaginationConfig={
+                'MaxItems': max_items,
+                'PageSize': 100
             }
         )
         
-        logger.info(f"Enabled AES-256 encryption for bucket {bucket_name}")
+        # Collect document information
+        documents = []
+        for page in page_iterator:
+            if 'Contents' in page:
+                for obj in page['Contents']:
+                    # Get object key and basic info
+                    obj_key = obj['Key']
+                    obj_info = {
+                        'key': obj_key,
+                        'size': obj['Size'],
+                        'last_modified': obj['LastModified'].isoformat(),
+                        'e_tag': obj['ETag'].strip('"')
+                    }
+                    
+                    # Get metadata for each object
+                    success, metadata = get_document_metadata(obj_key)
+                    if success:
+                        obj_info['metadata'] = metadata
+                    
+                    documents.append(obj_info)
         
-        return response
-    
+        logger.info(f"Successfully listed {len(documents)} documents of type '{document_type}'")
+        return True, documents
     except ClientError as e:
-        logger.error(f"Failed to enable encryption for bucket {bucket_name}: {str(e)}")
-        raise
+        logger.error(f"Error listing documents by type: {str(e)}")
+        return False, None
+    except Exception as e:
+        logger.error(f"Unexpected error listing documents by type: {str(e)}")
+        return False, None
 
 
-def delete_document(s3_client: boto3.client, bucket_name: str, object_key: str) -> Dict[str, Any]:
-    """
-    Delete a document from S3.
-    
+def delete_document(object_key: str) -> bool:
+    """Delete a document from S3.
+
     Args:
-        s3_client: Boto3 S3 client
-        bucket_name: Name of the S3 bucket
-        object_key: Key (path) for the object in S3
-        
+        object_key (str): S3 object key of the document to delete.
+
     Returns:
-        Dict: Response from S3 delete_object operation
-    
-    Raises:
-        ClientError: If operation fails
+        bool: True if deletion was successful, False otherwise.
     """
     try:
+        bucket_name = get_bucket_name()
+        
         # Delete the object
-        response = s3_client.delete_object(Bucket=bucket_name, Key=object_key)
+        s3_client.delete_object(
+            Bucket=bucket_name,
+            Key=object_key
+        )
         
-        logger.info(f"Deleted document {bucket_name}/{object_key}")
-        
-        return response
-    
+        logger.info(f"Successfully deleted document {bucket_name}/{object_key}")
+        return True
     except ClientError as e:
-        logger.error(f"Failed to delete document {bucket_name}/{object_key}: {str(e)}")
-        raise
+        logger.error(f"Error deleting document from S3: {str(e)}")
+        return False
+    except Exception as e:
+        logger.error(f"Unexpected error deleting document from S3: {str(e)}")
+        return False
 
 
-def list_documents_by_classification(s3_client: boto3.client,
-                                   bucket_name: str,
-                                   classification: str,
-                                   prefix: Optional[str] = None,
-                                   max_keys: int = 1000) -> List[Dict[str, Any]]:
-    """
-    List documents in an S3 bucket with a specific classification.
-    
+def copy_document(source_key: str, dest_key: str, new_metadata: Optional[Dict[str, str]] = None) -> bool:
+    """Copy a document within S3, optionally updating its metadata.
+
     Args:
-        s3_client: Boto3 S3 client
-        bucket_name: Name of the S3 bucket
-        classification: Document classification to filter by
-        prefix: Optional prefix to filter objects (e.g., 'folder/')
-        max_keys: Maximum number of keys to return
-        
+        source_key (str): S3 object key of the source document.
+        dest_key (str): S3 object key for the destination.
+        new_metadata (Optional[Dict[str, str]], optional): New metadata to apply. Defaults to None.
+
     Returns:
-        List[Dict]: List of document metadata
-        
-    Raises:
-        ClientError: If operation fails
+        bool: True if copy was successful, False otherwise.
     """
     try:
-        # List all documents with the given prefix
-        all_documents = list_documents(s3_client, bucket_name, prefix, max_keys)
+        bucket_name = get_bucket_name()
         
-        # Filter documents by classification
-        classified_documents = []
-        for doc in all_documents:
-            # Get document classification
-            doc_key = doc.get('Key')
-            try:
-                doc_classification, _ = get_document_classification(s3_client, bucket_name, doc_key)
-                if doc_classification == classification:
-                    classified_documents.append(doc)
-            except ClientError:
-                # Skip documents that can't be accessed
-                continue
-        
-        logger.info(f"Found {len(classified_documents)} documents with classification '{classification}'")
-        
-        return classified_documents
-    
-    except ClientError as e:
-        logger.error(f"Failed to list documents by classification '{classification}': {str(e)}")
-        raise
-
-
-def list_documents(s3_client: boto3.client, 
-                  bucket_name: str, 
-                  prefix: Optional[str] = None, 
-                  max_keys: int = 1000) -> List[Dict[str, Any]]:
-    """
-    List documents in an S3 bucket with optional prefix filtering.
-    
-    Args:
-        s3_client: Boto3 S3 client
-        bucket_name: Name of the S3 bucket
-        prefix: Optional prefix to filter objects (e.g., 'folder/')
-        max_keys: Maximum number of keys to return
-        
-    Returns:
-        List[Dict]: List of document metadata
-    
-    Raises:
-        ClientError: If operation fails
-    """
-    try:
-        # Prepare list parameters
-        list_params = {
+        # Prepare copy parameters
+        copy_params = {
+            'CopySource': {'Bucket': bucket_name, 'Key': source_key},
             'Bucket': bucket_name,
-            'MaxKeys': max_keys
+            'Key': dest_key,
+            'ServerSideEncryption': 'AES256'  # Maintain encryption
         }
         
-        if prefix:
-            list_params['Prefix'] = prefix
+        # If new metadata is provided, apply it
+        if new_metadata:
+            # Get existing metadata to preserve content type
+            success, existing_metadata = get_document_metadata(source_key)
+            if success:
+                content_type = existing_metadata.get('content_type', 'application/octet-stream')
+                copy_params['ContentType'] = content_type
+            
+            # Prepare metadata - convert all values to strings for S3 compatibility
+            string_metadata = {}
+            for key, value in new_metadata.items():
+                if isinstance(value, (dict, list)):
+                    string_metadata[key] = json.dumps(value)
+                else:
+                    string_metadata[key] = str(value)
+            
+            copy_params['MetadataDirective'] = 'REPLACE'
+            copy_params['Metadata'] = string_metadata
         
-        # List objects
-        response = s3_client.list_objects_v2(**list_params)
+        # Copy the object
+        s3_client.copy_object(**copy_params)
         
-        # Extract document information
-        documents = []
-        for obj in response.get('Contents', []):
-            documents.append({
-                'Key': obj.get('Key'),
-                'Size': obj.get('Size'),
-                'LastModified': obj.get('LastModified'),
-                'ETag': obj.get('ETag'),
-                'StorageClass': obj.get('StorageClass')
-            })
-        
-        logger.info(f"Listed {len(documents)} documents in {bucket_name}/{prefix if prefix else ''}")
-        
-        return documents
-    
+        logger.info(f"Successfully copied document from {bucket_name}/{source_key} to {bucket_name}/{dest_key}")
+        return True
     except ClientError as e:
-        logger.error(f"Failed to list documents in {bucket_name}/{prefix if prefix else ''}: {str(e)}")
-        raise
+        logger.error(f"Error copying document in S3: {str(e)}")
+        return False
+    except Exception as e:
+        logger.error(f"Unexpected error copying document in S3: {str(e)}")
+        return False
 
 
-def get_document_url(s3_client: boto3.client, bucket_name: str, object_key: str) -> str:
-    """
-    Get a direct URL to a document in S3 (not presigned, requires proper authentication).
-    
+def check_document_exists(object_key: str) -> bool:
+    """Check if a document exists in S3.
+
     Args:
-        s3_client: Boto3 S3 client
-        bucket_name: Name of the S3 bucket
-        object_key: Key (path) for the object in S3
-        
-    Returns:
-        str: URL to the document
-    """
-    # Get the region from the client if not explicitly provided
-    region = s3_client.meta.region_name
-    
-    # Check if using a custom endpoint
-    endpoint_url = s3_client.meta.endpoint_url
-    if endpoint_url:
-        # For custom S3-compatible storage
-        url = f"{endpoint_url}/{bucket_name}/{object_key}"
-    else:
-        # For AWS S3
-        url = f"https://{bucket_name}.s3.{region}.amazonaws.com/{object_key}"
-    
-    return url
+        object_key (str): S3 object key of the document to check.
 
-
-def document_exists(s3_client: boto3.client, bucket_name: str, object_key: str) -> bool:
-    """
-    Check if a document exists in S3.
-    
-    Args:
-        s3_client: Boto3 S3 client
-        bucket_name: Name of the S3 bucket
-        object_key: Key (path) for the object in S3
-        
     Returns:
-        bool: True if document exists, False otherwise
+        bool: True if the document exists, False otherwise.
     """
     try:
-        # Try to get object metadata
-        s3_client.head_object(Bucket=bucket_name, Key=object_key)
-        logger.debug(f"Document {bucket_name}/{object_key} exists")
+        bucket_name = get_bucket_name()
+        
+        # Check if object exists
+        s3_client.head_object(
+            Bucket=bucket_name,
+            Key=object_key
+        )
+        
         return True
-    
     except ClientError as e:
-        if e.response['Error']['Code'] == '404':
-            logger.debug(f"Document {bucket_name}/{object_key} does not exist")
-            return False
+        error_code = e.response.get('Error', {}).get('Code')
+        if error_code == '404' or error_code == 'NoSuchKey':
+            logger.info(f"Document {bucket_name}/{object_key} does not exist")
         else:
-            logger.error(f"Error checking if document {bucket_name}/{object_key} exists: {str(e)}")
-            raise
+            logger.error(f"Error checking if document exists: {str(e)}")
+        return False
+    except Exception as e:
+        logger.error(f"Unexpected error checking if document exists: {str(e)}")
+        return False
+
+
+def get_document_classification(object_key: str) -> Tuple[bool, Optional[str], Optional[float]]:
+    """Get the classification type and confidence score for a document.
+
+    Args:
+        object_key (str): S3 object key of the document.
+
+    Returns:
+        Tuple[bool, Optional[str], Optional[float]]: 
+            Tuple containing success status, classification type if successful, and confidence score.
+    """
+    try:
+        # Get document metadata
+        success, metadata = get_document_metadata(object_key)
+        if not success:
+            logger.error(f"Failed to retrieve metadata for classification")
+            return False, None, None
+        
+        # Extract classification information
+        document_type = metadata.get('document_type')
+        confidence_str = metadata.get('classification_confidence', '0.0')
+        
+        # Convert confidence to float
+        try:
+            confidence = float(confidence_str)
+        except (ValueError, TypeError):
+            confidence = 0.0
+        
+        logger.info(f"Retrieved classification for document: {document_type} (confidence: {confidence})")
+        return True, document_type, confidence
+    except Exception as e:
+        logger.error(f"Unexpected error retrieving document classification: {str(e)}")
+        return False, None, None
+
+
+def add_classification_metadata(object_key: str, document_type: str, 
+                               confidence: float, additional_metadata: Optional[Dict[str, Any]] = None) -> bool:
+    """Add or update classification metadata for a document.
+
+    Args:
+        object_key (str): S3 object key of the document.
+        document_type (str): Classification type of the document.
+        confidence (float): Confidence score of the classification (0.0 to 1.0).
+        additional_metadata (Optional[Dict[str, Any]], optional): Additional metadata to add. Defaults to None.
+
+    Returns:
+        bool: True if update was successful, False otherwise.
+    """
+    try:
+        # Get existing metadata
+        success, existing_metadata = get_document_metadata(object_key)
+        if not success:
+            logger.error(f"Failed to retrieve existing metadata for classification update")
+            return False
+        
+        # Prepare new metadata
+        new_metadata = {
+            'document_type': document_type,
+            'classification_confidence': str(confidence),
+            'classification_timestamp': datetime.now().isoformat()
+        }
+        
+        # Add additional metadata if provided
+        if additional_metadata:
+            for key, value in additional_metadata.items():
+                new_metadata[key] = value
+        
+        # Update document metadata
+        return update_document_metadata(object_key, new_metadata)
+    except Exception as e:
+        logger.error(f"Unexpected error adding classification metadata: {str(e)}")
+        return False
