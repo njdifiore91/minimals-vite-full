@@ -1,571 +1,706 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
 """
-Machine Learning Utilities for Document Service
+Machine learning utilities for the Document Service.
 
-This module provides utility functions for machine learning operations in the Document Service,
-including model loading, feature extraction, prediction, confidence scoring, and performance monitoring.
-
-These utilities support the document classification functionality using scikit-learn models.
+This module provides utility functions for model loading, feature extraction,
+prediction, and confidence scoring. It's essential for the document classification
+functionality of the service using scikit-learn models.
 """
 
 import os
-import time
 import logging
+import pickle
+import joblib
+import time
+import json
+from datetime import datetime
+from typing import Dict, List, Tuple, Union, Optional, Any, Set
+
 import numpy as np
-import pandas as pd
-from typing import Dict, List, Tuple, Union, Optional, Any, Callable
 from sklearn.base import BaseEstimator
-from sklearn.preprocessing import StandardScaler
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.decomposition import TruncatedSVD
-from sklearn.pipeline import Pipeline
-from sklearn.metrics import accuracy_score, precision_recall_fscore_support, confusion_matrix
-from joblib import dump, load
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.svm import SVC
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
 
-# Import local modules
-try:
-    from config import model_config
-    from utils import logging_utils, error_utils, time_utils
-except ImportError:
-    # Handle relative imports when running as script
-    import sys
-    from pathlib import Path
-    sys.path.append(str(Path(__file__).resolve().parent.parent))
-    from config import model_config
-    from utils import logging_utils, error_utils, time_utils
+# Import from other modules
+from ..config.model_config import get_model_config, get_model_path, get_confidence_threshold
+from ..models.feature_extraction import FeatureExtractor
+from ..types.documents import Document, DocumentType
+from ..types.classification import ClassificationResult, ConfidenceScore, ModelMetadata
 
+# Set up logging
 logger = logging.getLogger(__name__)
 
-# Constants
-MODEL_VERSION_KEY = "model_version"
-MODEL_TIMESTAMP_KEY = "timestamp"
-MODEL_METRICS_KEY = "metrics"
-MODEL_PARAMS_KEY = "parameters"
-MODEL_FEATURES_KEY = "features"
 
-
-def load_model(model_path: str) -> Tuple[BaseEstimator, Dict[str, Any]]:
+# Model loading functions
+def load_model(model_type: str) -> BaseEstimator:
     """
-    Load a scikit-learn model and its metadata from disk.
+    Load a trained model from disk.
     
     Args:
-        model_path: Path to the saved model file
+        model_type: Type of model to load (svm, random_forest, ensemble)
         
     Returns:
-        Tuple containing the loaded model and its metadata dictionary
+        Loaded scikit-learn model
         
     Raises:
         FileNotFoundError: If the model file doesn't exist
-        ValueError: If the loaded file is not a valid model
+        ValueError: If the model type is not supported
     """
-    start_time = time.time()
-    try:
-        if not os.path.exists(model_path):
-            raise FileNotFoundError(f"Model file not found at {model_path}")
-        
-        # Load the model and metadata
-        model_data = load(model_path)
-        
-        # Validate model data structure
-        if not isinstance(model_data, dict) or 'model' not in model_data or 'metadata' not in model_data:
-            raise ValueError(f"Invalid model format at {model_path}")
-        
-        model = model_data['model']
-        metadata = model_data['metadata']
-        
-        # Log model loading
-        version = metadata.get(MODEL_VERSION_KEY, 'unknown')
-        logger.info(
-            f"Loaded model version {version} from {model_path} "
-            f"in {time_utils.format_duration(time.time() - start_time)}"
-        )
-        
-        return model, metadata
+    model_config = get_model_config()
+    model_path = get_model_path(model_type)
     
-    except Exception as e:
-        error_msg = f"Failed to load model from {model_path}: {str(e)}"
-        logger.error(error_msg)
-        raise error_utils.create_error("ModelLoadError", error_msg, e) from e
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(f"Model file not found: {model_path}")
+    
+    logger.info(f"Loading {model_type} model from {model_path}")
+    
+    try:
+        # Try loading with joblib first (preferred for scikit-learn models)
+        model = joblib.load(model_path)
+        logger.info(f"Successfully loaded {model_type} model using joblib")
+        return model
+    except Exception as joblib_error:
+        logger.warning(f"Failed to load model with joblib: {str(joblib_error)}")
+        try:
+            # Fall back to pickle if joblib fails
+            with open(model_path, 'rb') as f:
+                model = pickle.load(f)
+            logger.info(f"Successfully loaded {model_type} model using pickle")
+            return model
+        except Exception as pickle_error:
+            logger.error(f"Failed to load model with pickle: {str(pickle_error)}")
+            raise ValueError(f"Failed to load model {model_type}: {str(pickle_error)}")
 
 
-def save_model(model: BaseEstimator, metadata: Dict[str, Any], model_path: str) -> str:
+def load_all_models() -> Dict[str, BaseEstimator]:
     """
-    Save a scikit-learn model and its metadata to disk.
+    Load all available trained models.
+    
+    Returns:
+        Dictionary of model type to loaded model
+    """
+    model_config = get_model_config()
+    models = {}
+    
+    for model_type in model_config["paths"].keys():
+        try:
+            models[model_type] = load_model(model_type)
+        except (FileNotFoundError, ValueError) as e:
+            logger.warning(f"Could not load {model_type} model: {str(e)}")
+    
+    if not models:
+        logger.error("No models could be loaded")
+    else:
+        logger.info(f"Successfully loaded {len(models)} models: {', '.join(models.keys())}")
+    
+    return models
+
+
+def get_model_metadata(model_type: str) -> ModelMetadata:
+    """
+    Get metadata for a trained model.
     
     Args:
-        model: The scikit-learn model to save
-        metadata: Dictionary containing model metadata
-        model_path: Path where the model should be saved
+        model_type: Type of model to get metadata for
         
     Returns:
-        Path to the saved model file
+        Model metadata
         
     Raises:
-        ValueError: If the model or metadata is invalid
-        IOError: If the model cannot be saved
+        FileNotFoundError: If the model metadata file doesn't exist
+        ValueError: If the model type is not supported
     """
-    start_time = time.time()
-    try:
-        # Ensure directory exists
-        os.makedirs(os.path.dirname(model_path), exist_ok=True)
-        
-        # Update metadata with timestamp if not present
-        if MODEL_TIMESTAMP_KEY not in metadata:
-            metadata[MODEL_TIMESTAMP_KEY] = time_utils.get_iso_timestamp()
-        
-        # Create model data dictionary
-        model_data = {
-            'model': model,
-            'metadata': metadata
-        }
-        
-        # Save the model
-        dump(model_data, model_path, compress=3)
-        
-        # Log model saving
-        version = metadata.get(MODEL_VERSION_KEY, 'unknown')
-        logger.info(
-            f"Saved model version {version} to {model_path} "
-            f"in {time_utils.format_duration(time.time() - start_time)}"
-        )
-        
-        return model_path
+    model_config = get_model_config()
+    model_path = get_model_path(model_type)
+    metadata_path = f"{os.path.splitext(model_path)[0]}_metadata.json"
     
+    if not os.path.exists(metadata_path):
+        logger.warning(f"Model metadata file not found: {metadata_path}")
+        # Return basic metadata if file doesn't exist
+        return ModelMetadata(
+            model_type=model_type,
+            version=model_config["version"],
+            created_at=datetime.fromtimestamp(os.path.getctime(model_path)) if os.path.exists(model_path) else datetime.now(),
+            accuracy=None,
+            f1_score=None,
+            training_parameters=None
+        )
+    
+    try:
+        with open(metadata_path, 'r') as f:
+            metadata_dict = json.load(f)
+        
+        # Convert string date to datetime
+        if "created_at" in metadata_dict and isinstance(metadata_dict["created_at"], str):
+            metadata_dict["created_at"] = datetime.fromisoformat(metadata_dict["created_at"])
+        
+        return ModelMetadata(**metadata_dict)
     except Exception as e:
-        error_msg = f"Failed to save model to {model_path}: {str(e)}"
-        logger.error(error_msg)
-        raise error_utils.create_error("ModelSaveError", error_msg, e) from e
+        logger.error(f"Failed to load model metadata: {str(e)}")
+        # Return basic metadata if loading fails
+        return ModelMetadata(
+            model_type=model_type,
+            version=model_config["version"],
+            created_at=datetime.fromtimestamp(os.path.getctime(model_path)) if os.path.exists(model_path) else datetime.now(),
+            accuracy=None,
+            f1_score=None,
+            training_parameters=None
+        )
 
 
-def create_feature_extractor(config: Dict[str, Any] = None) -> Pipeline:
+# Feature extraction functions
+def create_feature_extractor(config: Optional[Dict[str, Any]] = None) -> FeatureExtractor:
     """
-    Create a scikit-learn pipeline for feature extraction based on configuration.
+    Create a feature extractor with the specified configuration.
     
     Args:
-        config: Configuration dictionary for feature extraction
-               If None, uses default configuration from model_config
-               
+        config: Feature extraction configuration (if None, uses default from model_config)
+        
     Returns:
-        A scikit-learn Pipeline for feature extraction
+        Configured feature extractor
     """
     if config is None:
-        config = model_config.FEATURE_EXTRACTION_CONFIG
+        model_config = get_model_config()
+        config = model_config["feature_extraction"]
     
-    # Create TF-IDF vectorizer
-    tfidf_params = config.get('tfidf', {})
-    tfidf = TfidfVectorizer(
-        max_features=tfidf_params.get('max_features', 10000),
-        min_df=tfidf_params.get('min_df', 5),
-        max_df=tfidf_params.get('max_df', 0.85),
-        ngram_range=tfidf_params.get('ngram_range', (1, 2)),
-        stop_words=tfidf_params.get('stop_words', 'english')
-    )
-    
-    # Create dimensionality reduction if configured
-    use_svd = config.get('use_svd', True)
-    pipeline_steps = [('tfidf', tfidf)]
-    
-    if use_svd:
-        svd_params = config.get('svd', {})
-        svd = TruncatedSVD(
-            n_components=svd_params.get('n_components', 100),
-            random_state=svd_params.get('random_state', 42)
-        )
-        pipeline_steps.append(('svd', svd))
-    
-    # Add scaling if configured
-    use_scaling = config.get('use_scaling', True)
-    if use_scaling:
-        pipeline_steps.append(('scaler', StandardScaler()))
-    
-    return Pipeline(pipeline_steps)
+    logger.info("Creating feature extractor with configuration")
+    return FeatureExtractor(config)
 
 
-def extract_features(documents: List[str], extractor: Optional[Pipeline] = None) -> np.ndarray:
+def extract_features_from_document(document: Document, feature_extractor: Optional[FeatureExtractor] = None) -> np.ndarray:
     """
-    Extract features from a list of document texts.
+    Extract features from a document for classification.
     
     Args:
-        documents: List of document texts to extract features from
-        extractor: Feature extraction pipeline (if None, creates a new one)
+        document: Document to extract features from
+        feature_extractor: Feature extractor to use (if None, creates a new one)
         
     Returns:
-        Numpy array of extracted features
-        
-    Raises:
-        ValueError: If documents is empty or contains non-string elements
+        Feature vector as numpy array
     """
-    if not documents:
-        raise ValueError("Empty document list provided for feature extraction")
+    if feature_extractor is None:
+        feature_extractor = create_feature_extractor()
     
-    if not all(isinstance(doc, str) for doc in documents):
-        raise ValueError("All documents must be strings")
+    logger.info(f"Extracting features from document {document.metadata.id if hasattr(document.metadata, 'id') else 'unknown'}")
     
-    # Create extractor if not provided
-    if extractor is None:
-        extractor = create_feature_extractor()
-        # Fit and transform
-        return extractor.fit_transform(documents)
+    # Check if feature extractor is fitted
+    if not feature_extractor.is_fitted:
+        logger.warning("Feature extractor not fitted. Using default extraction.")
+        # For a single document, we can't properly fit the extractor
+        # So we'll use a simplified approach
+        from ..models.feature_extraction import TextExtractor, TextPreprocessor, MetadataExtractor
+        
+        # Extract text
+        text_extractor = TextExtractor()
+        text = text_extractor.extract_text(document)
+        
+        # Preprocess text
+        text_preprocessor = TextPreprocessor()
+        preprocessed_text = text_preprocessor.preprocess(text)
+        
+        # Extract metadata features
+        metadata_extractor = MetadataExtractor()
+        metadata_features = metadata_extractor.extract_metadata_features(document)
+        
+        # Combine features (simplified approach)
+        # This is not ideal but allows for prediction without a fitted extractor
+        features = np.array(list(metadata_features.values()))
+        
+        logger.warning("Using simplified feature extraction. Classification may be less accurate.")
+        return features
     
-    # If extractor is already fitted, just transform
-    try:
-        return extractor.transform(documents)
-    except Exception as e:
-        # If transform fails, try fit_transform (extractor might not be fitted)
+    # Use the fitted feature extractor
+    feature_vector = feature_extractor.extract_features_from_document(document)
+    return feature_vector.values
+
+
+# Prediction functions
+def predict_document_type(document: Document, model: Optional[BaseEstimator] = None, 
+                         feature_extractor: Optional[FeatureExtractor] = None) -> ClassificationResult:
+    """
+    Predict the document type for a document.
+    
+    Args:
+        document: Document to classify
+        model: Model to use for prediction (if None, loads the ensemble model)
+        feature_extractor: Feature extractor to use (if None, creates a new one)
+        
+    Returns:
+        Classification result with document type and confidence scores
+    """
+    model_config = get_model_config()
+    
+    # Load model if not provided
+    if model is None:
         try:
-            return extractor.fit_transform(documents)
-        except Exception as inner_e:
-            error_msg = f"Feature extraction failed: {str(inner_e)}"
-            logger.error(error_msg)
-            raise error_utils.create_error("FeatureExtractionError", error_msg, inner_e) from inner_e
-
-
-def get_prediction_confidence(probabilities: np.ndarray, method: str = 'max_prob') -> np.ndarray:
-    """
-    Calculate confidence scores for predictions based on probability distributions.
+            model = load_model("ensemble")
+        except (FileNotFoundError, ValueError):
+            logger.warning("Ensemble model not available. Trying random_forest model.")
+            try:
+                model = load_model("random_forest")
+            except (FileNotFoundError, ValueError):
+                logger.warning("Random forest model not available. Trying SVM model.")
+                try:
+                    model = load_model("svm")
+                except (FileNotFoundError, ValueError):
+                    raise ValueError("No classification models available")
     
-    Args:
-        probabilities: Array of class probabilities from classifier
-        method: Method to calculate confidence
-                'max_prob': Maximum probability (default)
-                'margin': Difference between top two probabilities
-                'entropy': Entropy-based confidence (higher entropy = lower confidence)
-                
-    Returns:
-        Array of confidence scores (0-1 range)
-    """
-    if method == 'max_prob':
-        # Simply use the maximum probability as confidence
-        return np.max(probabilities, axis=1)
+    # Extract features
+    features = extract_features_from_document(document, feature_extractor)
+    features = features.reshape(1, -1)  # Reshape for single sample prediction
     
-    elif method == 'margin':
-        # Sort probabilities in descending order
-        sorted_probs = np.sort(probabilities, axis=1)[:, ::-1]
-        # Calculate margin between top two classes
-        # If only one class, use the probability directly
-        if sorted_probs.shape[1] > 1:
-            return sorted_probs[:, 0] - sorted_probs[:, 1]
+    # Get document categories
+    document_categories = model_config["document_categories"]
+    
+    # Make prediction
+    start_time = time.time()
+    
+    try:
+        # Get predicted class
+        predicted_class = model.predict(features)[0]
+        
+        # Get prediction probabilities if available
+        if hasattr(model, "predict_proba"):
+            probabilities = model.predict_proba(features)[0]
+            confidence_scores = {
+                category: float(prob) 
+                for category, prob in zip(model.classes_, probabilities)
+            }
         else:
-            return sorted_probs[:, 0]
+            # For models without predict_proba, use decision function if available
+            if hasattr(model, "decision_function"):
+                decisions = model.decision_function(features)[0]
+                # Convert decision values to pseudo-probabilities
+                if len(model.classes_) == 2:  # Binary classification
+                    # For binary classification, decision_function returns a single value
+                    pos_score = 1 / (1 + np.exp(-decisions))  # Sigmoid function
+                    confidence_scores = {
+                        model.classes_[0]: float(1 - pos_score),
+                        model.classes_[1]: float(pos_score)
+                    }
+                else:  # Multi-class classification
+                    # Softmax to convert decision values to pseudo-probabilities
+                    exp_decisions = np.exp(decisions - np.max(decisions))
+                    softmax_scores = exp_decisions / exp_decisions.sum()
+                    confidence_scores = {
+                        category: float(score) 
+                        for category, score in zip(model.classes_, softmax_scores)
+                    }
+            else:
+                # If no probability or decision function, use binary confidence
+                confidence_scores = {category: 1.0 if category == predicted_class else 0.0 for category in document_categories}
+    except Exception as e:
+        logger.error(f"Error during prediction: {str(e)}")
+        # Return unknown classification with zero confidence
+        return ClassificationResult(
+            document_id=document.metadata.id if hasattr(document.metadata, "id") else None,
+            document_type="unknown",
+            confidence_scores={category: 0.0 for category in document_categories},
+            prediction_time=time.time() - start_time,
+            model_type=getattr(model, "_estimator_type", "unknown"),
+            model_version=model_config["version"],
+            threshold_applied=False,
+            requires_review=True
+        )
     
-    elif method == 'entropy':
-        # Calculate entropy of the probability distribution
-        # Add small epsilon to avoid log(0)
-        epsilon = 1e-10
-        entropy = -np.sum(probabilities * np.log(probabilities + epsilon), axis=1)
-        # Normalize to 0-1 range (max entropy is log(n_classes))
-        n_classes = probabilities.shape[1]
-        max_entropy = np.log(n_classes)
-        # Convert to confidence (1 - normalized entropy)
-        return 1.0 - (entropy / max_entropy)
+    # Get confidence threshold for the predicted document type
+    threshold = get_confidence_threshold(predicted_class)
     
-    else:
-        raise ValueError(f"Unknown confidence method: {method}")
-
-
-def predict_with_confidence(
-    model: BaseEstimator, 
-    features: np.ndarray, 
-    confidence_method: str = 'max_prob',
-    confidence_threshold: float = 0.75
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Make predictions with a classifier and calculate confidence scores.
+    # Check if confidence meets threshold
+    predicted_confidence = confidence_scores.get(predicted_class, 0.0)
+    requires_review = predicted_confidence < threshold
     
-    Args:
-        model: Trained classifier model
-        features: Feature matrix for prediction
-        confidence_method: Method to calculate confidence
-        confidence_threshold: Threshold for high/low confidence classification
-        
-    Returns:
-        Tuple of (predictions, probabilities, confidence_scores)
-        
-    Raises:
-        ValueError: If model doesn't support predict_proba
-    """
-    # Check if model supports probability estimates
-    if not hasattr(model, 'predict_proba'):
-        raise ValueError("Model does not support probability estimation")
-    
-    # Get predictions and probabilities
-    predictions = model.predict(features)
-    probabilities = model.predict_proba(features)
-    
-    # Calculate confidence scores
-    confidence_scores = get_prediction_confidence(probabilities, method=confidence_method)
-    
-    # Log prediction statistics
-    low_confidence_count = np.sum(confidence_scores < confidence_threshold)
-    logger.info(
-        f"Made {len(predictions)} predictions with "
-        f"{low_confidence_count} below confidence threshold {confidence_threshold}"
+    # Create classification result
+    result = ClassificationResult(
+        document_id=document.metadata.id if hasattr(document.metadata, "id") else None,
+        document_type=predicted_class,
+        confidence_scores=confidence_scores,
+        prediction_time=time.time() - start_time,
+        model_type=getattr(model, "_estimator_type", "unknown"),
+        model_version=model_config["version"],
+        threshold_applied=True,
+        requires_review=requires_review
     )
     
-    return predictions, probabilities, confidence_scores
+    logger.info(f"Classified document as {predicted_class} with confidence {predicted_confidence:.4f}")
+    if requires_review:
+        logger.info(f"Document requires review (confidence {predicted_confidence:.4f} < threshold {threshold:.4f})")
+    
+    return result
 
 
-def evaluate_model_performance(
-    model: BaseEstimator, 
-    X_test: np.ndarray, 
-    y_test: np.ndarray,
-    class_names: Optional[List[str]] = None
-) -> Dict[str, Any]:
+def predict_document_types_batch(documents: List[Document], model: Optional[BaseEstimator] = None,
+                               feature_extractor: Optional[FeatureExtractor] = None) -> List[ClassificationResult]:
     """
-    Evaluate model performance on test data and return metrics.
+    Predict document types for a batch of documents.
     
     Args:
-        model: Trained classifier model
-        X_test: Test feature matrix
-        y_test: True labels for test data
-        class_names: List of class names (optional)
+        documents: List of documents to classify
+        model: Model to use for prediction (if None, loads the ensemble model)
+        feature_extractor: Feature extractor to use (if None, creates a new one)
         
     Returns:
-        Dictionary containing performance metrics
+        List of classification results
+    """
+    model_config = get_model_config()
+    
+    # Load model if not provided
+    if model is None:
+        try:
+            model = load_model("ensemble")
+        except (FileNotFoundError, ValueError):
+            logger.warning("Ensemble model not available. Trying random_forest model.")
+            try:
+                model = load_model("random_forest")
+            except (FileNotFoundError, ValueError):
+                logger.warning("Random forest model not available. Trying SVM model.")
+                try:
+                    model = load_model("svm")
+                except (FileNotFoundError, ValueError):
+                    raise ValueError("No classification models available")
+    
+    # Create feature extractor if not provided
+    if feature_extractor is None:
+        feature_extractor = create_feature_extractor()
+        
+        # If we have enough documents, fit the feature extractor
+        if len(documents) >= 5:  # Arbitrary threshold for fitting
+            logger.info(f"Fitting feature extractor on {len(documents)} documents")
+            feature_extractor.fit(documents)
+    
+    # Extract features for all documents
+    features_list = []
+    for doc in documents:
+        try:
+            features = extract_features_from_document(doc, feature_extractor)
+            features_list.append(features)
+        except Exception as e:
+            logger.error(f"Error extracting features from document: {str(e)}")
+            # Add a placeholder for failed feature extraction
+            features_list.append(None)
+    
+    # Make predictions for documents with successful feature extraction
+    results = []
+    for i, (doc, features) in enumerate(zip(documents, features_list)):
+        if features is None:
+            # Create a failed classification result
+            results.append(ClassificationResult(
+                document_id=doc.metadata.id if hasattr(doc.metadata, "id") else None,
+                document_type="unknown",
+                confidence_scores={category: 0.0 for category in model_config["document_categories"]},
+                prediction_time=0.0,
+                model_type=getattr(model, "_estimator_type", "unknown"),
+                model_version=model_config["version"],
+                threshold_applied=False,
+                requires_review=True,
+                error="Feature extraction failed"
+            ))
+        else:
+            try:
+                # Reshape features for single sample prediction
+                features_reshaped = features.reshape(1, -1)
+                
+                # Get predicted class
+                predicted_class = model.predict(features_reshaped)[0]
+                
+                # Get prediction probabilities if available
+                if hasattr(model, "predict_proba"):
+                    probabilities = model.predict_proba(features_reshaped)[0]
+                    confidence_scores = {
+                        category: float(prob) 
+                        for category, prob in zip(model.classes_, probabilities)
+                    }
+                else:
+                    # For models without predict_proba, use decision function if available
+                    if hasattr(model, "decision_function"):
+                        decisions = model.decision_function(features_reshaped)[0]
+                        # Convert decision values to pseudo-probabilities
+                        if len(model.classes_) == 2:  # Binary classification
+                            pos_score = 1 / (1 + np.exp(-decisions))  # Sigmoid function
+                            confidence_scores = {
+                                model.classes_[0]: float(1 - pos_score),
+                                model.classes_[1]: float(pos_score)
+                            }
+                        else:  # Multi-class classification
+                            exp_decisions = np.exp(decisions - np.max(decisions))
+                            softmax_scores = exp_decisions / exp_decisions.sum()
+                            confidence_scores = {
+                                category: float(score) 
+                                for category, score in zip(model.classes_, softmax_scores)
+                            }
+                    else:
+                        # If no probability or decision function, use binary confidence
+                        confidence_scores = {category: 1.0 if category == predicted_class else 0.0 
+                                           for category in model_config["document_categories"]}
+                
+                # Get confidence threshold for the predicted document type
+                threshold = get_confidence_threshold(predicted_class)
+                
+                # Check if confidence meets threshold
+                predicted_confidence = confidence_scores.get(predicted_class, 0.0)
+                requires_review = predicted_confidence < threshold
+                
+                # Create classification result
+                results.append(ClassificationResult(
+                    document_id=doc.metadata.id if hasattr(doc.metadata, "id") else None,
+                    document_type=predicted_class,
+                    confidence_scores=confidence_scores,
+                    prediction_time=0.0,  # Not measuring individual prediction time in batch mode
+                    model_type=getattr(model, "_estimator_type", "unknown"),
+                    model_version=model_config["version"],
+                    threshold_applied=True,
+                    requires_review=requires_review
+                ))
+                
+            except Exception as e:
+                logger.error(f"Error during prediction for document {i}: {str(e)}")
+                # Create a failed classification result
+                results.append(ClassificationResult(
+                    document_id=doc.metadata.id if hasattr(doc.metadata, "id") else None,
+                    document_type="unknown",
+                    confidence_scores={category: 0.0 for category in model_config["document_categories"]},
+                    prediction_time=0.0,
+                    model_type=getattr(model, "_estimator_type", "unknown"),
+                    model_version=model_config["version"],
+                    threshold_applied=False,
+                    requires_review=True,
+                    error=f"Prediction failed: {str(e)}"
+                ))
+    
+    logger.info(f"Classified {len(documents)} documents in batch mode")
+    return results
+
+
+# Confidence scoring functions
+def calculate_confidence_score(probabilities: Dict[str, float], predicted_class: str) -> ConfidenceScore:
+    """
+    Calculate a detailed confidence score for a classification result.
+    
+    Args:
+        probabilities: Dictionary of class probabilities
+        predicted_class: The predicted class
+        
+    Returns:
+        Detailed confidence score
+    """
+    model_config = get_model_config()
+    
+    # Get the probability for the predicted class
+    predicted_prob = probabilities.get(predicted_class, 0.0)
+    
+    # Get the second highest probability
+    other_probs = [prob for cls, prob in probabilities.items() if cls != predicted_class]
+    second_highest_prob = max(other_probs) if other_probs else 0.0
+    
+    # Calculate margin (difference between top two probabilities)
+    margin = predicted_prob - second_highest_prob
+    
+    # Get confidence thresholds
+    thresholds = model_config["confidence_thresholds"]
+    document_threshold = get_confidence_threshold(predicted_class)
+    
+    # Determine confidence level
+    if predicted_prob >= thresholds["high"]:
+        confidence_level = "high"
+    elif predicted_prob >= thresholds["medium"]:
+        confidence_level = "medium"
+    elif predicted_prob >= thresholds["low"]:
+        confidence_level = "low"
+    else:
+        confidence_level = "very_low"
+    
+    # Determine if review is required
+    requires_review = predicted_prob < document_threshold
+    
+    # Create confidence score
+    return ConfidenceScore(
+        value=float(predicted_prob),
+        level=confidence_level,
+        margin=float(margin),
+        threshold=float(document_threshold),
+        requires_review=requires_review
+    )
+
+
+def get_confidence_level(confidence_value: float) -> str:
+    """
+    Get the confidence level string for a confidence value.
+    
+    Args:
+        confidence_value: Confidence value between 0 and 1
+        
+    Returns:
+        Confidence level string (high, medium, low, very_low)
+    """
+    model_config = get_model_config()
+    thresholds = model_config["confidence_thresholds"]
+    
+    if confidence_value >= thresholds["high"]:
+        return "high"
+    elif confidence_value >= thresholds["medium"]:
+        return "medium"
+    elif confidence_value >= thresholds["low"]:
+        return "low"
+    else:
+        return "very_low"
+
+
+# Model evaluation functions
+def evaluate_model_performance(model: BaseEstimator, X_test: np.ndarray, y_test: np.ndarray) -> Dict[str, Any]:
+    """
+    Evaluate the performance of a model on test data.
+    
+    Args:
+        model: Trained model to evaluate
+        X_test: Test features
+        y_test: True labels for test data
+        
+    Returns:
+        Dictionary of performance metrics
     """
     # Make predictions
     y_pred = model.predict(X_test)
     
-    # Calculate basic metrics
+    # Calculate metrics
     accuracy = accuracy_score(y_test, y_pred)
-    precision, recall, f1, support = precision_recall_fscore_support(y_test, y_pred, average='weighted')
+    precision = precision_score(y_test, y_pred, average="weighted")
+    recall = recall_score(y_test, y_pred, average="weighted")
+    f1 = f1_score(y_test, y_pred, average="weighted")
+    conf_matrix = confusion_matrix(y_test, y_pred)
     
-    # Calculate confusion matrix
-    cm = confusion_matrix(y_test, y_pred)
+    # Get prediction probabilities if available
+    if hasattr(model, "predict_proba"):
+        y_proba = model.predict_proba(X_test)
+        # Calculate average confidence
+        avg_confidence = np.mean([proba[np.argmax(proba)] for proba in y_proba])
+    else:
+        avg_confidence = None
     
-    # Calculate per-class metrics if class names are provided
-    class_metrics = None
-    if class_names is not None:
-        prec, rec, f1, supp = precision_recall_fscore_support(y_test, y_pred, average=None)
-        class_metrics = {
-            name: {
-                'precision': float(prec[i]),
-                'recall': float(rec[i]),
-                'f1': float(f1[i]),
-                'support': int(supp[i])
-            } for i, name in enumerate(class_names)
-        }
-    
-    # Compile metrics dictionary
+    # Create performance metrics dictionary
     metrics = {
-        'accuracy': float(accuracy),
-        'precision': float(precision),
-        'recall': float(recall),
-        'f1': float(f1),
-        'confusion_matrix': cm.tolist(),
-        'support': int(np.sum(support)),
-        'timestamp': time_utils.get_iso_timestamp()
+        "accuracy": float(accuracy),
+        "precision": float(precision),
+        "recall": float(recall),
+        "f1_score": float(f1),
+        "confusion_matrix": conf_matrix.tolist(),
+        "average_confidence": float(avg_confidence) if avg_confidence is not None else None,
+        "sample_count": len(y_test)
     }
     
-    if class_metrics:
-        metrics['class_metrics'] = class_metrics
+    logger.info(f"Model evaluation results: accuracy={accuracy:.4f}, f1_score={f1:.4f}")
+    return metrics
+
+
+def monitor_prediction_performance(predictions: List[ClassificationResult]) -> Dict[str, Any]:
+    """
+    Monitor the performance of predictions in production.
+    
+    Args:
+        predictions: List of classification results
+        
+    Returns:
+        Dictionary of monitoring metrics
+    """
+    if not predictions:
+        return {}
+    
+    # Calculate metrics
+    total_predictions = len(predictions)
+    requires_review_count = sum(1 for p in predictions if p.requires_review)
+    error_count = sum(1 for p in predictions if hasattr(p, "error") and p.error)
+    
+    # Calculate average confidence by document type
+    confidence_by_type = {}
+    for p in predictions:
+        if p.document_type not in confidence_by_type:
+            confidence_by_type[p.document_type] = []
+        if p.document_type in p.confidence_scores:
+            confidence_by_type[p.document_type].append(p.confidence_scores[p.document_type])
+    
+    avg_confidence_by_type = {
+        doc_type: sum(scores) / len(scores) if scores else 0.0
+        for doc_type, scores in confidence_by_type.items()
+    }
+    
+    # Calculate average prediction time
+    avg_prediction_time = sum(p.prediction_time for p in predictions) / total_predictions if total_predictions > 0 else 0.0
+    
+    # Create monitoring metrics dictionary
+    metrics = {
+        "total_predictions": total_predictions,
+        "requires_review_count": requires_review_count,
+        "requires_review_percentage": requires_review_count / total_predictions if total_predictions > 0 else 0.0,
+        "error_count": error_count,
+        "error_percentage": error_count / total_predictions if total_predictions > 0 else 0.0,
+        "average_confidence_by_type": avg_confidence_by_type,
+        "average_prediction_time": avg_prediction_time
+    }
     
     return metrics
 
 
-def track_model_performance(model_name: str, metrics: Dict[str, Any]) -> None:
+# Model versioning functions
+def get_model_version() -> str:
     """
-    Track model performance metrics for monitoring.
+    Get the current model version.
+    
+    Returns:
+        Current model version string
+    """
+    model_config = get_model_config()
+    return model_config["version"]
+
+
+def check_model_compatibility(model: BaseEstimator) -> bool:
+    """
+    Check if a model is compatible with the current configuration.
     
     Args:
-        model_name: Name of the model being tracked
-        metrics: Dictionary of performance metrics
+        model: Model to check compatibility for
+        
+    Returns:
+        True if compatible, False otherwise
     """
-    # Log performance metrics
-    logger.info(f"Model {model_name} performance: accuracy={metrics['accuracy']:.4f}, "
-                f"precision={metrics['precision']:.4f}, recall={metrics['recall']:.4f}, "
-                f"f1={metrics['f1']:.4f}")
+    # Check if model has the expected attributes for its type
+    if isinstance(model, RandomForestClassifier):
+        expected_attrs = ["n_estimators", "criterion", "max_depth"]
+    elif isinstance(model, SVC):
+        expected_attrs = ["C", "kernel", "gamma"]
+    else:
+        # For other model types, just check if it has predict method
+        return hasattr(model, "predict")
     
-    # Here we would typically send metrics to a monitoring system
-    # This could be implemented with various backends (Prometheus, CloudWatch, etc.)
-    # For now, we'll just log them
-    
-    # Example of how this might be implemented with a monitoring client:
-    # try:
-    #     monitoring_client.record_metrics({
-    #         f"model.{model_name}.accuracy": metrics['accuracy'],
-    #         f"model.{model_name}.precision": metrics['precision'],
-    #         f"model.{model_name}.recall": metrics['recall'],
-    #         f"model.{model_name}.f1": metrics['f1']
-    #     })
-    # except Exception as e:
-    #     logger.warning(f"Failed to record metrics to monitoring system: {str(e)}")
+    # Check if model has all expected attributes
+    return all(hasattr(model, attr) for attr in expected_attrs)
 
 
-def validate_model(model: BaseEstimator, expected_classes: List[str]) -> bool:
+def validate_model(model: BaseEstimator, X_sample: np.ndarray, expected_classes: Set[str]) -> bool:
     """
-    Validate that a model meets basic requirements for use.
+    Validate that a model can make predictions and has the expected classes.
     
     Args:
         model: Model to validate
-        expected_classes: List of class names the model should predict
+        X_sample: Sample features for prediction
+        expected_classes: Set of expected class labels
         
     Returns:
-        True if model is valid, False otherwise
-    """
-    # Check that model has required methods
-    required_methods = ['fit', 'predict', 'predict_proba']
-    for method in required_methods:
-        if not hasattr(model, method):
-            logger.error(f"Model validation failed: missing required method '{method}'")
-            return False
-    
-    # Check that model has expected classes
-    if hasattr(model, 'classes_'):
-        model_classes = model.classes_
-        if len(model_classes) != len(expected_classes) or not all(c in model_classes for c in expected_classes):
-            logger.error(f"Model validation failed: expected classes {expected_classes}, "
-                        f"got {model_classes}")
-            return False
-    else:
-        logger.warning("Model validation: model has no classes_ attribute, skipping class validation")
-    
-    return True
-
-
-def get_model_version_info(model_path: str) -> Dict[str, Any]:
-    """
-    Get version information for a saved model.
-    
-    Args:
-        model_path: Path to the saved model file
-        
-    Returns:
-        Dictionary containing model version information
-        
-    Raises:
-        FileNotFoundError: If the model file doesn't exist
+        True if valid, False otherwise
     """
     try:
-        _, metadata = load_model(model_path)
+        # Check if model can make predictions
+        _ = model.predict(X_sample)
         
-        # Extract relevant version info
-        version_info = {
-            'version': metadata.get(MODEL_VERSION_KEY, 'unknown'),
-            'timestamp': metadata.get(MODEL_TIMESTAMP_KEY, 'unknown'),
-            'parameters': metadata.get(MODEL_PARAMS_KEY, {}),
-        }
+        # Check if model has the expected classes
+        if hasattr(model, "classes_"):
+            model_classes = set(model.classes_)
+            if not expected_classes.issubset(model_classes):
+                logger.warning(f"Model is missing expected classes. Expected: {expected_classes}, Got: {model_classes}")
+                return False
         
-        # Add performance metrics if available
-        if MODEL_METRICS_KEY in metadata:
-            metrics = metadata[MODEL_METRICS_KEY]
-            version_info['accuracy'] = metrics.get('accuracy', 'unknown')
-            version_info['f1'] = metrics.get('f1', 'unknown')
-        
-        return version_info
-    
-    except FileNotFoundError:
-        raise
+        return True
     except Exception as e:
-        logger.error(f"Failed to get model version info: {str(e)}")
-        return {'version': 'unknown', 'error': str(e)}
-
-
-def compare_model_versions(model_paths: List[str]) -> pd.DataFrame:
-    """
-    Compare multiple model versions and their performance metrics.
-    
-    Args:
-        model_paths: List of paths to model files to compare
-        
-    Returns:
-        Pandas DataFrame with model comparison information
-    """
-    comparison_data = []
-    
-    for path in model_paths:
-        try:
-            version_info = get_model_version_info(path)
-            version_info['path'] = path
-            comparison_data.append(version_info)
-        except Exception as e:
-            logger.warning(f"Skipping model at {path} due to error: {str(e)}")
-    
-    # Convert to DataFrame for easier analysis
-    if comparison_data:
-        return pd.DataFrame(comparison_data)
-    else:
-        return pd.DataFrame(columns=['version', 'timestamp', 'accuracy', 'f1', 'path'])
-
-
-def get_feature_importance(model: BaseEstimator, feature_names: List[str] = None) -> Dict[str, float]:
-    """
-    Extract feature importance from a trained model if available.
-    
-    Args:
-        model: Trained model
-        feature_names: List of feature names (optional)
-        
-    Returns:
-        Dictionary mapping feature names to importance scores,
-        or empty dict if model doesn't support feature importance
-    """
-    # Different models store feature importance in different attributes
-    importance_attrs = ['feature_importances_', 'coef_']
-    
-    # Try to find feature importance attribute
-    importance = None
-    for attr in importance_attrs:
-        if hasattr(model, attr):
-            importance = getattr(model, attr)
-            break
-    
-    if importance is None:
-        logger.info("Model doesn't provide feature importance information")
-        return {}
-    
-    # Handle different shapes of importance values
-    if importance.ndim > 1:
-        # For multi-class models with coef_ (e.g., LinearSVC, LogisticRegression)
-        # Use the average absolute value across classes
-        importance = np.abs(importance).mean(axis=0)
-    
-    # If feature names not provided, use generic names
-    if feature_names is None:
-        feature_names = [f"feature_{i}" for i in range(len(importance))]
-    
-    # Ensure we have the right number of feature names
-    if len(feature_names) != len(importance):
-        logger.warning(
-            f"Feature names length ({len(feature_names)}) doesn't match "
-            f"importance length ({len(importance)}). Using generic names."
-        )
-        feature_names = [f"feature_{i}" for i in range(len(importance))]
-    
-    # Create dictionary of feature importance
-    importance_dict = {name: float(imp) for name, imp in zip(feature_names, importance)}
-    
-    # Sort by importance (descending)
-    return dict(sorted(importance_dict.items(), key=lambda x: x[1], reverse=True))
-
-
-def get_model_size(model: BaseEstimator) -> str:
-    """
-    Estimate the memory size of a model.
-    
-    Args:
-        model: The model to measure
-        
-    Returns:
-        Human-readable string representing the model size
-    """
-    import sys
-    import tempfile
-    
-    # Save model to a temporary file to measure its size
-    with tempfile.NamedTemporaryFile() as tmp:
-        dump(model, tmp.name)
-        size_bytes = os.path.getsize(tmp.name)
-    
-    # Convert to human-readable format
-    units = ['B', 'KB', 'MB', 'GB']
-    size = size_bytes
-    unit_index = 0
-    
-    while size >= 1024 and unit_index < len(units) - 1:
-        size /= 1024
-        unit_index += 1
-    
-    return f"{size:.2f} {units[unit_index]}"
+        logger.error(f"Model validation failed: {str(e)}")
+        return False
