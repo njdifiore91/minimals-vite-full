@@ -1,0 +1,103 @@
+{{- /*
+HorizontalPodAutoscaler template for OCR Service.
+
+This template extends the common HPA template with OCR Service specific configurations,
+including CPU, memory, and GPU utilization metrics. It also implements environment-specific
+scaling parameters and behavior optimized for GPU-intensive workloads.
+
+Key features:
+- GPU-aware scaling with custom metrics
+- Environment-specific scaling configurations (dev, staging, production)
+- Optimized scaling behavior for GPU-intensive workloads
+- Conservative scale-down to prevent disruption of document processing
+*/}}
+
+{{- $values := .Values }}
+{{- if .Values.environment }}
+  {{- if index .Values .Values.environment }}
+    {{- $values = merge (deepCopy $values) (index .Values .Values.environment) }}
+  {{- end }}
+{{- end }}
+
+{{- if and $values.autoscaling.enabled (not (empty $values.autoscaling)) }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "common.fullname" . }}
+  labels:
+    {{- include "common.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ocr-service
+  annotations:
+    {{- with $values.autoscaling.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    # OCR Service specific annotations
+    autoscaling.alpha.kubernetes.io/metrics-visibility: "true"
+    kubernetes.io/description: "HPA for OCR Service with GPU-aware scaling"
+    {{- if eq .Release.Namespace "production" }}
+    monitoring.dollarfunding.com/priority: "high"
+    {{- end }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: {{ $values.autoscaling.scaleTargetRef.kind | default "Deployment" }}
+    name: {{ $values.autoscaling.scaleTargetRef.name | default (include "common.fullname" .) }}
+  # Set min/max replicas based on environment and GPU availability
+  minReplicas: {{ $values.autoscaling.minReplicas | default 1 }}
+  maxReplicas: {{ $values.autoscaling.maxReplicas | default 5 }}
+  metrics:
+    # CPU utilization metric
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ $values.autoscaling.targetCPUUtilizationPercentage | default 80 }}
+    # Memory utilization metric
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ $values.autoscaling.targetMemoryUtilizationPercentage | default 80 }}
+    {{- if $values.autoscaling.customMetrics }}
+    # Custom metrics for GPU utilization
+    {{- toYaml $values.autoscaling.customMetrics | nindent 4 }}
+    {{- end }}
+  # Scaling behavior optimized for GPU-intensive workloads
+  behavior:
+    scaleDown:
+      # Longer stabilization window for GPU workloads to prevent flapping
+      # This is important for OCR processing which can have variable load patterns
+      stabilizationWindowSeconds: 600
+      policies:
+      # Scale down conservatively - only 5% of current replicas per minute
+      # This prevents disruption of ongoing document processing
+      - type: Percent
+        value: 5
+        periodSeconds: 60
+      # Never scale down by more than 1 pod at a time for GPU workloads
+      # This ensures smooth transition and prevents resource waste
+      - type: Pods
+        value: 1
+        periodSeconds: 60
+      # Use the policy that scales down the least
+      selectPolicy: Min
+    scaleUp:
+      # Short stabilization window for scaling up to ensure quick response to load
+      # This helps maintain the 5-minute processing SLA mentioned in section 0.2.6
+      stabilizationWindowSeconds: 0
+      policies:
+      # Scale up by at most 50% of current replicas per minute
+      # More conservative than default due to GPU resource constraints
+      - type: Percent
+        value: 50
+        periodSeconds: 60
+      # But never scale up by more than 2 pods per minute due to GPU limitations
+      # This prevents overwhelming the cluster with too many GPU requests
+      - type: Pods
+        value: 2
+        periodSeconds: 60
+      # Use the policy that scales up the most
+      selectPolicy: Max
+{{- end }}
