@@ -1,0 +1,169 @@
+# Storage Classes for MCA Application Processing System
+# This manifest defines the storage classes for persistent volumes used by infrastructure components
+# including PostgreSQL, RabbitMQ, Redis, and MinIO (S3-compatible storage)
+
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: postgres-storage
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "false"
+    description: "Storage class optimized for PostgreSQL database with high IOPS"
+provisioner: kubernetes.io/no-provisioner  # On-premises (replace with appropriate provisioner)
+# Uncomment the appropriate provisioner for your cloud environment and comment out the above line
+# provisioner: kubernetes.io/aws-ebs  # AWS EBS
+# provisioner: kubernetes.io/azure-disk  # Azure Disk
+# provisioner: kubernetes.io/gce-pd  # Google Persistent Disk
+reclaimPolicy: Retain  # Prevents accidental deletion of persistent volumes
+volumeBindingMode: WaitForFirstConsumer  # Ensures volume is created in same zone as pod
+allowVolumeExpansion: true  # Allows volume to be expanded after creation
+parameters:
+  # Uncomment the appropriate parameters for your cloud provider
+  
+  # AWS EBS parameters (when using kubernetes.io/aws-ebs provisioner)
+  # type: gp3  # General Purpose SSD
+  # iopsPerGB: "50"  # Baseline IOPS
+  # encrypted: "true"  # Enable encryption
+  
+  # Azure Disk parameters (when using kubernetes.io/azure-disk provisioner)
+  # storageaccounttype: Premium_LRS  # Premium SSD
+  # kind: Managed  # Managed disks
+  
+  # GCP parameters (when using kubernetes.io/gce-pd provisioner)
+  # type: pd-ssd  # SSD persistent disk
+  # replication-type: none  # No replication needed (handled at application level)
+  
+  # On-premises parameters (when using kubernetes.io/no-provisioner)
+  fsType: ext4  # Filesystem type
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: rabbitmq-storage
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "false"
+    description: "Storage class optimized for RabbitMQ message persistence"
+provisioner: kubernetes.io/no-provisioner  # On-premises (replace with appropriate provisioner)
+# Uncomment the appropriate provisioner for your cloud environment and comment out the above line
+# provisioner: kubernetes.io/aws-ebs  # AWS EBS
+# provisioner: kubernetes.io/azure-disk  # Azure Disk
+# provisioner: kubernetes.io/gce-pd  # Google Persistent Disk
+reclaimPolicy: Retain  # Prevents accidental deletion of persistent volumes
+volumeBindingMode: WaitForFirstConsumer  # Ensures volume is created in same zone as pod
+allowVolumeExpansion: true  # Allows volume to be expanded after creation
+parameters:
+  # Uncomment the appropriate parameters for your cloud provider
+  
+  # AWS EBS parameters (when using kubernetes.io/aws-ebs provisioner)
+  # type: gp3  # General Purpose SSD
+  # iopsPerGB: "30"  # Moderate IOPS for message queue
+  # encrypted: "true"  # Enable encryption
+  
+  # Azure Disk parameters (when using kubernetes.io/azure-disk provisioner)
+  # storageaccounttype: Premium_LRS  # Premium SSD
+  # kind: Managed  # Managed disks
+  
+  # GCP parameters (when using kubernetes.io/gce-pd provisioner)
+  # type: pd-ssd  # SSD persistent disk
+  
+  # On-premises parameters (when using kubernetes.io/no-provisioner)
+  fsType: ext4  # Filesystem type
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: redis-storage
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "false"
+    description: "Storage class optimized for Redis AOF persistence"
+provisioner: kubernetes.io/no-provisioner  # On-premises (replace with appropriate provisioner)
+# Uncomment the appropriate provisioner for your cloud environment and comment out the above line
+# provisioner: kubernetes.io/aws-ebs  # AWS EBS
+# provisioner: kubernetes.io/azure-disk  # Azure Disk
+# provisioner: kubernetes.io/gce-pd  # Google Persistent Disk
+reclaimPolicy: Retain  # Prevents accidental deletion of persistent volumes
+volumeBindingMode: WaitForFirstConsumer  # Ensures volume is created in same zone as pod
+allowVolumeExpansion: true  # Allows volume to be expanded after creation
+parameters:
+  # Uncomment the appropriate parameters for your cloud provider
+  
+  # AWS EBS parameters (when using kubernetes.io/aws-ebs provisioner)
+  # type: gp3  # General Purpose SSD
+  # iopsPerGB: "20"  # Lower IOPS for Redis (primarily in-memory)
+  # encrypted: "true"  # Enable encryption
+  
+  # Azure Disk parameters (when using kubernetes.io/azure-disk provisioner)
+  # storageaccounttype: Premium_LRS  # Premium SSD
+  # kind: Managed  # Managed disks
+  
+  # GCP parameters (when using kubernetes.io/gce-pd provisioner)
+  # type: pd-ssd  # SSD persistent disk
+  
+  # On-premises parameters (when using kubernetes.io/no-provisioner)
+  fsType: ext4  # Filesystem type
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: minio-storage
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "false"
+    description: "Storage class optimized for MinIO object storage"
+provisioner: kubernetes.io/no-provisioner  # On-premises (replace with appropriate provisioner)
+# Uncomment the appropriate provisioner for your cloud environment and comment out the above line
+# provisioner: kubernetes.io/aws-ebs  # AWS EBS
+# provisioner: kubernetes.io/azure-disk  # Azure Disk
+# provisioner: kubernetes.io/gce-pd  # Google Persistent Disk
+reclaimPolicy: Retain  # Prevents accidental deletion of persistent volumes
+volumeBindingMode: WaitForFirstConsumer  # Ensures volume is created in same zone as pod
+allowVolumeExpansion: true  # Allows volume to be expanded after creation
+parameters:
+  # Uncomment the appropriate parameters for your cloud provider
+  
+  # AWS EBS parameters (when using kubernetes.io/aws-ebs provisioner)
+  # type: gp3  # General Purpose SSD
+  # iopsPerGB: "10"  # Lower IOPS for object storage
+  # encrypted: "true"  # Enable encryption
+  
+  # Azure Disk parameters (when using kubernetes.io/azure-disk provisioner)
+  # storageaccounttype: Standard_LRS  # Standard SSD (cost optimization)
+  # kind: Managed  # Managed disks
+  
+  # GCP parameters (when using kubernetes.io/gce-pd provisioner)
+  # type: pd-standard  # Standard persistent disk (cost optimization)
+  
+  # On-premises parameters (when using kubernetes.io/no-provisioner)
+  fsType: xfs  # XFS filesystem (better for large files)
+---
+# Storage class for development environment (faster provisioning, lower cost)
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: standard-dev
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"
+    description: "Default storage class for development environment"
+provisioner: kubernetes.io/no-provisioner  # On-premises (replace with appropriate provisioner)
+# Uncomment the appropriate provisioner for your cloud environment and comment out the above line
+# provisioner: kubernetes.io/aws-ebs  # AWS EBS
+# provisioner: kubernetes.io/azure-disk  # Azure Disk
+# provisioner: kubernetes.io/gce-pd  # Google Persistent Disk
+reclaimPolicy: Delete  # Automatically delete PVs when PVCs are deleted (for dev only)
+volumeBindingMode: Immediate  # Immediate binding for faster provisioning
+allowVolumeExpansion: true  # Allows volume to be expanded after creation
+parameters:
+  # Uncomment the appropriate parameters for your cloud provider
+  
+  # AWS EBS parameters (when using kubernetes.io/aws-ebs provisioner)
+  # type: gp2  # General Purpose SSD (lower cost)
+  # encrypted: "true"  # Enable encryption
+  
+  # Azure Disk parameters (when using kubernetes.io/azure-disk provisioner)
+  # storageaccounttype: Standard_LRS  # Standard SSD (lower cost)
+  # kind: Managed  # Managed disks
+  
+  # GCP parameters (when using kubernetes.io/gce-pd provisioner)
+  # type: pd-standard  # Standard persistent disk (lower cost)
+  
+  # On-premises parameters (when using kubernetes.io/no-provisioner)
+  fsType: ext4  # Filesystem type
