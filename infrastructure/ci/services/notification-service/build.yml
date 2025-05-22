@@ -1,0 +1,171 @@
+# Notification Service Build Pipeline
+# This workflow handles the build process for the Notification Service including:
+# - Dependency installation with npm
+# - Code quality checks with ESLint
+# - Unit testing with Jest and coverage reporting
+# - TypeScript compilation with strict type checking
+# - Docker image creation using multi-stage builds
+# - Security scanning with Trivy
+# - Container registry publishing with versioning
+
+name: Build Notification Service
+
+on:
+  push:
+    branches: [ main, development ]
+    paths:
+      - 'notification-service/**'
+      - 'infrastructure/ci/services/notification-service/**'
+  pull_request:
+    branches: [ main, development ]
+    paths:
+      - 'notification-service/**'
+      - 'infrastructure/ci/services/notification-service/**'
+  workflow_dispatch:
+
+env:
+  NODE_VERSION: '22.x'
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}/notification-service
+
+jobs:
+  build:
+    name: Build and Test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: 'notification-service/package-lock.json'
+
+      - name: Install dependencies
+        working-directory: notification-service
+        run: npm ci
+
+      - name: Lint code
+        working-directory: notification-service
+        run: npm run lint
+        continue-on-error: false
+
+      - name: Type check
+        working-directory: notification-service
+        run: npm run type-check
+        continue-on-error: false
+
+      - name: Run tests
+        working-directory: notification-service
+        run: npm test -- --coverage
+        continue-on-error: false
+
+      # Verify webhook security tests specifically for HMAC signature verification
+      # This ensures the security requirements from section 3.8.5 are properly tested
+      - name: Verify webhook security tests
+        working-directory: notification-service
+        run: |
+          # Ensure HMAC signature verification tests exist and pass
+          TEST_COUNT=$(find . -name "*.test.ts" -o -name "*.spec.ts" | xargs grep -l "HMAC" | wc -l)
+          if [ "$TEST_COUNT" -lt 1 ]; then
+            echo "Error: No tests found for HMAC signature verification"
+            exit 1
+          fi
+          
+          # Check test coverage for webhook security components
+          WEBHOOK_COVERAGE=$(npm test -- --coverage --coverageReporters="json-summary" --testPathPattern="webhook|hmac" && \
+            cat coverage/coverage-summary.json | jq '.total.statements.pct')
+          
+          if (( $(echo "$WEBHOOK_COVERAGE < 90" | bc -l) )); then
+            echo "Error: Webhook security test coverage is below 90%"
+            exit 1
+          fi
+        continue-on-error: false
+
+      - name: Build TypeScript
+        working-directory: notification-service
+        run: npm run build
+        continue-on-error: false
+
+      # Set up Docker Buildx for multi-platform builds
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Login to container registry
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Extract metadata for Docker
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,format=long
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+
+      # Build and push Docker image using multi-stage build
+      # This creates an optimized container image separating build dependencies from runtime
+      - name: Build and push Docker image
+        id: build-and-push
+        uses: docker/build-push-action@v5
+        with:
+          context: notification-service
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          # Ensure Dockerfile uses multi-stage build pattern
+          file: notification-service/Dockerfile
+
+      # Scan the Docker image for vulnerabilities
+      # This step ensures container security by detecting vulnerabilities before deployment
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+          timeout: '10m0s'
+          # Fail the build on critical vulnerabilities in production
+          exit-code: ${{ github.ref == 'refs/heads/main' && 1 || 0 }}
+
+      # Upload Trivy scan results to GitHub Security tab
+      - name: Upload Trivy scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+      # Notify on build completion
+      - name: Notify on build completion
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const buildStatus = '${{ job.status }}' === 'success' ? '✅ succeeded' : '❌ failed';
+            const message = `Notification Service build ${buildStatus}`;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: message
+            });
