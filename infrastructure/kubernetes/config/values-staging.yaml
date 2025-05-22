@@ -1,0 +1,222 @@
+# Staging Environment Configuration for MCA Application Processing System
+# This file contains staging-specific overrides for Kubernetes deployments
+
+# Global settings for staging environment
+global:
+  environment: staging
+  domain: staging.dollarfunding.com
+  replicaCount: 2  # Default replica count for staging (moderate redundancy)
+  featureFlags:
+    debugMode: false
+    verboseLogging: false
+    aiEnhancedOcr: true
+    automationFeatures: true
+  monitoring:
+    datadog:
+      enabled: true
+      logLevel: INFO
+    alerting:
+      enabled: true
+      criticalOnly: true  # Only critical alerts in staging
+
+# Infrastructure Components
+infrastructure:
+  # PostgreSQL configuration with 1 read replica as specified
+  postgresql:
+    primary:
+      persistence:
+        size: 50Gi
+      resources:
+        requests:
+          cpu: 1000m
+          memory: 2Gi
+        limits:
+          cpu: 2000m
+          memory: 4Gi
+    readReplicas:
+      replicaCount: 1  # 1 read replica for staging as specified
+      persistence:
+        size: 50Gi
+      resources:
+        requests:
+          cpu: 1000m
+          memory: 2Gi
+        limits:
+          cpu: 2000m
+          memory: 4Gi
+    connectionString: "postgresql://mca_user:${POSTGRESQL_PASSWORD}@postgresql-primary.staging.svc.cluster.local:5432/mca_db"
+    readConnectionString: "postgresql://mca_user:${POSTGRESQL_PASSWORD}@postgresql-read.staging.svc.cluster.local:5432/mca_db"
+  
+  # RabbitMQ configuration
+  rabbitmq:
+    replicaCount: 3
+    persistence:
+      size: 20Gi
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+    connectionString: "amqp://user:${RABBITMQ_PASSWORD}@rabbitmq.staging.svc.cluster.local:5672"
+  
+  # Redis configuration
+  redis:
+    replicaCount: 3
+    persistence:
+      size: 10Gi
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+    connectionString: "redis://redis.staging.svc.cluster.local:6379"
+    ttl:
+      applicationData: 900  # 15 minutes in seconds
+      userSessions: 86400   # 24 hours in seconds
+  
+  # S3-compatible storage configuration
+  s3:
+    bucket: "mca-documents-staging"  # Staging bucket as specified
+    endpoint: "https://s3.staging.dollarfunding.com"
+    encryption: "AES256"
+    region: "us-east-1"
+
+# Microservices Configuration
+services:
+  # Email Service
+  emailService:
+    replicaCount: 2
+    image:
+      tag: "latest"
+    resources:
+      requests:
+        cpu: 200m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+    config:
+      emailPollingInterval: 60  # seconds
+      imapSettings:
+        host: "imap.staging.dollarfunding.com"
+        port: 993
+        user: "submissions@staging.dollarfunding.com"
+        tls: true
+  
+  # Document Service
+  documentService:
+    replicaCount: 2
+    image:
+      tag: "latest"
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+    config:
+      classificationConfidenceThreshold: 0.85
+      modelVersion: "v2.0"
+  
+  # OCR Service
+  ocrService:
+    replicaCount: 2
+    image:
+      tag: "latest"
+    resources:
+      requests:
+        cpu: 1000m
+        memory: 2Gi
+        nvidia.com/gpu: 1  # GPU allocation for OCR service
+      limits:
+        cpu: 2000m
+        memory: 4Gi
+        nvidia.com/gpu: 1
+    config:
+      batchSize: 5
+      confidenceThreshold: 0.75
+      modelVersion: "v2.0"
+  
+  # Data Service
+  dataService:
+    replicaCount: 3  # Higher replica count for core data service
+    image:
+      tag: "latest"
+    resources:
+      requests:
+        cpu: 1000m
+        memory: 1Gi
+      limits:
+        cpu: 2000m
+        memory: 2Gi
+    config:
+      maxConnections: 20
+      connectionTimeout: 30  # seconds
+      encryptionEnabled: true
+  
+  # Notification Service
+  notificationService:
+    replicaCount: 2
+    image:
+      tag: "latest"
+    resources:
+      requests:
+        cpu: 200m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+    config:
+      webhookRetryAttempts: 3
+      webhookRetryDelay: 60  # seconds
+      maxConcurrentDeliveries: 10
+  
+  # API Gateway
+  apiGateway:
+    replicaCount: 3  # Higher replica count for entry point
+    image:
+      tag: "latest"
+    resources:
+      requests:
+        cpu: 500m
+        memory: 512Mi
+      limits:
+        cpu: 1000m
+        memory: 1Gi
+    config:
+      rateLimit:
+        enabled: true
+        requestsPerSecond: 50
+      cors:
+        allowedOrigins:
+          - "https://staging.dollarfunding.com"
+          - "https://*.staging.dollarfunding.com"
+      jwt:
+        algorithm: "RS256"
+        tokenExpiry: 3600  # 60 minutes in seconds
+        refreshTokenExpiry: 604800  # 7 days in seconds
+
+# Frontend Configuration
+frontend:
+  replicaCount: 2
+  image:
+    tag: "latest"
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+  config:
+    apiEndpoint: "https://api.staging.dollarfunding.com"
+    authProvider: "jwt"
+    sessionStorage: true  # Use sessionStorage for auth tokens
+    featureFlags:
+      darkMode: true
+      rtlSupport: true
