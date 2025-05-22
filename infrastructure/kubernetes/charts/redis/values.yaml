@@ -1,0 +1,350 @@
+## Redis 7.0 Helm Chart Values for MCA Application Processing System
+## This configuration is optimized for the specific requirements of the MCA system
+## including cluster mode, high availability, persistence, and security settings
+
+## Global parameters
+global:
+  ## Redis image settings
+  redis:
+    ## Specify a custom password for Redis
+    password: ""
+  ## Specify ImagePullSecrets for all deployments
+  imagePullSecrets: []
+  ## Use a specific StorageClass for all PVCs
+  storageClass: "managed-premium"
+
+## Bitnami Redis image settings
+image:
+  registry: docker.io
+  repository: bitnami/redis
+  tag: 7.0.14-debian-11-r0  # Specific Redis 7.0 version as required in section 0.1.2
+  pullPolicy: IfNotPresent
+  pullSecrets: []
+  debug: false
+
+## Redis architecture configuration
+## Options: standalone or replication
+architecture: replication
+
+## Redis Authentication parameters
+auth:
+  enabled: true
+  sentinel: true  # Enable authentication on sentinels
+  password: ""  # Will be auto-generated if not provided
+  existingSecret: ""
+  existingSecretPasswordKey: ""
+  usePasswordFiles: false
+
+## Redis cluster settings
+## Configured for horizontal scalability with 3+ shards as specified in section 8.4.5
+cluster:
+  enabled: true  # Enable Redis cluster mode
+  slaveCount: 3  # Number of slave nodes per master (at least 1 replica per shard as required)
+  nodes: 6  # Total number of nodes (3 masters + 3 slaves)
+
+## Redis master configuration
+master:
+  ## Redis command arguments
+  extraFlags:
+    - "--maxmemory-policy allkeys-lru"  # Eviction policy for caching as specified in section 8.4.5
+    - "--lazyfree-lazy-eviction yes"
+    - "--lazyfree-lazy-expire yes"
+  
+  ## Pod resources limits and requests
+  resources:
+    requests:
+      memory: 2Gi
+      cpu: 500m
+    limits:
+      memory: 4Gi
+      cpu: 1000m
+  
+  ## Master persistence parameters
+  ## Memory tiering with SSD persistence for cost optimization as specified in section 8.4.5
+  persistence:
+    enabled: true
+    path: /data
+    subPath: ""
+    storageClass: "managed-premium-ssd"  # SSD storage class for performance
+    accessModes:
+      - ReadWriteOnce
+    size: 20Gi
+    annotations: {}
+    selector: {}
+  
+  ## Redis service parameters
+  service:
+    type: ClusterIP
+    port: 6379
+    annotations: {}
+    loadBalancerIP: ""
+  
+  ## Pod affinity preset
+  ## ref: https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/#inter-pod-affinity-and-anti-affinity
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis
+              app.kubernetes.io/instance: redis
+              app.kubernetes.io/component: master
+          topologyKey: kubernetes.io/hostname
+
+## Redis replicas configuration
+replica:
+  replicaCount: 3  # At least 1 replica per shard for high availability as specified in section 8.4.5
+  
+  ## Redis command arguments
+  extraFlags:
+    - "--maxmemory-policy allkeys-lru"  # Eviction policy for caching as specified in section 8.4.5
+    - "--lazyfree-lazy-eviction yes"
+    - "--lazyfree-lazy-expire yes"
+  
+  ## Pod resources limits and requests
+  resources:
+    requests:
+      memory: 2Gi
+      cpu: 500m
+    limits:
+      memory: 4Gi
+      cpu: 1000m
+  
+  ## Replica persistence parameters
+  ## Memory tiering with SSD persistence for cost optimization as specified in section 8.4.5
+  persistence:
+    enabled: true
+    path: /data
+    subPath: ""
+    storageClass: "managed-premium-ssd"  # SSD storage class for performance
+    accessModes:
+      - ReadWriteOnce
+    size: 20Gi
+    annotations: {}
+    selector: {}
+  
+  ## Redis service parameters
+  service:
+    type: ClusterIP
+    port: 6379
+    annotations: {}
+    loadBalancerIP: ""
+  
+  ## Pod affinity preset
+  ## ref: https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/#inter-pod-affinity-and-anti-affinity
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis
+              app.kubernetes.io/instance: redis
+              app.kubernetes.io/component: replica
+          topologyKey: kubernetes.io/hostname
+
+## Redis Sentinel configuration
+## Auto-failover with Sentinel for reliability as specified in section 8.4.5
+sentinel:
+  enabled: true  # Enable Sentinel for auto-failover
+  masterSet: "mca-master"
+  quorum: 2
+  downAfterMilliseconds: 15000  # 15-second failover time as specified in section 8.4.5
+  
+  ## Sentinel service parameters
+  service:
+    type: ClusterIP
+    port: 26379
+    annotations: {}
+    loadBalancerIP: ""
+  
+  ## Sentinel command arguments
+  extraFlags: []
+  
+  ## Pod resources limits and requests
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 100m
+    limits:
+      memory: 512Mi
+      cpu: 200m
+
+## Redis TLS configuration
+## TLS for secure connections as specified in section 8.4.5
+tls:
+  enabled: true  # Enable TLS for transit
+  authClients: true
+  certificatesSecret: "redis-tls-certificates"
+  certFilename: "tls.crt"
+  certKeyFilename: "tls.key"
+  certCAFilename: "ca.crt"
+  dhParamsFilename: "dh.pem"
+
+## Redis configuration
+## ref: https://redis.io/topics/config
+config: |
+  # Enable AOF persistence as specified in section 8.4.5
+  appendonly yes
+  appendfsync everysec
+  
+  # RDB snapshots every 60 minutes as specified in section 8.4.5
+  save 3600 1
+  
+  # Memory management
+  maxmemory 75%
+  
+  # Connection pooling with timeouts for resource efficiency as specified in section 8.4.5
+  timeout 30
+  tcp-keepalive 300
+  
+  # TTL settings as specified in section 0.2.5 and 3.5.1
+  # 15 minutes for application data
+  # 24 hours for sessions
+  notify-keyspace-events Ex
+  
+  # Default expiry for application data (15 minutes = 900 seconds)
+  # This will be used for application cache data
+  expire-default-application 900
+  
+  # Performance optimizations
+  activedefrag yes
+  
+  # Security settings
+  protected-mode yes
+
+## Separate Redis instance for sessions with different eviction policy
+## Different eviction policies for caching and sessions as specified in section 8.4.5
+sessionCache:
+  enabled: true
+  port: 6380
+  password: ""  # Will be auto-generated if not provided
+  
+  ## Pod resources limits and requests
+  resources:
+    requests:
+      memory: 1Gi
+      cpu: 500m
+    limits:
+      memory: 2Gi
+      cpu: 1000m
+  
+  ## Session cache persistence parameters
+  persistence:
+    enabled: true
+    path: /data
+    storageClass: "managed-premium-ssd"  # SSD storage class for performance
+    size: 10Gi
+  
+  ## Session cache configuration
+  config: |
+    # Use noeviction policy for sessions as specified in section 8.4.5
+    maxmemory-policy noeviction
+    
+    # Set 24-hour TTL for session keys by default (24 hours = 86400 seconds)
+    # This will be used for user sessions as specified in section 0.2.5 and 3.5.1
+    expire-default-session 86400
+    notify-keyspace-events Ex
+    
+    # Enable AOF persistence
+    appendonly yes
+    appendfsync everysec
+    
+    # RDB snapshots every 60 minutes
+    save 3600 1
+
+## Metrics exporter configuration
+## INFO-based metrics with custom dashboards as specified in section 8.4.5
+metrics:
+  enabled: true  # Enable Redis metrics exporter
+  image:
+    registry: docker.io
+    repository: bitnami/redis-exporter
+    tag: 1.44.0  # Specific version for stability
+    pullPolicy: IfNotPresent
+  
+  ## Metrics exporter resource requests and limits
+  resources:
+    requests:
+      memory: 128Mi
+      cpu: 100m
+    limits:
+      memory: 256Mi
+      cpu: 200m
+  
+  ## Metrics exporter service parameters
+  service:
+    type: ClusterIP
+    port: 9121
+    annotations:
+      prometheus.io/scrape: "true"
+      prometheus.io/port: "9121"
+  
+  ## Prometheus ServiceMonitor configuration
+  serviceMonitor:
+    enabled: true
+    namespace: monitoring
+    interval: 15s  # 15-second metrics collection as specified in section 8.4.5
+    selector:
+      prometheus: kube-prometheus
+    
+  ## Alerts for memory usage and evictions as specified in section 8.4.5
+  alerts:
+    enabled: true
+    labels:
+      severity: warning
+    annotations:
+      description: "Redis instance {{ $labels.instance }} has high memory usage"
+      summary: "Redis high memory usage"
+
+## Pod disruption budget configuration
+## Ensures high availability during cluster updates
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2  # Ensure at least 2 instances are always available
+
+## Node selector for multi-AZ deployment as specified in section 8.4.5
+nodeSelector: {}
+
+## Tolerations
+tolerations: []
+
+## Update strategy
+updateStrategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 1
+    maxSurge: 1
+
+## Pod annotations
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "9121"
+
+## Pod labels
+podLabels:
+  app.kubernetes.io/part-of: "mca-application-system"
+  app.kubernetes.io/component: "cache"
+
+## Lifecycle hooks
+lifecycle:
+  preStop:
+    exec:
+      command: ["sh", "-c", "redis-cli -a $REDIS_PASSWORD shutdown save"]
+
+## Init containers
+initContainers: []
+
+## Additional containers
+sidecars: []
+
+## Additional volumes
+extraVolumes: []
+
+## Additional volume mounts
+extraVolumeMounts: []
+
+## SLA configuration
+## 99.9% uptime guarantee as specified in section 8.4.5
+sla:
+  uptimeGuarantee: "99.9%"
+  maxDowntimePerMonth: "43m"
