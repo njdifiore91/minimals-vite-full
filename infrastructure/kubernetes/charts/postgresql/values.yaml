@@ -1,0 +1,821 @@
+# PostgreSQL Helm Chart Values for MCA Application Processing System
+# Default configuration values for the PostgreSQL deployment
+# This file configures PostgreSQL 14 in a primary-replica architecture with environment-specific settings
+
+## Global settings
+global:
+  # PostgreSQL image configuration
+  image:
+    repository: postgres
+    tag: "14.7" # Using PostgreSQL 14.7 as specified in the technical requirements
+    pullPolicy: IfNotPresent
+  
+  # Common labels to be applied to all resources
+  labels: 
+    app.kubernetes.io/part-of: "mca-application-system"
+    app.kubernetes.io/component: "database"
+  
+  # Common annotations to be applied to all resources
+  annotations: 
+    "dollarfunding.com/system": "mca-application-processing"
+  
+  # Security context settings
+  securityContext:
+    enabled: true
+    fsGroup: 999
+    runAsUser: 999
+    runAsNonRoot: true
+
+## Environment-specific settings
+## These settings control environment-specific configurations
+## The environment variable controls replica counts, resource allocations, and other settings
+environment: "staging" # Options: production, staging, development
+
+# Production environment uses 2 read replicas as specified in the technical requirements
+# Staging environment uses 1 read replica as specified in the technical requirements
+# Development environment uses no replicas for simplicity
+
+## PostgreSQL configuration
+postgresql:
+  # Database name, username and password
+  database: "mca_application_db" # Database name for MCA application data
+  username: "postgres"
+  # Password will be auto-generated if not provided
+  # password: "postgres"
+  
+  # Port to expose PostgreSQL service
+  port: 5432
+  
+  # PostgreSQL configuration parameters
+  configuration:
+    # Memory settings - optimized for application performance
+    sharedBuffers: "4GB" # Buffer for frequently accessed data
+    effectiveCacheSize: "12GB" # Estimate of memory available for disk caching
+    workMem: "32MB" # Memory for query operations
+    maintenanceWorkMem: "1GB" # Memory for maintenance operations
+    
+    # Connection settings
+    maxConnections: 200 # Maximum concurrent connections
+    
+    # Logging settings
+    logMinDurationStatement: 1000 # Log queries taking more than 1000ms
+    logStatement: "ddl" # Log all DDL statements for schema tracking
+    
+    # Partitioning settings for large tables as required in technical spec
+    maxLocksPerTransaction: 128 # Increased for partitioning operations
+    enablePartitioningFeatures: true # Enable native partitioning
+    
+    # Field-level encryption settings for PII protection as required
+    enablePgcrypto: true # Enable pgcrypto extension for field-level encryption
+    
+    # Additional custom parameters
+    extraParams:
+      # WAL settings for point-in-time recovery
+      wal_level: "replica" # Required for read replicas
+      max_wal_senders: 10 # Support multiple replicas
+      wal_keep_segments: 64 # Keep more WAL segments for replication lag
+      
+      # Performance tuning
+      random_page_cost: 1.1 # Optimized for SSD storage
+      effective_io_concurrency: 200 # Increased for SSD performance
+  
+  # Primary-replica configuration as required in technical spec
+  replication:
+    enabled: true # Enable replication for high availability
+    user: "replicator" # Dedicated user for replication
+    # Password will be auto-generated if not provided
+    # password: "replicator"
+    slotName: "replica_slot" # Replication slot name
+    synchronousCommit: "on" # Ensure data durability
+    numSynchronousReplicas: 1 # Number of synchronous replicas
+    applicationName: "mca_replica" # Application name for monitoring
+  
+  # Environment-specific overrides
+  production:
+    configuration:
+      # Enhanced settings for production workloads
+      sharedBuffers: "8GB" # Increased for production workload
+      effectiveCacheSize: "24GB" # Increased for production workload
+      workMem: "64MB" # Increased for complex queries in production
+      maintenanceWorkMem: "2GB" # Increased for faster maintenance operations
+      maxConnections: 500 # Support more concurrent connections
+      # Additional production-specific parameters
+      extraParams:
+        # Enhanced durability settings
+        synchronous_commit: "on" # Ensure data durability
+        full_page_writes: "on" # Protect against partial page writes
+        # Performance optimizations
+        autovacuum_vacuum_scale_factor: 0.05 # More aggressive vacuuming
+        autovacuum_analyze_scale_factor: 0.025 # More frequent statistics updates
+    replication:
+      numSynchronousReplicas: 1 # One synchronous replica for data durability
+  
+  staging:
+    configuration:
+      # Standard settings for staging environment
+      sharedBuffers: "4GB"
+      effectiveCacheSize: "12GB"
+      workMem: "32MB"
+      maintenanceWorkMem: "1GB"
+      maxConnections: 200
+      # Additional staging-specific parameters
+      extraParams:
+        # Reduced durability for better performance
+        synchronous_commit: "off" # Improved performance at slight durability cost
+        # Less aggressive maintenance
+        autovacuum_vacuum_scale_factor: 0.1 # Standard vacuuming
+        autovacuum_analyze_scale_factor: 0.05 # Standard statistics updates
+    replication:
+      numSynchronousReplicas: 0 # Asynchronous replication for staging
+
+## Replica configuration
+replicas:
+  # Number of read replicas (environment-specific)
+  # Will be overridden based on environment setting
+  count: 1
+  
+  # Production environment replica count
+  # Technical specification requires 2 read replicas for production
+  production:
+    count: 2 # 2 read replicas as specified in technical requirements
+    # Distribution across availability zones for high availability
+    distributionStrategy: "antiAffinity" # Distribute across different zones
+  
+  # Staging environment replica count
+  # Technical specification requires 1 read replica for staging
+  staging:
+    count: 1 # 1 read replica as specified in technical requirements
+    distributionStrategy: "antiAffinity" # Distribute across different zones
+  
+  # Development environment replica count
+  development:
+    count: 0 # No replicas for development environment
+
+## Resource allocation
+## Resources are allocated based on environment and instance role (primary vs replica)
+resources:
+  # Primary instance resources - default for staging/development
+  primary:
+    requests:
+      cpu: "1000m" # 1 CPU core
+      memory: "4Gi" # 4GB memory
+    limits:
+      cpu: "2000m" # 2 CPU cores
+      memory: "8Gi" # 8GB memory
+  
+  # Replica instance resources - default for staging/development
+  replica:
+    requests:
+      cpu: "500m" # 0.5 CPU core
+      memory: "2Gi" # 2GB memory
+    limits:
+      cpu: "1000m" # 1 CPU core
+      memory: "4Gi" # 4GB memory
+  
+  # Production environment resources - enhanced for production workloads
+  production:
+    primary:
+      requests:
+        cpu: "2000m" # 2 CPU cores
+        memory: "8Gi" # 8GB memory
+      limits:
+        cpu: "4000m" # 4 CPU cores
+        memory: "16Gi" # 16GB memory
+    replica:
+      requests:
+        cpu: "1000m" # 1 CPU core
+        memory: "4Gi" # 4GB memory
+      limits:
+        cpu: "2000m" # 2 CPU cores
+        memory: "8Gi" # 8GB memory
+  
+  # Staging environment resources - explicitly defined
+  staging:
+    primary:
+      requests:
+        cpu: "1000m" # 1 CPU core
+        memory: "4Gi" # 4GB memory
+      limits:
+        cpu: "2000m" # 2 CPU cores
+        memory: "8Gi" # 8GB memory
+    replica:
+      requests:
+        cpu: "500m" # 0.5 CPU core
+        memory: "2Gi" # 2GB memory
+      limits:
+        cpu: "1000m" # 1 CPU core
+        memory: "4Gi" # 4GB memory
+
+## Storage configuration
+## Storage is configured based on environment with appropriate size and performance characteristics
+storage:
+  # Storage class for PostgreSQL data
+  # Use cloud provider's fastest storage class
+  storageClass: "standard"
+  
+  # Storage size for primary instance - default
+  primary:
+    size: "100Gi"
+  
+  # Storage size for replica instances - default
+  replica:
+    size: "100Gi"
+  
+  # Production environment storage
+  # Technical specification requires 500GB for production
+  production:
+    storageClass: "premium-ssd" # High-performance SSD storage
+    primary:
+      size: "500Gi" # 500GB as specified in technical requirements
+      iops: 3000 # Provisioned IOPS for consistent performance
+    replica:
+      size: "500Gi" # Same size for replicas
+      iops: 3000 # Same performance characteristics
+  
+  # Staging environment storage
+  # Technical specification requires 200GB for staging
+  staging:
+    storageClass: "standard-ssd" # Standard SSD storage
+    primary:
+      size: "200Gi" # 200GB as specified in technical requirements
+      iops: 1000 # Standard IOPS
+    replica:
+      size: "200Gi" # Same size for replicas
+      iops: 1000 # Same performance characteristics
+  
+  # Allow volume expansion for growing databases
+  allowVolumeExpansion: true
+  
+  # Storage encryption for data security
+  encryption: true # Enable encryption at rest
+
+## Connection pooling configuration
+## Connection pooling is required by technical specification for efficient database connection management
+connectionPooling:
+  enabled: true # Enable connection pooling as required
+  
+  # PgBouncer configuration
+  pgBouncer:
+    # Pool mode: session, transaction, or statement
+    poolMode: "transaction" # Transaction pooling for optimal efficiency
+    
+    # Connection limits
+    maxClientConnections: 1000 # Maximum client connections
+    defaultPoolSize: 20 # Default pool size
+    minPoolSize: 10 # Minimum pool size as specified in technical requirements
+    maxPoolSize: 50 # Maximum pool size as specified in technical requirements
+    
+    # Connection settings
+    connectionTimeout: 30 # Connection timeout in seconds as specified in technical requirements
+    clientIdleTimeout: 600 # Client idle timeout in seconds
+    serverIdleTimeout: 600 # Server idle timeout in seconds
+    
+    # Production environment settings
+    production:
+      maxClientConnections: 2000 # Increased for production workload
+      defaultPoolSize: 50 # Larger default pool for production
+      minPoolSize: 10 # Minimum pool size as specified in technical requirements
+      maxPoolSize: 100 # Increased maximum pool size for production
+      # Additional production-specific settings
+      serverLifetime: 3600 # Server lifetime in seconds
+      serverResetQueryAlways: true # Always reset server state
+    
+    # Staging environment settings
+    staging:
+      maxClientConnections: 1000 # Standard for staging
+      defaultPoolSize: 20 # Standard pool size
+      minPoolSize: 10 # Minimum pool size as specified in technical requirements
+      maxPoolSize: 50 # Maximum pool size as specified in technical requirements
+      # Additional staging-specific settings
+      serverLifetime: 1800 # Shorter server lifetime
+      serverResetQueryAlways: true # Always reset server state
+    
+    # Resources for PgBouncer
+    resources:
+      requests:
+        cpu: "200m"
+        memory: "256Mi"
+      limits:
+        cpu: "500m"
+        memory: "512Mi"
+
+## Backup configuration
+## Regular backups with point-in-time recovery are required by technical specification
+backup:
+  enabled: true # Enable backups
+  
+  # Backup schedule (cron format)
+  schedule: "0 3 * * *" # Daily at 3 AM
+  
+  # Backup retention period (days)
+  retentionDays: 7 # Default retention period
+  
+  # S3-compatible storage configuration
+  # Technical specification requires S3-compatible storage with AES-256 encryption
+  s3:
+    enabled: true # Enable S3 storage for backups
+    bucket: "mca-documents-staging" # Default bucket name
+    region: "us-east-1" # Default region
+    endpoint: "s3.amazonaws.com" # S3 endpoint
+    # Credentials will be provided via environment variables or IAM roles
+    encryption: "AES256" # AES-256 encryption as required by technical specification
+    # Storage class for backups
+    storageClass: "STANDARD" # Standard storage class
+  
+  # Production environment backup settings
+  production:
+    schedule: "0 3 * * *" # Daily at 3 AM
+    retentionDays: 30 # 30-day retention as specified in technical requirements
+    s3:
+      bucket: "mca-documents-production" # Production bucket
+      storageClass: "STANDARD_IA" # Infrequent access for cost optimization
+      # Additional production-specific settings
+      replication:
+        enabled: true # Enable cross-region replication
+        region: "us-west-2" # Secondary region for disaster recovery
+  
+  # Staging environment backup settings
+  staging:
+    schedule: "0 3 * * *" # Daily at 3 AM
+    retentionDays: 7 # 7-day retention for staging
+    s3:
+      bucket: "mca-documents-staging" # Staging bucket
+      storageClass: "STANDARD" # Standard storage class
+  
+  # Point-in-time recovery configuration
+  # Technical specification requires point-in-time recovery capability
+  pointInTimeRecovery:
+    enabled: true # Enable point-in-time recovery
+    # Recovery point objective (RPO) in minutes
+    rpoMinutes: 5 # 5-minute RPO as specified in technical requirements
+    # Recovery time objective (RTO) in minutes
+    rtoMinutes: 30 # 30-minute RTO
+  
+  # Backup verification
+  verification:
+    enabled: true # Enable backup verification
+    schedule: "0 5 * * *" # Daily at 5 AM
+    # Restore to temporary database for verification
+    restoreTest: true # Test restore functionality
+
+## Security configuration
+## Security is a critical requirement with specific encryption needs for sensitive data
+security:
+  # TLS/SSL configuration
+  tls:
+    enabled: true # Enable TLS for secure connections
+    # Auto-generated if not provided
+    # certificateSecret: "postgres-tls"
+    # TLS version and ciphers
+    minVersion: "TLSv1.2" # Minimum TLS version
+    preferredCiphers: "HIGH:!aNULL:!MD5" # Preferred cipher suites
+  
+  # Network policies
+  networkPolicy:
+    enabled: true # Enable network policies
+    allowedNamespaces: [] # Namespaces allowed to access PostgreSQL
+    # Specific pod selectors for access
+    podSelectors:
+      - namespaceSelector:
+          matchLabels:
+            name: "data-service"
+      - namespaceSelector:
+          matchLabels:
+            name: "api-gateway"
+  
+  # Pod security context
+  podSecurityContext:
+    enabled: true # Enable pod security context
+    fsGroup: 999 # File system group
+    runAsUser: 999 # Run as non-root user
+    runAsNonRoot: true # Explicitly prevent running as root
+    # Additional security settings
+    readOnlyRootFilesystem: true # Read-only root filesystem
+    allowPrivilegeEscalation: false # Prevent privilege escalation
+  
+  # Data encryption
+  # Technical specification requires AES-256 encryption for sensitive data
+  # and field-level encryption for PII
+  encryption:
+    # Storage encryption (encrypted PVs)
+    storageEncryption: true # Enable storage encryption
+    storageEncryptionAlgorithm: "AES-256" # AES-256 as required by technical specification
+    
+    # Field-level encryption for PII
+    fieldLevelEncryption:
+      enabled: true # Enable field-level encryption as required
+      # Key will be auto-generated if not provided
+      # key: "your-encryption-key"
+      algorithm: "AES-256-CBC" # AES-256 algorithm as required
+      # Fields to encrypt
+      fields:
+        - table: "merchant_details"
+          columns: ["legal_name", "ein", "address"]
+        - table: "applications"
+          columns: ["metadata"]
+      # Key rotation
+      keyRotation:
+        enabled: true # Enable key rotation
+        schedule: "0 0 1 * *" # Monthly key rotation
+        retainPreviousKeys: 3 # Retain previous keys for decryption
+
+## Monitoring and logging configuration
+## Comprehensive monitoring is required by technical specification
+monitoring:
+  # Prometheus metrics
+  metrics:
+    enabled: true # Enable Prometheus metrics
+    serviceMonitor:
+      enabled: true # Enable ServiceMonitor for Prometheus Operator
+      interval: "15s" # 15-second metrics interval as specified in technical requirements
+      scrapeTimeout: "10s" # Scrape timeout
+      # Labels for ServiceMonitor
+      labels:
+        release: "prometheus"
+    
+    # Prometheus annotations
+    annotations:
+      prometheus.io/scrape: "true"
+      prometheus.io/port: "9187"
+  
+  # PostgreSQL exporter configuration
+  exporter:
+    enabled: true # Enable PostgreSQL exporter
+    image:
+      repository: prometheuscommunity/postgres-exporter
+      tag: "v0.10.0"
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "256Mi"
+      limits:
+        cpu: "200m"
+        memory: "512Mi"
+    # Custom queries for application-specific metrics
+    queries:
+      applicationMetrics: |
+        SELECT COUNT(*) AS application_count, status FROM applications GROUP BY status;
+      documentMetrics: |
+        SELECT COUNT(*) AS document_count, type FROM documents GROUP BY type;
+  
+  # Logging configuration
+  # Technical specification requires comprehensive logging with specified log levels
+  logging:
+    # Log level: ERROR, WARN, INFO, DEBUG
+    level: "INFO" # Default log level
+    
+    # Log format: text or json
+    format: "json" # JSON format for structured logging
+    
+    # Log slow queries (in milliseconds)
+    slowQueryThreshold: 1000 # Log queries taking more than 1000ms
+    
+    # Log destination
+    destination: "stdout" # Log to standard output for container logging
+    
+    # Log rotation
+    rotation:
+      enabled: true # Enable log rotation
+      maxSize: "100Mi" # Maximum log file size
+      maxFiles: 10 # Maximum number of log files
+    
+    # Additional logging settings
+    settings:
+      logConnections: true # Log connections
+      logDisconnections: true # Log disconnections
+      logLockWaits: true # Log lock waits
+      logTempFiles: true # Log temporary files
+  
+  # Datadog integration
+  # Technical specification mentions Datadog for monitoring
+  datadog:
+    enabled: true # Enable Datadog integration
+    # Metrics collection
+    metrics:
+      enabled: true # Enable metrics collection
+      interval: 15 # 15-second interval
+    # APM tracing
+    apm:
+      enabled: true # Enable APM tracing
+    # Log collection
+    logs:
+      enabled: true # Enable log collection
+    # Alerts
+    alerts:
+      cpuUtilization:
+        threshold: 80 # Alert on 80% CPU utilization
+        duration: "5m" # Sustained for 5 minutes
+      memoryUtilization:
+        threshold: 80 # Alert on 80% memory utilization
+        duration: "5m" # Sustained for 5 minutes
+      diskUsage:
+        threshold: 85 # Alert on 85% disk usage
+        duration: "10m" # Sustained for 10 minutes
+      replicationLag:
+        threshold: 300 # Alert on 5-minute replication lag
+        duration: "5m" # Sustained for 5 minutes
+
+## High availability configuration
+## High availability is required by technical specification
+highAvailability:
+  enabled: true # Enable high availability
+  
+  # Automatic failover configuration
+  automaticFailover:
+    enabled: true # Enable automatic failover
+    # Failover settings
+    maxLagSeconds: 30 # Maximum replication lag for failover
+    failoverTimeout: 30 # Failover timeout in seconds
+    # Technical specification requires automatic failover within 30 seconds
+  
+  # Pod disruption budget
+  podDisruptionBudget:
+    enabled: true # Enable pod disruption budget
+    minAvailable: 1 # Minimum available pods
+    # Production-specific settings
+    production:
+      minAvailable: 2 # Ensure at least 2 pods are available in production
+  
+  # Pod anti-affinity to distribute across nodes
+  podAntiAffinity:
+    enabled: true # Enable pod anti-affinity
+    # soft or hard
+    type: "soft" # Soft anti-affinity (preferred)
+    # Production-specific settings
+    production:
+      type: "hard" # Hard anti-affinity (required) for production
+  
+  # Topology spread constraints for multi-AZ distribution
+  # Technical specification requires distribution across availability zones
+  topologySpreadConstraints:
+    enabled: true # Enable topology spread constraints
+    maxSkew: 1 # Maximum skew
+    topologyKey: "topology.kubernetes.io/zone" # Distribute across zones
+    # Additional topology keys
+    additionalTopologyKeys:
+      - "kubernetes.io/hostname" # Also distribute across hosts
+    # Production-specific settings
+    production:
+      maxSkew: 1 # Strict distribution for production
+      whenUnsatisfiable: "DoNotSchedule" # Strict enforcement for production
+  
+  # Health checks
+  healthChecks:
+    enabled: true # Enable health checks
+    # Liveness probe
+    livenessProbe:
+      initialDelaySeconds: 30
+      periodSeconds: 10
+      timeoutSeconds: 5
+      successThreshold: 1
+      failureThreshold: 3
+    # Readiness probe
+    readinessProbe:
+      initialDelaySeconds: 5
+      periodSeconds: 10
+      timeoutSeconds: 5
+      successThreshold: 1
+      failureThreshold: 3
+
+## Initialization scripts
+## Database initialization with partitioning and encryption functions
+initialization:
+  # Scripts to run on database initialization
+  scripts:
+    enabled: true # Enable initialization scripts
+    # ConfigMap containing initialization scripts
+    configMapName: "" # Will be auto-generated if not provided
+    # Custom initialization scripts
+    customScripts:
+      # Create extensions
+      01-create-extensions.sql: |
+        CREATE EXTENSION IF NOT EXISTS pgcrypto;
+        CREATE EXTENSION IF NOT EXISTS pg_partman;
+        CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+  
+  # Database schema initialization
+  schema:
+    enabled: true # Enable schema initialization
+    # Create partitioned tables for large datasets
+    # Technical specification requires partitioning strategies for large tables
+    createPartitionedTables: true # Enable partitioned tables
+    # Partitioning configuration
+    partitioning:
+      # Applications table partitioning by created_at
+      applications:
+        column: "created_at"
+        type: "range"
+        interval: "monthly"
+      # Documents table partitioning by uploaded_at
+      documents:
+        column: "uploaded_at"
+        type: "range"
+        interval: "monthly"
+    
+    # Create functions for field-level encryption
+    # Technical specification requires field-level encryption for PII
+    createEncryptionFunctions: true # Enable encryption functions
+    # Encryption functions
+    encryptionFunctions:
+      # Encryption function
+      encrypt_pii: |
+        CREATE OR REPLACE FUNCTION encrypt_pii(data TEXT, key TEXT) 
+        RETURNS TEXT AS $$
+        BEGIN
+          RETURN pgp_sym_encrypt(data, key);
+        END;
+        $$ LANGUAGE plpgsql SECURITY DEFINER;
+      # Decryption function
+      decrypt_pii: |
+        CREATE OR REPLACE FUNCTION decrypt_pii(data TEXT, key TEXT) 
+        RETURNS TEXT AS $$
+        BEGIN
+          RETURN pgp_sym_decrypt(data, key);
+        END;
+        $$ LANGUAGE plpgsql SECURITY DEFINER;
+    
+    # Create initial tables
+    createTables: true # Enable table creation
+    # Table definitions
+    tables:
+      # Applications table
+      applications: |
+        CREATE TABLE IF NOT EXISTS applications (
+          id UUID PRIMARY KEY,
+          status VARCHAR(50) NOT NULL,
+          metadata JSONB,
+          created_at TIMESTAMP NOT NULL,
+          updated_at TIMESTAMP NOT NULL,
+          review_status VARCHAR(50)
+        ) PARTITION BY RANGE (created_at);
+      # Documents table
+      documents: |
+        CREATE TABLE IF NOT EXISTS documents (
+          id UUID PRIMARY KEY,
+          application_id UUID NOT NULL,
+          type VARCHAR(100) NOT NULL,
+          storage_path VARCHAR(255) NOT NULL,
+          classification VARCHAR(100),
+          uploaded_at TIMESTAMP NOT NULL,
+          metadata JSONB,
+          FOREIGN KEY (application_id) REFERENCES applications(id)
+        ) PARTITION BY RANGE (uploaded_at);
+      # Merchant details table
+      merchant_details: |
+        CREATE TABLE IF NOT EXISTS merchant_details (
+          id UUID PRIMARY KEY,
+          application_id UUID NOT NULL,
+          legal_name VARCHAR(255) NOT NULL,
+          dba_name VARCHAR(255),
+          ein VARCHAR(255) NOT NULL,
+          address JSONB NOT NULL,
+          industry VARCHAR(100) NOT NULL,
+          revenue NUMERIC(15,2),
+          FOREIGN KEY (application_id) REFERENCES applications(id)
+        );
+
+## Service configuration
+## Service configuration for database access
+service:
+  # Service type: ClusterIP, NodePort, LoadBalancer
+  type: "ClusterIP" # Use ClusterIP for internal access
+  
+  # Service port
+  port: 5432 # Standard PostgreSQL port
+  
+  # Additional annotations for the service
+  annotations:
+    "service.beta.kubernetes.io/aws-load-balancer-internal": "true"
+    "service.beta.kubernetes.io/aws-load-balancer-backend-protocol": "tcp"
+  
+  # Load balancer configuration (if service type is LoadBalancer)
+  loadBalancer:
+    enabled: false # Disabled by default
+    sourceRanges: [] # Source IP ranges allowed to access
+    annotations: {}
+  
+  # Read-write split service
+  # Separate service for read-only operations targeting replicas
+  readReplica:
+    enabled: true # Enable read replica service
+    name: "postgresql-readonly" # Service name
+    port: 5432 # Service port
+    # Annotations for read replica service
+    annotations:
+      "service.beta.kubernetes.io/aws-load-balancer-internal": "true"
+      "service.beta.kubernetes.io/aws-load-balancer-backend-protocol": "tcp"
+
+## Persistence configuration
+## Persistence configuration for database storage
+persistence:
+  enabled: true # Enable persistence
+  
+  # Access modes: ReadWriteOnce, ReadOnlyMany, ReadWriteMany
+  accessModes:
+    - ReadWriteOnce # Standard access mode for database
+  
+  # Annotations for persistent volume claims
+  annotations:
+    "volume.beta.kubernetes.io/storage-class": "${storage.storageClass}"
+    "volume.beta.kubernetes.io/storage-provisioner": "kubernetes.io/aws-ebs"
+  
+  # Volume expansion
+  allowVolumeExpansion: true # Allow volume expansion for growing databases
+  
+  # Backup and restore
+  backup:
+    enabled: true # Enable volume backups
+    schedule: "0 2 * * *" # Daily at 2 AM
+    # Retention policy
+    retention:
+      daily: 7 # Keep daily backups for 7 days
+      weekly: 4 # Keep weekly backups for 4 weeks
+      monthly: 12 # Keep monthly backups for 12 months
+  
+  # Storage encryption
+  encryption:
+    enabled: true # Enable storage encryption
+    # Encryption key
+    kmsKeyId: "" # KMS key ID for encryption
+
+## RBAC configuration
+## RBAC configuration for PostgreSQL pods
+rbac:
+  # Create service account, role, and role binding
+  create: true # Create RBAC resources
+  
+  # Service account name
+  serviceAccountName: "postgresql" # Service account name
+  
+  # Annotations for service account (for cloud provider IAM integration)
+  serviceAccountAnnotations:
+    "eks.amazonaws.com/role-arn": "arn:aws:iam::123456789012:role/postgresql-role"
+  
+  # Rules for the role
+  rules:
+    - apiGroups: [""] # Core API group
+      resources: ["pods", "pods/exec"] # Resources
+      verbs: ["get", "list", "watch", "create", "update", "patch", "delete"] # Permissions
+    - apiGroups: [""] # Core API group
+      resources: ["configmaps", "secrets"] # Resources
+      verbs: ["get", "list", "watch"] # Permissions
+
+## Affinity and tolerations
+## Pod scheduling configuration
+affinity:
+  # Node affinity
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: "kubernetes.io/role"
+              operator: "In"
+              values: ["database"]
+  # Pod anti-affinity
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: "postgresql"
+          topologyKey: "kubernetes.io/hostname"
+
+# Tolerations for node taints
+tolerations:
+  - key: "dedicated"
+    operator: "Equal"
+    value: "database"
+    effect: "NoSchedule"
+
+# Node selector for pod scheduling
+nodeSelector:
+  "kubernetes.io/role": "database"
+
+## Additional custom values
+## Custom values for specific deployments
+custom:
+  # Production-specific custom values
+  production:
+    # Additional production-specific settings
+    additionalSettings:
+      # WAL archiving
+      walArchiving:
+        enabled: true # Enable WAL archiving
+        destination: "s3://mca-documents-production/postgresql-wal"
+      # Synchronous replication
+      synchronousReplication:
+        enabled: true # Enable synchronous replication
+        numSynchronousReplicas: 1 # Number of synchronous replicas
+  
+  # Staging-specific custom values
+  staging:
+    # Additional staging-specific settings
+    additionalSettings:
+      # WAL archiving
+      walArchiving:
+        enabled: true # Enable WAL archiving
+        destination: "s3://mca-documents-staging/postgresql-wal"
+      # Synchronous replication
+      synchronousReplication:
+        enabled: false # Disable synchronous replication for staging
