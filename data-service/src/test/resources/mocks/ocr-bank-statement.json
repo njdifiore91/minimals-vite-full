@@ -1,0 +1,365 @@
+{
+  "metadata": {
+    "document_id": "doc-8a7b6c5d4e3f2g1h",
+    "document_type": "bank_statement",
+    "processing_timestamp": "2023-09-15T14:32:18.456Z",
+    "ocr_model_version": "v2.3.1",
+    "page_count": 3,
+    "source_filename": "FirstNationalBank_Statement_Aug2023.pdf"
+  },
+  "account_information": {
+    "account_holder": {
+      "value": "ACME BUSINESS SOLUTIONS LLC",
+      "confidence": 0.992
+    },
+    "account_number": {
+      "value": "1234567890",
+      "confidence": 0.998
+    },
+    "routing_number": {
+      "value": "021000021",
+      "confidence": 0.995
+    },
+    "bank_name": {
+      "value": "First National Bank",
+      "confidence": 0.999
+    },
+    "bank_address": {
+      "value": "123 Financial Street, New York, NY 10004",
+      "confidence": 0.987
+    },
+    "account_type": {
+      "value": "Business Checking",
+      "confidence": 0.994
+    }
+  },
+  "statement_information": {
+    "statement_period": {
+      "start_date": {
+        "value": "2023-08-01",
+        "confidence": 0.996
+      },
+      "end_date": {
+        "value": "2023-08-31",
+        "confidence": 0.996
+      }
+    },
+    "beginning_balance": {
+      "value": 24568.92,
+      "confidence": 0.993
+    },
+    "ending_balance": {
+      "value": 31245.67,
+      "confidence": 0.991
+    },
+    "total_deposits": {
+      "value": 42500.00,
+      "confidence": 0.989
+    },
+    "total_withdrawals": {
+      "value": 35823.25,
+      "confidence": 0.988
+    },
+    "currency": {
+      "value": "USD",
+      "confidence": 0.999
+    }
+  },
+  "transactions": [
+    {
+      "date": {
+        "value": "2023-08-01",
+        "confidence": 0.995
+      },
+      "description": {
+        "value": "PREVIOUS BALANCE",
+        "confidence": 0.997
+      },
+      "amount": {
+        "value": null,
+        "confidence": null
+      },
+      "balance": {
+        "value": 24568.92,
+        "confidence": 0.993
+      },
+      "type": {
+        "value": "BALANCE",
+        "confidence": 0.999
+      }
+    },
+    {
+      "date": {
+        "value": "2023-08-02",
+        "confidence": 0.994
+      },
+      "description": {
+        "value": "DEPOSIT - CUSTOMER PAYMENT - JOHNSON CORP",
+        "confidence": 0.985
+      },
+      "amount": {
+        "value": 12500.00,
+        "confidence": 0.992
+      },
+      "balance": {
+        "value": 37068.92,
+        "confidence": 0.991
+      },
+      "type": {
+        "value": "CREDIT",
+        "confidence": 0.998
+      }
+    },
+    {
+      "date": {
+        "value": "2023-08-05",
+        "confidence": 0.996
+      },
+      "description": {
+        "value": "ACH WITHDRAWAL - RENT PAYMENT",
+        "confidence": 0.989
+      },
+      "amount": {
+        "value": 4500.00,
+        "confidence": 0.994
+      },
+      "balance": {
+        "value": 32568.92,
+        "confidence": 0.990
+      },
+      "type": {
+        "value": "DEBIT",
+        "confidence": 0.998
+      }
+    },
+    {
+      "date": {
+        "value": "2023-08-07",
+        "confidence": 0.995
+      },
+      "description": {
+        "value": "ACH WITHDRAWAL - PAYROLL",
+        "confidence": 0.991
+      },
+      "amount": {
+        "value": 18750.00,
+        "confidence": 0.993
+      },
+      "balance": {
+        "value": 13818.92,
+        "confidence": 0.989
+      },
+      "type": {
+        "value": "DEBIT",
+        "confidence": 0.998
+      }
+    },
+    {
+      "date": {
+        "value": "2023-08-10",
+        "confidence": 0.996
+      },
+      "description": {
+        "value": "CHECK #1042",
+        "confidence": 0.994
+      },
+      "amount": {
+        "value": 1250.75,
+        "confidence": 0.992
+      },
+      "balance": {
+        "value": 12568.17,
+        "confidence": 0.988
+      },
+      "type": {
+        "value": "DEBIT",
+        "confidence": 0.998
+      }
+    },
+    {
+      "date": {
+        "value": "2023-08-15",
+        "confidence": 0.995
+      },
+      "description": {
+        "value": "DEPOSIT - CUSTOMER PAYMENT - SMITH INDUSTRIES",
+        "confidence": 0.983
+      },
+      "amount": {
+        "value": 15000.00,
+        "confidence": 0.991
+      },
+      "balance": {
+        "value": 27568.17,
+        "confidence": 0.987
+      },
+      "type": {
+        "value": "CREDIT",
+        "confidence": 0.998
+      }
+    },
+    {
+      "date": {
+        "value": "2023-08-18",
+        "confidence": 0.994
+      },
+      "description": {
+        "value": "ACH WITHDRAWAL - UTILITIES",
+        "confidence": 0.990
+      },
+      "amount": {
+        "value": 822.50,
+        "confidence": 0.991
+      },
+      "balance": {
+        "value": 26745.67,
+        "confidence": 0.986
+      },
+      "type": {
+        "value": "DEBIT",
+        "confidence": 0.998
+      }
+    },
+    {
+      "date": {
+        "value": "2023-08-22",
+        "confidence": 0.995
+      },
+      "description": {
+        "value": "DEPOSIT - CUSTOMER PAYMENT - ACME GLOBAL",
+        "confidence": 0.982
+      },
+      "amount": {
+        "value": 15000.00,
+        "confidence": 0.990
+      },
+      "balance": {
+        "value": 41745.67,
+        "confidence": 0.985
+      },
+      "type": {
+        "value": "CREDIT",
+        "confidence": 0.998
+      }
+    },
+    {
+      "date": {
+        "value": "2023-08-25",
+        "confidence": 0.994
+      },
+      "description": {
+        "value": "ACH WITHDRAWAL - INSURANCE PREMIUM",
+        "confidence": 0.988
+      },
+      "amount": {
+        "value": 2500.00,
+        "confidence": 0.992
+      },
+      "balance": {
+        "value": 39245.67,
+        "confidence": 0.984
+      },
+      "type": {
+        "value": "DEBIT",
+        "confidence": 0.998
+      }
+    },
+    {
+      "date": {
+        "value": "2023-08-28",
+        "confidence": 0.995
+      },
+      "description": {
+        "value": "ACH WITHDRAWAL - SUPPLIER PAYMENT",
+        "confidence": 0.987
+      },
+      "amount": {
+        "value": 8000.00,
+        "confidence": 0.991
+      },
+      "balance": {
+        "value": 31245.67,
+        "confidence": 0.983
+      },
+      "type": {
+        "value": "DEBIT",
+        "confidence": 0.998
+      }
+    },
+    {
+      "date": {
+        "value": "2023-08-31",
+        "confidence": 0.996
+      },
+      "description": {
+        "value": "ENDING BALANCE",
+        "confidence": 0.997
+      },
+      "amount": {
+        "value": null,
+        "confidence": null
+      },
+      "balance": {
+        "value": 31245.67,
+        "confidence": 0.991
+      },
+      "type": {
+        "value": "BALANCE",
+        "confidence": 0.999
+      }
+    }
+  ],
+  "page_information": [
+    {
+      "page_number": 1,
+      "image_quality": {
+        "value": "high",
+        "confidence": 0.995
+      },
+      "contains_transactions": true,
+      "contains_account_info": true,
+      "contains_summary": true
+    },
+    {
+      "page_number": 2,
+      "image_quality": {
+        "value": "high",
+        "confidence": 0.993
+      },
+      "contains_transactions": true,
+      "contains_account_info": false,
+      "contains_summary": false
+    },
+    {
+      "page_number": 3,
+      "image_quality": {
+        "value": "medium",
+        "confidence": 0.978
+      },
+      "contains_transactions": true,
+      "contains_account_info": false,
+      "contains_summary": true
+    }
+  ],
+  "extraction_metrics": {
+    "overall_confidence": 0.991,
+    "processing_time_ms": 1245,
+    "field_extraction_count": 87,
+    "low_confidence_fields": 0,
+    "unreadable_fields": 0
+  },
+  "additional_information": {
+    "statement_message": {
+      "value": "Thank you for your business. Please contact customer service at 1-800-555-1234 for any questions regarding your statement.",
+      "confidence": 0.975
+    },
+    "interest_earned": {
+      "value": 12.50,
+      "confidence": 0.985
+    },
+    "fees_charged": {
+      "value": 0.00,
+      "confidence": 0.990
+    }
+  }
+}
