@@ -1,0 +1,238 @@
+# Development Environment Configuration Values for MCA Application Processing System
+# This file contains development-specific overrides for the common Kubernetes configuration
+
+# Global settings for development environment
+global:
+  environment: development
+  domain: dev.dollarfunding.local
+  debug: true
+  verboseLogging: true
+  featureFlags:
+    automationEnabled: true
+    webhooksEnabled: true
+    ocr:
+      handwritingRecognition: true
+      confidenceScoring: true
+  resources:
+    small:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
+    medium:
+      requests:
+        cpu: 200m
+        memory: 256Mi
+      limits:
+        cpu: 400m
+        memory: 512Mi
+    large:
+      requests:
+        cpu: 400m
+        memory: 512Mi
+      limits:
+        cpu: 800m
+        memory: 1Gi
+
+# Email Service Configuration
+emailService:
+  replicaCount: 1
+  resources: ${global.resources.small}
+  debug: true
+  config:
+    emailPollingInterval: 30
+    imap:
+      host: dev-imap.dollarfunding.local
+      port: 993
+      user: submissions
+      secretName: email-service-dev-credentials
+    rabbitmq:
+      host: rabbitmq-dev
+      port: 5672
+      user: dev-user
+      secretName: rabbitmq-dev-credentials
+      exchange: mca.documents
+      queue: document-processing
+
+# Document Service Configuration
+documentService:
+  replicaCount: 1
+  resources: ${global.resources.medium}
+  debug: true
+  config:
+    modelPath: /app/models/dev
+    confidenceThreshold: 0.7
+    rabbitmq:
+      host: rabbitmq-dev
+      port: 5672
+      user: dev-user
+      secretName: rabbitmq-dev-credentials
+      exchange: mca.documents
+      queue: data-extraction
+    storage:
+      bucket: mca-documents-development
+      region: us-east-1
+      endpoint: http://minio:9000
+      secretName: s3-dev-credentials
+
+# OCR Service Configuration
+ocrService:
+  replicaCount: 1
+  resources: ${global.resources.medium}
+  debug: true
+  config:
+    modelPath: /app/models/dev
+    confidenceThreshold: 0.6
+    useGPU: false
+    rabbitmq:
+      host: rabbitmq-dev
+      port: 5672
+      user: dev-user
+      secretName: rabbitmq-dev-credentials
+      exchange: mca.documents
+      queue: notification
+    storage:
+      bucket: mca-documents-development
+      region: us-east-1
+      endpoint: http://minio:9000
+      secretName: s3-dev-credentials
+
+# Data Service Configuration
+dataService:
+  replicaCount: 1
+  resources: ${global.resources.medium}
+  debug: true
+  config:
+    spring:
+      profiles: dev
+    database:
+      host: postgres-dev
+      port: 5432
+      name: mca_dev
+      user: mca_dev
+      secretName: postgres-dev-credentials
+    rabbitmq:
+      host: rabbitmq-dev
+      port: 5672
+      user: dev-user
+      secretName: rabbitmq-dev-credentials
+    redis:
+      host: redis-dev
+      port: 6379
+      secretName: redis-dev-credentials
+    jwt:
+      issuer: dollarfunding-dev
+      expiry: 3600
+      secretName: jwt-dev-secret
+
+# Notification Service Configuration
+notificationService:
+  replicaCount: 1
+  resources: ${global.resources.small}
+  debug: true
+  config:
+    webhookRetryAttempts: 3
+    webhookRetryDelay: 30
+    rabbitmq:
+      host: rabbitmq-dev
+      port: 5672
+      user: dev-user
+      secretName: rabbitmq-dev-credentials
+      exchange: mca.notifications
+      queue: webhook-delivery
+    redis:
+      host: redis-dev
+      port: 6379
+      secretName: redis-dev-credentials
+
+# API Gateway Configuration
+apiGateway:
+  replicaCount: 1
+  resources: ${global.resources.small}
+  debug: true
+  config:
+    cors:
+      allowedOrigins: 
+        - http://localhost:3000
+        - http://localhost:5173
+      allowCredentials: true
+    rateLimit:
+      enabled: false
+    jwt:
+      issuer: dollarfunding-dev
+      secretName: jwt-dev-secret
+    services:
+      dataService: http://data-service:8080
+      notificationService: http://notification-service:3000
+
+# PostgreSQL Configuration
+postgresql:
+  replicaCount: 1
+  resources: ${global.resources.medium}
+  persistence:
+    size: 10Gi
+  config:
+    maxConnections: 100
+    sharedBuffers: 256MB
+    workMem: 16MB
+    maintenanceWorkMem: 64MB
+    logMinDurationStatement: 1000
+  readReplicas:
+    enabled: false
+
+# RabbitMQ Configuration
+rabbitmq:
+  replicaCount: 1
+  resources: ${global.resources.medium}
+  persistence:
+    size: 8Gi
+  config:
+    memoryHighWatermark: 0.6
+    diskFreeLimit: 2GB
+    queues:
+      - name: document-processing
+        durable: true
+        autoDelete: false
+      - name: data-extraction
+        durable: true
+        autoDelete: false
+      - name: notification
+        durable: true
+        autoDelete: false
+      - name: webhook-delivery
+        durable: true
+        autoDelete: false
+    exchanges:
+      - name: mca.documents
+        type: fanout
+        durable: true
+      - name: mca.notifications
+        type: direct
+        durable: true
+
+# Redis Configuration
+redis:
+  replicaCount: 1
+  resources: ${global.resources.small}
+  persistence:
+    size: 5Gi
+  config:
+    maxmemory: 256mb
+    maxmemoryPolicy: allkeys-lru
+    ttl:
+      applicationData: 900
+      userSessions: 86400
+
+# S3-Compatible Storage Configuration
+s3Storage:
+  enabled: true
+  provider: minio
+  config:
+    endpoint: http://minio:9000
+    region: us-east-1
+    buckets:
+      - name: mca-documents-development
+        versioning: true
+        encryption: AES256
