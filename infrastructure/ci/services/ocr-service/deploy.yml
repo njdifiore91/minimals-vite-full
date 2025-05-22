@@ -1,0 +1,309 @@
+# OCR Service Deployment Workflow
+# This workflow handles the deployment of the OCR Service to Kubernetes environments
+# It includes environment selection, Helm chart deployment with GPU resource allocation,
+# post-deployment validation, and rollback procedures.
+
+name: Deploy OCR Service
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment for deployment'
+        required: true
+        default: 'development'
+        type: 'choice'
+        options:
+          - development
+          - staging
+          - production
+      version:
+        description: 'Version to deploy (defaults to latest if not specified)'
+        required: false
+        type: 'string'
+  
+  # Automatic deployment trigger when a new image is pushed to the registry
+  repository_dispatch:
+    types: [ocr-service-image-pushed]
+
+# Environment-specific configuration
+env:
+  SERVICE_NAME: ocr-service
+  CHART_PATH: infrastructure/kubernetes/charts/ocr-service
+  NAMESPACE_PREFIX: mca
+
+jobs:
+  prepare-deployment:
+    name: Prepare Deployment
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.set-version.outputs.version }}
+      namespace: ${{ steps.set-namespace.outputs.namespace }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set deployment version
+        id: set-version
+        run: |
+          if [[ -n "${{ github.event.inputs.version }}" ]]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.event_name }}" == "repository_dispatch" ]]; then
+            echo "version=${{ github.event.client_payload.version }}" >> $GITHUB_OUTPUT
+          else
+            # Get latest version from registry if not specified
+            echo "version=$(./infrastructure/ci/scripts/get-latest-version.sh ${{ env.SERVICE_NAME }})" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Set environment and namespace
+        id: set-namespace
+        run: |
+          if [[ -n "${{ github.event.inputs.environment }}" ]]; then
+            ENV="${{ github.event.inputs.environment }}"
+          elif [[ "${{ github.event_name }}" == "repository_dispatch" ]]; then
+            ENV="${{ github.event.client_payload.environment }}"
+          else
+            ENV="development"
+          fi
+          echo "namespace=${{ env.NAMESPACE_PREFIX }}-${ENV}" >> $GITHUB_OUTPUT
+          echo "environment=${ENV}" >> $GITHUB_OUTPUT
+
+  validate-deployment:
+    name: Validate Deployment
+    needs: prepare-deployment
+    runs-on: ubuntu-latest
+    environment: ${{ needs.prepare-deployment.outputs.environment }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate Helm chart
+        run: |
+          helm lint ${{ env.CHART_PATH }} 
+            --set image.tag=${{ needs.prepare-deployment.outputs.version }}
+
+      - name: Validate Kubernetes resources
+        run: |
+          helm template ${{ env.SERVICE_NAME }} ${{ env.CHART_PATH }} 
+            --set image.tag=${{ needs.prepare-deployment.outputs.version }} 
+            --namespace ${{ needs.prepare-deployment.outputs.namespace }} 
+            --debug | kubectl apply --dry-run=client -f -
+
+  deploy-development:
+    name: Deploy to Development
+    needs: [prepare-deployment, validate-deployment]
+    if: needs.prepare-deployment.outputs.environment == 'development'
+    runs-on: ubuntu-latest
+    environment: development
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure Kubernetes context
+        uses: azure/k8s-set-context@v3
+        with:
+          method: kubeconfig
+          kubeconfig: ${{ secrets.KUBECONFIG_DEV }}
+
+      - name: Deploy OCR Service with Helm
+        run: |
+          helm upgrade --install ${{ env.SERVICE_NAME }} ${{ env.CHART_PATH }} 
+            --namespace ${{ needs.prepare-deployment.outputs.namespace }} 
+            --set image.tag=${{ needs.prepare-deployment.outputs.version }} 
+            --set environment=development 
+            --set resources.requests.gpu=1 
+            --set resources.limits.gpu=1 
+            --set resources.requests.memory=4Gi 
+            --set resources.limits.memory=8Gi 
+            --set replicaCount=1 
+            --set autoscaling.minReplicas=1 
+            --set autoscaling.maxReplicas=2 
+            --wait 
+            --timeout 10m
+
+      - name: Verify deployment
+        run: |
+          kubectl rollout status deployment/${{ env.SERVICE_NAME }} 
+            --namespace ${{ needs.prepare-deployment.outputs.namespace }} 
+            --timeout=300s
+
+      - name: Run post-deployment health checks
+        run: |
+          ./infrastructure/ci/scripts/health-check.sh 
+            ${{ env.SERVICE_NAME }} 
+            ${{ needs.prepare-deployment.outputs.namespace }} 
+            /health/live
+
+      - name: Send deployment notification
+        if: success()
+        run: |
+          ./infrastructure/ci/scripts/notify.sh 
+            "OCR Service deployment to development successful" 
+            "Version: ${{ needs.prepare-deployment.outputs.version }}" 
+            "success"
+
+      - name: Rollback on failure
+        if: failure()
+        run: |
+          helm rollback ${{ env.SERVICE_NAME }} 
+            --namespace ${{ needs.prepare-deployment.outputs.namespace }}
+          ./infrastructure/ci/scripts/notify.sh 
+            "OCR Service deployment to development failed - automatic rollback initiated" 
+            "Version: ${{ needs.prepare-deployment.outputs.version }}" 
+            "failure"
+
+  deploy-staging:
+    name: Deploy to Staging
+    needs: [prepare-deployment, validate-deployment]
+    if: needs.prepare-deployment.outputs.environment == 'staging'
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure Kubernetes context
+        uses: azure/k8s-set-context@v3
+        with:
+          method: kubeconfig
+          kubeconfig: ${{ secrets.KUBECONFIG_STAGING }}
+
+      - name: Deploy OCR Service with Helm
+        run: |
+          helm upgrade --install ${{ env.SERVICE_NAME }} ${{ env.CHART_PATH }} 
+            --namespace ${{ needs.prepare-deployment.outputs.namespace }} 
+            --set image.tag=${{ needs.prepare-deployment.outputs.version }} 
+            --set environment=staging 
+            --set resources.requests.gpu=1 
+            --set resources.limits.gpu=1 
+            --set resources.requests.memory=6Gi 
+            --set resources.limits.memory=12Gi 
+            --set replicaCount=2 
+            --set autoscaling.minReplicas=2 
+            --set autoscaling.maxReplicas=4 
+            --wait 
+            --timeout 10m
+
+      - name: Verify deployment
+        run: |
+          kubectl rollout status deployment/${{ env.SERVICE_NAME }} 
+            --namespace ${{ needs.prepare-deployment.outputs.namespace }} 
+            --timeout=300s
+
+      - name: Run post-deployment health checks
+        run: |
+          ./infrastructure/ci/scripts/health-check.sh 
+            ${{ env.SERVICE_NAME }} 
+            ${{ needs.prepare-deployment.outputs.namespace }} 
+            /health/live
+
+      - name: Send deployment notification
+        if: success()
+        run: |
+          ./infrastructure/ci/scripts/notify.sh 
+            "OCR Service deployment to staging successful" 
+            "Version: ${{ needs.prepare-deployment.outputs.version }}" 
+            "success"
+
+      - name: Rollback on failure
+        if: failure()
+        run: |
+          helm rollback ${{ env.SERVICE_NAME }} 
+            --namespace ${{ needs.prepare-deployment.outputs.namespace }}
+          ./infrastructure/ci/scripts/notify.sh 
+            "OCR Service deployment to staging failed - automatic rollback initiated" 
+            "Version: ${{ needs.prepare-deployment.outputs.version }}" 
+            "failure"
+
+  deploy-production:
+    name: Deploy to Production
+    needs: [prepare-deployment, validate-deployment]
+    if: needs.prepare-deployment.outputs.environment == 'production'
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://ocr-service.dollarfunding.com
+    # Production deployment requires manual approval
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure Kubernetes context
+        uses: azure/k8s-set-context@v3
+        with:
+          method: kubeconfig
+          kubeconfig: ${{ secrets.KUBECONFIG_PROD }}
+
+      - name: Deploy OCR Service with Helm
+        run: |
+          helm upgrade --install ${{ env.SERVICE_NAME }} ${{ env.CHART_PATH }} 
+            --namespace ${{ needs.prepare-deployment.outputs.namespace }} 
+            --set image.tag=${{ needs.prepare-deployment.outputs.version }} 
+            --set environment=production 
+            --set resources.requests.gpu=1 
+            --set resources.limits.gpu=2 
+            --set resources.requests.memory=8Gi 
+            --set resources.limits.memory=16Gi 
+            --set replicaCount=3 
+            --set autoscaling.minReplicas=3 
+            --set autoscaling.maxReplicas=6 
+            --wait 
+            --timeout 15m
+
+      - name: Verify deployment
+        run: |
+          kubectl rollout status deployment/${{ env.SERVICE_NAME }} 
+            --namespace ${{ needs.prepare-deployment.outputs.namespace }} 
+            --timeout=300s
+
+      - name: Run post-deployment health checks
+        run: |
+          ./infrastructure/ci/scripts/health-check.sh 
+            ${{ env.SERVICE_NAME }} 
+            ${{ needs.prepare-deployment.outputs.namespace }} 
+            /health/live
+
+      - name: Run performance validation
+        run: |
+          ./infrastructure/ci/scripts/performance-check.sh 
+            ${{ env.SERVICE_NAME }} 
+            ${{ needs.prepare-deployment.outputs.namespace }} 
+            "ocr-performance"
+
+      - name: Send deployment notification
+        if: success()
+        run: |
+          ./infrastructure/ci/scripts/notify.sh 
+            "OCR Service deployment to production successful" 
+            "Version: ${{ needs.prepare-deployment.outputs.version }}" 
+            "success"
+
+      - name: Rollback on failure
+        if: failure()
+        run: |
+          helm rollback ${{ env.SERVICE_NAME }} 
+            --namespace ${{ needs.prepare-deployment.outputs.namespace }}
+          ./infrastructure/ci/scripts/notify.sh 
+            "OCR Service deployment to production failed - automatic rollback initiated" 
+            "Version: ${{ needs.prepare-deployment.outputs.version }}" 
+            "failure"
+
+  update-deployment-registry:
+    name: Update Deployment Registry
+    needs: [prepare-deployment, deploy-development, deploy-staging, deploy-production]
+    if: |
+      always() && 
+      (needs.deploy-development.result == 'success' || 
+       needs.deploy-staging.result == 'success' || 
+       needs.deploy-production.result == 'success')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Update deployment registry
+        run: |
+          ./infrastructure/ci/scripts/update-deployment-registry.sh 
+            ${{ env.SERVICE_NAME }} 
+            ${{ needs.prepare-deployment.outputs.version }} 
+            ${{ needs.prepare-deployment.outputs.environment }}
