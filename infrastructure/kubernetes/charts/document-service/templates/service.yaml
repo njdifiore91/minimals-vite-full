@@ -1,0 +1,74 @@
+{{- /*
+service.yaml: Kubernetes Service template for Document Service
+
+This template creates a Kubernetes Service resource that exposes the Document Service within the cluster,
+making it accessible to other services for document classification requests.
+
+It follows the pattern of the common service template but with Document Service specific configurations.
+*/}}
+
+{{- if .Values.service.enabled | default true }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "common.names.fullname" . }}
+  labels:
+    {{- include "common.labels.standard" . | nindent 4 }}
+    app.kubernetes.io/component: document-service
+    {{- if .Values.service.labels }}
+    {{- include "common.tplvalues.render" (dict "value" .Values.service.labels "context" $) | nindent 4 }}
+    {{- end }}
+  annotations:
+    # Document Service specific annotations for service discovery and monitoring
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "{{ .Values.service.metricsPort | default 9090 }}"
+    prometheus.io/path: "/metrics"
+    # Additional annotations for service identification
+    app.kubernetes.io/part-of: "mca-application-processing-system"
+    app.kubernetes.io/component: "document-service"
+    {{- if .Values.service.annotations }}
+    {{- include "common.tplvalues.render" (dict "value" .Values.service.annotations "context" $) | nindent 4 }}
+    {{- end }}
+    {{- if .Values.commonAnnotations }}
+    {{- include "common.tplvalues.render" (dict "value" .Values.commonAnnotations "context" $) | nindent 4 }}
+    {{- end }}
+spec:
+  type: {{ .Values.service.type | default "ClusterIP" }}
+  {{- if and (eq .Values.service.type "LoadBalancer") .Values.service.loadBalancerIP }}
+  loadBalancerIP: {{ .Values.service.loadBalancerIP }}
+  {{- end }}
+  {{- if and (eq .Values.service.type "LoadBalancer") .Values.service.loadBalancerSourceRanges }}
+  loadBalancerSourceRanges:
+    {{- range .Values.service.loadBalancerSourceRanges }}
+    - {{ . | quote }}
+    {{- end }}
+  {{- end }}
+  {{- if .Values.service.externalTrafficPolicy }}
+  externalTrafficPolicy: {{ .Values.service.externalTrafficPolicy }}
+  {{- end }}
+  {{- if .Values.service.sessionAffinity.enabled }}
+  sessionAffinity: ClientIP
+  {{- if .Values.service.sessionAffinity.timeoutSeconds }}
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: {{ .Values.service.sessionAffinity.timeoutSeconds }}
+  {{- end }}
+  {{- end }}
+  ports:
+    # HTTP API port for document classification requests
+    - name: http
+      port: {{ .Values.service.port | default 5000 }}
+      targetPort: {{ .Values.service.port | default 5000 }}
+      protocol: TCP
+    # Metrics port for monitoring and observability
+    - name: metrics
+      port: {{ .Values.service.metricsPort | default 9090 }}
+      targetPort: {{ .Values.service.metricsPort | default 9090 }}
+      protocol: TCP
+  selector:
+    {{- include "common.labels.matchLabels" . | nindent 4 }}
+    app.kubernetes.io/component: document-service
+    {{- if .Values.service.selector }}
+    {{- include "common.tplvalues.render" (dict "value" .Values.service.selector "context" $) | nindent 4 }}
+    {{- end }}
+{{- end }}
