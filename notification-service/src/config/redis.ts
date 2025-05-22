@@ -9,7 +9,7 @@
 import Redis from 'ioredis';
 import { IRedisConfig } from '../types/config';
 import { logger } from './logger';
-import { config } from './app';
+import config from './app';
 
 /**
  * Default TTL values in seconds
