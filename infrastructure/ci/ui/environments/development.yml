@@ -1,0 +1,199 @@
+# Development Environment Configuration for UI CI/CD Pipeline
+# This file defines the configuration for the UI component's CI/CD pipeline in the development environment.
+# It includes API endpoints, feature flags, resource allocations, and deployment settings specific to development.
+
+# API Configuration
+api:
+  gateway_url: http://api-gateway.dev.dollarfunding.com
+  timeout_ms: 60000  # Longer timeout for development debugging
+  retry_attempts: 5  # More retry attempts for development stability
+  cache_ttl_minutes: 5  # Shorter cache TTL for development to see changes faster
+
+# Feature Flags (all enabled for development and testing)
+feature_flags:
+  automated_document_processing: true
+  advanced_ocr_extraction: true
+  webhook_notifications: true
+  real_time_updates: true
+  experimental_features: true
+  beta_features: true
+  debug_tools: true
+  development_tools: true  # Development-only tools
+  mock_services: true  # Allow mock services for development
+  performance_monitoring: true
+
+# Resource Allocations (minimal for development)
+resources:
+  cpu: 1
+  memory: 2Gi
+  storage: 5Gi
+  replicas: 1
+  autoscaling:
+    enabled: false  # No autoscaling needed in development
+    min_replicas: 1
+    max_replicas: 1
+    target_cpu_utilization: 80
+
+# Deployment Configuration
+deployment:
+  platform: vercel
+  target: dollarfunding-dev.vercel.app
+  build_command: yarn build
+  output_directory: dist
+  node_version: 20.0.0
+  environment_variables:
+    NODE_ENV: development
+    VITE_SERVER_URL: http://api-gateway.dev.dollarfunding.com
+    VITE_APP_NAME: Dollar Funding MCA (Development)
+    VITE_APP_VERSION: ${APP_VERSION}
+    VITE_ASSETS_DIR: /assets
+    VITE_ENABLE_MOCK_API: "true"  # Enable mock API for development
+    VITE_ENABLE_DEBUG: "true"  # Enable debug mode
+  deployment_protection:
+    enabled: false  # No deployment protection needed in development
+    require_approval: false
+    require_integration_tests: false
+
+# Authentication Configuration
+authentication:
+  method: jwt
+  jwt:
+    algorithm: RS256
+    token_expiry_minutes: 120  # Longer token expiry for development convenience
+    refresh_token_days: 14  # Longer refresh token for development convenience
+    issuer: dollarfunding-auth-dev
+    audience: mca-application-dev
+  session_storage: sessionStorage
+  persistent_login: true  # Allow persistent login in development
+
+# Logging Configuration (verbose for development troubleshooting)
+logging:
+  level: debug  # More verbose logging for development
+  enabled_levels:
+    - error
+    - warn
+    - info
+    - debug
+    - trace  # Include trace level for detailed debugging
+  disabled_levels: []  # No disabled levels in development
+  log_to_console: true
+  log_to_service: true
+  service_endpoint: http://logging.dev.dollarfunding.com/api/logs
+
+# Performance Monitoring
+monitoring:
+  enabled: true
+  datadog:
+    api_key: ${DATADOG_API_KEY}
+    app_key: ${DATADOG_APP_KEY}
+    service_name: mca-ui
+    environment: development
+  metrics:
+    - response_time
+    - error_rate
+    - user_interactions
+    - page_load_time
+    - api_call_duration
+    - feature_flag_usage
+    - memory_usage  # Additional metrics for development
+    - component_render_time  # Additional metrics for development
+
+# UI Display Configuration
+ui:
+  screen_sizes:
+    desktop:
+      - 1920x1080
+      - 1440x900
+    tablet:
+      - 1024x768
+      - 768x1024
+    mobile:
+      - 375x667
+      - 414x896
+  theme:
+    primary_color: '#0052CC'
+    secondary_color: '#00875A'
+    funding_colors:
+      alpha:
+        primary: '#0052CC'
+        secondary: '#00875A'
+      beta:
+        primary: '#6E44FF'
+        secondary: '#FF5630'
+      gamma:
+        primary: '#006644'
+        secondary: '#DE350B'
+  debug_overlay: true  # Enable debug overlay in development
+  grid_overlay: true  # Enable grid overlay in development
+
+# Approval Workflow
+approval:
+  required: false
+  approvers_required: 0
+  timeout_hours: 24
+  auto_expire: true
+  notify_channels:
+    - email:dev-team@dollarfunding.com
+    - slack:#dev-deployments
+
+# Health Checks
+health_checks:
+  enabled: true
+  endpoints:
+    - path: /health
+      expected_status: 200
+      timeout_ms: 10000  # Longer timeout for development
+    - path: /api/status
+      expected_status: 200
+      timeout_ms: 10000  # Longer timeout for development
+  interval_seconds: 60  # Longer interval for development
+  failure_threshold: 5  # Higher failure threshold for development
+  success_threshold: 1
+
+# Rollback Configuration
+rollback:
+  automatic: false  # No automatic rollback in development
+  on_health_check_failure: false
+  on_error_threshold: 0.5  # Higher error threshold for development
+  max_deployment_time_minutes: 30  # Longer deployment time for development
+  notify_on_rollback: true
+
+# Integration Tests
+integration_tests:
+  required: false  # Not required in development
+  timeout_minutes: 30
+  test_command: yarn test:integration
+  fail_on_error: false  # Don't fail on error in development
+  environments:
+    - development
+  notify_on_failure: true
+
+# Feature Flag Gradual Rollout
+feature_rollout:
+  enabled: true
+  strategies:
+    - name: percentage_rollout
+      default: true
+    - name: user_targeting
+      enabled: true
+    - name: a_b_testing
+      enabled: true
+  default_rollout_percentage: 100  # 100% rollout in development
+  monitoring_enabled: true
+
+# Development-specific Settings
+development:
+  hot_reload: true
+  source_maps: true
+  mock_data: true
+  api_mocking: true
+  performance_warnings: true
+  bundle_analyzer: true
+  error_overlay: true
+  react_dev_tools: true
+  redux_dev_tools: true
+  vite_dev_server:
+    port: 8080
+    host: 0.0.0.0
+    https: false
+    open: true
