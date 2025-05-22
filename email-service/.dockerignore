@@ -1,54 +1,56 @@
 # Node.js dependencies and package management
-node_modules/
+node_modules
 npm-debug.log
 yarn-debug.log
 yarn-error.log
-.npm/
-.yarn/
+.npm
+.pnpm-store
 
 # Environment and configuration files
 .env
 .env.*
-.editorconfig
-.eslintrc*
-.prettierrc*
-nodemon.json
+.npmrc
+.aws
 
-# Git related files
-.git/
+# Git files
+.git
 .gitignore
-.github/
+.github
 
-# Test files and directories
-tests/
-**/*.test.ts
-**/*.spec.ts
-coverage/
+# Test files and coverage reports
+test
+tests
+coverage
+*.test.ts
+*.spec.ts
+__tests__
+
+# IDE and editor files
+.vscode
+.idea
+.editorconfig
+*.swp
+*.swo
 
 # Build artifacts and temporary files
-dist/
-build/
-tmp/
-temp/
-tsconfig.tsbuildinfo
+dist
+build
+tmp
+*.log
+
+# Docker files
+Dockerfile*
+docker-compose*
+.dockerignore
 
 # Documentation and non-essential files
 README.md
-CHANGELOG.md
 LICENSE
-docs/
+docs
 
-# OS specific files
+# TypeScript specific
+tsconfig.tsbuildinfo
+
+# Miscellaneous
 .DS_Store
 Thumbs.db
-
-# Docker related files (to prevent recursion)
-Dockerfile
-.dockerignore
-
-# IDE specific files
-.idea/
-.vscode/
-*.sublime-*
-*.swp
-*.swo
