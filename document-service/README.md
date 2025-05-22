@@ -2,248 +2,284 @@
 
 ## Overview
 
-The Document Service is a critical microservice in the Merchant Cash Advance (MCA) Application Processing System. It is responsible for classifying incoming documents using AI-based algorithms, extracting document metadata, and routing documents to appropriate OCR processors based on their classification.
+The Document Service is a critical microservice component of the Merchant Cash Advance (MCA) Application Processing System. It is responsible for classifying incoming documents using AI-based algorithms, extracting document metadata, and routing documents to appropriate OCR processors for data extraction.
 
-### Key Features
+## Key Features
 
-- **AI-Based Document Classification**: Uses scikit-learn models (SVM, Random Forest) to classify documents with 99% accuracy
-- **RabbitMQ Integration**: Consumes document messages from RabbitMQ and publishes classification results
-- **S3 Storage**: Securely stores documents with AES-256 encryption
-- **Intelligent Routing**: Routes documents to specialized OCR processors based on document type
-- **Health Monitoring**: Provides comprehensive health check endpoints for Kubernetes
-- **Confidence Scoring**: Includes confidence metrics for classification decisions
+- AI-powered document classification using scikit-learn (SVM and Random Forest classifiers)
+- High-accuracy document type detection (99% accuracy target)
+- Confidence scoring for classification decisions
+- Seamless integration with RabbitMQ message queue
+- Secure document storage with S3-compatible storage
+- Kubernetes-ready with health check endpoints
+- Comprehensive logging and monitoring
 
 ## Architecture
 
-The Document Service is implemented as a Python microservice using scikit-learn for machine learning capabilities. It follows a modular architecture with clear separation of concerns:
+The Document Service is implemented as a Python microservice that consumes document messages from RabbitMQ, processes them using machine learning models, and publishes classification results back to RabbitMQ for further processing by the OCR Service.
+
+### Workflow
+
+1. Email Service extracts documents from incoming emails and publishes them to RabbitMQ
+2. Document Service consumes messages from the `document-processing` queue
+3. Document Service downloads document content from S3-compatible storage
+4. Document Service classifies documents using trained ML models
+5. Document Service adds classification metadata and confidence scores
+6. Document Service routes documents to appropriate OCR processors via RabbitMQ
+7. OCR Service extracts data based on document classification
+
+### Component Diagram
 
 ```
-document-service/
-├── src/
-│   ├── api/                 # FastAPI endpoints
-│   ├── config/              # Configuration modules
-│   ├── models/              # Classification models
-│   ├── services/            # Core services
-│   ├── types/               # Type definitions
-│   ├── utils/               # Utility functions
-│   ├── app.py               # Application setup
-│   └── main.py              # Entry point
-├── tests/                   # Test suite
-├── Dockerfile               # Container definition
-├── requirements.txt         # Python dependencies
-└── README.md               # This file
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│   Email Service │     │ Document Service │     │   OCR Service   │
+│    (Node.js)    │────▶│    (Python)     │────▶│    (Python)     │
+└─────────────────┘     └─────────────────┘     └─────────────────┘
+         │                       │                       │
+         │                       │                       │
+         ▼                       ▼                       ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                        RabbitMQ Message Queue                    │
+└─────────────────────────────────────────────────────────────────┘
+                                 │
+                                 │
+                                 ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                     S3-Compatible Document Storage              │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-### Document Classification Workflow
-
-1. **Message Consumption**: Service consumes document messages from the `document-processing` queue in RabbitMQ
-2. **Document Retrieval**: Documents are retrieved from S3-compatible storage
-3. **Preprocessing**: Documents are preprocessed to normalize format, size, and orientation
-4. **Feature Extraction**: Features are extracted from documents for classification
-5. **Classification**: Documents are classified using ensemble methods (SVM, Random Forest)
-6. **Confidence Scoring**: Classification results include confidence scores
-7. **Document Routing**: Documents are routed to appropriate OCR processors based on classification
-8. **Result Publishing**: Classification results are published to the OCR Service via RabbitMQ
-
-## Requirements
+## Technical Requirements
 
 ### System Requirements
 
 - Python 3.9+
-- 16GB RAM minimum (for processing larger document batches)
-- Access to RabbitMQ cluster
-- Access to S3-compatible storage
-- GPU acceleration (optional, for improved performance)
+- scikit-learn 1.4.1
+- At least 16GB RAM for processing larger document batches
+- CUDA-compatible GPU recommended for improved performance
 
 ### Dependencies
 
 - scikit-learn 1.4.1: Machine learning library for document classification
+- amqplib 0.10.3: RabbitMQ client for message queue integration
+- @aws-sdk/client-s3 3.509.0: S3 client for document storage
 - FastAPI: API framework for health checks and diagnostics
-- pika: RabbitMQ client for message queue integration
-- boto3: AWS SDK for S3 storage integration
-- pydantic: Data validation and settings management
-- uvicorn: ASGI server for FastAPI
-- python-dotenv: Environment variable management
-- loguru: Structured logging
+- Pydantic: Data validation and settings management
+- Uvicorn: ASGI server for running the API
 
 ## Configuration
 
-The Document Service is configured using environment variables. These can be provided directly or through a `.env` file in development environments.
+The Document Service is configured using environment variables. Below are the key configuration options:
 
-### Core Configuration
+### Application Configuration
 
-```env
-# Application settings
-APP_NAME=document-service
-APP_VERSION=1.0.0
-LOG_LEVEL=INFO  # ERROR, WARN, INFO, DEBUG
-PORT=8000
-
-# Environment
-ENVIRONMENT=production  # development, staging, production
-```
+| Environment Variable | Description | Default |
+|----------------------|-------------|--------|
+| `APP_ENV` | Application environment (development, staging, production) | `development` |
+| `LOG_LEVEL` | Logging level (ERROR, WARN, INFO, DEBUG) | `INFO` |
+| `SERVICE_PORT` | Port for the health check API | `8080` |
 
 ### RabbitMQ Configuration
 
-```env
-# RabbitMQ connection
-RABBITMQ_HOST=rabbitmq.example.com
-RABBITMQ_PORT=5671
-RABBITMQ_VHOST=/mca
-RABBITMQ_USERNAME=document-service
-RABBITMQ_PASSWORD=your-secure-password
-RABBITMQ_USE_TLS=true
-RABBITMQ_CLIENT_CERT=/path/to/client.cert
-RABBITMQ_CLIENT_KEY=/path/to/client.key
-
-# RabbitMQ exchanges and queues
-RABBITMQ_EXCHANGE=mca.documents
-RABBITMQ_QUEUE=document-processing
-RABBITMQ_ROUTING_KEY=document.new
-RABBITMQ_OUTPUT_ROUTING_KEY=document.classified
-```
+| Environment Variable | Description | Default |
+|----------------------|-------------|--------|
+| `RABBITMQ_HOST` | RabbitMQ host | `localhost` |
+| `RABBITMQ_PORT` | RabbitMQ port | `5672` |
+| `RABBITMQ_USERNAME` | RabbitMQ username | `guest` |
+| `RABBITMQ_PASSWORD` | RabbitMQ password | `guest` |
+| `RABBITMQ_VHOST` | RabbitMQ virtual host | `/` |
+| `RABBITMQ_EXCHANGE` | RabbitMQ exchange name | `mca.documents` |
+| `RABBITMQ_QUEUE` | RabbitMQ queue name | `document-processing` |
+| `RABBITMQ_ROUTING_KEY` | RabbitMQ routing key | `document.classify` |
+| `RABBITMQ_USE_TLS` | Enable TLS for RabbitMQ connection | `true` |
+| `RABBITMQ_CERT_PATH` | Path to client certificate for RabbitMQ | |
+| `RABBITMQ_KEY_PATH` | Path to client key for RabbitMQ | |
+| `RABBITMQ_CA_PATH` | Path to CA certificate for RabbitMQ | |
 
 ### S3 Storage Configuration
 
-```env
-# S3 connection
-S3_ENDPOINT=s3.example.com
-S3_REGION=us-east-1
-S3_ACCESS_KEY=your-access-key
-S3_SECRET_KEY=your-secret-key
-S3_USE_SSL=true
-
-# S3 buckets
-S3_BUCKET_PRODUCTION=mca-documents-production
-S3_BUCKET_STAGING=mca-documents-staging
-```
+| Environment Variable | Description | Default |
+|----------------------|-------------|--------|
+| `S3_ENDPOINT` | S3-compatible storage endpoint | |
+| `S3_REGION` | S3 region | `us-east-1` |
+| `S3_ACCESS_KEY` | S3 access key | |
+| `S3_SECRET_KEY` | S3 secret key | |
+| `S3_BUCKET_NAME` | S3 bucket name | `mca-documents-development` |
+| `S3_USE_SSL` | Enable SSL for S3 connection | `true` |
+| `S3_ENCRYPTION` | Enable AES-256 encryption for documents | `true` |
 
 ### Model Configuration
 
-```env
-# Classification models
-MODEL_PATH=/app/models
-MODEL_VERSION=1.0.0
-CLASSIFICATION_CONFIDENCE_THRESHOLD=0.75
-```
+| Environment Variable | Description | Default |
+|----------------------|-------------|--------|
+| `MODEL_PATH` | Path to trained classification models | `/app/models` |
+| `CONFIDENCE_THRESHOLD` | Minimum confidence score for automatic routing | `0.85` |
+| `FEATURE_COUNT` | Number of features to use for classification | `1500` |
 
 ## API Endpoints
 
-The Document Service exposes several API endpoints for health monitoring, diagnostics, and document operations.
+The Document Service exposes the following API endpoints for health checks and diagnostics:
 
-### Health Endpoints
+### Health Checks
 
-- `GET /health/liveness`: Kubernetes liveness probe
-- `GET /health/readiness`: Kubernetes readiness probe (checks RabbitMQ and S3 connections)
+- `GET /health/liveness`: Kubernetes liveness probe endpoint
+- `GET /health/readiness`: Kubernetes readiness probe endpoint (checks RabbitMQ and S3 connections)
 
-### Status Endpoints
+### Status and Metrics
 
 - `GET /status`: Overall service status
-- `GET /status/metrics`: Prometheus-compatible metrics
+- `GET /status/metrics`: Prometheus-compatible metrics endpoint
 
-### Diagnostic Endpoints
+### Diagnostics
 
-- `GET /diagnostics/logs`: Recent logs (requires authentication)
-- `GET /diagnostics/config`: Current configuration (requires authentication)
+- `GET /diagnostics/logs`: Retrieve recent logs (requires authentication)
+- `GET /diagnostics/config`: Check current configuration (requires authentication)
 - `GET /diagnostics/test`: Run diagnostic tests (requires authentication)
 
-### Document Endpoints
+## Local Development
 
-- `GET /documents/{document_id}`: Get document classification status
-- `POST /documents/{document_id}/classify`: Manually trigger classification
-- `POST /documents/batch`: Batch classification operations
+### Prerequisites
+
+- Python 3.9+
+- Docker and Docker Compose
+- Git
+
+### Setup
+
+1. Clone the repository:
+
+```bash
+git clone https://github.com/dollarfunding/mca-document-service.git
+cd mca-document-service
+```
+
+2. Create a virtual environment and install dependencies:
+
+```bash
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+pip install -r requirements.txt
+pip install -r requirements-dev.txt
+```
+
+3. Set up local environment variables:
+
+```bash
+cp .env.example .env
+# Edit .env file with your local configuration
+```
+
+4. Start local dependencies using Docker Compose:
+
+```bash
+docker-compose up -d rabbitmq s3mock
+```
+
+5. Run the service:
+
+```bash
+python src/main.py
+```
+
+### Testing
+
+The Document Service includes comprehensive unit and integration tests. To run the tests:
+
+```bash
+pytest
+```
+
+To run tests with coverage report:
+
+```bash
+pytest --cov=src tests/
+```
+
+To run specific test categories:
+
+```bash
+pytest tests/test_models/  # Run model tests only
+pytest tests/test_services/  # Run service tests only
+pytest tests/test_api/  # Run API tests only
+```
 
 ## Deployment
 
-### Local Development
+### Docker
 
-1. Clone the repository
-2. Create a virtual environment: `python -m venv venv`
-3. Activate the virtual environment: `source venv/bin/activate` (Linux/Mac) or `venv\Scripts\activate` (Windows)
-4. Install dependencies: `pip install -r requirements.txt`
-5. Create a `.env` file with required configuration
-6. Run the service: `python -m src.main`
+The Document Service can be deployed as a Docker container. A Dockerfile is provided in the repository.
 
-### Docker Deployment
+To build the Docker image:
 
 ```bash
-# Build the Docker image
-docker build -t document-service:latest .
-
-# Run the container
-docker run -p 8000:8000 --env-file .env document-service:latest
+docker build -t mca-document-service:latest .
 ```
 
-### Kubernetes Deployment
-
-The Document Service is designed to be deployed in Kubernetes using the provided Helm chart.
+To run the Docker container:
 
 ```bash
-# Deploy using Helm
+docker run -p 8080:8080 --env-file .env mca-document-service:latest
+```
+
+### Kubernetes
+
+The Document Service is designed to be deployed in a Kubernetes cluster. Helm charts are provided in the `/infrastructure/kubernetes/charts/document-service` directory.
+
+To deploy using Helm:
+
+```bash
 helm upgrade --install document-service ./infrastructure/kubernetes/charts/document-service \
-  --namespace mca \
+  --namespace mca --create-namespace \
+  --set image.repository=mca-document-service \
+  --set image.tag=latest \
   --values ./infrastructure/kubernetes/charts/document-service/values-production.yaml
 ```
 
-## Resource Requirements
+#### Resource Requirements
 
-The Document Service requires the following resources for optimal performance:
+The Document Service requires at least 16GB RAM for processing larger document batches. The recommended Kubernetes resource configuration is:
 
-### Development Environment
-
-- CPU: 2 cores
-- Memory: 8GB
-- Storage: 10GB
-
-### Production Environment
-
-- CPU: 4 cores
-- Memory: 16GB (minimum)
-- Storage: 20GB
-- GPU: Optional, for improved performance
-
-## Monitoring
-
-The Document Service exposes Prometheus-compatible metrics at the `/status/metrics` endpoint. These metrics include:
-
-- Document processing throughput
-- Classification accuracy
-- Queue depth
-- Processing time
-- Error rates
-- Resource usage (CPU, memory)
-
-These metrics can be collected by Prometheus and visualized in Datadog or Grafana dashboards.
+```yaml
+resources:
+  requests:
+    memory: "8Gi"
+    cpu: "1"
+  limits:
+    memory: "16Gi"
+    cpu: "2"
+```
 
 ## Troubleshooting
 
 ### Common Issues
 
-1. **RabbitMQ Connection Failures**
-   - Check RabbitMQ credentials and connection parameters
-   - Verify TLS certificates are valid and accessible
-   - Ensure the RabbitMQ server is running and accessible
+#### RabbitMQ Connection Issues
 
-2. **S3 Storage Access Issues**
-   - Verify S3 credentials and bucket permissions
-   - Check network connectivity to the S3 endpoint
-   - Ensure the correct bucket is configured for the environment
+- Verify RabbitMQ credentials and connection settings
+- Check that TLS certificates are properly configured
+- Ensure the RabbitMQ exchange and queue exist
 
-3. **Classification Performance Issues**
-   - Check if the service has sufficient memory (16GB minimum recommended)
-   - Verify model files are correctly loaded
-   - Monitor classification confidence scores for potential model drift
+#### S3 Storage Issues
+
+- Verify S3 credentials and endpoint
+- Check bucket permissions
+- Ensure the service has proper IAM roles for S3 access
+
+#### Classification Performance Issues
+
+- Check model training data quality
+- Verify model paths and versions
+- Increase memory allocation for large document batches
 
 ### Logs
 
-The Document Service uses structured logging with the following levels:
+The Document Service logs to stdout/stderr in JSON format. Log levels can be configured using the `LOG_LEVEL` environment variable.
 
-- `ERROR`: Processing failures
-- `WARN`: Potential issues
-- `INFO`: Normal operations
-- `DEBUG`: Troubleshooting (development only)
+Example log output:
 
-Logs can be accessed via the `/diagnostics/logs` endpoint (requires authentication) or through the container logs.
+```json
+{"timestamp": "2025-05-22T10:15:30.123Z", "level": "INFO", "message": "Document classified", "document_id": "doc-123", "document_type": "invoice", "confidence": 0.95}
+```
 
 ## License
 
