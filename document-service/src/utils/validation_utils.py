@@ -4,81 +4,163 @@
 """
 Validation utilities for the Document Service.
 
-This module provides functions for validating document types, formats, sizes,
-and other input data. It's essential for ensuring data integrity and preventing
-processing of invalid or malicious content.
+This module provides utility functions for validating document types, formats,
+sizes, and other input data. It's essential for ensuring data integrity and
+preventing processing of invalid or malicious content.
 """
 
 import os
 import re
 import json
-import magic
 import logging
 import hashlib
-from typing import Dict, List, Optional, Set, Tuple, Union, Any, Callable
+import magic
+from typing import Dict, List, Optional, Set, Tuple, Union, Any, BinaryIO, Iterator
 from pathlib import Path
 from functools import wraps
+import jsonschema
+from jsonschema import validate, ValidationError as JsonSchemaValidationError
 
 # Import custom types
-from ..types.documents import DocumentMetadata, DocumentType, DocumentContent
-from ..types.messages import MessagePayload
-from ..types.errors import ServiceError
+from ..types.documents import DocumentType, DocumentMetadata, DocumentContent
+from ..types.errors import ValidationError, ServiceError, Result
+
+# Import file utilities
+from .file_utils import (
+    get_file_size, get_file_size_from_buffer, get_mime_type, 
+    get_mime_type_from_buffer, is_supported_mime_type, 
+    is_supported_file_extension, SUPPORTED_MIME_TYPES
+)
 
 # Configure logger
 logger = logging.getLogger(__name__)
 
 # Constants for document validation
-MAX_DOCUMENT_SIZE_MB = 25  # Maximum document size in MB
-MIN_DOCUMENT_SIZE_KB = 1   # Minimum document size in KB
+MAX_FILE_SIZE = 25 * 1024 * 1024  # 25 MB maximum file size
+MIN_FILE_SIZE = 1024  # 1 KB minimum file size
+MAX_PAGE_COUNT = 100  # Maximum number of pages in a document
 
-# Supported MIME types and their corresponding file extensions
-SUPPORTED_MIME_TYPES = {
-    # PDF documents
-    'application/pdf': ['.pdf'],
-    
-    # TIFF images
-    'image/tiff': ['.tiff', '.tif'],
-    
-    # JPEG images
-    'image/jpeg': ['.jpg', '.jpeg'],
-    
-    # PNG images
-    'image/png': ['.png']
-}
-
-# Flat list of all supported file extensions
-SUPPORTED_EXTENSIONS = [ext for exts in SUPPORTED_MIME_TYPES.values() for ext in exts]
-
-# Suspicious patterns that might indicate malicious content
-SUSPICIOUS_PATTERNS = [
-    rb'<%[\s]*eval',      # ASP/PHP code execution
-    rb'<script[\s>]',     # JavaScript
-    rb'function\(\)',     # JavaScript function
-    rb'\beval\s*\(',     # JavaScript eval
-    rb'ExecuteGlobal',    # VBScript code execution
-    rb'ShellExecute',     # Windows API for executing programs
-    rb'cmd\.exe',         # Windows command shell
-    rb'/bin/sh',          # Unix shell
-    rb'/bin/bash',        # Bash shell
-    rb'document\.write',  # JavaScript document manipulation
-    rb'\bping\s',         # Network commands
-    rb'\bnmap\s',         # Network scanning
-    rb'\btelnet\s',       # Network access
-    rb'\bssh\s',          # SSH commands
+# Constants for security validation
+MALICIOUS_EXTENSIONS = [
+    '.exe', '.dll', '.bat', '.cmd', '.sh', '.js', '.vbs', '.ps1', 
+    '.msi', '.com', '.scr', '.pif', '.hta', '.cpl', '.msc', '.jar'
 ]
 
-# Document type to MIME type mapping for validation
-DOCUMENT_TYPE_MIME_MAPPING = {
-    DocumentType.APPLICATION.name: ['application/pdf'],
-    DocumentType.TAX_RETURN.name: ['application/pdf', 'image/tiff'],
-    DocumentType.BANK_STATEMENT.name: ['application/pdf', 'image/tiff', 'image/jpeg', 'image/png'],
-    DocumentType.PAY_STUB.name: ['application/pdf', 'image/tiff', 'image/jpeg', 'image/png'],
-    DocumentType.ID_DOCUMENT.name: ['application/pdf', 'image/tiff', 'image/jpeg', 'image/png'],
-    DocumentType.OTHER.name: list(SUPPORTED_MIME_TYPES.keys())
+# Constants for MIME type validation
+MALICIOUS_MIME_TYPES = [
+    'application/x-msdownload',
+    'application/x-executable',
+    'application/x-dosexec',
+    'application/x-msdos-program',
+    'application/x-msi',
+    'application/x-ms-shortcut',
+    'application/x-sh',
+    'application/javascript',
+    'application/x-javascript',
+    'text/javascript',
+    'application/java-archive'
+]
+
+# Constants for message validation
+MAX_MESSAGE_SIZE = 1 * 1024 * 1024  # 1 MB maximum message size
+
+# JSON Schema for document message validation
+DOCUMENT_MESSAGE_SCHEMA = {
+    "type": "object",
+    "required": ["document_id", "metadata", "source"],
+    "properties": {
+        "document_id": {"type": "string", "format": "uuid"},
+        "metadata": {
+            "type": "object",
+            "required": ["filename", "size", "mime_type"],
+            "properties": {
+                "filename": {"type": "string"},
+                "size": {"type": "integer", "minimum": 0},
+                "mime_type": {"type": "string"},
+                "created_at": {"type": "string", "format": "date-time"},
+                "updated_at": {"type": "string", "format": "date-time"},
+                "classification_confidence": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+                "ocr_confidence": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+                "application_id": {"type": ["string", "null"]},
+                "storage_path": {"type": ["string", "null"]},
+                "checksum": {"type": ["string", "null"]},
+                "page_count": {"type": ["integer", "null"], "minimum": 1},
+                "tags": {"type": "array", "items": {"type": "string"}}
+            }
+        },
+        "source": {
+            "type": "object",
+            "required": ["source_type", "received_at"],
+            "properties": {
+                "source_type": {"type": "string", "enum": ["email", "upload", "api"]},
+                "email_id": {"type": ["string", "null"]},
+                "email_sender": {"type": ["string", "null"]},
+                "email_subject": {"type": ["string", "null"]},
+                "email_received_at": {"type": ["string", "null"], "format": "date-time"},
+                "upload_user_id": {"type": ["string", "null"]},
+                "upload_ip": {"type": ["string", "null"]},
+                "api_client_id": {"type": ["string", "null"]},
+                "submission_id": {"type": ["string", "null"]},
+                "received_at": {"type": "string", "format": "date-time"}
+            }
+        },
+        "content_reference": {"type": ["string", "null"]},
+        "document_type": {"type": ["string", "null"], "enum": [dt.value for dt in DocumentType] + [None]},
+        "status": {"type": "string", "enum": ["received", "classifying", "classified", "processing", "processed", "error", "review", "completed"]}
+    }
+}
+
+# JSON Schema for classification result message validation
+CLASSIFICATION_RESULT_SCHEMA = {
+    "type": "object",
+    "required": ["document_id", "document_type", "confidence", "confidence_scores", "model_version", "classified_at"],
+    "properties": {
+        "document_id": {"type": "string", "format": "uuid"},
+        "document_type": {"type": "string", "enum": [dt.value for dt in DocumentType]},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "confidence_scores": {
+            "type": "object",
+            "additionalProperties": {"type": "number", "minimum": 0, "maximum": 1}
+        },
+        "features_used": {"type": "array", "items": {"type": "string"}},
+        "model_version": {"type": "string"},
+        "classified_at": {"type": "string", "format": "date-time"},
+        "requires_review": {"type": "boolean"}
+    }
+}
+
+# JSON Schema for OCR request message validation
+OCR_REQUEST_SCHEMA = {
+    "type": "object",
+    "required": ["document_id", "document_type", "storage_path"],
+    "properties": {
+        "document_id": {"type": "string", "format": "uuid"},
+        "document_type": {"type": "string", "enum": [dt.value for dt in DocumentType]},
+        "storage_path": {"type": "string"},
+        "metadata": {
+            "type": "object",
+            "properties": {
+                "filename": {"type": "string"},
+                "size": {"type": "integer", "minimum": 0},
+                "mime_type": {"type": "string"},
+                "page_count": {"type": ["integer", "null"], "minimum": 1},
+                "classification_confidence": {"type": "number", "minimum": 0, "maximum": 1}
+            }
+        },
+        "processing_options": {
+            "type": "object",
+            "properties": {
+                "extract_tables": {"type": "boolean"},
+                "extract_signatures": {"type": "boolean"},
+                "extract_handwriting": {"type": "boolean"},
+                "confidence_threshold": {"type": "number", "minimum": 0, "maximum": 1}
+            }
+        }
+    }
 }
 
 
-def validation_decorator(func: Callable) -> Callable:
+def validation_decorator(func):
     """
     Decorator for validation functions to handle exceptions and log errors.
     
@@ -92,625 +174,704 @@ def validation_decorator(func: Callable) -> Callable:
     def wrapper(*args, **kwargs):
         try:
             return func(*args, **kwargs)
+        except ValidationError as e:
+            logger.warning(f"Validation error in {func.__name__}: {str(e)}")
+            raise e
         except Exception as e:
-            logger.error(f"Validation error in {func.__name__}: {str(e)}")
-            # Return validation failure with error message
-            if func.__annotations__.get('return') == bool:
-                return False
-            else:
-                return False, f"Validation error: {str(e)}"
+            logger.error(f"Unexpected error in {func.__name__}: {str(e)}")
+            raise ValidationError(f"Validation error: {str(e)}", context={"function": func.__name__})
     return wrapper
 
 
 @validation_decorator
-def is_valid_document_size(file_size: int) -> bool:
+def validate_file_size(file_path: str, min_size: int = MIN_FILE_SIZE, max_size: int = MAX_FILE_SIZE) -> bool:
     """
-    Validate if the document size is within acceptable limits.
+    Validate that a file's size is within acceptable limits.
     
     Args:
-        file_size: Size of the file in bytes
+        file_path: Path to the file to validate
+        min_size: Minimum acceptable file size in bytes
+        max_size: Maximum acceptable file size in bytes
         
     Returns:
-        bool: True if the file size is valid, False otherwise
+        bool: True if the file size is valid
+        
+    Raises:
+        ValidationError: If the file size is outside acceptable limits
     """
-    # Convert limits to bytes for comparison
-    max_size_bytes = MAX_DOCUMENT_SIZE_MB * 1024 * 1024
-    min_size_bytes = MIN_DOCUMENT_SIZE_KB * 1024
+    file_size = get_file_size(file_path)
     
-    if file_size > max_size_bytes:
-        logger.warning(f"Document size {file_size} bytes exceeds maximum limit of {max_size_bytes} bytes")
-        return False
+    if file_size < min_size:
+        raise ValidationError(
+            f"File size too small: {file_size} bytes (minimum: {min_size} bytes)",
+            context={"file_path": file_path, "file_size": file_size, "min_size": min_size}
+        )
     
-    if file_size < min_size_bytes:
-        logger.warning(f"Document size {file_size} bytes is below minimum limit of {min_size_bytes} bytes")
-        return False
+    if file_size > max_size:
+        raise ValidationError(
+            f"File size too large: {file_size} bytes (maximum: {max_size} bytes)",
+            context={"file_path": file_path, "file_size": file_size, "max_size": max_size}
+        )
     
     return True
 
 
 @validation_decorator
-def get_mime_type(file_path: str) -> str:
+def validate_buffer_size(buffer: bytes, min_size: int = MIN_FILE_SIZE, max_size: int = MAX_FILE_SIZE) -> bool:
     """
-    Detect the MIME type of a file using python-magic.
+    Validate that a buffer's size is within acceptable limits.
     
     Args:
-        file_path: Path to the file
+        buffer: Bytes buffer to validate
+        min_size: Minimum acceptable buffer size in bytes
+        max_size: Maximum acceptable buffer size in bytes
         
     Returns:
-        str: Detected MIME type
+        bool: True if the buffer size is valid
+        
+    Raises:
+        ValidationError: If the buffer size is outside acceptable limits
     """
-    try:
-        mime = magic.Magic(mime=True)
-        return mime.from_file(file_path)
-    except Exception as e:
-        logger.error(f"Failed to detect MIME type for {file_path}: {str(e)}")
-        raise ServiceError(f"MIME type detection failed: {str(e)}")
+    buffer_size = len(buffer)
+    
+    if buffer_size < min_size:
+        raise ValidationError(
+            f"Buffer size too small: {buffer_size} bytes (minimum: {min_size} bytes)",
+            context={"buffer_size": buffer_size, "min_size": min_size}
+        )
+    
+    if buffer_size > max_size:
+        raise ValidationError(
+            f"Buffer size too large: {buffer_size} bytes (maximum: {max_size} bytes)",
+            context={"buffer_size": buffer_size, "max_size": max_size}
+        )
+    
+    return True
 
 
 @validation_decorator
-def get_mime_type_from_buffer(buffer: bytes) -> str:
+def validate_document_type(file_path: str, allowed_types: Optional[List[DocumentType]] = None) -> DocumentType:
     """
-    Detect the MIME type from a bytes buffer using python-magic.
+    Validate that a file's MIME type is compatible with allowed document types.
     
     Args:
-        buffer: File content as bytes
+        file_path: Path to the file to validate
+        allowed_types: List of allowed document types (if None, all types are allowed)
         
     Returns:
-        str: Detected MIME type
+        DocumentType: The most appropriate document type for the file
+        
+    Raises:
+        ValidationError: If the file type is not compatible with allowed document types
     """
-    try:
-        mime = magic.Magic(mime=True)
-        return mime.from_buffer(buffer)
-    except Exception as e:
-        logger.error(f"Failed to detect MIME type from buffer: {str(e)}")
-        raise ServiceError(f"MIME type detection failed: {str(e)}")
+    mime_type = get_mime_type(file_path)
+    
+    # Check if the MIME type is supported at all
+    if not is_supported_mime_type(mime_type):
+        raise ValidationError(
+            f"Unsupported MIME type: {mime_type}",
+            context={"file_path": file_path, "mime_type": mime_type, "supported_types": list(SUPPORTED_MIME_TYPES.keys())}
+        )
+    
+    # If no specific allowed types are provided, any supported type is valid
+    if allowed_types is None:
+        # Return a default document type based on MIME type
+        for doc_type in DocumentType:
+            if mime_type in SUPPORTED_MIME_TYPES:
+                return doc_type
+        return DocumentType.OTHER
+    
+    # Check if the MIME type is compatible with any of the allowed document types
+    from ..utils.file_utils import DOCUMENT_TYPE_MIME_MAPPING
+    
+    compatible_types = []
+    for doc_type in allowed_types:
+        compatible_mime_types = DOCUMENT_TYPE_MIME_MAPPING.get(doc_type.value, [])
+        if mime_type in compatible_mime_types:
+            compatible_types.append(doc_type)
+    
+    if not compatible_types:
+        raise ValidationError(
+            f"File type {mime_type} is not compatible with allowed document types",
+            context={
+                "file_path": file_path, 
+                "mime_type": mime_type, 
+                "allowed_types": [dt.value for dt in allowed_types]
+            }
+        )
+    
+    # Return the first compatible document type
+    return compatible_types[0]
 
 
 @validation_decorator
-def is_supported_mime_type(mime_type: str) -> bool:
+def validate_document_extension(file_path: str) -> bool:
     """
-    Check if the MIME type is in the list of supported types.
+    Validate that a file has a supported extension.
     
     Args:
-        mime_type: MIME type to check
+        file_path: Path to the file to validate
         
     Returns:
-        bool: True if supported, False otherwise
+        bool: True if the file extension is supported
+        
+    Raises:
+        ValidationError: If the file extension is not supported
     """
-    return mime_type in SUPPORTED_MIME_TYPES
+    if not is_supported_file_extension(file_path):
+        ext = Path(file_path).suffix.lower()
+        raise ValidationError(
+            f"Unsupported file extension: {ext}",
+            context={"file_path": file_path, "extension": ext, "supported_extensions": list(SUPPORTED_MIME_TYPES.values())}
+        )
+    
+    return True
 
 
 @validation_decorator
-def is_supported_file_extension(file_path: str) -> bool:
+def validate_document_content(file_path: str) -> bool:
     """
-    Check if the file has a supported extension.
+    Validate document content for security issues.
     
     Args:
-        file_path: Path to the file
+        file_path: Path to the file to validate
         
     Returns:
-        bool: True if the extension is supported, False otherwise
+        bool: True if the document content is valid and safe
+        
+    Raises:
+        ValidationError: If the document content is invalid or potentially malicious
     """
+    # Check for malicious file extensions
     ext = Path(file_path).suffix.lower()
-    return ext in SUPPORTED_EXTENSIONS
-
-
-@validation_decorator
-def validate_document_metadata(metadata: DocumentMetadata) -> Tuple[bool, Optional[str]]:
-    """
-    Validate document metadata for required fields and valid values.
+    if ext in MALICIOUS_EXTENSIONS:
+        raise ValidationError(
+            f"Potentially malicious file extension: {ext}",
+            context={"file_path": file_path, "extension": ext}
+        )
     
-    Args:
-        metadata: DocumentMetadata object to validate
-        
-    Returns:
-        Tuple[bool, Optional[str]]: (is_valid, error_message)
-    """
-    if not metadata.filename:
-        return False, "Filename is required"
-    
-    if not metadata.mime_type:
-        return False, "MIME type is required"
-    
-    if not is_supported_mime_type(metadata.mime_type):
-        return False, f"Unsupported MIME type: {metadata.mime_type}"
-    
-    if not is_valid_document_size(metadata.size):
-        return False, f"Invalid document size: {metadata.size} bytes"
-    
-    return True, None
-
-
-@validation_decorator
-def validate_document_content(content: DocumentContent, metadata: DocumentMetadata) -> Tuple[bool, Optional[str]]:
-    """
-    Validate document content against its metadata and check for malicious content.
-    
-    Args:
-        content: Document content as bytes
-        metadata: Document metadata
-        
-    Returns:
-        Tuple[bool, Optional[str]]: (is_valid, error_message)
-    """
-    if not content:
-        return False, "Document content is empty"
-    
-    # Verify the actual size matches the metadata
-    actual_size = len(content)
-    if actual_size != metadata.size:
-        return False, f"Content size {actual_size} doesn't match metadata size {metadata.size}"
-    
-    # Verify the actual MIME type matches the metadata
+    # Check for malicious MIME types using libmagic
     try:
-        actual_mime_type = get_mime_type_from_buffer(content)
-        if actual_mime_type != metadata.mime_type:
-            return False, f"Content MIME type {actual_mime_type} doesn't match metadata MIME type {metadata.mime_type}"
-    except ServiceError:
-        return False, "Failed to detect content MIME type"
+        mime_type = magic.Magic(mime=True).from_file(file_path)
+        if mime_type in MALICIOUS_MIME_TYPES:
+            raise ValidationError(
+                f"Potentially malicious MIME type detected: {mime_type}",
+                context={"file_path": file_path, "mime_type": mime_type}
+            )
+    except ImportError:
+        logger.warning("python-magic not available for content validation, falling back to extension check only")
+    except Exception as e:
+        logger.warning(f"Error during content validation with python-magic: {str(e)}")
     
-    # Check for malicious content
-    if contains_malicious_content(content):
-        return False, "Document contains potentially malicious content"
+    # Additional content validation could be added here, such as:
+    # - Virus scanning
+    # - File structure validation
+    # - Content analysis for suspicious patterns
     
-    return True, None
+    return True
 
 
 @validation_decorator
-def contains_malicious_content(content: bytes) -> bool:
+def validate_buffer_content(buffer: bytes) -> bool:
     """
-    Check if the document contains potentially malicious content.
+    Validate buffer content for security issues.
     
     Args:
-        content: Document content as bytes
+        buffer: Bytes buffer to validate
         
     Returns:
-        bool: True if suspicious patterns are found, False otherwise
+        bool: True if the buffer content is valid and safe
+        
+    Raises:
+        ValidationError: If the buffer content is invalid or potentially malicious
     """
-    for pattern in SUSPICIOUS_PATTERNS:
-        if re.search(pattern, content, re.IGNORECASE):
-            logger.warning(f"Suspicious pattern detected: {pattern}")
+    # Check for malicious MIME types using libmagic
+    try:
+        mime_type = magic.Magic(mime=True).from_buffer(buffer)
+        if mime_type in MALICIOUS_MIME_TYPES:
+            raise ValidationError(
+                f"Potentially malicious MIME type detected: {mime_type}",
+                context={"mime_type": mime_type}
+            )
+    except ImportError:
+        logger.warning("python-magic not available for content validation")
+    except Exception as e:
+        logger.warning(f"Error during content validation with python-magic: {str(e)}")
+    
+    # Additional content validation could be added here
+    
+    return True
+
+
+@validation_decorator
+def validate_document(file_path: str, allowed_types: Optional[List[DocumentType]] = None) -> Result[DocumentType, ValidationError]:
+    """
+    Perform comprehensive validation on a document file.
+    
+    Args:
+        file_path: Path to the file to validate
+        allowed_types: List of allowed document types (if None, all types are allowed)
+        
+    Returns:
+        Result[DocumentType, ValidationError]: Result containing the document type if successful
+        
+    Raises:
+        ValidationError: If any validation check fails
+    """
+    try:
+        # Validate file size
+        validate_file_size(file_path)
+        
+        # Validate file extension
+        validate_document_extension(file_path)
+        
+        # Validate document content for security
+        validate_document_content(file_path)
+        
+        # Validate document type
+        doc_type = validate_document_type(file_path, allowed_types)
+        
+        return Result.success(doc_type)
+    except ValidationError as e:
+        return Result.failure(e)
+
+
+@validation_decorator
+def validate_json_schema(json_data: Union[str, Dict], schema: Dict) -> bool:
+    """
+    Validate JSON data against a JSON schema.
+    
+    Args:
+        json_data: JSON data as string or dictionary
+        schema: JSON schema to validate against
+        
+    Returns:
+        bool: True if the JSON data is valid according to the schema
+        
+    Raises:
+        ValidationError: If the JSON data does not conform to the schema
+    """
+    # Parse JSON string if necessary
+    if isinstance(json_data, str):
+        try:
+            data = json.loads(json_data)
+        except json.JSONDecodeError as e:
+            raise ValidationError(
+                f"Invalid JSON format: {str(e)}",
+                context={"error_position": e.pos, "error_message": e.msg}
+            )
+    else:
+        data = json_data
+    
+    # Validate against schema
+    try:
+        validate(instance=data, schema=schema)
+        return True
+    except JsonSchemaValidationError as e:
+        raise ValidationError(
+            f"JSON schema validation failed: {str(e)}",
+            context={"validation_error": str(e), "schema_path": e.schema_path, "json_path": e.path}
+        )
+
+
+@validation_decorator
+def validate_document_message(message: Union[str, Dict]) -> bool:
+    """
+    Validate a document message against the document message schema.
+    
+    Args:
+        message: Document message as string or dictionary
+        
+    Returns:
+        bool: True if the message is valid
+        
+    Raises:
+        ValidationError: If the message does not conform to the schema
+    """
+    return validate_json_schema(message, DOCUMENT_MESSAGE_SCHEMA)
+
+
+@validation_decorator
+def validate_classification_result_message(message: Union[str, Dict]) -> bool:
+    """
+    Validate a classification result message against the classification result schema.
+    
+    Args:
+        message: Classification result message as string or dictionary
+        
+    Returns:
+        bool: True if the message is valid
+        
+    Raises:
+        ValidationError: If the message does not conform to the schema
+    """
+    return validate_json_schema(message, CLASSIFICATION_RESULT_SCHEMA)
+
+
+@validation_decorator
+def validate_ocr_request_message(message: Union[str, Dict]) -> bool:
+    """
+    Validate an OCR request message against the OCR request schema.
+    
+    Args:
+        message: OCR request message as string or dictionary
+        
+    Returns:
+        bool: True if the message is valid
+        
+    Raises:
+        ValidationError: If the message does not conform to the schema
+    """
+    return validate_json_schema(message, OCR_REQUEST_SCHEMA)
+
+
+@validation_decorator
+def validate_message_size(message: str, max_size: int = MAX_MESSAGE_SIZE) -> bool:
+    """
+    Validate that a message's size is within acceptable limits.
+    
+    Args:
+        message: Message string to validate
+        max_size: Maximum acceptable message size in bytes
+        
+    Returns:
+        bool: True if the message size is valid
+        
+    Raises:
+        ValidationError: If the message size exceeds the maximum
+    """
+    message_size = len(message.encode('utf-8'))
+    
+    if message_size > max_size:
+        raise ValidationError(
+            f"Message size too large: {message_size} bytes (maximum: {max_size} bytes)",
+            context={"message_size": message_size, "max_size": max_size}
+        )
+    
+    return True
+
+
+@validation_decorator
+def validate_metadata(metadata: Dict) -> bool:
+    """
+    Validate document metadata for required fields and value constraints.
+    
+    Args:
+        metadata: Document metadata dictionary
+        
+    Returns:
+        bool: True if the metadata is valid
+        
+    Raises:
+        ValidationError: If the metadata is invalid
+    """
+    required_fields = ['filename', 'size', 'mime_type']
+    for field in required_fields:
+        if field not in metadata:
+            raise ValidationError(
+                f"Missing required metadata field: {field}",
+                context={"metadata": metadata, "missing_field": field}
+            )
+    
+    # Validate size is non-negative
+    if metadata['size'] < 0:
+        raise ValidationError(
+            f"Invalid size value: {metadata['size']} (must be non-negative)",
+            context={"metadata": metadata, "size": metadata['size']}
+        )
+    
+    # Validate MIME type is supported
+    if not is_supported_mime_type(metadata['mime_type']):
+        raise ValidationError(
+            f"Unsupported MIME type: {metadata['mime_type']}",
+            context={"metadata": metadata, "mime_type": metadata['mime_type'], "supported_types": list(SUPPORTED_MIME_TYPES.keys())}
+        )
+    
+    # Validate confidence scores are between 0 and 1 if present
+    for confidence_field in ['classification_confidence', 'ocr_confidence']:
+        if confidence_field in metadata and metadata[confidence_field] is not None:
+            confidence = metadata[confidence_field]
+            if not (0 <= confidence <= 1):
+                raise ValidationError(
+                    f"Invalid {confidence_field} value: {confidence} (must be between 0 and 1)",
+                    context={"metadata": metadata, confidence_field: confidence}
+                )
+    
+    # Validate page count is positive if present
+    if 'page_count' in metadata and metadata['page_count'] is not None:
+        page_count = metadata['page_count']
+        if page_count <= 0:
+            raise ValidationError(
+                f"Invalid page_count value: {page_count} (must be positive)",
+                context={"metadata": metadata, "page_count": page_count}
+            )
+        
+        # Check if page count exceeds maximum
+        if page_count > MAX_PAGE_COUNT:
+            raise ValidationError(
+                f"Page count too high: {page_count} (maximum: {MAX_PAGE_COUNT})",
+                context={"metadata": metadata, "page_count": page_count, "max_page_count": MAX_PAGE_COUNT}
+            )
+    
+    return True
+
+
+@validation_decorator
+def is_potentially_malicious(file_path: str) -> bool:
+    """
+    Check if a file is potentially malicious based on extension and content.
+    
+    Args:
+        file_path: Path to the file to check
+        
+    Returns:
+        bool: True if the file is potentially malicious, False otherwise
+    """
+    # Check extension
+    ext = Path(file_path).suffix.lower()
+    if ext in MALICIOUS_EXTENSIONS:
+        logger.warning(f"Potentially malicious file extension detected: {ext}")
+        return True
+    
+    # Check MIME type
+    try:
+        mime_type = magic.Magic(mime=True).from_file(file_path)
+        if mime_type in MALICIOUS_MIME_TYPES:
+            logger.warning(f"Potentially malicious MIME type detected: {mime_type}")
             return True
+    except ImportError:
+        logger.warning("python-magic not available for malicious file detection")
+    except Exception as e:
+        logger.warning(f"Error during malicious file detection: {str(e)}")
+    
+    # Additional checks could be added here
     
     return False
 
 
 @validation_decorator
-def validate_message_schema(message: Dict[str, Any], schema_type: str) -> Tuple[bool, Optional[str]]:
+def validate_document_for_processing(file_path: str, document_type: DocumentType) -> bool:
     """
-    Validate a message against a predefined JSON schema.
+    Validate that a document is suitable for processing based on its type.
     
     Args:
-        message: Message dictionary to validate
-        schema_type: Type of schema to validate against (e.g., 'document', 'classification')
+        file_path: Path to the file to validate
+        document_type: Expected document type
         
     Returns:
-        Tuple[bool, Optional[str]]: (is_valid, error_message)
+        bool: True if the document is valid for processing
+        
+    Raises:
+        ValidationError: If the document is not valid for processing
     """
-    # Load the appropriate schema based on schema_type
-    schema_path = os.path.join(os.path.dirname(__file__), '..', 'schemas', f"{schema_type}.json")
+    # Validate file size
+    validate_file_size(file_path)
     
-    try:
-        with open(schema_path, 'r') as f:
-            schema = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError) as e:
-        logger.error(f"Failed to load schema {schema_type}: {str(e)}")
-        return False, f"Schema validation error: {str(e)}"
+    # Validate document content for security
+    validate_document_content(file_path)
     
-    try:
-        # Use jsonschema for validation if available, otherwise do basic validation
-        try:
-            import jsonschema
-            jsonschema.validate(message, schema)
-            return True, None
-        except ImportError:
-            # Fallback to basic validation if jsonschema is not available
-            return basic_schema_validation(message, schema)
-    except Exception as e:
-        return False, f"Schema validation error: {str(e)}"
+    # Check if the document type is compatible with the file
+    from ..utils.file_utils import is_valid_document_for_type
+    
+    if not is_valid_document_for_type(file_path, document_type.value):
+        mime_type = get_mime_type(file_path)
+        raise ValidationError(
+            f"Document type {document_type.value} is not compatible with file type {mime_type}",
+            context={"file_path": file_path, "document_type": document_type.value, "mime_type": mime_type}
+        )
+    
+    return True
 
 
 @validation_decorator
-def basic_schema_validation(message: Dict[str, Any], schema: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
+def validate_email_source(source: Dict) -> bool:
     """
-    Basic schema validation without using jsonschema library.
+    Validate email source information for required fields and format.
     
     Args:
-        message: Message dictionary to validate
-        schema: Schema dictionary to validate against
+        source: Source information dictionary
         
     Returns:
-        Tuple[bool, Optional[str]]: (is_valid, error_message)
+        bool: True if the source information is valid
+        
+    Raises:
+        ValidationError: If the source information is invalid
     """
-    # Check required properties
-    required = schema.get('required', [])
-    for prop in required:
-        if prop not in message:
-            return False, f"Missing required property: {prop}"
+    if source.get('source_type') != 'email':
+        raise ValidationError(
+            f"Invalid source type for email validation: {source.get('source_type')}",
+            context={"source": source}
+        )
     
-    # Check property types for properties that exist in the message
-    properties = schema.get('properties', {})
-    for prop, value in message.items():
-        if prop in properties:
-            prop_schema = properties[prop]
-            prop_type = prop_schema.get('type')
-            
-            if prop_type == 'string' and not isinstance(value, str):
-                return False, f"Property {prop} should be a string"
-            elif prop_type == 'number' and not isinstance(value, (int, float)):
-                return False, f"Property {prop} should be a number"
-            elif prop_type == 'integer' and not isinstance(value, int):
-                return False, f"Property {prop} should be an integer"
-            elif prop_type == 'boolean' and not isinstance(value, bool):
-                return False, f"Property {prop} should be a boolean"
-            elif prop_type == 'array' and not isinstance(value, list):
-                return False, f"Property {prop} should be an array"
-            elif prop_type == 'object' and not isinstance(value, dict):
-                return False, f"Property {prop} should be an object"
+    # Check required email fields
+    required_fields = ['email_id', 'email_sender', 'email_received_at']
+    for field in required_fields:
+        if field not in source or not source[field]:
+            raise ValidationError(
+                f"Missing required email source field: {field}",
+                context={"source": source, "missing_field": field}
+            )
     
-    return True, None
+    # Validate email format
+    email_sender = source['email_sender']
+    email_pattern = re.compile(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$')
+    if not email_pattern.match(email_sender):
+        raise ValidationError(
+            f"Invalid email format: {email_sender}",
+            context={"source": source, "email_sender": email_sender}
+        )
+    
+    return True
 
 
 @validation_decorator
-def validate_document_type(document_type: str) -> bool:
+def validate_upload_source(source: Dict) -> bool:
     """
-    Validate if the document type is one of the supported types.
+    Validate upload source information for required fields and format.
     
     Args:
-        document_type: Document type to validate
+        source: Source information dictionary
         
     Returns:
-        bool: True if valid, False otherwise
+        bool: True if the source information is valid
+        
+    Raises:
+        ValidationError: If the source information is invalid
     """
-    try:
-        # Check if the document_type is a valid DocumentType enum value
-        DocumentType[document_type]
-        return True
-    except (KeyError, ValueError):
-        logger.warning(f"Invalid document type: {document_type}")
-        return False
+    if source.get('source_type') != 'upload':
+        raise ValidationError(
+            f"Invalid source type for upload validation: {source.get('source_type')}",
+            context={"source": source}
+        )
+    
+    # Check required upload fields
+    required_fields = ['upload_user_id']
+    for field in required_fields:
+        if field not in source or not source[field]:
+            raise ValidationError(
+                f"Missing required upload source field: {field}",
+                context={"source": source, "missing_field": field}
+            )
+    
+    # Validate IP format if present
+    if 'upload_ip' in source and source['upload_ip']:
+        ip_address = source['upload_ip']
+        # Simple IPv4 pattern
+        ipv4_pattern = re.compile(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$')
+        # Simple IPv6 pattern
+        ipv6_pattern = re.compile(r'^[0-9a-fA-F:]+$')
+        
+        if not (ipv4_pattern.match(ip_address) or ipv6_pattern.match(ip_address)):
+            raise ValidationError(
+                f"Invalid IP address format: {ip_address}",
+                context={"source": source, "upload_ip": ip_address}
+            )
+    
+    return True
 
 
 @validation_decorator
-def validate_document_type_mime_compatibility(document_type: str, mime_type: str) -> bool:
+def validate_api_source(source: Dict) -> bool:
     """
-    Validate if the document type is compatible with the MIME type.
+    Validate API source information for required fields and format.
     
     Args:
-        document_type: Document type to validate
-        mime_type: MIME type to check compatibility with
+        source: Source information dictionary
         
     Returns:
-        bool: True if compatible, False otherwise
+        bool: True if the source information is valid
+        
+    Raises:
+        ValidationError: If the source information is invalid
     """
-    if not validate_document_type(document_type):
-        return False
+    if source.get('source_type') != 'api':
+        raise ValidationError(
+            f"Invalid source type for API validation: {source.get('source_type')}",
+            context={"source": source}
+        )
     
-    if not is_supported_mime_type(mime_type):
-        return False
+    # Check required API fields
+    required_fields = ['api_client_id']
+    for field in required_fields:
+        if field not in source or not source[field]:
+            raise ValidationError(
+                f"Missing required API source field: {field}",
+                context={"source": source, "missing_field": field}
+            )
     
-    compatible_mime_types = DOCUMENT_TYPE_MIME_MAPPING.get(document_type, [])
-    return mime_type in compatible_mime_types
+    return True
 
 
 @validation_decorator
-def validate_message_payload(payload: MessagePayload) -> Tuple[bool, Optional[str]]:
+def validate_source_information(source: Dict) -> bool:
     """
-    Validate a RabbitMQ message payload for required fields and valid values.
+    Validate source information based on source type.
     
     Args:
-        payload: MessagePayload object to validate
+        source: Source information dictionary
         
     Returns:
-        Tuple[bool, Optional[str]]: (is_valid, error_message)
+        bool: True if the source information is valid
+        
+    Raises:
+        ValidationError: If the source information is invalid
     """
-    if not payload.message_id:
-        return False, "Message ID is required"
+    if 'source_type' not in source:
+        raise ValidationError(
+            "Missing source_type in source information",
+            context={"source": source}
+        )
     
-    if not payload.document_id:
-        return False, "Document ID is required"
+    if 'received_at' not in source:
+        raise ValidationError(
+            "Missing received_at in source information",
+            context={"source": source}
+        )
     
-    if not payload.timestamp:
-        return False, "Timestamp is required"
+    source_type = source['source_type']
     
-    # Additional payload-specific validations can be added here
-    
-    return True, None
+    if source_type == 'email':
+        return validate_email_source(source)
+    elif source_type == 'upload':
+        return validate_upload_source(source)
+    elif source_type == 'api':
+        return validate_api_source(source)
+    else:
+        raise ValidationError(
+            f"Invalid source_type: {source_type}",
+            context={"source": source, "valid_types": ['email', 'upload', 'api']}
+        )
 
 
 @validation_decorator
-def validate_email_sender(sender: str, allowed_domains: List[str]) -> bool:
+def validate_document_hash(file_path: str, expected_hash: str, algorithm: str = 'sha256') -> bool:
     """
-    Validate if the email sender is from an allowed domain.
+    Validate a document's hash against an expected value.
     
     Args:
-        sender: Email address of the sender
-        allowed_domains: List of allowed email domains
-        
-    Returns:
-        bool: True if the sender is from an allowed domain, False otherwise
-    """
-    if not sender or '@' not in sender:
-        return False
-    
-    domain = sender.split('@')[-1].lower()
-    return domain in allowed_domains
-
-
-@validation_decorator
-def validate_file_hash(file_hash: str, expected_hash: str) -> bool:
-    """
-    Validate if the file hash matches the expected hash.
-    
-    Args:
-        file_hash: Calculated hash of the file
+        file_path: Path to the file to validate
         expected_hash: Expected hash value
-        
-    Returns:
-        bool: True if the hashes match, False otherwise
-    """
-    return file_hash == expected_hash
-
-
-@validation_decorator
-def calculate_file_hash(content: bytes, algorithm: str = 'sha256') -> str:
-    """
-    Calculate a hash for the given file content.
-    
-    Args:
-        content: File content as bytes
         algorithm: Hash algorithm to use (default: sha256)
         
     Returns:
-        str: Calculated hash value
+        bool: True if the document hash matches the expected value
+        
+    Raises:
+        ValidationError: If the document hash does not match the expected value
     """
-    if algorithm == 'md5':
-        hash_obj = hashlib.md5()
-    elif algorithm == 'sha1':
-        hash_obj = hashlib.sha1()
-    elif algorithm == 'sha256':
-        hash_obj = hashlib.sha256()
-    elif algorithm == 'sha512':
-        hash_obj = hashlib.sha512()
-    else:
-        raise ValueError(f"Unsupported hash algorithm: {algorithm}")
+    from .file_utils import calculate_file_hash
     
-    hash_obj.update(content)
-    return hash_obj.hexdigest()
-
-
-@validation_decorator
-def validate_document_structure(content: bytes, document_type: str) -> Tuple[bool, Optional[str]]:
-    """
-    Validate the document structure based on its type.
+    actual_hash = calculate_file_hash(file_path, algorithm)
     
-    Args:
-        content: Document content as bytes
-        document_type: Type of document to validate structure for
-        
-    Returns:
-        Tuple[bool, Optional[str]]: (is_valid, error_message)
-    """
-    if not validate_document_type(document_type):
-        return False, f"Invalid document type: {document_type}"
+    if actual_hash.lower() != expected_hash.lower():
+        raise ValidationError(
+            f"Document hash mismatch: expected {expected_hash}, got {actual_hash}",
+            context={
+                "file_path": file_path, 
+                "expected_hash": expected_hash, 
+                "actual_hash": actual_hash,
+                "algorithm": algorithm
+            }
+        )
     
-    # Detect MIME type
-    mime_type = get_mime_type_from_buffer(content)
-    
-    # Check if the document type is compatible with the MIME type
-    if not validate_document_type_mime_compatibility(document_type, mime_type):
-        return False, f"Document type {document_type} is not compatible with MIME type {mime_type}"
-    
-    # Perform document type-specific structure validation
-    if document_type == DocumentType.APPLICATION.name:
-        # Application forms should be PDF and have certain characteristics
-        if mime_type != 'application/pdf':
-            return False, "Application forms must be in PDF format"
-        
-        # Additional application form validation logic can be added here
-        # For example, check for required form fields or page count
-        
-    elif document_type == DocumentType.TAX_RETURN.name:
-        # Tax returns should be PDF or TIFF and have certain characteristics
-        if mime_type not in ['application/pdf', 'image/tiff']:
-            return False, "Tax returns must be in PDF or TIFF format"
-        
-        # Additional tax return validation logic can be added here
-        
-    # Add more document type-specific validations as needed
-    
-    return True, None
-
-
-@validation_decorator
-def validate_document_page_count(content: bytes, mime_type: str, min_pages: int = 1, max_pages: int = 100) -> Tuple[bool, Optional[str]]:
-    """
-    Validate the document page count is within acceptable limits.
-    
-    Args:
-        content: Document content as bytes
-        mime_type: MIME type of the document
-        min_pages: Minimum acceptable number of pages
-        max_pages: Maximum acceptable number of pages
-        
-    Returns:
-        Tuple[bool, Optional[str]]: (is_valid, error_message)
-    """
-    # For PDF documents, use PyPDF2 to count pages if available
-    if mime_type == 'application/pdf':
-        try:
-            import io
-            from PyPDF2 import PdfReader
-            
-            pdf_file = io.BytesIO(content)
-            pdf_reader = PdfReader(pdf_file)
-            page_count = len(pdf_reader.pages)
-            
-            if page_count < min_pages:
-                return False, f"Document has {page_count} pages, which is less than the minimum of {min_pages}"
-            
-            if page_count > max_pages:
-                return False, f"Document has {page_count} pages, which exceeds the maximum of {max_pages}"
-            
-            return True, None
-        except ImportError:
-            logger.warning("PyPDF2 not available for page count validation")
-            return True, None  # Skip validation if PyPDF2 is not available
-        except Exception as e:
-            return False, f"Failed to validate PDF page count: {str(e)}"
-    
-    # For TIFF images, use PIL/Pillow to count pages if available
-    elif mime_type == 'image/tiff':
-        try:
-            import io
-            from PIL import Image
-            
-            tiff_file = io.BytesIO(content)
-            img = Image.open(tiff_file)
-            
-            # Count frames in the TIFF file
-            page_count = 0
-            try:
-                while True:
-                    page_count += 1
-                    img.seek(img.tell() + 1)
-            except EOFError:
-                pass  # End of frames
-            
-            if page_count < min_pages:
-                return False, f"Document has {page_count} pages, which is less than the minimum of {min_pages}"
-            
-            if page_count > max_pages:
-                return False, f"Document has {page_count} pages, which exceeds the maximum of {max_pages}"
-            
-            return True, None
-        except ImportError:
-            logger.warning("PIL/Pillow not available for TIFF page count validation")
-            return True, None  # Skip validation if PIL is not available
-        except Exception as e:
-            return False, f"Failed to validate TIFF page count: {str(e)}"
-    
-    # For other formats, assume single page
-    return True, None
-
-
-@validation_decorator
-def validate_document_resolution(content: bytes, mime_type: str, min_dpi: int = 200) -> Tuple[bool, Optional[str]]:
-    """
-    Validate the document resolution is sufficient for OCR processing.
-    
-    Args:
-        content: Document content as bytes
-        mime_type: MIME type of the document
-        min_dpi: Minimum acceptable resolution in DPI
-        
-    Returns:
-        Tuple[bool, Optional[str]]: (is_valid, error_message)
-    """
-    # Only validate resolution for image formats
-    if mime_type in ['image/jpeg', 'image/png', 'image/tiff']:
-        try:
-            import io
-            from PIL import Image
-            
-            img_file = io.BytesIO(content)
-            img = Image.open(img_file)
-            
-            # Get DPI information if available
-            dpi_info = img.info.get('dpi')
-            
-            if dpi_info:
-                # DPI info is usually a tuple of (x_dpi, y_dpi)
-                x_dpi, y_dpi = dpi_info
-                min_dimension_dpi = min(x_dpi, y_dpi)
-                
-                if min_dimension_dpi < min_dpi:
-                    return False, f"Document resolution {min_dimension_dpi} DPI is below minimum of {min_dpi} DPI"
-            else:
-                # If DPI info is not available, estimate from image dimensions
-                # This is a rough estimate and may not be accurate
-                width, height = img.size
-                if width < 1000 or height < 1000:  # Rough estimate for low resolution
-                    logger.warning(f"Document may have low resolution: {width}x{height} pixels")
-            
-            return True, None
-        except ImportError:
-            logger.warning("PIL/Pillow not available for resolution validation")
-            return True, None  # Skip validation if PIL is not available
-        except Exception as e:
-            return False, f"Failed to validate document resolution: {str(e)}"
-    
-    # For non-image formats, skip resolution validation
-    return True, None
-
-
-@validation_decorator
-def validate_document_against_rules(document: Dict[str, Any], rules: List[Dict[str, Any]]) -> Tuple[bool, Optional[str]]:
-    """
-    Validate a document against a set of configurable rules.
-    
-    Args:
-        document: Document dictionary with metadata and content information
-        rules: List of rule dictionaries with conditions and actions
-        
-    Returns:
-        Tuple[bool, Optional[str]]: (is_valid, error_message)
-    """
-    for rule in rules:
-        rule_name = rule.get('name', 'Unnamed rule')
-        conditions = rule.get('conditions', [])
-        action = rule.get('action', {})
-        
-        # Check if all conditions match
-        conditions_match = True
-        for condition in conditions:
-            field = condition.get('field')
-            operator = condition.get('operator')
-            value = condition.get('value')
-            
-            if not field or not operator:
-                continue
-            
-            # Get the field value from the document
-            field_value = document.get(field)
-            
-            # Apply the operator
-            if operator == 'equals' and field_value != value:
-                conditions_match = False
-                break
-            elif operator == 'not_equals' and field_value == value:
-                conditions_match = False
-                break
-            elif operator == 'contains' and (not isinstance(field_value, str) or value not in field_value):
-                conditions_match = False
-                break
-            elif operator == 'not_contains' and (isinstance(field_value, str) and value in field_value):
-                conditions_match = False
-                break
-            elif operator == 'greater_than' and (not isinstance(field_value, (int, float)) or field_value <= value):
-                conditions_match = False
-                break
-            elif operator == 'less_than' and (not isinstance(field_value, (int, float)) or field_value >= value):
-                conditions_match = False
-                break
-            elif operator == 'in' and field_value not in value:
-                conditions_match = False
-                break
-            elif operator == 'not_in' and field_value in value:
-                conditions_match = False
-                break
-        
-        # If all conditions match, apply the action
-        if conditions_match:
-            action_type = action.get('type')
-            
-            if action_type == 'reject':
-                reason = action.get('reason', f"Rejected by rule: {rule_name}")
-                return False, reason
-            elif action_type == 'flag':
-                # Flagging doesn't reject the document, but logs a warning
-                reason = action.get('reason', f"Flagged by rule: {rule_name}")
-                logger.warning(f"Document flagged: {reason}")
-    
-    # If no rules rejected the document, it's valid
-    return True, None
+    return True
