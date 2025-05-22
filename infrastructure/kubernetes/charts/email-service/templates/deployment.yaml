@@ -1,0 +1,75 @@
+{{- /*
+Email Service Deployment Template
+
+This template extends the common deployment template with Email Service specific configurations.
+The Email Service is a Node.js microservice that monitors the submissions inbox using IMAP protocol
+and processes incoming emails with attachments.
+
+Features:
+- Configures Node.js container with appropriate image and tag (Node.js 20-alpine)
+- Sets resource limits and requests based on Email Service requirements
+- Configures liveness and readiness probes for health monitoring
+- Sets up environment variables from ConfigMaps and Secrets for IMAP and RabbitMQ connections
+- Implements security context with non-root user
+- Configures volumes for temporary file storage
+*/}}
+
+{{- $serviceType := "nodejs" }}
+
+{{- $emailServiceValues := dict "serviceType" $serviceType -}}
+
+{{- /* Add Email Service specific environment variables */ -}}
+{{- $emailServiceEnv := dict 
+  "IMAP_HOST" (required .Values.imap.host "IMAP host must be provided") 
+  "IMAP_PORT" (.Values.imap.port | toString) 
+  "IMAP_USER" (required .Values.imap.user "IMAP user must be provided") 
+  "IMAP_TLS" (.Values.imap.tls | toString) 
+  "IMAP_TIMEOUT" (.Values.imap.timeout | toString) 
+  "IMAP_KEEPALIVE_ENABLE" (.Values.imap.keepalive.enable | toString) 
+  "IMAP_KEEPALIVE_INTERVAL" (.Values.imap.keepalive.interval | toString) 
+  "IMAP_KEEPALIVE_IDLE_INTERVAL" (.Values.imap.keepalive.idleInterval | toString) 
+  "RABBITMQ_HOST" (required .Values.rabbitmq.host "RabbitMQ host must be provided") 
+  "RABBITMQ_PORT" (.Values.rabbitmq.port | toString) 
+  "RABBITMQ_VHOST" .Values.rabbitmq.vhost 
+  "RABBITMQ_EXCHANGE" .Values.rabbitmq.exchange 
+  "RABBITMQ_EXCHANGE_TYPE" .Values.rabbitmq.exchangeType 
+  "RABBITMQ_QUEUE" .Values.rabbitmq.queue 
+  "LOG_LEVEL" (.Values.logLevel | default "info") 
+-}}
+
+{{- /* Create a temporary directory for file processing */ -}}
+{{- $emailServiceVolumes := list 
+  (dict "name" "temp-storage" "emptyDir" dict) 
+-}}
+
+{{- $emailServiceVolumeMounts := list 
+  (dict "name" "temp-storage" "mountPath" "/app/temp") 
+-}}
+
+{{- /* Create secrets for sensitive data */ -}}
+{{- $emailServiceEnvFrom := list 
+  (dict "secretRef" (dict "name" (include "common.fullname" .) | printf "%s-secrets")) 
+-}}
+
+{{- /* Merge all values */ -}}
+{{- $emailServiceValues = merge $emailServiceValues (dict "env" $emailServiceEnv) -}}
+{{- $emailServiceValues = merge $emailServiceValues (dict "volumes" $emailServiceVolumes) -}}
+{{- $emailServiceValues = merge $emailServiceValues (dict "volumeMounts" $emailServiceVolumeMounts) -}}
+{{- $emailServiceValues = merge $emailServiceValues (dict "envFrom" $emailServiceEnvFrom) -}}
+
+{{- /* Include the common deployment template with our custom values */ -}}
+{{- include "common.deployment" (merge $emailServiceValues .) }}
+
+{{- /* Generate the Secret for sensitive data */ -}}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "common.fullname" . }}-secrets
+  labels:
+    {{- include "common.labels" . | nindent 4 }}
+type: Opaque
+data:
+  IMAP_PASSWORD: {{ .Values.imap.password | b64enc | quote }}
+  RABBITMQ_USER: {{ .Values.rabbitmq.user | b64enc | quote }}
+  RABBITMQ_PASSWORD: {{ .Values.rabbitmq.password | b64enc | quote }}
