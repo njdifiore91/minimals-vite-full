@@ -6,13 +6,24 @@
  */
 
 // Export all configuration modules
-export { default as appConfig } from './app';
-export { default as loggerConfig } from './logger';
-export { default as redisConfig } from './redis';
-export { default as webhookConfig } from './webhook';
-export { default as rabbitMQConfig } from './rabbitmq';
+export { default as config } from './app';
+export { default as logger } from './logger';
+export { default as redis } from './redis';
+export { default as webhook } from './webhook';
+export { default as rabbitmq } from './rabbitmq';
 
-// Export helper functions
+// Export helper functions from app.ts
+export {
+  getEnv,
+  getNumericEnv,
+  getBooleanEnv,
+  getArrayEnv,
+  getEnvironment,
+  getLogLevel,
+  validateConfig
+} from './app';
+
+// Export helper functions from rabbitmq.ts
 export {
   getConnectionUrl as getRabbitMQConnectionUrl,
   validateRabbitMQConfig,
