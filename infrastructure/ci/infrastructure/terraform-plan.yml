@@ -1,0 +1,432 @@
+# =========================================================================
+# Terraform Plan Workflow
+# =========================================================================
+# This workflow runs Terraform plan operations for infrastructure changes,
+# including initialization, validation, and plan generation. It ensures that
+# Terraform configurations are valid and generates execution plans for review
+# before any changes are applied to the infrastructure.
+# =========================================================================
+
+name: Terraform Plan
+
+# Trigger on infrastructure code changes
+on:
+  push:
+    branches:
+      - main
+      - development
+    paths:
+      - 'infrastructure/terraform/**'
+      - 'infrastructure/kubernetes/**'
+      - '.github/workflows/terraform-*.yml'
+  pull_request:
+    paths:
+      - 'infrastructure/terraform/**'
+      - 'infrastructure/kubernetes/**'
+      - '.github/workflows/terraform-*.yml'
+  # Allow manual triggering
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to plan for (development, staging, production)'
+        required: true
+        type: choice
+        options:
+          - development
+          - staging
+          - production
+      terraform_action:
+        description: 'Terraform action to perform'
+        required: true
+        type: choice
+        options:
+          - plan
+          - validate
+      notify_channels:
+        description: 'Notification channels (comma-separated: email,slack,webhook)'
+        required: false
+        default: 'slack'
+        type: string
+
+# Environment variables used across jobs
+env:
+  TF_LOG: INFO
+  TF_INPUT: false
+  TF_IN_AUTOMATION: true
+  TERRAFORM_VERSION: '1.5.7'
+  TFSEC_VERSION: '1.28.1'
+  INFRACOST_VERSION: '0.10.19'
+
+# Define jobs in the workflow
+jobs:
+  # Determine which environments to plan for
+  determine-environments:
+    name: Determine Environments
+    runs-on: ubuntu-latest
+    outputs:
+      environments: ${{ steps.set-environments.outputs.environments }}
+    steps:
+      - name: Set environments based on trigger
+        id: set-environments
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            # Manual trigger - use specified environment
+            echo "environments=[\"${{ github.event.inputs.environment }}\"]" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            # Pull request - plan for all environments
+            echo "environments=[\"development\", \"staging\", \"production\"]" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            # Push to main - plan for staging and production
+            echo "environments=[\"staging\", \"production\"]" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.ref }}" == "refs/heads/development" ]]; then
+            # Push to development - plan for development only
+            echo "environments=[\"development\"]" >> $GITHUB_OUTPUT
+          else
+            # Default - plan for development only
+            echo "environments=[\"development\"]" >> $GITHUB_OUTPUT
+          fi
+
+  # Terraform validation job
+  validate:
+    name: Terraform Validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+
+      - name: Terraform Format Check
+        id: fmt
+        run: terraform fmt -check -recursive -diff ./infrastructure/terraform
+        continue-on-error: true
+
+      - name: Initialize Terraform
+        working-directory: ./infrastructure/terraform
+        run: |
+          terraform init -backend=false
+
+      - name: Validate Terraform Configuration
+        working-directory: ./infrastructure/terraform
+        run: |
+          terraform validate
+
+      - name: Report Format Issues
+        if: steps.fmt.outcome == 'failure'
+        run: |
+          echo "::warning::Terraform format check failed. Please run 'terraform fmt -recursive' to fix formatting issues."
+
+  # Security scanning job
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Setup tfsec
+        run: |
+          curl -sSLo ./tfsec https://github.com/aquasecurity/tfsec/releases/download/v${{ env.TFSEC_VERSION }}/tfsec-linux-amd64
+          chmod +x ./tfsec
+          sudo mv ./tfsec /usr/local/bin/tfsec
+          tfsec --version
+
+      - name: Run tfsec
+        id: tfsec
+        run: |
+          tfsec ./infrastructure/terraform --format json > tfsec-results.json
+        continue-on-error: true
+
+      - name: Generate tfsec Report
+        if: always()
+        run: |
+          tfsec ./infrastructure/terraform --format markdown > tfsec-report.md
+
+      - name: Upload tfsec Results
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: tfsec-results
+          path: |
+            tfsec-results.json
+            tfsec-report.md
+          retention-days: 7
+
+      - name: Check for Critical Vulnerabilities
+        if: steps.tfsec.outcome == 'success'
+        run: |
+          HIGH_OR_CRITICAL=$(cat tfsec-results.json | jq '.results[] | select(.severity == "HIGH" or .severity == "CRITICAL")' | wc -l)
+          if [[ $HIGH_OR_CRITICAL -gt 0 ]]; then
+            echo "::error::Found $HIGH_OR_CRITICAL HIGH or CRITICAL security issues. Please fix these issues before proceeding."
+            exit 1
+          else
+            echo "No HIGH or CRITICAL security issues found."
+          fi
+
+  # Terraform plan job - runs for each environment
+  plan:
+    name: Terraform Plan (${{ matrix.environment }})
+    needs: [determine-environments, validate, security-scan]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        environment: ${{ fromJson(needs.determine-environments.outputs.environments) }}
+      fail-fast: false
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+
+      - name: Setup Infracost
+        uses: infracost/actions/setup@v2
+        with:
+          api-key: ${{ secrets.INFRACOST_API_KEY }}
+          version: ${{ env.INFRACOST_VERSION }}
+
+      - name: Load Environment-Specific Configuration
+        run: |
+          mkdir -p ./terraform-config
+          
+          # Create backend configuration for the environment
+          cat > ./terraform-config/backend.tfvars << EOF
+          # Backend configuration for ${{ matrix.environment }} environment
+          bucket         = "dollarfunding-terraform-state-${{ matrix.environment }}"
+          key            = "mca-application/terraform.tfstate"
+          region         = "us-east-1"
+          dynamodb_table = "terraform-locks-${{ matrix.environment }}"
+          encrypt        = true
+          EOF
+          
+          # Create environment-specific variables
+          cat > ./terraform-config/env.tfvars << EOF
+          # Environment-specific variables for ${{ matrix.environment }}
+          environment = "${{ matrix.environment }}"
+          EOF
+          
+          # Add environment-specific resource configurations
+          if [[ "${{ matrix.environment }}" == "production" ]]; then
+            cat >> ./terraform-config/env.tfvars << EOF
+          # Production-specific configurations
+          database_instance_class = "db.r6g.large"
+          database_replica_count  = 2
+          redis_node_type         = "cache.r6g.large"
+          redis_replicas_per_node = 1
+          EOF
+          elif [[ "${{ matrix.environment }}" == "staging" ]]; then
+            cat >> ./terraform-config/env.tfvars << EOF
+          # Staging-specific configurations
+          database_instance_class = "db.r6g.medium"
+          database_replica_count  = 1
+          redis_node_type         = "cache.r6g.medium"
+          redis_replicas_per_node = 1
+          EOF
+          else
+            cat >> ./terraform-config/env.tfvars << EOF
+          # Development-specific configurations
+          database_instance_class = "db.t4g.small"
+          database_replica_count  = 0
+          redis_node_type         = "cache.t4g.small"
+          redis_replicas_per_node = 0
+          EOF
+          fi
+
+      - name: Initialize Terraform
+        working-directory: ./infrastructure/terraform/environments/${{ matrix.environment }}
+        run: |
+          terraform init \
+            -backend-config=../../../terraform-config/backend.tfvars
+
+      - name: Terraform Plan
+        id: plan
+        working-directory: ./infrastructure/terraform/environments/${{ matrix.environment }}
+        run: |
+          # Create plan
+          terraform plan \
+            -var-file=../../../terraform-config/env.tfvars \
+            -out=tfplan.binary \
+            -detailed-exitcode
+          
+          # Convert plan to JSON for analysis
+          terraform show -json tfplan.binary > tfplan.json
+          
+          # Extract plan summary
+          PLAN_SUMMARY=$(terraform show -no-color tfplan.binary | grep -A 10 "Plan:")
+          echo "PLAN_SUMMARY<<EOF" >> $GITHUB_ENV
+          echo "$PLAN_SUMMARY" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+          
+          # Determine if there are changes
+          CHANGES=$(echo "$PLAN_SUMMARY" | grep -oP "Plan: \K\d+" | head -1)
+          if [[ "$CHANGES" == "0" ]]; then
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+          else
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+          fi
+        continue-on-error: true
+
+      - name: Generate Infracost Estimate
+        id: infracost
+        if: steps.plan.outcome == 'success'
+        working-directory: ./infrastructure/terraform/environments/${{ matrix.environment }}
+        run: |
+          # Generate cost estimate
+          infracost breakdown --path=tfplan.json \
+            --format=json \
+            --out-file=infracost.json
+          
+          # Generate human-readable report
+          infracost output --path=infracost.json --format=table > infracost-report.txt
+          infracost output --path=infracost.json --format=html > infracost-report.html
+          
+          # Extract cost summary
+          MONTHLY_COST=$(cat infracost.json | jq -r '.totalMonthlyCost')
+          DIFF_COST=$(cat infracost.json | jq -r '.diffTotalMonthlyCost')
+          
+          echo "monthly_cost=$MONTHLY_COST" >> $GITHUB_OUTPUT
+          echo "diff_cost=$DIFF_COST" >> $GITHUB_OUTPUT
+          
+          echo "COST_SUMMARY<<EOF" >> $GITHUB_ENV
+          echo "Monthly cost: $MONTHLY_COST" >> $GITHUB_ENV
+          if [[ "$DIFF_COST" != "null" && "$DIFF_COST" != "0" ]]; then
+            echo "Cost change: $DIFF_COST" >> $GITHUB_ENV
+          fi
+          echo "EOF" >> $GITHUB_ENV
+
+      - name: Save Plan Artifacts
+        if: steps.plan.outcome == 'success'
+        uses: actions/upload-artifact@v3
+        with:
+          name: terraform-plan-${{ matrix.environment }}-${{ github.run_id }}
+          path: |
+            ./infrastructure/terraform/environments/${{ matrix.environment }}/tfplan.binary
+            ./infrastructure/terraform/environments/${{ matrix.environment }}/tfplan.json
+          retention-days: 7
+
+      - name: Save Cost Estimate Artifacts
+        if: steps.infracost.outcome == 'success'
+        uses: actions/upload-artifact@v3
+        with:
+          name: infracost-${{ matrix.environment }}-${{ github.run_id }}
+          path: |
+            ./infrastructure/terraform/environments/${{ matrix.environment }}/infracost.json
+            ./infrastructure/terraform/environments/${{ matrix.environment }}/infracost-report.txt
+            ./infrastructure/terraform/environments/${{ matrix.environment }}/infracost-report.html
+          retention-days: 7
+
+      - name: Save Environment Configuration
+        uses: actions/upload-artifact@v3
+        with:
+          name: terraform-config-${{ matrix.environment }}
+          path: ./terraform-config
+          retention-days: 7
+
+      - name: Comment on PR
+        if: github.event_name == 'pull_request' && steps.plan.outcome == 'success'
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const planSummary = process.env.PLAN_SUMMARY || 'No changes detected';
+            const costSummary = process.env.COST_SUMMARY || 'Cost estimate not available';
+            const hasChanges = '${{ steps.plan.outputs.has_changes }}' === 'true';
+            
+            const body = `## Terraform Plan for ${{ matrix.environment }}
+
+` +
+              `### Plan Summary
+` +
+              `\`\`\`
+${planSummary}
+\`\`\`
+
+` +
+              `### Cost Estimate
+` +
+              `\`\`\`
+${costSummary}
+\`\`\`
+
+` +
+              `${hasChanges ? '⚠️ This plan includes changes that will be applied when merged.' : '✅ No changes detected in this plan.'}
+
+` +
+              `[View detailed plan](${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID})`;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
+
+  # Notification job
+  notify:
+    name: Send Notifications
+    needs: [plan]
+    if: always() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Determine Notification Channels
+        id: channels
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            CHANNELS="${{ github.event.inputs.notify_channels }}"
+          else
+            CHANNELS="slack"
+          fi
+          echo "channels=$CHANNELS" >> $GITHUB_OUTPUT
+
+      - name: Prepare Notification
+        id: prepare
+        run: |
+          # Determine overall status
+          if [[ "${{ needs.plan.result }}" == "success" ]]; then
+            STATUS="success"
+            TITLE="✅ Terraform Plan Successful"
+          elif [[ "${{ needs.plan.result }}" == "cancelled" ]]; then
+            STATUS="cancelled"
+            TITLE="⚠️ Terraform Plan Cancelled"
+          else
+            STATUS="failure"
+            TITLE="❌ Terraform Plan Failed"
+          fi
+          
+          echo "status=$STATUS" >> $GITHUB_OUTPUT
+          echo "title=$TITLE" >> $GITHUB_OUTPUT
+          
+          # Create message
+          MESSAGE="Terraform plan for infrastructure changes completed with status: $STATUS\n\n"
+          MESSAGE+="Repository: ${{ github.repository }}\n"
+          MESSAGE+="Branch: ${{ github.ref_name }}\n"
+          MESSAGE+="Commit: ${{ github.sha }}\n"
+          MESSAGE+="Triggered by: ${{ github.actor }}\n\n"
+          MESSAGE+="[View workflow run](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})"
+          
+          echo "message=$MESSAGE" >> $GITHUB_OUTPUT
+
+      - name: Send Notification
+        uses: ./.github/actions/notify
+        with:
+          event_type: "build.${{ steps.prepare.outputs.status }}"
+          event_severity: "${{ steps.prepare.outputs.status == 'success' && 'info' || 'error' }}"
+          service_name: "infrastructure"
+          environment: "${{ github.event.inputs.environment || 'all' }}"
+          title: "${{ steps.prepare.outputs.title }}"
+          message: "${{ steps.prepare.outputs.message }}"
+          channels: "${{ steps.channels.outputs.channels }}"
+          webhook_url: "${{ secrets.NOTIFICATION_WEBHOOK_URL }}"
+          slack_webhook: "${{ secrets.SLACK_WEBHOOK_URL }}"
+          email_recipients: "${{ secrets.EMAIL_RECIPIENTS }}"
