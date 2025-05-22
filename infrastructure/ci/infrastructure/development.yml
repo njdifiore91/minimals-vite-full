@@ -1,0 +1,419 @@
+# Development Environment CI/CD Configuration for Infrastructure
+# This file defines the development-specific settings for Terraform workflows
+
+name: Development Infrastructure Deployment
+
+# Controls for development environment - more relaxed than staging/production
+on:
+  workflow_call:
+    inputs:
+      terraform_version:
+        description: 'Terraform version to use'
+        required: false
+        type: string
+        default: '1.5.7'
+      environment:
+        description: 'Deployment environment'
+        required: false
+        type: string
+        default: 'development'
+      feature_branch:
+        description: 'Feature branch name for ephemeral environments'
+        required: false
+        type: string
+        default: ''
+    secrets:
+      TERRAFORM_API_TOKEN:
+        required: true
+      AWS_ACCESS_KEY_ID:
+        required: true
+      AWS_SECRET_ACCESS_KEY:
+        required: true
+
+# Environment-specific configuration
+env:
+  TF_WORKSPACE: development
+  TF_VAR_environment: development
+  # Development-specific resource sizing (smaller instances, fewer replicas for cost optimization)
+  TF_VAR_db_instance_class: 'db.t4g.medium'
+  TF_VAR_db_multi_az: 'false'
+  TF_VAR_db_replica_count: '0'
+  TF_VAR_redis_node_type: 'cache.t4g.medium'
+  TF_VAR_redis_replicas_per_shard: '0'
+  TF_VAR_redis_shards: '1'
+  TF_VAR_rabbitmq_instance_type: 'mq.t3.micro'
+  TF_VAR_rabbitmq_deployment_mode: 'SINGLE_INSTANCE'
+  TF_VAR_k8s_node_instance_type: 't3.medium'
+  TF_VAR_k8s_node_min_count: '1'
+  TF_VAR_k8s_node_max_count: '3'
+  TF_VAR_k8s_gpu_node_instance_type: 'g4dn.xlarge'
+  TF_VAR_k8s_gpu_node_min_count: '0'
+  TF_VAR_k8s_gpu_node_max_count: '1'
+  # Development-specific security settings (less strict than production)
+  TF_VAR_enable_waf: 'false'
+  TF_VAR_enable_shield: 'false'
+  TF_VAR_enable_guardduty: 'true'
+  TF_VAR_enable_cloudtrail: 'true'
+  TF_VAR_enable_config: 'false'
+  TF_VAR_enable_security_hub: 'false'
+  TF_VAR_enable_vpc_flow_logs: 'true'
+  TF_VAR_enable_s3_encryption: 'true'
+  TF_VAR_enable_db_encryption: 'true'
+  TF_VAR_enable_kms_cmk: 'true'
+  # Development-specific monitoring settings
+  TF_VAR_enable_enhanced_monitoring: 'false'
+  TF_VAR_monitoring_retention_days: '7'
+  TF_VAR_alarm_evaluation_periods: '2'
+  TF_VAR_alarm_datapoints_to_alarm: '2'
+  # Development-specific backup settings
+  TF_VAR_db_backup_retention_days: '3'
+  TF_VAR_enable_point_in_time_recovery: 'false'
+  TF_VAR_enable_cross_region_backup: 'false'
+  # Feature branch environment settings
+  TF_VAR_enable_feature_branch_environments: 'true'
+  TF_VAR_feature_branch_ttl_hours: '72'
+
+jobs:
+  # Validate Terraform configuration
+  validate:
+    name: Validate Terraform Configuration
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: ${{ inputs.terraform_version }}
+          cli_config_credentials_token: ${{ secrets.TERRAFORM_API_TOKEN }}
+
+      - name: Terraform Format Check
+        id: fmt
+        run: terraform -chdir=infrastructure/terraform/environments/development fmt -check -recursive
+        continue-on-error: true  # More relaxed for development
+
+      - name: Terraform Init
+        id: init
+        run: terraform -chdir=infrastructure/terraform/environments/development init
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Terraform Validate
+        id: validate
+        run: terraform -chdir=infrastructure/terraform/environments/development validate -no-color
+
+      - name: Run tfsec Security Scan
+        uses: aquasecurity/tfsec-action@v1.0.0
+        with:
+          working_directory: infrastructure/terraform/environments/development
+          soft_fail: true  # Allow warnings in development
+
+  # Generate Terraform plan for development
+  plan:
+    name: Generate Terraform Plan
+    needs: validate
+    runs-on: ubuntu-latest
+    # No environment approval required for development plans
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: ${{ inputs.terraform_version }}
+          cli_config_credentials_token: ${{ secrets.TERRAFORM_API_TOKEN }}
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Set Feature Branch Workspace
+        if: inputs.feature_branch != ''
+        run: |
+          echo "TF_WORKSPACE=dev-${{ inputs.feature_branch }}" >> $GITHUB_ENV
+          echo "TF_VAR_environment=dev-${{ inputs.feature_branch }}" >> $GITHUB_ENV
+
+      - name: Terraform Init
+        id: init
+        run: terraform -chdir=infrastructure/terraform/environments/development init
+
+      - name: Terraform Plan
+        id: plan
+        run: |
+          terraform -chdir=infrastructure/terraform/environments/development plan -no-color -input=false -out=tfplan
+        continue-on-error: false
+
+      - name: Run Infracost Analysis
+        uses: infracost/infracost-action@v3
+        with:
+          path: infrastructure/terraform/environments/development
+          terraform_plan_flags: -out=tfplan
+          terraform_workspace: ${{ env.TF_WORKSPACE }}
+
+      - name: Upload Plan Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: terraform-plan-${{ env.TF_WORKSPACE }}
+          path: infrastructure/terraform/environments/development/tfplan
+          retention-days: 3  # Shorter retention for development
+
+      - name: Generate Plan Summary
+        run: |
+          terraform -chdir=infrastructure/terraform/environments/development show -no-color tfplan > plan-output.txt
+          echo "Plan generated successfully for ${{ env.TF_WORKSPACE }} environment"
+
+      - name: Post Plan Summary
+        uses: actions/github-script@v6
+        if: github.event_name == 'pull_request'
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const planOutput = fs.readFileSync('plan-output.txt', 'utf8');
+            const truncatedOutput = planOutput.length > 65000 
+              ? planOutput.substring(0, 65000) + '\n\n... (Output truncated due to size)'
+              : planOutput;
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '## Terraform Plan for ${{ env.TF_WORKSPACE }} Environment\n```\n' + truncatedOutput + '\n```'
+            });
+
+  # Apply Terraform plan for development
+  apply:
+    name: Apply Terraform Plan
+    needs: plan
+    runs-on: ubuntu-latest
+    # No environment approval required for development applies
+    permissions:
+      id-token: write
+      contents: read
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: ${{ inputs.terraform_version }}
+          cli_config_credentials_token: ${{ secrets.TERRAFORM_API_TOKEN }}
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Set Feature Branch Workspace
+        if: inputs.feature_branch != ''
+        run: |
+          echo "TF_WORKSPACE=dev-${{ inputs.feature_branch }}" >> $GITHUB_ENV
+          echo "TF_VAR_environment=dev-${{ inputs.feature_branch }}" >> $GITHUB_ENV
+
+      - name: Download Plan Artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: terraform-plan-${{ env.TF_WORKSPACE }}
+          path: infrastructure/terraform/environments/development
+
+      - name: Terraform Init
+        id: init
+        run: terraform -chdir=infrastructure/terraform/environments/development init
+
+      - name: Terraform Apply
+        id: apply
+        run: |
+          terraform -chdir=infrastructure/terraform/environments/development apply -auto-approve tfplan
+        continue-on-error: false
+
+      - name: Notify Slack on Success
+        uses: slackapi/slack-github-action@v1.23.0
+        with:
+          payload: |
+            {
+              "text": "✅ ${{ env.TF_WORKSPACE }} infrastructure deployment completed successfully.",
+              "blocks": [
+                {
+                  "type": "header",
+                  "text": {
+                    "type": "plain_text",
+                    "text": "✅ ${{ env.TF_WORKSPACE }} Infrastructure Deployment Successful"
+                  }
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*Workflow:* ${{ github.workflow }}\n*Repository:* ${{ github.repository }}\n*Commit:* ${{ github.sha }}\n*Triggered by:* ${{ github.actor }}"
+                  }
+                },
+                {
+                  "type": "actions",
+                  "elements": [
+                    {
+                      "type": "button",
+                      "text": {
+                        "type": "plain_text",
+                        "text": "View Workflow"
+                      },
+                      "url": "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                    }
+                  ]
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_DEVELOPMENT }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+
+  # Basic validation for development environment
+  validate-deployment:
+    name: Validate Development Deployment
+    needs: apply
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Set Feature Branch Workspace
+        if: inputs.feature_branch != ''
+        run: |
+          echo "TF_WORKSPACE=dev-${{ inputs.feature_branch }}" >> $GITHUB_ENV
+          echo "TF_VAR_environment=dev-${{ inputs.feature_branch }}" >> $GITHUB_ENV
+
+      - name: Validate Database Availability
+        run: |
+          aws rds describe-db-instances --query "DBInstances[?DBInstanceIdentifier=='mca-${{ env.TF_VAR_environment }}'].DBInstanceStatus" --output text | grep -q "available"
+          echo "Database is available"
+
+      - name: Validate Redis Cluster
+        run: |
+          aws elasticache describe-replication-groups --query "ReplicationGroups[?ReplicationGroupId=='mca-redis-${{ env.TF_VAR_environment }}'].Status" --output text | grep -q "available"
+          echo "Redis cluster is available"
+
+      - name: Validate RabbitMQ Broker
+        run: |
+          aws mq describe-broker --broker-id mca-rabbitmq-${{ env.TF_VAR_environment }} --query "BrokerState" --output text | grep -q "RUNNING"
+          echo "RabbitMQ broker is running"
+
+      - name: Validate Kubernetes Cluster
+        run: |
+          aws eks describe-cluster --name mca-${{ env.TF_VAR_environment }} --query "cluster.status" --output text | grep -q "ACTIVE"
+          echo "Kubernetes cluster is active"
+
+      - name: Validate S3 Buckets
+        run: |
+          aws s3api head-bucket --bucket mca-documents-${{ env.TF_VAR_environment }}
+          echo "S3 bucket is accessible"
+
+      - name: Notify Slack on Validation Success
+        uses: slackapi/slack-github-action@v1.23.0
+        with:
+          payload: |
+            {
+              "text": "✅ ${{ env.TF_WORKSPACE }} infrastructure validation completed successfully.",
+              "blocks": [
+                {
+                  "type": "header",
+                  "text": {
+                    "type": "plain_text",
+                    "text": "✅ ${{ env.TF_WORKSPACE }} Infrastructure Validation Successful"
+                  }
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "All infrastructure components have been validated and are operating correctly.\n\n*Workflow:* ${{ github.workflow }}\n*Repository:* ${{ github.repository }}\n*Commit:* ${{ github.sha }}"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_DEVELOPMENT }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+
+  # Cleanup ephemeral environments (for feature branches)
+  cleanup-ephemeral:
+    name: Cleanup Ephemeral Environment
+    if: inputs.feature_branch != '' && github.event_name == 'pull_request' && github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: ${{ inputs.terraform_version }}
+          cli_config_credentials_token: ${{ secrets.TERRAFORM_API_TOKEN }}
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Set Feature Branch Workspace
+        run: |
+          echo "TF_WORKSPACE=dev-${{ inputs.feature_branch }}" >> $GITHUB_ENV
+          echo "TF_VAR_environment=dev-${{ inputs.feature_branch }}" >> $GITHUB_ENV
+
+      - name: Terraform Init
+        id: init
+        run: terraform -chdir=infrastructure/terraform/environments/development init
+
+      - name: Terraform Destroy
+        id: destroy
+        run: |
+          terraform -chdir=infrastructure/terraform/environments/development destroy -auto-approve
+        continue-on-error: false
+
+      - name: Notify Slack on Cleanup Success
+        uses: slackapi/slack-github-action@v1.23.0
+        with:
+          payload: |
+            {
+              "text": "🧹 Ephemeral environment ${{ env.TF_WORKSPACE }} has been cleaned up successfully.",
+              "blocks": [
+                {
+                  "type": "header",
+                  "text": {
+                    "type": "plain_text",
+                    "text": "🧹 Ephemeral Environment Cleanup Successful"
+                  }
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "Environment *${{ env.TF_WORKSPACE }}* has been destroyed.\n\n*Workflow:* ${{ github.workflow }}\n*Repository:* ${{ github.repository }}\n*Branch:* ${{ inputs.feature_branch }}"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_DEVELOPMENT }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
