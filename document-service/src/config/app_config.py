@@ -1,281 +1,205 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
 """
-Application Configuration for Document Service
+Core application configuration for the Document Service microservice.
 
-This module defines and exports the core application configuration for the Document Service
-microservice. It centralizes environment variables, application settings, and environment-specific
-configurations (development, staging, production).
-
-The configuration is loaded from environment variables with appropriate defaults and validation.
-It provides a unified interface for accessing all configuration settings throughout the service.
-
-Features:
-    - Environment-specific configuration (development, staging, production)
-    - Environment variable loading with validation
-    - Centralized configuration object
-    - Type-safe configuration access
-    - Integration with other configuration modules
+This module centralizes environment variables, application settings, and
+environment-specific configurations (development, staging, production).
+It provides a type-safe configuration interface using Pydantic.
 """
 
 import os
-import sys
-import logging
-from pathlib import Path
-from typing import Dict, Any, Optional, Union, List
+from enum import Enum
+from typing import Dict, Any, Optional
 
-# Import configuration types
-from ..types.config import (
-    AppConfig, 
-    ServiceConfig, 
-    ModelConfig, 
-    RabbitMQConfig, 
-    S3Config, 
-    LoggingConfig,
-    Environment,
-    ConfigDict
-)
-
-# Set up basic logging until proper logging is configured
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# Base directory of the application
-BASE_DIR = Path(__file__).parent.parent.parent
-
-# Environment variables
-ENVIRONMENT = os.environ.get("ENVIRONMENT", "development")
-SERVICE_NAME = os.environ.get("SERVICE_NAME", "document-service")
-SERVICE_VERSION = os.environ.get("SERVICE_VERSION", "1.0.0")
-SERVICE_PORT = int(os.environ.get("SERVICE_PORT", "8000"))
-SERVICE_DEBUG = os.environ.get("SERVICE_DEBUG", "false").lower() in ("true", "1", "yes")
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-def load_environment_config() -> Dict[str, Any]:
+class EnvironmentType(str, Enum):
+    """Supported environment types for the Document Service."""
+    DEVELOPMENT = "development"
+    STAGING = "staging"
+    PRODUCTION = "production"
+
+
+class AppConfig(BaseSettings):
     """
-    Load environment-specific configuration.
+    Core application configuration for the Document Service.
     
-    Returns:
-        Dict[str, Any]: Environment-specific configuration dictionary
+    This class centralizes all configuration settings and provides
+    environment-specific overrides. It validates environment variables
+    and ensures required values are present.
     """
-    env_config: Dict[str, Any] = {}
+    # Service information
+    SERVICE_NAME: str = "document-service"
+    SERVICE_VERSION: str = "1.0.0"
     
-    # Development environment configuration
-    if ENVIRONMENT.lower() in ("dev", "development"):
-        env_config = {
-            "debug": True,
-            "log_level": "DEBUG",
-            "rabbitmq": {
-                "host": "localhost",
-                "port": 5672,
-                "ssl": False,
-            },
-            "s3": {
-                "endpoint_url": "http://localhost:4566",  # LocalStack endpoint
-                "bucket_name": "mca-documents-development",
-                "use_ssl": False,
-                "verify": False,
-            },
-            "model": {
-                "confidence_threshold": 0.6,  # Lower threshold for development
-            }
-        }
-    
-    # Staging environment configuration
-    elif ENVIRONMENT.lower() in ("stage", "staging"):
-        env_config = {
-            "debug": False,
-            "log_level": "INFO",
-            "rabbitmq": {
-                "host": os.environ.get("RABBITMQ_HOST", "rabbitmq.staging"),
-                "port": int(os.environ.get("RABBITMQ_PORT", "5671")),
-                "ssl": True,
-            },
-            "s3": {
-                "bucket_name": "mca-documents-staging",
-                "use_ssl": True,
-                "verify": True,
-            },
-            "model": {
-                "confidence_threshold": 0.75,  # Medium threshold for staging
-            }
-        }
-    
-    # Production environment configuration
-    elif ENVIRONMENT.lower() in ("prod", "production"):
-        env_config = {
-            "debug": False,
-            "log_level": "INFO",
-            "rabbitmq": {
-                "host": os.environ.get("RABBITMQ_HOST", "rabbitmq.production"),
-                "port": int(os.environ.get("RABBITMQ_PORT", "5671")),
-                "ssl": True,
-            },
-            "s3": {
-                "bucket_name": "mca-documents-production",
-                "use_ssl": True,
-                "verify": True,
-            },
-            "model": {
-                "confidence_threshold": 0.85,  # Higher threshold for production
-            }
-        }
-    
-    # Default to development if environment is not recognized
-    else:
-        logger.warning(f"Unknown environment: {ENVIRONMENT}. Using development configuration.")
-        return load_environment_config()  # Recursively call with default environment
-    
-    return env_config
-
-
-def create_app_config() -> AppConfig:
-    """
-    Create and return the application configuration.
-    
-    This function loads configuration from environment variables and environment-specific
-    settings, then creates a unified AppConfig object.
-    
-    Returns:
-        AppConfig: The complete application configuration
-    """
-    # Load environment-specific configuration
-    env_config = load_environment_config()
-    
-    # Create service configuration
-    service_config = ServiceConfig(
-        name=SERVICE_NAME,
-        version=SERVICE_VERSION,
-        port=SERVICE_PORT,
-        environment=Environment.from_string(ENVIRONMENT),
-        debug=env_config.get("debug", False),
-        base_path=BASE_DIR
+    # Environment configuration
+    ENVIRONMENT: EnvironmentType = Field(
+        default=EnvironmentType.DEVELOPMENT,
+        description="The environment in which the service is running"
     )
     
-    # Create model configuration
-    model_config = ModelConfig(
-        model_type=os.environ.get("MODEL_TYPE", "random_forest"),
-        parameters={},  # Will be loaded from model_config.py
-        confidence_threshold=env_config.get("model", {}).get("confidence_threshold", 0.75),
-        version=os.environ.get("MODEL_VERSION", "1.0.0"),
-        description="Document classification model for MCA application processing"
+    # Server configuration
+    HOST: str = Field(
+        default="0.0.0.0",
+        description="Host address to bind the service to"
+    )
+    PORT: int = Field(
+        default=8000,
+        description="Port to bind the service to"
     )
     
-    # Create RabbitMQ configuration
-    rabbitmq_config = RabbitMQConfig(
-        host=env_config.get("rabbitmq", {}).get("host", "localhost"),
-        port=env_config.get("rabbitmq", {}).get("port", 5672),
-        username=os.environ.get("RABBITMQ_USERNAME", "guest"),
-        password=os.environ.get("RABBITMQ_PASSWORD", "guest"),
-        virtual_host=os.environ.get("RABBITMQ_VHOST", "/"),
-        ssl=env_config.get("rabbitmq", {}).get("ssl", True),
-        heartbeat=int(os.environ.get("RABBITMQ_HEARTBEAT", "60")),
-        connection_attempts=int(os.environ.get("RABBITMQ_CONNECTION_ATTEMPTS", "3")),
-        retry_delay=int(os.environ.get("RABBITMQ_RETRY_DELAY", "5"))
+    # API configuration
+    API_PREFIX: str = Field(
+        default="/api/v1",
+        description="Prefix for all API endpoints"
     )
     
-    # Create S3 configuration
-    s3_config: S3Config = {
-        "endpoint_url": env_config.get("s3", {}).get("endpoint_url", os.environ.get("S3_ENDPOINT_URL", "https://s3.amazonaws.com")),
-        "region_name": os.environ.get("S3_REGION", "us-east-1"),
-        "aws_access_key_id": os.environ.get("S3_ACCESS_KEY", ""),
-        "aws_secret_access_key": os.environ.get("S3_SECRET_KEY", ""),
-        "use_ssl": env_config.get("s3", {}).get("use_ssl", True),
-        "verify": env_config.get("s3", {}).get("verify", True),
-        "max_pool_connections": int(os.environ.get("S3_MAX_POOL_CONNECTIONS", "10")),
-        "timeout": int(os.environ.get("S3_TIMEOUT", "60")),
-        "retries": int(os.environ.get("S3_RETRIES", "3")),
-        "bucket_name": env_config.get("s3", {}).get("bucket_name", os.environ.get("S3_BUCKET", f"mca-documents-{ENVIRONMENT.lower()}")),
-        "encryption": os.environ.get("S3_ENCRYPTION", "AES256")
-    }
-    
-    # Create logging configuration
-    logging_config = LoggingConfig(
-        level=env_config.get("log_level", "INFO"),
-        format=os.environ.get("LOG_FORMAT", "%(asctime)s - %(name)s - %(levelname)s - %(message)s"),
-        date_format=os.environ.get("LOG_DATE_FORMAT", "%Y-%m-%d %H:%M:%S"),
-        file_path=os.environ.get("LOG_FILE_PATH"),
-        console_output=os.environ.get("LOG_CONSOLE", "true").lower() in ("true", "1", "yes"),
-        json_format=os.environ.get("LOG_JSON", "true").lower() in ("true", "1", "yes"),
-        include_correlation_id=os.environ.get("LOG_CORRELATION_ID", "true").lower() in ("true", "1", "yes"),
-        include_document_id=os.environ.get("LOG_DOCUMENT_ID", "true").lower() in ("true", "1", "yes")
+    # Logging configuration
+    LOG_LEVEL: str = Field(
+        default="INFO",
+        description="Logging level (ERROR, WARN, INFO, DEBUG)"
+    )
+    LOG_FORMAT: str = Field(
+        default="json",
+        description="Logging format (json, text)"
     )
     
-    # Create complete application configuration
-    app_config = AppConfig(
-        service=service_config,
-        model=model_config,
-        rabbitmq=rabbitmq_config,
-        s3=s3_config,
-        logging=logging_config
+    # Document classification confidence thresholds
+    MIN_CONFIDENCE_THRESHOLD: float = Field(
+        default=0.75,
+        description="Minimum confidence threshold for automatic classification"
+    )
+    HIGH_CONFIDENCE_THRESHOLD: float = Field(
+        default=0.95,
+        description="High confidence threshold for automatic processing"
     )
     
-    return app_config
-
-
-def validate_config(config: AppConfig) -> None:
-    """
-    Validate the application configuration.
+    # Performance settings
+    WORKER_THREADS: int = Field(
+        default=4,
+        description="Number of worker threads for document processing"
+    )
+    BATCH_SIZE: int = Field(
+        default=10,
+        description="Batch size for document processing"
+    )
     
-    This function checks that all required configuration values are present and valid.
-    It raises ValueError if any validation fails.
+    # Timeout settings
+    REQUEST_TIMEOUT_SECONDS: int = Field(
+        default=30,
+        description="Timeout for HTTP requests in seconds"
+    )
+    PROCESSING_TIMEOUT_SECONDS: int = Field(
+        default=300,
+        description="Timeout for document processing in seconds"
+    )
     
-    Args:
-        config: The application configuration to validate
+    # Feature flags
+    ENABLE_GPU_ACCELERATION: bool = Field(
+        default=False,
+        description="Enable GPU acceleration for document processing"
+    )
+    
+    # Model settings
+    MODEL_PATH: str = Field(
+        default="./models",
+        description="Path to the document classification models"
+    )
+    
+    # Health check settings
+    HEALTH_CHECK_INTERVAL_SECONDS: int = Field(
+        default=60,
+        description="Interval between health checks in seconds"
+    )
+    
+    # Metrics settings
+    ENABLE_METRICS: bool = Field(
+        default=True,
+        description="Enable metrics collection"
+    )
+    METRICS_PORT: int = Field(
+        default=9090,
+        description="Port for metrics endpoint"
+    )
+    
+    # Pydantic configuration
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        env_nested_delimiter="__",
+        extra="ignore",
+        case_sensitive=False,
+    )
+    
+    @field_validator("LOG_LEVEL")
+    @classmethod
+    def validate_log_level(cls, v: str) -> str:
+        """Validate that the log level is one of the allowed values."""
+        allowed_levels = ["ERROR", "WARN", "INFO", "DEBUG"]
+        if v.upper() not in allowed_levels:
+            raise ValueError(f"Log level must be one of {allowed_levels}")
+        return v.upper()
+    
+    def get_environment_settings(self) -> Dict[str, Any]:
+        """
+        Get environment-specific settings.
         
-    Raises:
-        ValueError: If any configuration validation fails
-    """
-    # Validate S3 configuration in production and staging
-    if config.service.environment in (Environment.PRODUCTION, Environment.STAGING):
-        if not config.s3["aws_access_key_id"] or not config.s3["aws_secret_access_key"]:
-            raise ValueError("S3 credentials are required in production and staging environments")
+        Returns:
+            Dict[str, Any]: Environment-specific settings
+        """
+        if self.ENVIRONMENT == EnvironmentType.DEVELOPMENT:
+            return {
+                "LOG_LEVEL": "DEBUG",
+                "MIN_CONFIDENCE_THRESHOLD": 0.6,  # Lower threshold for development
+                "ENABLE_GPU_ACCELERATION": False,
+                "WORKER_THREADS": 2,
+                "BATCH_SIZE": 5,
+            }
+        elif self.ENVIRONMENT == EnvironmentType.STAGING:
+            return {
+                "LOG_LEVEL": "INFO",
+                "MIN_CONFIDENCE_THRESHOLD": 0.7,
+                "ENABLE_GPU_ACCELERATION": True,
+                "WORKER_THREADS": 4,
+                "BATCH_SIZE": 10,
+            }
+        elif self.ENVIRONMENT == EnvironmentType.PRODUCTION:
+            return {
+                "LOG_LEVEL": "INFO",
+                "MIN_CONFIDENCE_THRESHOLD": 0.75,
+                "ENABLE_GPU_ACCELERATION": True,
+                "WORKER_THREADS": 8,
+                "BATCH_SIZE": 20,
+            }
+        return {}
     
-    # Validate RabbitMQ configuration in all environments
-    if not config.rabbitmq.host:
-        raise ValueError("RabbitMQ host is required")
-    
-    # In production and staging, validate RabbitMQ credentials
-    if config.service.environment in (Environment.PRODUCTION, Environment.STAGING):
-        if not config.rabbitmq.username or not config.rabbitmq.password:
-            raise ValueError("RabbitMQ credentials are required in production and staging environments")
-    
-    # Validate service configuration
-    if not config.service.name or not config.service.version:
-        raise ValueError("Service name and version are required")
-    
-    # Validate model configuration
-    if not config.model.model_type:
-        raise ValueError("Model type is required")
-    
-    # Validate confidence threshold is between 0 and 1
-    if not 0 <= config.model.confidence_threshold <= 1:
-        raise ValueError(f"Model confidence threshold must be between 0 and 1, got {config.model.confidence_threshold}")
-    
-    logger.info(f"Configuration validated for {config.service.name} v{config.service.version} in {config.service.environment.value} environment")
+    def __init__(self, **data: Any):
+        """
+        Initialize the configuration with environment-specific overrides.
+        
+        Args:
+            **data: Configuration data
+        """
+        super().__init__(**data)
+        
+        # Apply environment-specific settings
+        env_settings = self.get_environment_settings()
+        for key, value in env_settings.items():
+            if hasattr(self, key):
+                setattr(self, key, value)
 
 
-# Create and validate the application configuration
-try:
-    app_config = create_app_config()
-    validate_config(app_config)
-except Exception as e:
-    logger.error(f"Failed to create or validate application configuration: {str(e)}")
-    sys.exit(1)
-
-
+# Create a singleton instance of the configuration
 def get_app_config() -> AppConfig:
     """
-    Get the application configuration.
-    
-    This function returns the singleton instance of the application configuration.
+    Get the application configuration singleton.
     
     Returns:
         AppConfig: The application configuration
     """
-    return app_config
+    return AppConfig()
 
 
-# Export the configuration object
-__all__ = ["app_config", "get_app_config", "AppConfig", "Environment"]
+# Export the configuration singleton
+app_config = get_app_config()
