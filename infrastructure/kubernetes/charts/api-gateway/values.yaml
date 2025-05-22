@@ -1,0 +1,333 @@
+# Kong API Gateway Helm Chart Values
+# Default configuration values for the Kong API Gateway deployment
+# This file serves as the single source of truth for deployment configuration across environments
+
+# Image configuration
+image:
+  repository: kong/kong-gateway
+  tag: "3.5.0"
+  pullPolicy: IfNotPresent
+
+# Replica count for Kong pods
+replicaCount: 2
+
+# Update strategy
+updateStrategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: "100%"
+    maxUnavailable: "0%"
+
+# Resource limits and requests
+resources:
+  limits:
+    cpu: 2
+    memory: 4Gi
+  requests:
+    cpu: 1
+    memory: 2Gi
+
+# Pod security context
+securityContext:
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+
+# Container security context
+containerSecurityContext:
+  runAsUser: 1000
+  runAsGroup: 1000
+  runAsNonRoot: true
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+  seccompProfile:
+    type: RuntimeDefault
+  capabilities:
+    drop:
+    - ALL
+
+# Health probes
+readinessProbe:
+  httpGet:
+    path: "/status/ready"
+    port: status
+    scheme: HTTP
+  initialDelaySeconds: 5
+  timeoutSeconds: 5
+  periodSeconds: 10
+  successThreshold: 1
+  failureThreshold: 3
+
+livenessProbe:
+  httpGet:
+    path: "/status"
+    port: status
+    scheme: HTTP
+  initialDelaySeconds: 15
+  timeoutSeconds: 5
+  periodSeconds: 10
+  successThreshold: 1
+  failureThreshold: 3
+
+# Service configuration
+service:
+  # Admin API service
+  admin:
+    enabled: true
+    type: ClusterIP
+    annotations: {}
+    http:
+      enabled: true
+      servicePort: 8001
+      containerPort: 8001
+    tls:
+      enabled: true
+      servicePort: 8444
+      containerPort: 8444
+    ingress:
+      enabled: false
+      # Only allow internal access to admin API
+      annotations:
+        kubernetes.io/ingress.class: "nginx-internal"
+        nginx.ingress.kubernetes.io/whitelist-source-range: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+      path: /
+      hosts: []
+      tls: []
+
+  # Proxy service (public-facing)
+  proxy:
+    enabled: true
+    type: LoadBalancer
+    annotations:
+      service.beta.kubernetes.io/aws-load-balancer-type: nlb
+      service.beta.kubernetes.io/aws-load-balancer-backend-protocol: tcp
+    http:
+      enabled: true
+      servicePort: 80
+      containerPort: 8000
+    tls:
+      enabled: true
+      servicePort: 443
+      containerPort: 8443
+      # TLS termination at the gateway level
+      parameters:
+        - http2
+
+# Kong Enterprise license
+enterprise:
+  enabled: false
+  license_secret: kong-enterprise-license
+  vitals:
+    enabled: true
+
+# Database configuration
+database: "off"  # Using DB-less mode
+
+# Kong configuration
+env:
+  # General settings
+  prefix: /kong_prefix/
+  log_level: notice
+  proxy_access_log: /dev/stdout
+  admin_access_log: /dev/stdout
+  proxy_error_log: /dev/stderr
+  admin_error_log: /dev/stderr
+  
+  # DB-less configuration
+  database: "off"
+  declarative_config: /kong_dbless/kong.yaml
+  
+  # Proxy settings
+  proxy_listen: 0.0.0.0:8000, 0.0.0.0:8443 ssl
+  admin_listen: 0.0.0.0:8001, 0.0.0.0:8444 ssl
+  
+  # Redis configuration for rate limiting
+  redis_host: redis-master.redis.svc.cluster.local
+  redis_port: 6379
+  redis_password:
+    valueFrom:
+      secretKeyRef:
+        name: redis-credentials
+        key: password
+  redis_timeout: 2000
+  redis_database: 0
+  
+  # JWT configuration
+  jwt_secret:
+    valueFrom:
+      secretKeyRef:
+        name: kong-jwt-keys
+        key: private-key
+
+# Kong plugins configuration
+kongPlugins:
+  # JWT Authentication plugin
+  - name: jwt
+    config:
+      uri_param_names:
+        - jwt
+      cookie_names: []
+      header_names:
+        - Authorization
+      claims_to_verify:
+        - exp
+        - nbf
+      key_claim_name: iss
+      secret_is_base64: false
+      run_on_preflight: true
+      maximum_expiration: 7200  # 2 hours
+      algorithm: RS256
+  
+  # Rate Limiting plugin with Redis
+  - name: rate-limiting
+    config:
+      second: null
+      minute: 60
+      hour: 3600
+      day: null
+      month: null
+      year: null
+      limit_by: consumer
+      policy: redis
+      fault_tolerant: true
+      redis_host: redis-master.redis.svc.cluster.local
+      redis_port: 6379
+      redis_password:
+        valueFrom:
+          secretKeyRef:
+            name: redis-credentials
+            key: password
+      redis_timeout: 2000
+      redis_database: 0
+      hide_client_headers: false
+
+  # Correlation ID plugin for request tracing
+  - name: correlation-id
+    config:
+      header_name: Kong-Request-ID
+      generator: uuid
+      echo_downstream: true
+
+  # CORS plugin for cross-origin requests
+  - name: cors
+    config:
+      origins:
+        - https://*.dollarfunding.com
+      methods:
+        - GET
+        - POST
+        - PUT
+        - PATCH
+        - DELETE
+        - OPTIONS
+      headers:
+        - Accept
+        - Accept-Version
+        - Authorization
+        - Content-Length
+        - Content-Type
+        - X-Requested-With
+      exposed_headers:
+        - X-Auth-Token
+        - X-Request-ID
+      credentials: true
+      max_age: 3600
+      preflight_continue: false
+
+# Ingress controller (disabled as we're using Kong as API Gateway only)
+ingressController:
+  enabled: false
+
+# Custom volumes for configuration
+volumes:
+  - name: kong-dbless-config
+    configMap:
+      name: kong-dbless-config
+
+volumeMounts:
+  - name: kong-dbless-config
+    mountPath: /kong_dbless
+    readOnly: true
+
+# Deployment-specific annotations
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "8100"
+
+# Prometheus ServiceMonitor
+serviceMonitor:
+  enabled: true
+  interval: 15s
+  namespace: monitoring
+
+# Pod disruption budget
+podDisruptionBudget:
+  enabled: true
+  maxUnavailable: 1
+
+# Affinity and anti-affinity rules
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+    - weight: 100
+      podAffinityTerm:
+        labelSelector:
+          matchExpressions:
+          - key: app.kubernetes.io/name
+            operator: In
+            values:
+            - kong
+        topologyKey: kubernetes.io/hostname
+
+# Environment-specific overrides
+environmentOverrides:
+  # Development environment
+  development:
+    replicaCount: 1
+    resources:
+      limits:
+        cpu: 500m
+        memory: 1Gi
+      requests:
+        cpu: 250m
+        memory: 512Mi
+    env:
+      log_level: debug
+    kongPlugins:
+      - name: rate-limiting
+        config:
+          minute: 120  # Higher rate limits for development
+
+  # Staging environment
+  staging:
+    replicaCount: 2
+    resources:
+      limits:
+        cpu: 1
+        memory: 2Gi
+      requests:
+        cpu: 500m
+        memory: 1Gi
+    kongPlugins:
+      - name: rate-limiting
+        config:
+          minute: 90  # Medium rate limits for staging
+
+  # Production environment
+  production:
+    replicaCount: 3
+    resources:
+      limits:
+        cpu: 2
+        memory: 4Gi
+      requests:
+        cpu: 1
+        memory: 2Gi
+    podDisruptionBudget:
+      maxUnavailable: 1
+    kongPlugins:
+      - name: rate-limiting
+        config:
+          minute: 60  # Stricter rate limits for production
