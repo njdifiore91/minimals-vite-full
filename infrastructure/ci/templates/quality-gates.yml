@@ -1,0 +1,277 @@
+# ======================================================
+# QUALITY GATES TEMPLATE
+# ======================================================
+# Reusable CI/CD quality gate template that defines standardized 
+# code quality checks across all services in the Merchant Cash 
+# Advance Application Processing System.
+#
+# This template provides parameterized steps for linting, static 
+# analysis, and testing that can be included in any service pipeline.
+# It supports multiple programming languages with conditional execution
+# paths for TypeScript/JavaScript, Python, and Java codebases.
+# ======================================================
+
+name: Quality Gates
+
+# Define parameters that can be passed when including this template
+parameters:
+  # Required parameters
+  language_type:
+    description: 'Programming language type (typescript, python, java)'
+    required: true
+    type: string
+  
+  # Optional parameters with defaults
+  source_directory:
+    description: 'Directory containing source code to analyze'
+    required: false
+    default: 'src'
+    type: string
+  
+  test_directory:
+    description: 'Directory containing test code'
+    required: false
+    default: 'tests'
+    type: string
+  
+  coverage_threshold:
+    description: 'Minimum code coverage percentage required'
+    required: false
+    default: 80
+    type: number
+  
+  skip_tests:
+    description: 'Whether to skip running tests'
+    required: false
+    default: false
+    type: boolean
+  
+  environment:
+    description: 'Deployment environment (development, staging, production)'
+    required: false
+    default: 'development'
+    type: string
+
+# Define the actual job steps
+jobs:
+  quality-gates:
+    name: Quality Gates
+    runs-on: ubuntu-latest
+    
+    # Define environment variables
+    env:
+      NODE_VERSION: '22.x'
+      PYTHON_VERSION: '3.13.3'
+      JAVA_VERSION: '21'
+    
+    steps:
+      # Common setup step
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history for proper coverage reporting
+      
+      # ======================================================
+      # LANGUAGE-SPECIFIC SETUP
+      # ======================================================
+      
+      # TypeScript/JavaScript setup
+      - name: Setup Node.js
+        if: ${{ parameters.language_type == 'typescript' || parameters.language_type == 'javascript' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'yarn'
+      
+      - name: Install Node.js dependencies
+        if: ${{ parameters.language_type == 'typescript' || parameters.language_type == 'javascript' }}
+        run: yarn install --frozen-lockfile
+      
+      # Python setup
+      - name: Setup Python
+        if: ${{ parameters.language_type == 'python' }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+      
+      - name: Install Poetry
+        if: ${{ parameters.language_type == 'python' }}
+        run: |
+          curl -sSL https://install.python-poetry.org | python3 -
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+      
+      - name: Install Python dependencies
+        if: ${{ parameters.language_type == 'python' }}
+        run: |
+          poetry config virtualenvs.in-project true
+          poetry install --no-interaction
+      
+      # Java setup
+      - name: Setup Java
+        if: ${{ parameters.language_type == 'java' }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: 'maven'
+      
+      # ======================================================
+      # LINTING
+      # ======================================================
+      
+      # TypeScript/JavaScript linting
+      - name: Lint TypeScript/JavaScript
+        if: ${{ parameters.language_type == 'typescript' || parameters.language_type == 'javascript' }}
+        run: |
+          echo "Running ESLint on ${{ parameters.source_directory }}"
+          yarn lint:ci || (echo "::error::ESLint found issues that must be fixed" && exit 1)
+      
+      # Python linting
+      - name: Lint Python
+        if: ${{ parameters.language_type == 'python' }}
+        run: |
+          echo "Running Flake8 on ${{ parameters.source_directory }}"
+          poetry run flake8 ${{ parameters.source_directory }} --count --select=E9,F63,F7,F82 --show-source --statistics
+          poetry run flake8 ${{ parameters.source_directory }} --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+      
+      # Java linting
+      - name: Lint Java
+        if: ${{ parameters.language_type == 'java' }}
+        run: |
+          echo "Running CheckStyle on ${{ parameters.source_directory }}"
+          mvn checkstyle:check
+      
+      # ======================================================
+      # STATIC ANALYSIS
+      # ======================================================
+      
+      # TypeScript type checking
+      - name: TypeScript type checking
+        if: ${{ parameters.language_type == 'typescript' }}
+        run: |
+          echo "Running TypeScript compiler checks"
+          yarn tsc --noEmit
+      
+      # Python type checking
+      - name: Python type checking
+        if: ${{ parameters.language_type == 'python' }}
+        run: |
+          echo "Running mypy type checking"
+          poetry run mypy ${{ parameters.source_directory }}
+      
+      # Java static analysis
+      - name: Java static analysis
+        if: ${{ parameters.language_type == 'java' }}
+        run: |
+          echo "Running SpotBugs analysis"
+          mvn spotbugs:check
+      
+      # ======================================================
+      # TESTING
+      # ======================================================
+      
+      # TypeScript/JavaScript testing
+      - name: Run TypeScript/JavaScript tests
+        if: ${{ !parameters.skip_tests && (parameters.language_type == 'typescript' || parameters.language_type == 'javascript') }}
+        run: |
+          echo "Running Jest tests with coverage"
+          yarn test:coverage
+      
+      # Python testing
+      - name: Run Python tests
+        if: ${{ !parameters.skip_tests && parameters.language_type == 'python' }}
+        run: |
+          echo "Running pytest with coverage"
+          poetry run pytest --cov=${{ parameters.source_directory }} --cov-report=xml --cov-report=term
+      
+      # Java testing
+      - name: Run Java tests
+        if: ${{ !parameters.skip_tests && parameters.language_type == 'java' }}
+        run: |
+          echo "Running JUnit tests with JaCoCo coverage"
+          mvn test jacoco:report
+      
+      # ======================================================
+      # COVERAGE REPORTING
+      # ======================================================
+      
+      # TypeScript/JavaScript coverage check
+      - name: Check TypeScript/JavaScript coverage
+        if: ${{ !parameters.skip_tests && (parameters.language_type == 'typescript' || parameters.language_type == 'javascript') }}
+        run: |
+          echo "Checking coverage threshold of ${{ parameters.coverage_threshold }}%"
+          yarn coverage:check --threshold ${{ parameters.coverage_threshold }}
+      
+      # Python coverage check
+      - name: Check Python coverage
+        if: ${{ !parameters.skip_tests && parameters.language_type == 'python' }}
+        run: |
+          echo "Checking coverage threshold of ${{ parameters.coverage_threshold }}%"
+          poetry run coverage report --fail-under=${{ parameters.coverage_threshold }}
+      
+      # Java coverage check
+      - name: Check Java coverage
+        if: ${{ !parameters.skip_tests && parameters.language_type == 'java' }}
+        run: |
+          echo "Checking coverage threshold of ${{ parameters.coverage_threshold }}%"
+          mvn jacoco:check -Djacoco.minimum.coverage=${{ parameters.coverage_threshold }}
+      
+      # ======================================================
+      # ARTIFACT UPLOAD
+      # ======================================================
+      
+      # Upload test results
+      - name: Upload test results
+        if: ${{ !parameters.skip_tests && always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ parameters.language_type }}
+          path: |
+            **/junit.xml
+            **/test-results.xml
+            **/TEST-*.xml
+          retention-days: 7
+      
+      # Upload coverage reports
+      - name: Upload coverage reports
+        if: ${{ !parameters.skip_tests && always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-reports-${{ parameters.language_type }}
+          path: |
+            **/coverage/
+            **/coverage.xml
+            **/site/jacoco/
+          retention-days: 7
+      
+      # ======================================================
+      # ENVIRONMENT-SPECIFIC QUALITY GATES
+      # ======================================================
+      
+      # Stricter quality gates for production
+      - name: Enforce stricter quality gates for production
+        if: ${{ parameters.environment == 'production' }}
+        run: |
+          echo "Enforcing stricter quality gates for production environment"
+          
+          # For TypeScript/JavaScript
+          if [[ "${{ parameters.language_type }}" == "typescript" || "${{ parameters.language_type }}" == "javascript" ]]; then
+            echo "Running additional TypeScript/JavaScript checks for production"
+            yarn lint:strict
+            yarn audit --level=moderate
+          fi
+          
+          # For Python
+          if [[ "${{ parameters.language_type }}" == "python" ]]; then
+            echo "Running additional Python checks for production"
+            poetry run bandit -r ${{ parameters.source_directory }}
+            poetry run safety check
+          fi
+          
+          # For Java
+          if [[ "${{ parameters.language_type }}" == "java" ]]; then
+            echo "Running additional Java checks for production"
+            mvn dependency:check
+            mvn pmd:check
+          fi
