@@ -1,0 +1,228 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "rabbitmq.fullname" . }}
+  labels:
+    {{- include "rabbitmq.labels" . | nindent 4 }}
+    rulesgroup: rabbitmq
+    severity: warning
+    {{- if .Values.prometheusRule.labels }}
+    {{- toYaml .Values.prometheusRule.labels | nindent 4 }}
+    {{- end }}
+  {{- if .Values.prometheusRule.annotations }}
+  annotations:
+    {{- toYaml .Values.prometheusRule.annotations | nindent 4 }}
+  {{- end }}
+spec:
+  groups:
+  - name: rabbitmq
+    rules:
+    # Queue depth alerts
+    - alert: RabbitmqHighQueueDepth
+      expr: |
+        sum by (queue) (rabbitmq_queue_messages_ready) > 1000
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: RabbitMQ high queue depth (instance {{ $labels.instance }})
+        description: |
+          Queue {{ $labels.queue }} has more than 1000 messages ready for delivery.
+          VALUE = {{ $value }}
+          LABELS = {{ $labels }}
+          
+          This may indicate a consumer backlog or processing bottleneck.
+          Check consumer health and processing capacity.
+
+    - alert: RabbitmqQueueConsumerLag
+      expr: |
+        sum by (queue) (rabbitmq_queue_messages_ready) > 0 and sum by (queue) (rabbitmq_queue_consumers) == 0
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: RabbitMQ queue without consumers (instance {{ $labels.instance }})
+        description: |
+          Queue {{ $labels.queue }} has messages but no consumers.
+          VALUE = {{ $value }}
+          LABELS = {{ $labels }}
+          
+          Messages in this queue will not be processed until consumers are connected.
+          Check if consumer services are running properly.
+
+    # Node down conditions
+    - alert: NoMajorityOfNodesReady
+      expr: |
+        kube_statefulset_status_replicas_ready * on (namespace, statefulset) group_left(label_app_kubernetes_io_name) kube_statefulset_labels{label_app_kubernetes_io_component="rabbitmq"}
+        <=
+        kube_statefulset_replicas * on (namespace, statefulset) group_left(label_app_kubernetes_io_name) kube_statefulset_labels{label_app_kubernetes_io_component="rabbitmq"}
+        / 2
+        unless
+        kube_statefulset_replicas * on (namespace, statefulset) group_left(label_app_kubernetes_io_name) kube_statefulset_labels{label_app_kubernetes_io_component="rabbitmq"}
+        == 0
+      for: 5m
+      labels:
+        severity: critical
+      annotations:
+        summary: RabbitMQ no majority of nodes ready (instance {{ $labels.instance }})
+        description: |
+          Only {{ $value }} replicas are ready in StatefulSet {{ $labels.statefulset }}
+          of RabbitMQ cluster {{ $labels.label_app_kubernetes_io_name }} in namespace {{ $labels.namespace }}.
+          
+          Some queues are likely to be unavailable, including replicated ones.
+          Check the details of the pods:
+          kubectl -n {{ $labels.namespace }} describe pods -l app.kubernetes.io/component=rabbitmq,app.kubernetes.io/name={{ $labels.label_app_kubernetes_io_name }}
+
+    - alert: RabbitmqNodeDown
+      expr: |
+        rabbitmq_identity_info{rabbitmq_cluster="true"} unless on(instance) (rabbitmq_identity_info and on(instance) rabbitmq_node_up)
+      for: 2m
+      labels:
+        severity: critical
+      annotations:
+        summary: RabbitMQ node down (instance {{ $labels.instance }})
+        description: |
+          RabbitMQ node {{ $labels.node }} is down
+          VALUE = {{ $value }}
+          LABELS = {{ $labels }}
+          
+          This may impact message processing and availability.
+          Check node status and logs for more information.
+
+    # Memory usage alerts
+    - alert: RabbitmqHighMemoryUsage
+      expr: |
+        rabbitmq_process_resident_memory_bytes / rabbitmq_resident_memory_limit_bytes > 0.8
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: RabbitMQ high memory usage (instance {{ $labels.instance }})
+        description: |
+          RabbitMQ memory usage is above 80% of the configured limit
+          VALUE = {{ $value }}
+          LABELS = {{ $labels }}
+          
+          When memory usage reaches 100%, publishers will be blocked.
+          Consider increasing memory limits or reducing message backlog.
+
+    - alert: RabbitmqMemoryAlarm
+      expr: |
+        rabbitmq_node_mem_alarm == 1
+      for: 1m
+      labels:
+        severity: critical
+      annotations:
+        summary: RabbitMQ memory alarm triggered (instance {{ $labels.instance }})
+        description: |
+          RabbitMQ memory alarm is active on node {{ $labels.node }}
+          VALUE = {{ $value }}
+          LABELS = {{ $labels }}
+          
+          Publishers are currently blocked. Message publishing is halted.
+          Reduce message backlog or increase memory limits.
+
+    # Disk space alerts
+    - alert: RabbitmqDiskSpaceLow
+      expr: |
+        rabbitmq_disk_space_available_bytes / 1024 / 1024 < 5120
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: RabbitMQ disk space low (instance {{ $labels.instance }})
+        description: |
+          RabbitMQ node {{ $labels.node }} has less than 5GB disk space available
+          VALUE = {{ $value }} MB
+          LABELS = {{ $labels }}
+          
+          When disk space is critically low, publishers will be blocked.
+          Consider increasing disk space or reducing message backlog.
+
+    - alert: RabbitmqDiskAlarm
+      expr: |
+        rabbitmq_node_disk_free_alarm == 1
+      for: 1m
+      labels:
+        severity: critical
+      annotations:
+        summary: RabbitMQ disk alarm triggered (instance {{ $labels.instance }})
+        description: |
+          RabbitMQ disk alarm is active on node {{ $labels.node }}
+          VALUE = {{ $value }}
+          LABELS = {{ $labels }}
+          
+          Publishers are currently blocked. Message publishing is halted.
+          Free up disk space or increase disk space limits.
+
+    # Resource usage alerts
+    - alert: RabbitmqFileDescriptorsNearLimit
+      expr: |
+        rabbitmq_fd_used / rabbitmq_fd_total > 0.8
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: RabbitMQ file descriptors near limit (instance {{ $labels.instance }})
+        description: |
+          RabbitMQ instance {{ $labels.instance }} is using more than 80% of file descriptors
+          VALUE = {{ $value }}
+          LABELS = {{ $labels }}
+          
+          When this value reaches 100%, RabbitMQ will not be able to establish new connections.
+          Consider reducing the number of connections or increasing the file descriptor limit.
+
+    - alert: RabbitmqTCPSocketsNearLimit
+      expr: |
+        rabbitmq_sockets_used / rabbitmq_sockets_total > 0.8
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: RabbitMQ TCP sockets near limit (instance {{ $labels.instance }})
+        description: |
+          RabbitMQ instance {{ $labels.instance }} is using more than 80% of TCP sockets
+          VALUE = {{ $value }}
+          LABELS = {{ $labels }}
+          
+          When this value reaches 100%, new connections will not be accepted.
+          Client libraries, peer nodes and CLI tools will not be able to connect.
+          Consider reducing the number of connections or increasing the socket limit.
+
+    # Container and volume alerts
+    - alert: ContainerRestarts
+      expr: |
+        increase(kube_pod_container_status_restarts_total[10m]) * on(namespace, pod, container) group_left(rabbitmq_cluster) max(rabbitmq_identity_info) by (namespace, pod, container, rabbitmq_cluster)
+        >=
+        1
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: RabbitMQ container restarts (instance {{ $labels.instance }})
+        description: |
+          Over the last 10 minutes, container {{ $labels.container }}
+          restarted {{ $value | printf "%.0f" }} times in pod {{ $labels.pod }} of RabbitMQ cluster
+          {{ $labels.rabbitmq_cluster }} in namespace {{ $labels.namespace }}.
+          
+          Investigate why the container is restarting. Check logs for errors:
+          kubectl -n {{ $labels.namespace }} logs {{ $labels.pod }} -c {{ $labels.container }}
+
+    - alert: PersistentVolumeMissing
+      expr: |
+        kube_persistentvolumeclaim_status_phase{phase="Bound"} * on (namespace, persistentvolumeclaim) group_left(label_app_kubernetes_io_name) kube_persistentvolumeclaim_labels{label_app_kubernetes_io_component="rabbitmq"}
+        ==
+        0
+      for: 10m
+      labels:
+        severity: critical
+      annotations:
+        summary: RabbitMQ persistent volume missing (instance {{ $labels.instance }})
+        description: |
+          PersistentVolumeClaim {{ $labels.persistentvolumeclaim }} of
+          RabbitMQ cluster {{ $labels.label_app_kubernetes_io_name }} in namespace
+          {{ $labels.namespace }} is not bound.
+          
+          This will prevent RabbitMQ from starting properly and may cause data loss.
+          Check the status of the PVC and underlying storage provider:
+          kubectl -n {{ $labels.namespace }} describe pvc {{ $labels.persistentvolumeclaim }}
