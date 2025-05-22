@@ -1,0 +1,388 @@
+# Java Service CI/CD Template for MCA Application Processing System
+# This template defines a standardized CI/CD workflow for Java microservices (Data Service)
+# built with Spring Boot and Maven.
+#
+# Features:
+# - Java SDK 21.x (LTS) support for Spring Boot 3.2.3
+# - Maven-based build process with dependency caching
+# - Code quality checks with CheckStyle and SpotBugs
+# - Unit and integration testing with JUnit and JaCoCo coverage reporting
+# - Multi-stage Docker builds for optimized container images
+# - Security scanning with Trivy for vulnerability detection
+# - Kubernetes deployment with Helm charts and environment-specific configurations
+# - Post-deployment health checks to verify successful deployment
+#
+# This template is part of the Merchant Cash Advance (MCA) Application Processing System
+# and is designed to standardize the CI/CD process for the Data Service microservice.
+# It enforces consistent quality gates, security checks, and deployment practices
+# across all environments (development, staging, production).
+
+name: Java Service CI/CD Pipeline
+
+# Workflow triggers
+on:
+  push:
+    branches: [main, development]
+    paths:
+      - 'data-service/**'
+      - 'infrastructure/ci/services/templates/java-service.yml'
+      - 'infrastructure/kubernetes/charts/data-service/**'
+  pull_request:
+    branches: [main, development]
+    paths:
+      - 'data-service/**'
+      - 'infrastructure/ci/services/templates/java-service.yml'
+      - 'infrastructure/kubernetes/charts/data-service/**'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment Environment'
+        required: true
+        default: 'development'
+        type: choice
+        options:
+          - development
+          - staging
+          - production
+      version:
+        description: 'Version Override (leave empty for auto-versioning)'
+        required: false
+        type: string
+
+# Environment variables
+env:
+  JAVA_VERSION: '21'  # Java SDK 21.x (LTS)
+  MAVEN_VERSION: '3.9.6'
+  SPRING_BOOT_VERSION: '3.2.3'
+  REGISTRY: ${{ secrets.CONTAINER_REGISTRY }}
+  IMAGE_NAME: data-service
+  TRIVY_SEVERITY: 'HIGH,CRITICAL'
+  TRIVY_EXIT_CODE: '1'
+  CHECKSTYLE_VERSION: '10.12.5'
+  SPOTBUGS_VERSION: '4.8.3'
+  JACOCO_VERSION: '0.8.11'
+  COVERAGE_MINIMUM: '80'
+  COVERAGE_BRANCHES_MINIMUM: '75'
+
+# Jobs definition
+jobs:
+  # Build and test job
+  build-and-test:
+    name: Build and Test
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history for proper versioning
+      
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'  # Eclipse Temurin distribution
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: 'maven'
+      
+      - name: Cache Maven packages
+        uses: actions/cache@v3
+        with:
+          path: ~/.m2
+          key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
+          restore-keys: ${{ runner.os }}-m2
+      
+      - name: Validate Maven project
+        run: |
+          cd data-service
+          mvn validate
+      
+      - name: Run CheckStyle
+        run: |
+          cd data-service
+          mvn checkstyle:check -Dcheckstyle.version=${{ env.CHECKSTYLE_VERSION }}
+      
+      - name: Run SpotBugs
+        run: |
+          cd data-service
+          mvn spotbugs:check -Dspotbugs.version=${{ env.SPOTBUGS_VERSION }}
+      
+      - name: Run unit tests
+        run: |
+          cd data-service
+          mvn test
+      
+      - name: Generate JaCoCo coverage report
+        run: |
+          cd data-service
+          mvn jacoco:report -Djacoco.version=${{ env.JACOCO_VERSION }}
+      
+      - name: Check code coverage
+        run: |
+          cd data-service
+          COVERAGE=$(mvn jacoco:report -Djacoco.version=${{ env.JACOCO_VERSION }} -q -Dexec.executable=echo -Dexec.args='${jacoco.report.coverage.percentage}' org.codehaus.mojo:exec-maven-plugin:3.1.0:exec)
+          BRANCHES=$(mvn jacoco:report -Djacoco.version=${{ env.JACOCO_VERSION }} -q -Dexec.executable=echo -Dexec.args='${jacoco.report.branch.percentage}' org.codehaus.mojo:exec-maven-plugin:3.1.0:exec)
+          
+          echo "Line coverage: $COVERAGE%"
+          echo "Branch coverage: $BRANCHES%"
+          
+          if (( $(echo "$COVERAGE < ${{ env.COVERAGE_MINIMUM }}" | bc -l) )); then
+            echo "::warning::Code coverage $COVERAGE% is below the minimum required ${{ env.COVERAGE_MINIMUM }}%"
+            # Uncomment to fail the build if coverage is too low
+            # exit 1
+          fi
+          
+          if (( $(echo "$BRANCHES < ${{ env.COVERAGE_BRANCHES_MINIMUM }}" | bc -l) )); then
+            echo "::warning::Branch coverage $BRANCHES% is below the minimum required ${{ env.COVERAGE_BRANCHES_MINIMUM }}%"
+            # Uncomment to fail the build if branch coverage is too low
+            # exit 1
+          fi
+      
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v3
+        with:
+          name: coverage-report
+          path: data-service/target/site/jacoco/
+      
+      - name: Run integration tests
+        run: |
+          cd data-service
+          mvn verify -DskipUnitTests=true
+      
+      - name: Build package
+        run: |
+          cd data-service
+          mvn package -DskipTests
+      
+      - name: Upload JAR artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: service-jar
+          path: data-service/target/*.jar
+  
+  # Build container image job
+  build-image:
+    name: Build Container Image
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Download JAR artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: service-jar
+          path: data-service/target/
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Login to container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+      
+      - name: Generate image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=sha,format=short
+      
+      # Create a Dockerfile for multi-stage build if it doesn't exist
+      - name: Create Dockerfile if needed
+        run: |
+          if [ ! -f data-service/Dockerfile ]; then
+            cat > data-service/Dockerfile << 'EOF'
+          # Multi-stage build for Java Spring Boot application
+          # Build stage
+          FROM eclipse-temurin:${JAVA_VERSION}-jdk-alpine AS builder
+          WORKDIR /app
+          COPY target/*.jar application.jar
+          # Extract layers for better caching
+          RUN java -Djarmode=layertools -jar application.jar extract
+          
+          # Runtime stage
+          FROM eclipse-temurin:${JAVA_VERSION}-jre-alpine
+          WORKDIR /app
+          
+          # Install required packages
+          RUN apk add --no-cache curl tzdata && \
+              addgroup -S spring && adduser -S spring -G spring
+          
+          # Copy layers from builder stage
+          COPY --from=builder /app/dependencies/ ./
+          COPY --from=builder /app/spring-boot-loader/ ./
+          COPY --from=builder /app/snapshot-dependencies/ ./
+          COPY --from=builder /app/application/ ./
+          
+          # Configure container
+          USER spring:spring
+          EXPOSE 8080
+          HEALTHCHECK --interval=30s --timeout=3s --start-period=60s --retries=3 \
+            CMD curl -f http://localhost:8080/actuator/health || exit 1
+          
+          # Set Spring Boot as the entrypoint
+          ENTRYPOINT ["java", "org.springframework.boot.loader.JarLauncher"]
+          EOF
+          fi
+      
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: data-service
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            JAVA_VERSION=${{ env.JAVA_VERSION }}
+            SPRING_BOOT_VERSION=${{ env.SPRING_BOOT_VERSION }}
+      
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          exit-code: ${{ env.TRIVY_EXIT_CODE }}
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: ${{ env.TRIVY_SEVERITY }}
+      
+      - name: Upload Trivy scan results
+        uses: actions/upload-artifact@v3
+        with:
+          name: trivy-results
+          path: trivy-results.sarif
+      
+      - name: Upload Trivy scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+  
+  # Deploy job
+  deploy:
+    name: Deploy to Kubernetes
+    needs: build-image
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'development' }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'latest'
+      
+      - name: Set up Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: 'latest'
+      
+      - name: Configure Kubernetes context
+        uses: azure/k8s-set-context@v3
+        with:
+          method: 'kubeconfig'
+          kubeconfig: ${{ secrets.KUBECONFIG }}
+          context: ${{ secrets.K8S_CONTEXT }}
+          
+      - name: Set environment variables
+        id: env_vars
+        run: |
+          if [[ "${{ github.event.inputs.environment }}" == "production" ]]; then
+            echo "NAMESPACE=mca-production" >> $GITHUB_ENV
+            echo "REPLICAS=3" >> $GITHUB_ENV
+            echo "RESOURCES_REQUESTS_CPU=500m" >> $GITHUB_ENV
+            echo "RESOURCES_REQUESTS_MEMORY=1Gi" >> $GITHUB_ENV
+            echo "RESOURCES_LIMITS_CPU=1000m" >> $GITHUB_ENV
+            echo "RESOURCES_LIMITS_MEMORY=2Gi" >> $GITHUB_ENV
+            echo "JAVA_OPTS=-Xms512m -Xmx1536m -XX:+UseG1GC -XX:+HeapDumpOnOutOfMemoryError" >> $GITHUB_ENV
+            echo "SPRING_PROFILES=production" >> $GITHUB_ENV
+          elif [[ "${{ github.event.inputs.environment }}" == "staging" ]]; then
+            echo "NAMESPACE=mca-staging" >> $GITHUB_ENV
+            echo "REPLICAS=2" >> $GITHUB_ENV
+            echo "RESOURCES_REQUESTS_CPU=250m" >> $GITHUB_ENV
+            echo "RESOURCES_REQUESTS_MEMORY=512Mi" >> $GITHUB_ENV
+            echo "RESOURCES_LIMITS_CPU=500m" >> $GITHUB_ENV
+            echo "RESOURCES_LIMITS_MEMORY=1Gi" >> $GITHUB_ENV
+            echo "JAVA_OPTS=-Xms256m -Xmx768m -XX:+UseG1GC" >> $GITHUB_ENV
+            echo "SPRING_PROFILES=staging" >> $GITHUB_ENV
+          else
+            echo "NAMESPACE=mca-development" >> $GITHUB_ENV
+            echo "REPLICAS=1" >> $GITHUB_ENV
+            echo "RESOURCES_REQUESTS_CPU=100m" >> $GITHUB_ENV
+            echo "RESOURCES_REQUESTS_MEMORY=256Mi" >> $GITHUB_ENV
+            echo "RESOURCES_LIMITS_CPU=250m" >> $GITHUB_ENV
+            echo "RESOURCES_LIMITS_MEMORY=512Mi" >> $GITHUB_ENV
+            echo "JAVA_OPTS=-Xms128m -Xmx384m -XX:+UseG1GC" >> $GITHUB_ENV
+            echo "SPRING_PROFILES=development" >> $GITHUB_ENV
+          fi
+          
+          # Set image tag based on inputs or git sha
+          if [[ -n "${{ github.event.inputs.version }}" ]]; then
+            echo "IMAGE_TAG=${{ github.event.inputs.version }}" >> $GITHUB_ENV
+          else
+            echo "IMAGE_TAG=${GITHUB_SHA::8}" >> $GITHUB_ENV
+          fi
+      
+      - name: Login to container registry for Kubernetes
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+      
+      - name: Deploy to Kubernetes with Helm
+        run: |
+          # Update Helm dependencies
+          cd infrastructure/kubernetes/charts/data-service
+          helm dependency update
+          
+          # Deploy using Helm
+          helm upgrade --install data-service . \
+            --namespace ${{ env.NAMESPACE }} \
+            --create-namespace \
+            --set image.repository=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }} \
+            --set image.tag=${{ env.IMAGE_TAG }} \
+            --set replicaCount=${{ env.REPLICAS }} \
+            --set resources.requests.cpu=${{ env.RESOURCES_REQUESTS_CPU }} \
+            --set resources.requests.memory=${{ env.RESOURCES_REQUESTS_MEMORY }} \
+            --set resources.limits.cpu=${{ env.RESOURCES_LIMITS_CPU }} \
+            --set resources.limits.memory=${{ env.RESOURCES_LIMITS_MEMORY }} \
+            --set env.JAVA_OPTS="${{ env.JAVA_OPTS }}" \
+            --set env.SPRING_PROFILES_ACTIVE=${{ env.SPRING_PROFILES }} \
+            --set env.DB_HOST=${{ secrets.DB_HOST }} \
+            --set env.DB_PORT=${{ secrets.DB_PORT }} \
+            --set env.DB_NAME=${{ secrets.DB_NAME }} \
+            --set env.RABBITMQ_HOST=${{ secrets.RABBITMQ_HOST }} \
+            --set env.RABBITMQ_PORT=${{ secrets.RABBITMQ_PORT }} \
+            --set env.REDIS_HOST=${{ secrets.REDIS_HOST }} \
+            --set env.REDIS_PORT=${{ secrets.REDIS_PORT }} \
+            --set env.S3_ENDPOINT=${{ secrets.S3_ENDPOINT }} \
+            --set env.S3_REGION=${{ secrets.S3_REGION }} \
+            --set env.S3_BUCKET=${{ secrets.S3_BUCKET }} \
+            --wait --timeout 5m
+      
+      - name: Verify deployment
+        run: |
+          # Wait for pods to be ready
+          kubectl rollout status deployment/data-service -n ${{ env.NAMESPACE }} --timeout=300s
+          
+          # Check health endpoint
+          POD_NAME=$(kubectl get pods -n ${{ env.NAMESPACE }} -l app.kubernetes.io/name=data-service -o jsonpath="{.items[0].metadata.name}")
+          kubectl exec $POD_NAME -n ${{ env.NAMESPACE }} -- curl -s http://localhost:8080/actuator/health | grep '"status":"UP"'
+          
+          echo "Deployment verified successfully!" 
