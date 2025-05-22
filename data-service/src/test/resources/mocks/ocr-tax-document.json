@@ -1,0 +1,501 @@
+{
+  "documentId": "tax-doc-12345",
+  "documentType": "tax_return",
+  "documentSubtype": "1040",
+  "processingTimestamp": "2025-05-21T14:32:18.456Z",
+  "processingDuration": 2.34,
+  "sourceDocumentPath": "s3://mca-documents-staging/applications/APP-2023-05-21-00123/tax_return_2024.pdf",
+  "processingStatus": "completed",
+  "ocrEngine": "tensorflow-v2.8",
+  "ocrModelVersion": "tax-document-extractor-v3.2.1",
+  "pageCount": 4,
+  "metadata": {
+    "taxYear": "2024",
+    "formType": "1040",
+    "documentQuality": "high",
+    "containsHandwrittenText": false,
+    "containsSignature": true,
+    "signatureDetected": true,
+    "signatureLocation": {
+      "page": 4,
+      "boundingBox": {
+        "x": 320,
+        "y": 1750,
+        "width": 200,
+        "height": 50
+      }
+    }
+  },
+  "extractedData": {
+    "taxpayerInfo": {
+      "firstName": {
+        "value": "John",
+        "confidence": 0.98,
+        "boundingBox": {
+          "page": 1,
+          "x": 120,
+          "y": 240,
+          "width": 80,
+          "height": 25
+        }
+      },
+      "lastName": {
+        "value": "Smith",
+        "confidence": 0.99,
+        "boundingBox": {
+          "page": 1,
+          "x": 220,
+          "y": 240,
+          "width": 90,
+          "height": 25
+        }
+      },
+      "ssn": {
+        "value": "***-**-1234",
+        "confidence": 0.97,
+        "boundingBox": {
+          "page": 1,
+          "x": 450,
+          "y": 240,
+          "width": 120,
+          "height": 25
+        }
+      },
+      "filingStatus": {
+        "value": "married_filing_jointly",
+        "confidence": 0.95,
+        "boundingBox": {
+          "page": 1,
+          "x": 200,
+          "y": 320,
+          "width": 150,
+          "height": 25
+        }
+      },
+      "address": {
+        "street": {
+          "value": "123 Main Street",
+          "confidence": 0.96,
+          "boundingBox": {
+            "page": 1,
+            "x": 120,
+            "y": 280,
+            "width": 200,
+            "height": 25
+          }
+        },
+        "city": {
+          "value": "Springfield",
+          "confidence": 0.97,
+          "boundingBox": {
+            "page": 1,
+            "x": 120,
+            "y": 310,
+            "width": 150,
+            "height": 25
+          }
+        },
+        "state": {
+          "value": "IL",
+          "confidence": 0.99,
+          "boundingBox": {
+            "page": 1,
+            "x": 280,
+            "y": 310,
+            "width": 30,
+            "height": 25
+          }
+        },
+        "zipCode": {
+          "value": "62704",
+          "confidence": 0.98,
+          "boundingBox": {
+            "page": 1,
+            "x": 320,
+            "y": 310,
+            "width": 80,
+            "height": 25
+          }
+        }
+      },
+      "spouseFirstName": {
+        "value": "Jane",
+        "confidence": 0.97,
+        "boundingBox": {
+          "page": 1,
+          "x": 120,
+          "y": 380,
+          "width": 80,
+          "height": 25
+        }
+      },
+      "spouseLastName": {
+        "value": "Smith",
+        "confidence": 0.99,
+        "boundingBox": {
+          "page": 1,
+          "x": 220,
+          "y": 380,
+          "width": 90,
+          "height": 25
+        }
+      },
+      "spouseSsn": {
+        "value": "***-**-5678",
+        "confidence": 0.96,
+        "boundingBox": {
+          "page": 1,
+          "x": 450,
+          "y": 380,
+          "width": 120,
+          "height": 25
+        }
+      }
+    },
+    "incomeData": {
+      "wagesAndSalaries": {
+        "value": "128500.00",
+        "confidence": 0.99,
+        "boundingBox": {
+          "page": 1,
+          "x": 520,
+          "y": 520,
+          "width": 100,
+          "height": 25
+        }
+      },
+      "interestIncome": {
+        "value": "1250.75",
+        "confidence": 0.98,
+        "boundingBox": {
+          "page": 1,
+          "x": 520,
+          "y": 550,
+          "width": 100,
+          "height": 25
+        }
+      },
+      "dividendIncome": {
+        "value": "3420.50",
+        "confidence": 0.97,
+        "boundingBox": {
+          "page": 1,
+          "x": 520,
+          "y": 580,
+          "width": 100,
+          "height": 25
+        }
+      },
+      "businessIncome": {
+        "value": "22750.00",
+        "confidence": 0.95,
+        "boundingBox": {
+          "page": 1,
+          "x": 520,
+          "y": 610,
+          "width": 100,
+          "height": 25
+        }
+      },
+      "capitalGains": {
+        "value": "8500.25",
+        "confidence": 0.96,
+        "boundingBox": {
+          "page": 2,
+          "x": 520,
+          "y": 120,
+          "width": 100,
+          "height": 25
+        }
+      },
+      "rentalIncome": {
+        "value": "12000.00",
+        "confidence": 0.94,
+        "boundingBox": {
+          "page": 2,
+          "x": 520,
+          "y": 150,
+          "width": 100,
+          "height": 25
+        }
+      },
+      "totalIncome": {
+        "value": "176421.50",
+        "confidence": 0.99,
+        "boundingBox": {
+          "page": 2,
+          "x": 520,
+          "y": 250,
+          "width": 100,
+          "height": 25
+        }
+      },
+      "adjustedGrossIncome": {
+        "value": "168750.25",
+        "confidence": 0.98,
+        "boundingBox": {
+          "page": 2,
+          "x": 520,
+          "y": 350,
+          "width": 100,
+          "height": 25
+        }
+      }
+    },
+    "deductionsData": {
+      "standardDeduction": {
+        "value": "25900.00",
+        "confidence": 0.99,
+        "boundingBox": {
+          "page": 2,
+          "x": 520,
+          "y": 450,
+          "width": 100,
+          "height": 25
+        }
+      },
+      "itemizedDeductions": {
+        "mortgageInterest": {
+          "value": "12500.00",
+          "confidence": 0.97,
+          "boundingBox": {
+            "page": 2,
+            "x": 520,
+            "y": 520,
+            "width": 100,
+            "height": 25
+          }
+        },
+        "charitableContributions": {
+          "value": "4500.00",
+          "confidence": 0.96,
+          "boundingBox": {
+            "page": 2,
+            "x": 520,
+            "y": 550,
+            "width": 100,
+            "height": 25
+          }
+        },
+        "stateTaxes": {
+          "value": "8750.00",
+          "confidence": 0.95,
+          "boundingBox": {
+            "page": 2,
+            "x": 520,
+            "y": 580,
+            "width": 100,
+            "height": 25
+          }
+        },
+        "medicalExpenses": {
+          "value": "3200.00",
+          "confidence": 0.93,
+          "boundingBox": {
+            "page": 2,
+            "x": 520,
+            "y": 610,
+            "width": 100,
+            "height": 25
+          }
+        },
+        "totalItemizedDeductions": {
+          "value": "28950.00",
+          "confidence": 0.98,
+          "boundingBox": {
+            "page": 2,
+            "x": 520,
+            "y": 650,
+            "width": 100,
+            "height": 25
+          }
+        }
+      },
+      "deductionMethod": {
+        "value": "itemized",
+        "confidence": 0.97,
+        "boundingBox": {
+          "page": 2,
+          "x": 300,
+          "y": 700,
+          "width": 150,
+          "height": 25
+        }
+      },
+      "qualifiedBusinessDeduction": {
+        "value": "4550.00",
+        "confidence": 0.94,
+        "boundingBox": {
+          "page": 3,
+          "x": 520,
+          "y": 120,
+          "width": 100,
+          "height": 25
+        }
+      }
+    },
+    "taxData": {
+      "taxableIncome": {
+        "value": "135250.25",
+        "confidence": 0.98,
+        "boundingBox": {
+          "page": 3,
+          "x": 520,
+          "y": 250,
+          "width": 100,
+          "height": 25
+        }
+      },
+      "federalTax": {
+        "value": "27050.05",
+        "confidence": 0.97,
+        "boundingBox": {
+          "page": 3,
+          "x": 520,
+          "y": 350,
+          "width": 100,
+          "height": 25
+        }
+      },
+      "selfEmploymentTax": {
+        "value": "3210.75",
+        "confidence": 0.95,
+        "boundingBox": {
+          "page": 3,
+          "x": 520,
+          "y": 380,
+          "width": 100,
+          "height": 25
+        }
+      },
+      "totalTax": {
+        "value": "30260.80",
+        "confidence": 0.99,
+        "boundingBox": {
+          "page": 3,
+          "x": 520,
+          "y": 450,
+          "width": 100,
+          "height": 25
+        }
+      }
+    },
+    "paymentsAndCredits": {
+      "withholdingTax": {
+        "value": "25750.00",
+        "confidence": 0.98,
+        "boundingBox": {
+          "page": 3,
+          "x": 520,
+          "y": 520,
+          "width": 100,
+          "height": 25
+        }
+      },
+      "estimatedTaxPayments": {
+        "value": "4000.00",
+        "confidence": 0.96,
+        "boundingBox": {
+          "page": 3,
+          "x": 520,
+          "y": 550,
+          "width": 100,
+          "height": 25
+        }
+      },
+      "childTaxCredit": {
+        "value": "2000.00",
+        "confidence": 0.97,
+        "boundingBox": {
+          "page": 3,
+          "x": 520,
+          "y": 580,
+          "width": 100,
+          "height": 25
+        }
+      },
+      "earnedIncomeCredit": {
+        "value": "0.00",
+        "confidence": 0.99,
+        "boundingBox": {
+          "page": 3,
+          "x": 520,
+          "y": 610,
+          "width": 100,
+          "height": 25
+        }
+      },
+      "totalPaymentsAndCredits": {
+        "value": "31750.00",
+        "confidence": 0.98,
+        "boundingBox": {
+          "page": 3,
+          "x": 520,
+          "y": 650,
+          "width": 100,
+          "height": 25
+        }
+      }
+    },
+    "refundOrAmountDue": {
+      "refundAmount": {
+        "value": "1489.20",
+        "confidence": 0.99,
+        "boundingBox": {
+          "page": 4,
+          "x": 520,
+          "y": 120,
+          "width": 100,
+          "height": 25
+        }
+      },
+      "amountDue": {
+        "value": "0.00",
+        "confidence": 0.99,
+        "boundingBox": {
+          "page": 4,
+          "x": 520,
+          "y": 180,
+          "width": 100,
+          "height": 25
+        }
+      }
+    }
+  },
+  "processingStats": {
+    "characterCount": 12450,
+    "wordCount": 2340,
+    "fieldCount": 42,
+    "extractedFieldCount": 42,
+    "lowConfidenceFieldCount": 0,
+    "averageConfidence": 0.97,
+    "processingTimeMs": 2340
+  },
+  "validationResults": {
+    "status": "passed",
+    "validationChecks": [
+      {
+        "check": "document_completeness",
+        "status": "passed",
+        "message": "All required pages present"
+      },
+      {
+        "check": "signature_verification",
+        "status": "passed",
+        "message": "Signature detected on page 4"
+      },
+      {
+        "check": "mathematical_consistency",
+        "status": "passed",
+        "message": "All calculations are consistent"
+      },
+      {
+        "check": "field_completeness",
+        "status": "passed",
+        "message": "All required fields extracted"
+      }
+    ]
+  },
+  "warnings": [],
+  "errors": []
+}
