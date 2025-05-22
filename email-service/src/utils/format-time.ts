@@ -1,25 +1,23 @@
-/**
- * Date and time formatting utilities for the Email Service
- * 
- * This module provides functions for ISO timestamp generation, RFC 2822 formatting,
- * date comparison, duration calculation, and relative time formatting. It's essential
- * for consistent timestamp handling in logs, message publishing, and email metadata extraction.
- */
-
 import type { Dayjs, OpUnitType } from 'dayjs';
-import type { IDateValue } from '../types/common';
 
 import dayjs from 'dayjs';
-import utc from 'dayjs/plugin/utc';
-import timezone from 'dayjs/plugin/timezone';
 import duration from 'dayjs/plugin/duration';
 import relativeTime from 'dayjs/plugin/relativeTime';
+import utc from 'dayjs/plugin/utc';
+import timezone from 'dayjs/plugin/timezone';
 import isSameOrBefore from 'dayjs/plugin/isSameOrBefore';
 import isSameOrAfter from 'dayjs/plugin/isSameOrAfter';
 
 // ----------------------------------------------------------------------
 
-// Extend dayjs with required plugins
+/**
+ * Configure dayjs plugins for the Email Service
+ * - utc: For handling UTC timestamps
+ * - timezone: For consistent timezone representation
+ * - duration: For calculating time differences
+ * - relativeTime: For human-readable time differences
+ * - isSameOrBefore/isSameOrAfter: For date comparisons
+ */
 dayjs.extend(utc);
 dayjs.extend(timezone);
 dayjs.extend(duration);
@@ -27,13 +25,13 @@ dayjs.extend(relativeTime);
 dayjs.extend(isSameOrBefore);
 dayjs.extend(isSameOrAfter);
 
-// Set default timezone to UTC for server-side operations
+// Set default timezone to UTC for consistent server-side processing
 dayjs.tz.setDefault('UTC');
 
 // ----------------------------------------------------------------------
 
 /**
- * Type for date input values that can be parsed by dayjs
+ * Type definition for date inputs that can be processed by the formatting functions
  */
 export type DateInput = Dayjs | Date | string | number | null | undefined;
 
@@ -41,30 +39,22 @@ export type DateInput = Dayjs | Date | string | number | null | undefined;
  * Email-specific date formats
  */
 export const emailDateFormats = {
-  /** ISO 8601 format (2023-04-17T12:00:00Z) */
-  iso8601: 'YYYY-MM-DDTHH:mm:ss[Z]',
-  
-  /** RFC 2822 format for email headers (Mon, 17 Apr 2023 12:00:00 +0000) */
+  /** RFC 2822 format used in email headers */
   rfc2822: 'ddd, DD MMM YYYY HH:mm:ss ZZ',
-  
-  /** ISO 8601 with milliseconds (2023-04-17T12:00:00.000Z) */
-  isoWithMs: 'YYYY-MM-DDTHH:mm:ss.SSS[Z]',
-  
-  /** Simple date format (2023-04-17) */
-  simpleDate: 'YYYY-MM-DD',
-  
-  /** Simple time format (12:00:00) */
-  simpleTime: 'HH:mm:ss',
-  
-  /** Log timestamp format (2023-04-17 12:00:00.000) */
+  /** ISO 8601 format for standardized date exchange */
+  iso8601: 'YYYY-MM-DDTHH:mm:ss.SSSZ',
+  /** ISO 8601 date only */
+  isoDate: 'YYYY-MM-DD',
+  /** ISO 8601 time only */
+  isoTime: 'HH:mm:ss.SSSZ',
+  /** Compact timestamp for logging */
   logTimestamp: 'YYYY-MM-DD HH:mm:ss.SSS',
 };
 
 /**
- * Checks if a date value is valid
- * 
+ * Validates if a date input is valid
  * @param date - The date to validate
- * @returns True if the date is valid, false otherwise
+ * @returns boolean indicating if the date is valid
  */
 export const isValidDate = (date: DateInput): boolean =>
   date !== null && date !== undefined && dayjs(date).isValid();
@@ -72,233 +62,201 @@ export const isValidDate = (date: DateInput): boolean =>
 // ----------------------------------------------------------------------
 
 /**
- * Creates a standardized date value object with ISO string and timestamp
- * 
- * @param date - The date to format (defaults to current time)
- * @returns An IDateValue object with ISO string and timestamp
+ * Returns the current date and time in ISO 8601 format
+ * @returns ISO 8601 formatted current timestamp
  */
-export function createDateValue(date: DateInput = new Date()): IDateValue {
-  if (!isValidDate(date)) {
-    throw new Error('Invalid date provided to createDateValue');
-  }
-  
-  const dayjsDate = dayjs(date).utc();
-  
-  return {
-    iso: dayjsDate.format(),
-    timestamp: dayjsDate.valueOf(),
-  };
+export function getCurrentISOTimestamp(): string {
+  return dayjs().toISOString();
 }
 
 /**
- * Gets the current time as an IDateValue
- * 
- * @returns Current time as IDateValue
+ * Returns the current date and time in RFC 2822 format (email header format)
+ * @returns RFC 2822 formatted current timestamp
  */
-export function getCurrentTime(): IDateValue {
-  return createDateValue(new Date());
+export function getCurrentRFC2822Timestamp(): string {
+  return dayjs().format(emailDateFormats.rfc2822);
 }
+
+/**
+ * Returns the current date and time in a format suitable for logging
+ * @returns Formatted timestamp for logging
+ */
+export function getLogTimestamp(): string {
+  return dayjs().format(emailDateFormats.logTimestamp);
+}
+
+// ----------------------------------------------------------------------
 
 /**
  * Formats a date in ISO 8601 format
- * 
  * @param date - The date to format
- * @param withMs - Whether to include milliseconds
- * @returns ISO 8601 formatted date string
+ * @returns ISO 8601 formatted date string or 'Invalid date' if input is invalid
  */
-export function formatISODate(date: DateInput, withMs = false): string {
+export function formatISO(date: DateInput): string {
   if (!isValidDate(date)) {
-    throw new Error('Invalid date provided to formatISODate');
+    return 'Invalid date';
   }
-  
-  const format = withMs ? emailDateFormats.isoWithMs : emailDateFormats.iso8601;
-  return dayjs(date).utc().format(format);
+  return dayjs(date).toISOString();
 }
 
 /**
- * Formats a date in RFC 2822 format for email headers
- * 
+ * Formats a date in RFC 2822 format (used in email headers)
  * @param date - The date to format
- * @returns RFC 2822 formatted date string
+ * @returns RFC 2822 formatted date string or 'Invalid date' if input is invalid
  */
-export function formatRFC2822Date(date: DateInput): string {
+export function formatRFC2822(date: DateInput): string {
   if (!isValidDate(date)) {
-    throw new Error('Invalid date provided to formatRFC2822Date');
+    return 'Invalid date';
   }
-  
-  return dayjs(date).utc().format(emailDateFormats.rfc2822);
+  return dayjs(date).format(emailDateFormats.rfc2822);
 }
 
 /**
- * Formats a date for log entries
- * 
+ * Formats a date with a custom format pattern
  * @param date - The date to format
- * @returns Formatted date string for logs
+ * @param format - Optional custom format pattern
+ * @returns Formatted date string or 'Invalid date' if input is invalid
  */
-export function formatLogDate(date: DateInput = new Date()): string {
+export function formatDate(date: DateInput, format?: string): string {
   if (!isValidDate(date)) {
-    throw new Error('Invalid date provided to formatLogDate');
+    return 'Invalid date';
   }
-  
-  return dayjs(date).utc().format(emailDateFormats.logTimestamp);
+  return dayjs(date).format(format || emailDateFormats.isoDate);
+}
+
+// ----------------------------------------------------------------------
+
+/**
+ * Parses an email header date string (RFC 2822 format)
+ * @param dateString - The RFC 2822 date string to parse
+ * @returns Dayjs object or null if parsing fails
+ */
+export function parseEmailHeaderDate(dateString: string): Dayjs | null {
+  const parsedDate = dayjs(dateString);
+  return parsedDate.isValid() ? parsedDate : null;
 }
 
 /**
- * Parses an email date header (RFC 2822 format)
- * 
- * @param dateHeader - The date header string from email
- * @returns Parsed date as IDateValue
+ * Converts a date to a Unix timestamp (milliseconds since epoch)
+ * @param date - The date to convert
+ * @returns Unix timestamp in milliseconds or 'Invalid date' if input is invalid
  */
-export function parseEmailDateHeader(dateHeader: string): IDateValue {
-  const parsedDate = dayjs(dateHeader).utc();
-  
-  if (!parsedDate.isValid()) {
-    throw new Error(`Invalid email date header: ${dateHeader}`);
+export function toUnixTimestamp(date: DateInput): number | 'Invalid date' {
+  if (!isValidDate(date)) {
+    return 'Invalid date';
   }
-  
-  return createDateValue(parsedDate);
+  return dayjs(date).valueOf();
 }
 
 // ----------------------------------------------------------------------
 
 /**
  * Calculates the age of a message in milliseconds
- * 
  * @param messageDate - The date of the message
- * @param referenceDate - The reference date (defaults to current time)
- * @returns Age in milliseconds
+ * @returns Age in milliseconds or null if input is invalid
  */
-export function calculateMessageAge(messageDate: DateInput, referenceDate: DateInput = new Date()): number {
-  if (!isValidDate(messageDate) || !isValidDate(referenceDate)) {
-    throw new Error('Invalid date provided to calculateMessageAge');
+export function calculateMessageAge(messageDate: DateInput): number | null {
+  if (!isValidDate(messageDate)) {
+    return null;
   }
-  
-  const start = dayjs(messageDate);
-  const end = dayjs(referenceDate);
-  
-  return end.diff(start);
+  return dayjs().diff(dayjs(messageDate));
 }
 
 /**
- * Formats a duration in milliseconds to a human-readable string
- * 
- * @param milliseconds - Duration in milliseconds
- * @returns Human-readable duration string
+ * Calculates the age of a message in a human-readable format
+ * @param messageDate - The date of the message
+ * @returns Human-readable age (e.g., "2 hours ago") or null if input is invalid
  */
-export function formatDuration(milliseconds: number): string {
-  return dayjs.duration(milliseconds).humanize();
+export function getMessageAgeHumanReadable(messageDate: DateInput): string | null {
+  if (!isValidDate(messageDate)) {
+    return null;
+  }
+  return dayjs(messageDate).fromNow();
 }
 
 /**
- * Calculates processing time between two timestamps
- * 
- * @param startTime - Start timestamp
- * @param endTime - End timestamp (defaults to current time)
- * @returns Processing time in milliseconds
+ * Calculates the processing time between two timestamps
+ * @param startTime - The start timestamp
+ * @param endTime - The end timestamp (defaults to current time if not provided)
+ * @returns Processing time in milliseconds or null if input is invalid
  */
-export function calculateProcessingTime(startTime: DateInput, endTime: DateInput = new Date()): number {
+export function calculateProcessingTime(
+  startTime: DateInput,
+  endTime: DateInput = dayjs()
+): number | null {
   if (!isValidDate(startTime) || !isValidDate(endTime)) {
-    throw new Error('Invalid date provided to calculateProcessingTime');
+    return null;
   }
-  
   return dayjs(endTime).diff(dayjs(startTime));
 }
 
 /**
- * Formats processing time for logging
- * 
- * @param milliseconds - Processing time in milliseconds
- * @returns Formatted processing time string
+ * Formats a duration in milliseconds to a human-readable string
+ * @param milliseconds - Duration in milliseconds
+ * @returns Human-readable duration string (e.g., "2.5s" or "150ms")
  */
-export function formatProcessingTime(milliseconds: number): string {
+export function formatDuration(milliseconds: number): string {
   if (milliseconds < 1000) {
     return `${milliseconds}ms`;
   }
-  
-  return `${(milliseconds / 1000).toFixed(2)}s`;
+  return `${(milliseconds / 1000).toFixed(1)}s`;
 }
 
 // ----------------------------------------------------------------------
 
 /**
  * Checks if a date is before another date
- * 
  * @param date - The date to check
  * @param compareDate - The date to compare against
- * @returns True if date is before compareDate
+ * @returns Boolean indicating if date is before compareDate
  */
 export function isBefore(date: DateInput, compareDate: DateInput): boolean {
   if (!isValidDate(date) || !isValidDate(compareDate)) {
     return false;
   }
-  
   return dayjs(date).isBefore(dayjs(compareDate));
 }
 
 /**
  * Checks if a date is after another date
- * 
  * @param date - The date to check
  * @param compareDate - The date to compare against
- * @returns True if date is after compareDate
+ * @returns Boolean indicating if date is after compareDate
  */
 export function isAfter(date: DateInput, compareDate: DateInput): boolean {
   if (!isValidDate(date) || !isValidDate(compareDate)) {
     return false;
   }
-  
   return dayjs(date).isAfter(dayjs(compareDate));
 }
 
 /**
- * Checks if a date is between two other dates
- * 
+ * Checks if a date is between two other dates (inclusive)
  * @param date - The date to check
  * @param startDate - The start date of the range
  * @param endDate - The end date of the range
- * @param inclusivity - Inclusion of start and end dates ('()' = exclusive, '[]' = inclusive, '[)' = start inclusive, end exclusive)
- * @returns True if date is between startDate and endDate
+ * @returns Boolean indicating if date is between startDate and endDate (inclusive)
  */
 export function isBetween(
   date: DateInput,
   startDate: DateInput,
-  endDate: DateInput,
-  inclusivity: '()' | '[]' | '[)' | '(]' = '[]'
+  endDate: DateInput
 ): boolean {
   if (!isValidDate(date) || !isValidDate(startDate) || !isValidDate(endDate)) {
     return false;
   }
-  
-  const d = dayjs(date);
-  const start = dayjs(startDate);
-  const end = dayjs(endDate);
-  
-  if (inclusivity === '[]') {
-    return d.isSameOrAfter(start) && d.isSameOrBefore(end);
-  }
-  
-  if (inclusivity === '()') {
-    return d.isAfter(start) && d.isBefore(end);
-  }
-  
-  if (inclusivity === '[)') {
-    return d.isSameOrAfter(start) && d.isBefore(end);
-  }
-  
-  if (inclusivity === '(]') {
-    return d.isAfter(start) && d.isSameOrBefore(end);
-  }
-  
-  return false;
+  return (
+    dayjs(date).isSameOrAfter(dayjs(startDate)) &&
+    dayjs(date).isSameOrBefore(dayjs(endDate))
+  );
 }
 
 /**
  * Checks if two dates are the same, optionally comparing only specific units
- * 
  * @param date1 - First date to compare
  * @param date2 - Second date to compare
- * @param unit - Unit to compare (year, month, day, hour, minute, second)
- * @returns True if dates are the same for the specified unit
+ * @param unit - Optional unit to compare (year, month, day, etc.)
+ * @returns Boolean indicating if dates are the same
  */
 export function isSame(
   date1: DateInput,
@@ -308,74 +266,70 @@ export function isSame(
   if (!isValidDate(date1) || !isValidDate(date2)) {
     return false;
   }
-  
-  return dayjs(date1).isSame(dayjs(date2), unit);
+  return unit ? dayjs(date1).isSame(dayjs(date2), unit) : dayjs(date1).isSame(dayjs(date2));
 }
 
 // ----------------------------------------------------------------------
 
 /**
- * Adds a duration to a date
- * 
+ * Adds a specified duration to a date
  * @param date - The base date
  * @param amount - The amount to add
- * @param unit - The unit to add (years, months, days, hours, minutes, seconds)
- * @returns New date with duration added
+ * @param unit - The unit of time to add (days, hours, minutes, etc.)
+ * @returns New date with added duration
  */
-export function addToDate(date: DateInput, amount: number, unit: OpUnitType): IDateValue {
+export function addTime(
+  date: DateInput,
+  amount: number,
+  unit: OpUnitType
+): Dayjs | null {
   if (!isValidDate(date)) {
-    throw new Error('Invalid date provided to addToDate');
+    return null;
   }
-  
-  const newDate = dayjs(date).add(amount, unit);
-  return createDateValue(newDate);
+  return dayjs(date).add(amount, unit);
 }
 
 /**
- * Subtracts a duration from a date
- * 
+ * Subtracts a specified duration from a date
  * @param date - The base date
  * @param amount - The amount to subtract
- * @param unit - The unit to subtract (years, months, days, hours, minutes, seconds)
- * @returns New date with duration subtracted
+ * @param unit - The unit of time to subtract (days, hours, minutes, etc.)
+ * @returns New date with subtracted duration
  */
-export function subtractFromDate(date: DateInput, amount: number, unit: OpUnitType): IDateValue {
+export function subtractTime(
+  date: DateInput,
+  amount: number,
+  unit: OpUnitType
+): Dayjs | null {
   if (!isValidDate(date)) {
-    throw new Error('Invalid date provided to subtractFromDate');
+    return null;
   }
-  
-  const newDate = dayjs(date).subtract(amount, unit);
-  return createDateValue(newDate);
+  return dayjs(date).subtract(amount, unit);
+}
+
+// ----------------------------------------------------------------------
+
+/**
+ * Converts a date to UTC
+ * @param date - The date to convert
+ * @returns Date in UTC
+ */
+export function toUTC(date: DateInput): Dayjs | null {
+  if (!isValidDate(date)) {
+    return null;
+  }
+  return dayjs(date).utc();
 }
 
 /**
- * Gets the start of a time unit for a date
- * 
- * @param date - The date to process
- * @param unit - The unit to get the start of (year, month, day, hour, minute, second)
- * @returns Date at the start of the specified unit
+ * Converts a date to a specific timezone
+ * @param date - The date to convert
+ * @param timezone - The timezone to convert to
+ * @returns Date in the specified timezone
  */
-export function startOf(date: DateInput, unit: OpUnitType): IDateValue {
+export function toTimezone(date: DateInput, timezone: string): Dayjs | null {
   if (!isValidDate(date)) {
-    throw new Error('Invalid date provided to startOf');
+    return null;
   }
-  
-  const newDate = dayjs(date).startOf(unit);
-  return createDateValue(newDate);
-}
-
-/**
- * Gets the end of a time unit for a date
- * 
- * @param date - The date to process
- * @param unit - The unit to get the end of (year, month, day, hour, minute, second)
- * @returns Date at the end of the specified unit
- */
-export function endOf(date: DateInput, unit: OpUnitType): IDateValue {
-  if (!isValidDate(date)) {
-    throw new Error('Invalid date provided to endOf');
-  }
-  
-  const newDate = dayjs(date).endOf(unit);
-  return createDateValue(newDate);
+  return dayjs(date).tz(timezone);
 }
