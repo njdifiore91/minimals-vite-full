@@ -1,175 +1,227 @@
 /**
- * Logger Configuration
+ * Logger configuration for the Notification Service
  * 
- * This file configures the logging system for the Notification Service. It defines log levels,
- * formats, transports, and context enrichment. It enables comprehensive logging for monitoring,
- * debugging, and troubleshooting the service's operation.
+ * This file configures the logging system with different levels, formats, and transports
+ * based on the environment. It enables comprehensive logging for monitoring, debugging,
+ * and troubleshooting the service's operation.
  */
 
-import winston from 'winston';
-import { ILoggerConfig } from '../types/config';
+import * as winston from 'winston';
+import * as path from 'path';
+import * as fs from 'fs';
+import { LogLevel, ILoggerConfig } from '../types/config';
 import { ILogContext } from '../types/common';
 
-// Define log levels with their priorities
-const logLevels = {
-  error: 0,   // Processing failures
-  warn: 1,    // Potential issues
-  info: 2,    // Normal operations
-  debug: 3,   // Troubleshooting (development only)
+// Ensure logs directory exists
+const logDir = path.join(process.cwd(), 'logs');
+if (!fs.existsSync(logDir)) {
+  fs.mkdirSync(logDir, { recursive: true });
+}
+
+/**
+ * Determine the appropriate log level based on the environment
+ * - ERROR: Processing failures (always enabled)
+ * - WARN: Potential issues (always enabled)
+ * - INFO: Normal operations (enabled in staging and production)
+ * - DEBUG: Troubleshooting (only enabled in development)
+ */
+const getLogLevel = (): LogLevel => {
+  const env = process.env.NODE_ENV || 'development';
+  
+  switch (env) {
+    case 'development':
+      return LogLevel.DEBUG;
+    case 'test':
+      return LogLevel.WARN;
+    case 'staging':
+    case 'production':
+    default:
+      return LogLevel.INFO;
+  }
 };
 
-// Define log level colors for console output
-const logColors = {
-  error: 'red',
-  warn: 'yellow',
-  info: 'green',
-  debug: 'blue',
+/**
+ * Create a custom format that includes timestamp, service name, and context information
+ */
+const createLogFormat = (colorize: boolean = false) => {
+  const formats = [
+    winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss.SSS' }),
+    winston.format.errors({ stack: true }),
+    winston.format((info) => {
+      // Add service name to all logs
+      info.service = 'notification-service';
+      return info;
+    })(),
+    winston.format((info) => {
+      // Redact sensitive information
+      if (info.metadata && info.metadata.headers) {
+        if (info.metadata.headers.authorization) {
+          info.metadata.headers.authorization = '[REDACTED]';
+        }
+        if (info.metadata.headers.cookie) {
+          info.metadata.headers.cookie = '[REDACTED]';
+        }
+      }
+      return info;
+    })()
+  ];
+
+  // Add colorization for console output if enabled
+  if (colorize) {
+    formats.push(winston.format.colorize());
+  }
+
+  // Add the final format (JSON for production, pretty print for development)
+  if (process.env.NODE_ENV === 'development') {
+    formats.push(
+      winston.format.printf((info) => {
+        const { timestamp, level, message, service, correlationId, ...rest } = info;
+        const contextInfo = correlationId ? `[${correlationId}]` : '';
+        const metaInfo = Object.keys(rest).length ? `\n${JSON.stringify(rest, null, 2)}` : '';
+        return `${timestamp} [${service}] ${level} ${contextInfo}: ${message}${metaInfo}`;
+      })
+    );
+  } else {
+    formats.push(winston.format.json());
+  }
+
+  return winston.format.combine(...formats);
 };
 
-// Add colors to Winston
-winston.addColors(logColors);
+/**
+ * Create transports based on environment
+ * - Console transport for all environments (with different formatting)
+ * - File transport for staging and production
+ * - Datadog transport for production (if configured)
+ */
+const createTransports = (config: ILoggerConfig) => {
+  const transports: winston.transport[] = [];
+
+  // Console transport (always enabled)
+  transports.push(
+    new winston.transports.Console({
+      level: config.level,
+      format: createLogFormat(config.colorize),
+    })
+  );
+
+  // File transport (for staging and production)
+  if (config.filePath && (process.env.NODE_ENV === 'staging' || process.env.NODE_ENV === 'production')) {
+    transports.push(
+      new winston.transports.File({
+        filename: config.filePath,
+        level: config.level,
+        format: createLogFormat(false),
+        maxsize: config.maxFileSize || 5242880, // 5MB default
+        maxFiles: config.maxFiles || 5,
+      })
+    );
+  }
+
+  // Datadog transport (for production if API key is provided)
+  if (process.env.DATADOG_API_KEY && process.env.NODE_ENV === 'production') {
+    try {
+      // Dynamically import the datadog-winston package to avoid dependency issues
+      // if the package is not installed
+      const DatadogWinston = require('datadog-winston');
+      
+      transports.push(
+        new DatadogWinston({
+          apiKey: process.env.DATADOG_API_KEY,
+          hostname: process.env.HOSTNAME || 'notification-service',
+          service: 'notification-service',
+          ddsource: 'nodejs',
+          ddtags: `env:${process.env.NODE_ENV},service:notification-service`,
+        })
+      );
+    } catch (error) {
+      // Log to console if datadog-winston package is not available
+      console.warn('Datadog transport could not be initialized:', error);
+    }
+  }
+
+  return transports;
+};
 
 /**
  * Default logger configuration
  */
 const defaultConfig: ILoggerConfig = {
-  level: process.env.LOG_LEVEL || 'info',
-  format: process.env.NODE_ENV === 'development' ? 'pretty' : 'json',
-  timestamp: true,
+  level: process.env.LOG_LEVEL as LogLevel || getLogLevel(),
+  prettyPrint: process.env.NODE_ENV === 'development',
+  colorize: process.env.NODE_ENV === 'development',
+  filePath: path.join(logDir, 'notification-service.log'),
+  maxFileSize: 5242880, // 5MB
+  maxFiles: 5,
+  console: true,
+  defaultMeta: {
+    service: 'notification-service',
+  },
+  redactPatterns: [
+    /password/i,
+    /secret/i,
+    /token/i,
+    /key/i,
+    /authorization/i,
+    /cookie/i,
+  ],
 };
 
 /**
- * Create a Winston logger instance with the specified configuration
- * 
- * @param config - Logger configuration options
- * @returns Configured Winston logger instance
+ * Create the logger instance with the specified configuration
  */
-export const createLogger = (config: ILoggerConfig = defaultConfig) => {
-  // Determine log level based on environment
-  const level = config.level || (process.env.NODE_ENV === 'development' ? 'debug' : 'info');
+export const createLogger = (config: Partial<ILoggerConfig> = {}) => {
+  const mergedConfig: ILoggerConfig = { ...defaultConfig, ...config };
   
-  // Define transports based on environment
-  const transports: winston.transport[] = [];
-  
-  // Always add console transport
-  transports.push(
-    new winston.transports.Console({
-      level,
-      format: winston.format.combine(
-        winston.format.colorize({ all: true }),
-        winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss.SSS' }),
-        winston.format.printf((info) => {
-          // Extract correlation ID from metadata if available
-          const meta = info.metadata || {};
-          const correlationId = meta.correlationId ? `[${meta.correlationId}] ` : '';
-          return `${info.timestamp} ${info.level}: ${correlationId}${info.message}`;
-        })
-      ),
-    })
-  );
-  
-  // Add file transport in production and staging
-  if (process.env.NODE_ENV === 'production' || process.env.NODE_ENV === 'staging') {
-    transports.push(
-      new winston.transports.File({
-        filename: 'logs/notification-service.log',
-        level,
-        format: winston.format.combine(
-          winston.format.timestamp(),
-          winston.format.json()
-        ),
-        maxsize: 10 * 1024 * 1024, // 10MB
-        maxFiles: 5,
-        tailable: true,
-      })
-    );
-    
-    // Add separate error log file
-    transports.push(
-      new winston.transports.File({
-        filename: 'logs/notification-service-error.log',
-        level: 'error',
-        format: winston.format.combine(
-          winston.format.timestamp(),
-          winston.format.json()
-        ),
-        maxsize: 10 * 1024 * 1024, // 10MB
-        maxFiles: 5,
-        tailable: true,
-      })
-    );
-  }
-  
-  // Create format based on configuration
-  let format: winston.Logform.Format;
-  
-  if (config.format === 'json' || process.env.NODE_ENV === 'production') {
-    format = winston.format.combine(
-      winston.format.timestamp(),
-      winston.format.metadata({ fillExcept: ['message', 'level', 'timestamp'] }),
-      winston.format.json()
-    );
-  } else {
-    format = winston.format.combine(
-      winston.format.colorize({ all: true }),
-      winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss.SSS' }),
-      winston.format.metadata({ fillExcept: ['message', 'level', 'timestamp'] }),
-      winston.format.printf((info) => {
-        // Extract correlation ID from metadata if available
-        const meta = info.metadata || {};
-        const correlationId = meta.correlationId ? `[${meta.correlationId}] ` : '';
-        const metaStr = Object.keys(meta).length > 0 ? 
-          `\n${JSON.stringify(meta, null, 2)}` : '';
-        
-        return `${info.timestamp} ${info.level}: ${correlationId}${info.message}${metaStr}`;
-      })
-    );
-  }
-  
-  // Create and return the logger
   return winston.createLogger({
-    levels: logLevels,
-    level,
-    format,
-    transports,
+    level: mergedConfig.level,
+    defaultMeta: mergedConfig.defaultMeta,
+    transports: createTransports(mergedConfig),
     exitOnError: false,
   });
 };
 
 /**
- * The main logger instance for the Notification Service
+ * Default logger instance
  */
 export const logger = createLogger();
 
 /**
- * Create a child logger with additional context
- * 
- * @param context - Additional context to include in all logs
- * @returns Child logger instance
+ * Create a child logger with context information
+ * This is useful for request tracking and correlation
  */
-export const createChildLogger = (context: ILogContext) => {
-  return logger.child({ metadata: context });
+export const createContextLogger = (context: ILogContext) => {
+  return logger.child(context);
 };
 
 /**
- * Configure the logger based on the provided configuration
- * 
- * @param config - Logger configuration options
+ * Middleware for enriching logs with request context
+ * This can be used with Express middleware to add request information to logs
  */
-export const configureLogger = (config: ILoggerConfig) => {
-  // Create a new logger with the updated configuration
-  const newLogger = createLogger(config);
-  
-  // Replace the transports in the existing logger
-  logger.clear();
-  newLogger.transports.forEach(transport => logger.add(transport));
-  
-  // Update the log level
-  logger.level = newLogger.level;
+export const requestContextMiddleware = () => {
+  return (req: any, res: any, next: any) => {
+    const correlationId = req.headers['x-correlation-id'] || 
+                          req.headers['x-request-id'] || 
+                          `req-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    
+    // Add correlation ID to response headers for tracking
+    res.setHeader('x-correlation-id', correlationId);
+    
+    // Create a request-scoped logger with context
+    req.logger = createContextLogger({
+      correlationId,
+      serviceName: 'notification-service',
+      timestamp: new Date().toISOString(),
+      metadata: {
+        method: req.method,
+        path: req.path,
+        ip: req.ip,
+        userAgent: req.headers['user-agent'],
+      },
+    });
+    
+    next();
+  };
 };
 
-export default {
-  logger,
-  createChildLogger,
-  configureLogger,
-};
+export default logger;
