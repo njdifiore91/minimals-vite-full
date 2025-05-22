@@ -1,463 +1,794 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+Tests for the core application setup module (app.py) of the Document Service.
+
+This file verifies that the application correctly initializes all components,
+loads configuration, sets up logging, and creates service instances. It ensures
+the application can start and stop properly and handles errors appropriately.
+"""
+
 import os
-import sys
 import pytest
 import logging
-from unittest.mock import patch, MagicMock, call
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
+from unittest.mock import patch, MagicMock, AsyncMock
 
-# Add path to allow importing from src
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+# Import the application module
+try:
+    from src.app import Application, get_app, get_application
+    from src.config import app_config
+    from src.services import QueueService, StorageService, ClassificationService, DocumentRoutingService
+except ImportError:
+    # If imports fail, the tests will use the mocks from conftest.py
+    pass
 
-# Import the app module
-from src.app import DocumentServiceApp
-from src.types.config import ServiceConfig, ModelConfig, RabbitMQConfig, S3Config, LoggingConfig
 
+# ===== Application Initialization Tests =====
 
-@pytest.fixture
-def mock_env_vars():
-    """Fixture to set up environment variables for testing."""
-    env_vars = {
-        'SERVICE_NAME': 'document-service',
-        'SERVICE_VERSION': '1.0.0',
-        'LOG_LEVEL': 'INFO',
-        'RABBITMQ_HOST': 'rabbitmq.example.com',
-        'RABBITMQ_PORT': '5672',
-        'RABBITMQ_EXCHANGE': 'mca.documents',
-        'RABBITMQ_QUEUE': 'document-processing',
-        'RABBITMQ_ROUTING_KEY': 'documents',
-        'RABBITMQ_USE_TLS': 'true',
-        'RABBITMQ_CERT_PATH': '/path/to/cert',
-        'S3_ENDPOINT_URL': 'https://s3.example.com',
-        'S3_REGION_NAME': 'us-east-1',
-        'S3_BUCKET_NAME': 'mca-documents-staging',
-        'S3_USE_ENCRYPTION': 'true',
-        'S3_ENCRYPTION_TYPE': 'AES256',
-        'MODEL_PATH': '/path/to/models',
-        'SVM_MODEL_FILE': 'svm_model.pkl',
-        'RF_MODEL_FILE': 'rf_model.pkl',
-        'CONFIDENCE_THRESHOLD': '0.85',
-        'ENVIRONMENT': 'staging'
-    }
+@pytest.mark.asyncio
+async def test_application_initialization(app_config_fixture, monkeypatch):
+    """Test that the Application class initializes correctly."""
+    # Mock the setup_logger function
+    mock_logger = MagicMock()
+    monkeypatch.setattr("src.app.setup_logger", lambda: mock_logger)
     
-    # Save original environment
-    original_env = os.environ.copy()
+    # Mock the service classes
+    monkeypatch.setattr("src.app.QueueService", MagicMock)
+    monkeypatch.setattr("src.app.StorageService", MagicMock)
+    monkeypatch.setattr("src.app.ClassificationService", MagicMock)
+    monkeypatch.setattr("src.app.DocumentRoutingService", MagicMock)
     
-    # Set environment variables for test
-    for key, value in env_vars.items():
-        os.environ[key] = value
+    # Mock FastAPI and router imports
+    monkeypatch.setattr("src.app.FastAPI", MagicMock)
+    monkeypatch.setattr("src.app.CORSMiddleware", MagicMock)
     
-    yield env_vars
+    # Create a mock for the API routers
+    mock_health_router = MagicMock()
+    mock_status_router = MagicMock()
+    mock_diagnostics_router = MagicMock()
+    mock_documents_router = MagicMock()
     
-    # Restore original environment
-    os.environ.clear()
-    os.environ.update(original_env)
+    monkeypatch.setattr("src.app.health_router", mock_health_router)
+    monkeypatch.setattr("src.app.status_router", mock_status_router)
+    monkeypatch.setattr("src.app.diagnostics_router", mock_diagnostics_router)
+    monkeypatch.setattr("src.app.documents_router", mock_documents_router)
+    
+    # Initialize the application
+    app = Application()
+    
+    # Verify that the logger was set up
+    assert app.logger == mock_logger
+    mock_logger.info.assert_any_call("Initializing Document Service application")
+    
+    # Verify that the configuration was loaded
+    assert app.config is not None
+    
+    # Verify that the FastAPI app was created
+    assert app.app is not None
+    
+    # Verify that the services were initialized
+    assert isinstance(app.queue_service, MagicMock)
+    assert isinstance(app.storage_service, MagicMock)
+    assert isinstance(app.classification_service, MagicMock)
+    assert isinstance(app.document_routing_service, MagicMock)
+    
+    # Verify that the initialized flag is set
+    assert app.initialized is True
+    assert app.running is False
+    
+    # Verify that the success message was logged
+    mock_logger.info.assert_any_call("Document Service application initialized successfully")
 
 
-@pytest.fixture
-def mock_logger():
-    """Fixture to provide a mock logger."""
-    logger = MagicMock(spec=logging.Logger)
-    return logger
+@pytest.mark.asyncio
+async def test_application_initialization_with_environment_variables(monkeypatch):
+    """Test that the Application class loads configuration from environment variables."""
+    # Set environment variables for configuration
+    monkeypatch.setenv("SERVICE_NAME", "document-service-env-test")
+    monkeypatch.setenv("SERVICE_VERSION", "1.0.0-env-test")
+    monkeypatch.setenv("SERVICE_ENVIRONMENT", "test")
+    monkeypatch.setenv("LOGGING_LEVEL", "DEBUG")
+    
+    # Mock the app_config.load_config method
+    mock_config = MagicMock()
+    mock_config.environment = "test"
+    mock_config.version = "1.0.0-env-test"
+    
+    with patch("src.app.app_config.load_config", return_value=mock_config):
+        # Mock the setup_logger function
+        mock_logger = MagicMock()
+        monkeypatch.setattr("src.app.setup_logger", lambda: mock_logger)
+        
+        # Mock the service classes and FastAPI
+        monkeypatch.setattr("src.app.QueueService", MagicMock)
+        monkeypatch.setattr("src.app.StorageService", MagicMock)
+        monkeypatch.setattr("src.app.ClassificationService", MagicMock)
+        monkeypatch.setattr("src.app.DocumentRoutingService", MagicMock)
+        monkeypatch.setattr("src.app.FastAPI", MagicMock)
+        monkeypatch.setattr("src.app.CORSMiddleware", MagicMock)
+        
+        # Mock the API routers
+        monkeypatch.setattr("src.app.health_router", MagicMock())
+        monkeypatch.setattr("src.app.status_router", MagicMock())
+        monkeypatch.setattr("src.app.diagnostics_router", MagicMock())
+        monkeypatch.setattr("src.app.documents_router", MagicMock())
+        
+        # Initialize the application
+        app = Application()
+        
+        # Verify that the configuration was loaded with environment variables
+        assert app.config == mock_config
+        assert app.config.version == "1.0.0-env-test"
+        assert app.config.environment == "test"
+        
+        # Verify that the environment was logged
+        mock_logger.info.assert_any_call("Loaded configuration for environment: test")
 
 
-@pytest.fixture
-def mock_queue_service():
-    """Fixture to provide a mock QueueService instance."""
-    queue_service = MagicMock()
-    return queue_service
+# ===== FastAPI Application Tests =====
 
-
-@pytest.fixture
-def mock_storage_service():
-    """Fixture to provide a mock StorageService instance."""
-    storage_service = MagicMock()
-    return storage_service
-
-
-@pytest.fixture
-def mock_classification_service():
-    """Fixture to provide a mock ClassificationService instance."""
-    classification_service = MagicMock()
-    return classification_service
-
-
-@pytest.fixture
-def mock_document_routing_service():
-    """Fixture to provide a mock DocumentRoutingService instance."""
-    routing_service = MagicMock()
-    return routing_service
-
-
-@pytest.fixture
-def app_instance(mock_env_vars):
-    """Fixture to provide a DocumentServiceApp instance."""
-    with patch('src.app.logging') as mock_logging:
-        app = DocumentServiceApp()
-        yield app
-
-
-class TestDocumentServiceApp:
-    """Test suite for the DocumentServiceApp class."""
-
-    def test_init(self, app_instance):
-        """Test that the application initializes correctly."""
-        # Verify app attributes are initialized
-        assert app_instance.config is None
-        assert app_instance.logger is None
-        assert app_instance.queue_service is None
-        assert app_instance.storage_service is None
-        assert app_instance.classification_service is None
-        assert app_instance.document_routing_service is None
-        assert app_instance.api_app is None
-        assert app_instance.running is False
-
-    @patch('src.app.logging')
-    def test_init_logger(self, mock_logging, app_instance):
-        """Test logger initialization with different log levels."""
-        # Test with INFO level
-        os.environ['LOG_LEVEL'] = 'INFO'
-        app_instance.init_logger()
+@pytest.mark.asyncio
+async def test_create_fastapi_app(monkeypatch):
+    """Test that the _create_fastapi_app method creates a properly configured FastAPI instance."""
+    # Mock FastAPI and middleware
+    mock_fastapi = MagicMock()
+    mock_fastapi_instance = MagicMock()
+    mock_fastapi.return_value = mock_fastapi_instance
+    
+    monkeypatch.setattr("src.app.FastAPI", mock_fastapi)
+    monkeypatch.setattr("src.app.CORSMiddleware", MagicMock())
+    
+    # Mock the API routers
+    mock_health_router = MagicMock()
+    mock_status_router = MagicMock()
+    mock_diagnostics_router = MagicMock()
+    mock_documents_router = MagicMock()
+    
+    monkeypatch.setattr("src.app.health_router", mock_health_router)
+    monkeypatch.setattr("src.app.status_router", mock_status_router)
+    monkeypatch.setattr("src.app.diagnostics_router", mock_diagnostics_router)
+    monkeypatch.setattr("src.app.documents_router", mock_documents_router)
+    
+    # Mock other dependencies
+    monkeypatch.setattr("src.app.setup_logger", lambda: MagicMock())
+    monkeypatch.setattr("src.app.QueueService", MagicMock)
+    monkeypatch.setattr("src.app.StorageService", MagicMock)
+    monkeypatch.setattr("src.app.ClassificationService", MagicMock)
+    monkeypatch.setattr("src.app.DocumentRoutingService", MagicMock)
+    
+    # Create a mock config
+    mock_config = MagicMock()
+    mock_config.environment = "test"
+    mock_config.version = "1.0.0-test"
+    
+    with patch("src.app.app_config.load_config", return_value=mock_config):
+        # Initialize the application
+        app = Application()
         
-        # Verify logger was configured
-        mock_logging.basicConfig.assert_called_once()
-        assert mock_logging.basicConfig.call_args[1]['level'] == logging.INFO
-        
-        # Verify logger was created
-        mock_logging.getLogger.assert_called_once_with('document-service')
-        assert app_instance.logger == mock_logging.getLogger.return_value
-        
-        # Test with DEBUG level
-        mock_logging.reset_mock()
-        os.environ['LOG_LEVEL'] = 'DEBUG'
-        app_instance.init_logger()
-        
-        # Verify logger was configured with DEBUG level
-        assert mock_logging.basicConfig.call_args[1]['level'] == logging.DEBUG
-        
-        # Test with invalid level (should default to INFO)
-        mock_logging.reset_mock()
-        os.environ['LOG_LEVEL'] = 'INVALID'
-        app_instance.init_logger()
-        
-        # Verify logger was configured with INFO level
-        assert mock_logging.basicConfig.call_args[1]['level'] == logging.INFO
-
-    def test_load_config(self, app_instance, mock_env_vars):
-        """Test configuration loading from environment variables."""
-        # Initialize logger first
-        with patch('src.app.logging'):
-            app_instance.init_logger()
-        
-        # Load configuration
-        app_instance.load_config()
-        
-        # Verify config was loaded
-        assert app_instance.config is not None
-        
-        # Verify service config
-        assert app_instance.config['service_name'] == 'document-service'
-        assert app_instance.config['service_version'] == '1.0.0'
-        assert app_instance.config['environment'] == 'staging'
-        
-        # Verify RabbitMQ config
-        assert app_instance.config['rabbitmq']['host'] == 'rabbitmq.example.com'
-        assert app_instance.config['rabbitmq']['port'] == 5672
-        assert app_instance.config['rabbitmq']['exchange'] == 'mca.documents'
-        assert app_instance.config['rabbitmq']['queue'] == 'document-processing'
-        assert app_instance.config['rabbitmq']['routing_key'] == 'documents'
-        assert app_instance.config['rabbitmq']['use_tls'] is True
-        assert app_instance.config['rabbitmq']['cert_path'] == '/path/to/cert'
-        
-        # Verify S3 config
-        assert app_instance.config['s3']['endpoint_url'] == 'https://s3.example.com'
-        assert app_instance.config['s3']['region_name'] == 'us-east-1'
-        assert app_instance.config['s3']['bucket_name'] == 'mca-documents-staging'
-        assert app_instance.config['s3']['use_encryption'] is True
-        assert app_instance.config['s3']['encryption_type'] == 'AES256'
-        
-        # Verify model config
-        assert app_instance.config['model']['path'] == '/path/to/models'
-        assert app_instance.config['model']['svm_model_file'] == 'svm_model.pkl'
-        assert app_instance.config['model']['rf_model_file'] == 'rf_model.pkl'
-        assert app_instance.config['model']['confidence_threshold'] == 0.85
-
-    def test_load_config_missing_required_vars(self, app_instance):
-        """Test configuration loading with missing required variables."""
-        # Initialize logger first
-        with patch('src.app.logging'):
-            app_instance.init_logger()
-        
-        # Remove required environment variables
-        os.environ.pop('SERVICE_NAME', None)
-        os.environ.pop('RABBITMQ_HOST', None)
-        
-        # Attempt to load configuration
-        with pytest.raises(ValueError, match="Required environment variable 'SERVICE_NAME' is missing"):
-            app_instance.load_config()
-        
-        # Set SERVICE_NAME but keep RABBITMQ_HOST missing
-        os.environ['SERVICE_NAME'] = 'document-service'
-        
-        # Attempt to load configuration
-        with pytest.raises(ValueError, match="Required environment variable 'RABBITMQ_HOST' is missing"):
-            app_instance.load_config()
-
-    def test_load_config_invalid_values(self, app_instance, mock_env_vars):
-        """Test configuration loading with invalid values."""
-        # Initialize logger first
-        with patch('src.app.logging'):
-            app_instance.init_logger()
-        
-        # Set invalid values
-        os.environ['RABBITMQ_PORT'] = 'not-a-number'
-        os.environ['RABBITMQ_USE_TLS'] = 'not-a-boolean'
-        os.environ['CONFIDENCE_THRESHOLD'] = 'not-a-float'
-        
-        # Load configuration
-        app_instance.load_config()
-        
-        # Verify default values were used
-        assert app_instance.config['rabbitmq']['port'] == 5672  # Default port
-        assert app_instance.config['rabbitmq']['use_tls'] is False  # Default for invalid boolean
-        assert app_instance.config['model']['confidence_threshold'] == 0.9  # Default threshold
-
-    @patch('src.services.QueueService')
-    @patch('src.services.StorageService')
-    @patch('src.services.ClassificationService')
-    @patch('src.services.DocumentRoutingService')
-    def test_create_services(self, mock_routing_service_class, mock_classification_service_class,
-                           mock_storage_service_class, mock_queue_service_class,
-                           app_instance, mock_queue_service, mock_storage_service,
-                           mock_classification_service, mock_document_routing_service):
-        """Test service creation and dependency injection."""
-        # Configure mocks
-        mock_queue_service_class.return_value = mock_queue_service
-        mock_storage_service_class.return_value = mock_storage_service
-        mock_classification_service_class.return_value = mock_classification_service
-        mock_routing_service_class.return_value = mock_document_routing_service
-        
-        # Initialize logger and load config
-        with patch('src.app.logging'):
-            app_instance.init_logger()
-            app_instance.load_config()
-        
-        # Create services
-        app_instance.create_services()
-        
-        # Verify services were created
-        mock_queue_service_class.assert_called_once_with(app_instance)
-        mock_storage_service_class.assert_called_once_with(app_instance)
-        mock_classification_service_class.assert_called_once_with(app_instance)
-        mock_routing_service_class.assert_called_once_with(app_instance, mock_classification_service)
-        
-        # Verify services were assigned
-        assert app_instance.queue_service == mock_queue_service
-        assert app_instance.storage_service == mock_storage_service
-        assert app_instance.classification_service == mock_classification_service
-        assert app_instance.document_routing_service == mock_document_routing_service
-
-    @patch('src.app.FastAPI')
-    @patch('src.api.router')
-    def test_create_api_app(self, mock_router, mock_fastapi_class, app_instance):
-        """Test FastAPI application creation."""
-        # Configure mocks
-        mock_api_app = MagicMock()
-        mock_fastapi_class.return_value = mock_api_app
-        
-        # Initialize logger and load config
-        with patch('src.app.logging'):
-            app_instance.init_logger()
-            app_instance.load_config()
-        
-        # Create API app
-        app_instance.create_api_app()
-        
-        # Verify FastAPI app was created
-        mock_fastapi_class.assert_called_once_with(
+        # Verify that FastAPI was called with the correct parameters
+        mock_fastapi.assert_called_once_with(
             title="Document Service API",
             description="API for the Document Service microservice",
-            version=app_instance.config['service_version']
+            version=mock_config.version,
+            docs_url="/api/docs",  # Should be available in test environment
+            redoc_url="/api/redoc"  # Should be available in test environment
         )
         
-        # Verify router was included
-        mock_api_app.include_router.assert_called_once_with(mock_router)
+        # Verify that CORS middleware was added
+        mock_fastapi_instance.add_middleware.assert_called_once()
         
-        # Verify API app was assigned
-        assert app_instance.api_app == mock_api_app
+        # Verify that the routers were included
+        assert mock_fastapi_instance.include_router.call_count >= 3
+        
+        # Verify that the diagnostics router is included in test environment
+        mock_fastapi_instance.include_router.assert_any_call(mock_diagnostics_router, prefix="/diagnostics")
 
-    def test_start(self, app_instance):
-        """Test application start method."""
-        # Initialize logger and load config
-        with patch('src.app.logging'):
-            app_instance.init_logger()
-            app_instance.load_config()
+
+@pytest.mark.asyncio
+async def test_create_fastapi_app_production(monkeypatch):
+    """Test that the _create_fastapi_app method configures FastAPI correctly for production."""
+    # Mock FastAPI and middleware
+    mock_fastapi = MagicMock()
+    mock_fastapi_instance = MagicMock()
+    mock_fastapi.return_value = mock_fastapi_instance
+    
+    monkeypatch.setattr("src.app.FastAPI", mock_fastapi)
+    monkeypatch.setattr("src.app.CORSMiddleware", MagicMock())
+    
+    # Mock the API routers
+    mock_health_router = MagicMock()
+    mock_status_router = MagicMock()
+    mock_diagnostics_router = MagicMock()
+    mock_documents_router = MagicMock()
+    
+    monkeypatch.setattr("src.app.health_router", mock_health_router)
+    monkeypatch.setattr("src.app.status_router", mock_status_router)
+    monkeypatch.setattr("src.app.diagnostics_router", mock_diagnostics_router)
+    monkeypatch.setattr("src.app.documents_router", mock_documents_router)
+    
+    # Mock other dependencies
+    monkeypatch.setattr("src.app.setup_logger", lambda: MagicMock())
+    monkeypatch.setattr("src.app.QueueService", MagicMock)
+    monkeypatch.setattr("src.app.StorageService", MagicMock)
+    monkeypatch.setattr("src.app.ClassificationService", MagicMock)
+    monkeypatch.setattr("src.app.DocumentRoutingService", MagicMock)
+    
+    # Create a mock config for production
+    mock_config = MagicMock()
+    mock_config.environment = "production"
+    mock_config.version = "1.0.0"
+    
+    with patch("src.app.app_config.load_config", return_value=mock_config):
+        # Initialize the application
+        app = Application()
         
-        # Create mock services
-        app_instance.queue_service = MagicMock()
-        app_instance.storage_service = MagicMock()
-        app_instance.classification_service = MagicMock()
-        app_instance.document_routing_service = MagicMock()
-        app_instance.api_app = MagicMock()
-        app_instance.logger = MagicMock()
+        # Verify that FastAPI was called with the correct parameters for production
+        mock_fastapi.assert_called_once_with(
+            title="Document Service API",
+            description="API for the Document Service microservice",
+            version=mock_config.version,
+            docs_url=None,  # Should be disabled in production
+            redoc_url=None  # Should be disabled in production
+        )
+        
+        # Verify that the diagnostics router is NOT included in production
+        for call in mock_fastapi_instance.include_router.call_args_list:
+            args, kwargs = call
+            if args[0] == mock_diagnostics_router:
+                pytest.fail("Diagnostics router should not be included in production")
+
+
+# ===== Application Lifecycle Tests =====
+
+@pytest.mark.asyncio
+async def test_application_start(monkeypatch):
+    """Test that the start method initializes connections and starts services."""
+    # Mock the setup_logger function
+    mock_logger = MagicMock()
+    monkeypatch.setattr("src.app.setup_logger", lambda: mock_logger)
+    
+    # Mock the service classes
+    mock_queue_service = MagicMock()
+    mock_queue_service.connect = AsyncMock()
+    mock_queue_service.start_consuming = AsyncMock()
+    
+    mock_storage_service = MagicMock()
+    mock_storage_service.connect = AsyncMock()
+    
+    mock_classification_service = MagicMock()
+    mock_classification_service.initialize = AsyncMock()
+    
+    mock_document_routing_service = MagicMock()
+    
+    monkeypatch.setattr("src.app.QueueService", lambda config: mock_queue_service)
+    monkeypatch.setattr("src.app.StorageService", lambda config: mock_storage_service)
+    monkeypatch.setattr("src.app.ClassificationService", lambda config: mock_classification_service)
+    monkeypatch.setattr("src.app.DocumentRoutingService", lambda: mock_document_routing_service)
+    
+    # Mock FastAPI and router imports
+    monkeypatch.setattr("src.app.FastAPI", MagicMock)
+    monkeypatch.setattr("src.app.CORSMiddleware", MagicMock)
+    monkeypatch.setattr("src.app.health_router", MagicMock())
+    monkeypatch.setattr("src.app.status_router", MagicMock())
+    monkeypatch.setattr("src.app.diagnostics_router", MagicMock())
+    monkeypatch.setattr("src.app.documents_router", MagicMock())
+    
+    # Create a mock config
+    mock_config = MagicMock()
+    mock_config.environment = "test"
+    
+    with patch("src.app.app_config.load_config", return_value=mock_config):
+        # Initialize the application
+        app = Application()
         
         # Start the application
-        app_instance.start()
+        await app.start()
         
-        # Verify running flag was set
-        assert app_instance.running is True
+        # Verify that the connections were established
+        mock_queue_service.connect.assert_called_once()
+        mock_storage_service.connect.assert_called_once()
+        mock_classification_service.initialize.assert_called_once()
         
-        # Verify logger was called
-        app_instance.logger.info.assert_called_with("Document Service started")
+        # Verify that message consumption was started
+        mock_queue_service.start_consuming.assert_called_once()
+        
+        # Verify that the running flag is set
+        assert app.running is True
+        
+        # Verify that the success message was logged
+        mock_logger.info.assert_any_call("Document Service application started successfully")
 
-    def test_stop(self, app_instance):
-        """Test application stop method."""
-        # Initialize logger and load config
-        with patch('src.app.logging'):
-            app_instance.init_logger()
-            app_instance.load_config()
+
+@pytest.mark.asyncio
+async def test_application_start_already_running(monkeypatch):
+    """Test that the start method handles the case when the application is already running."""
+    # Mock the setup_logger function
+    mock_logger = MagicMock()
+    monkeypatch.setattr("src.app.setup_logger", lambda: mock_logger)
+    
+    # Mock the service classes
+    mock_queue_service = MagicMock()
+    mock_storage_service = MagicMock()
+    mock_classification_service = MagicMock()
+    mock_document_routing_service = MagicMock()
+    
+    monkeypatch.setattr("src.app.QueueService", lambda config: mock_queue_service)
+    monkeypatch.setattr("src.app.StorageService", lambda config: mock_storage_service)
+    monkeypatch.setattr("src.app.ClassificationService", lambda config: mock_classification_service)
+    monkeypatch.setattr("src.app.DocumentRoutingService", lambda: mock_document_routing_service)
+    
+    # Mock FastAPI and router imports
+    monkeypatch.setattr("src.app.FastAPI", MagicMock)
+    monkeypatch.setattr("src.app.CORSMiddleware", MagicMock)
+    monkeypatch.setattr("src.app.health_router", MagicMock())
+    monkeypatch.setattr("src.app.status_router", MagicMock())
+    monkeypatch.setattr("src.app.diagnostics_router", MagicMock())
+    monkeypatch.setattr("src.app.documents_router", MagicMock())
+    
+    # Create a mock config
+    mock_config = MagicMock()
+    
+    with patch("src.app.app_config.load_config", return_value=mock_config):
+        # Initialize the application
+        app = Application()
         
-        # Create mock services
-        app_instance.queue_service = MagicMock()
-        app_instance.storage_service = MagicMock()
-        app_instance.classification_service = MagicMock()
-        app_instance.document_routing_service = MagicMock()
-        app_instance.api_app = MagicMock()
-        app_instance.logger = MagicMock()
+        # Set the running flag to True
+        app.running = True
         
-        # Set running flag
-        app_instance.running = True
+        # Start the application
+        await app.start()
+        
+        # Verify that no connections were established
+        assert not mock_queue_service.connect.called
+        assert not mock_storage_service.connect.called
+        assert not mock_classification_service.initialize.called
+        
+        # Verify that the warning was logged
+        mock_logger.warning.assert_called_with("Application is already running")
+
+
+@pytest.mark.asyncio
+async def test_application_start_not_initialized(monkeypatch):
+    """Test that the start method raises an error when the application is not initialized."""
+    # Mock the setup_logger function
+    mock_logger = MagicMock()
+    monkeypatch.setattr("src.app.setup_logger", lambda: mock_logger)
+    
+    # Mock the service classes
+    monkeypatch.setattr("src.app.QueueService", MagicMock)
+    monkeypatch.setattr("src.app.StorageService", MagicMock)
+    monkeypatch.setattr("src.app.ClassificationService", MagicMock)
+    monkeypatch.setattr("src.app.DocumentRoutingService", MagicMock)
+    
+    # Mock FastAPI and router imports
+    monkeypatch.setattr("src.app.FastAPI", MagicMock)
+    monkeypatch.setattr("src.app.CORSMiddleware", MagicMock)
+    monkeypatch.setattr("src.app.health_router", MagicMock())
+    monkeypatch.setattr("src.app.status_router", MagicMock())
+    monkeypatch.setattr("src.app.diagnostics_router", MagicMock())
+    monkeypatch.setattr("src.app.documents_router", MagicMock())
+    
+    # Create a mock config
+    mock_config = MagicMock()
+    
+    with patch("src.app.app_config.load_config", return_value=mock_config):
+        # Initialize the application
+        app = Application()
+        
+        # Set the initialized flag to False
+        app.initialized = False
+        
+        # Start the application and expect an error
+        with pytest.raises(RuntimeError, match="Application must be initialized before starting"):
+            await app.start()
+
+
+@pytest.mark.asyncio
+async def test_application_start_connection_error(monkeypatch):
+    """Test that the start method handles connection errors properly."""
+    # Mock the setup_logger function
+    mock_logger = MagicMock()
+    monkeypatch.setattr("src.app.setup_logger", lambda: mock_logger)
+    
+    # Mock the service classes
+    mock_queue_service = MagicMock()
+    mock_queue_service.connect = AsyncMock(side_effect=Exception("Connection error"))
+    mock_queue_service.disconnect = AsyncMock()
+    
+    mock_storage_service = MagicMock()
+    mock_storage_service.connect = AsyncMock()
+    mock_storage_service.disconnect = AsyncMock()
+    
+    mock_classification_service = MagicMock()
+    mock_classification_service.initialize = AsyncMock()
+    mock_classification_service.cleanup = AsyncMock()
+    
+    mock_document_routing_service = MagicMock()
+    
+    monkeypatch.setattr("src.app.QueueService", lambda config: mock_queue_service)
+    monkeypatch.setattr("src.app.StorageService", lambda config: mock_storage_service)
+    monkeypatch.setattr("src.app.ClassificationService", lambda config: mock_classification_service)
+    monkeypatch.setattr("src.app.DocumentRoutingService", lambda: mock_document_routing_service)
+    
+    # Mock FastAPI and router imports
+    monkeypatch.setattr("src.app.FastAPI", MagicMock)
+    monkeypatch.setattr("src.app.CORSMiddleware", MagicMock)
+    monkeypatch.setattr("src.app.health_router", MagicMock())
+    monkeypatch.setattr("src.app.status_router", MagicMock())
+    monkeypatch.setattr("src.app.diagnostics_router", MagicMock())
+    monkeypatch.setattr("src.app.documents_router", MagicMock())
+    
+    # Create a mock config
+    mock_config = MagicMock()
+    
+    with patch("src.app.app_config.load_config", return_value=mock_config):
+        # Initialize the application
+        app = Application()
+        
+        # Start the application and expect an error
+        with pytest.raises(Exception, match="Connection error"):
+            await app.start()
+        
+        # Verify that the error was logged
+        mock_logger.error.assert_called_with("Failed to start Document Service application: Connection error")
+        
+        # Verify that stop was called to clean up
+        mock_queue_service.disconnect.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_application_stop(monkeypatch):
+    """Test that the stop method closes connections and performs cleanup."""
+    # Mock the setup_logger function
+    mock_logger = MagicMock()
+    monkeypatch.setattr("src.app.setup_logger", lambda: mock_logger)
+    
+    # Mock the service classes
+    mock_queue_service = MagicMock()
+    mock_queue_service.connect = AsyncMock()
+    mock_queue_service.start_consuming = AsyncMock()
+    mock_queue_service.stop_consuming = AsyncMock()
+    mock_queue_service.disconnect = AsyncMock()
+    
+    mock_storage_service = MagicMock()
+    mock_storage_service.connect = AsyncMock()
+    mock_storage_service.disconnect = AsyncMock()
+    
+    mock_classification_service = MagicMock()
+    mock_classification_service.initialize = AsyncMock()
+    mock_classification_service.cleanup = AsyncMock()
+    
+    mock_document_routing_service = MagicMock()
+    
+    monkeypatch.setattr("src.app.QueueService", lambda config: mock_queue_service)
+    monkeypatch.setattr("src.app.StorageService", lambda config: mock_storage_service)
+    monkeypatch.setattr("src.app.ClassificationService", lambda config: mock_classification_service)
+    monkeypatch.setattr("src.app.DocumentRoutingService", lambda: mock_document_routing_service)
+    
+    # Mock FastAPI and router imports
+    monkeypatch.setattr("src.app.FastAPI", MagicMock)
+    monkeypatch.setattr("src.app.CORSMiddleware", MagicMock)
+    monkeypatch.setattr("src.app.health_router", MagicMock())
+    monkeypatch.setattr("src.app.status_router", MagicMock())
+    monkeypatch.setattr("src.app.diagnostics_router", MagicMock())
+    monkeypatch.setattr("src.app.documents_router", MagicMock())
+    
+    # Create a mock config
+    mock_config = MagicMock()
+    
+    with patch("src.app.app_config.load_config", return_value=mock_config):
+        # Initialize the application
+        app = Application()
+        
+        # Set the running flag to True
+        app.running = True
         
         # Stop the application
-        app_instance.stop()
+        await app.stop()
         
-        # Verify running flag was cleared
-        assert app_instance.running is False
+        # Verify that the connections were closed
+        mock_queue_service.stop_consuming.assert_called_once()
+        mock_queue_service.disconnect.assert_called_once()
+        mock_storage_service.disconnect.assert_called_once()
+        mock_classification_service.cleanup.assert_called_once()
         
-        # Verify logger was called
-        app_instance.logger.info.assert_called_with("Document Service stopped")
+        # Verify that the running flag is set to False
+        assert app.running is False
+        
+        # Verify that the success message was logged
+        mock_logger.info.assert_any_call("Document Service application stopped successfully")
 
-    def test_health_check_endpoints(self, app_instance):
-        """Test health check endpoints for Kubernetes probes."""
-        # Initialize logger and load config
-        with patch('src.app.logging'):
-            app_instance.init_logger()
-            app_instance.load_config()
+
+@pytest.mark.asyncio
+async def test_application_stop_with_errors(monkeypatch):
+    """Test that the stop method handles errors during shutdown."""
+    # Mock the setup_logger function
+    mock_logger = MagicMock()
+    monkeypatch.setattr("src.app.setup_logger", lambda: mock_logger)
+    
+    # Mock the service classes with errors
+    mock_queue_service = MagicMock()
+    mock_queue_service.stop_consuming = AsyncMock(side_effect=Exception("Error stopping queue"))
+    mock_queue_service.disconnect = AsyncMock(side_effect=Exception("Error disconnecting queue"))
+    
+    mock_storage_service = MagicMock()
+    mock_storage_service.disconnect = AsyncMock(side_effect=Exception("Error disconnecting storage"))
+    
+    mock_classification_service = MagicMock()
+    mock_classification_service.cleanup = AsyncMock(side_effect=Exception("Error cleaning up classification"))
+    
+    monkeypatch.setattr("src.app.QueueService", lambda config: mock_queue_service)
+    monkeypatch.setattr("src.app.StorageService", lambda config: mock_storage_service)
+    monkeypatch.setattr("src.app.ClassificationService", lambda config: mock_classification_service)
+    monkeypatch.setattr("src.app.DocumentRoutingService", MagicMock)
+    
+    # Mock FastAPI and router imports
+    monkeypatch.setattr("src.app.FastAPI", MagicMock)
+    monkeypatch.setattr("src.app.CORSMiddleware", MagicMock)
+    monkeypatch.setattr("src.app.health_router", MagicMock())
+    monkeypatch.setattr("src.app.status_router", MagicMock())
+    monkeypatch.setattr("src.app.diagnostics_router", MagicMock())
+    monkeypatch.setattr("src.app.documents_router", MagicMock())
+    
+    # Create a mock config
+    mock_config = MagicMock()
+    
+    with patch("src.app.app_config.load_config", return_value=mock_config):
+        # Initialize the application
+        app = Application()
         
-        # Create API app
-        with patch('src.app.FastAPI') as mock_fastapi_class:
-            mock_api_app = MagicMock()
-            mock_fastapi_class.return_value = mock_api_app
-            
-            with patch('src.api.router'):
-                app_instance.create_api_app()
+        # Stop the application
+        await app.stop()
         
-        # Create mock services
-        app_instance.queue_service = MagicMock()
-        app_instance.storage_service = MagicMock()
-        app_instance.classification_service = MagicMock()
-        app_instance.document_routing_service = MagicMock()
+        # Verify that all errors were logged
+        mock_logger.error.assert_any_call("Error stopping queue consumption: Error stopping queue")
+        mock_logger.error.assert_any_call("Error disconnecting from RabbitMQ: Error disconnecting queue")
+        mock_logger.error.assert_any_call("Error disconnecting from S3: Error disconnecting storage")
+        mock_logger.error.assert_any_call("Error cleaning up classification service: Error cleaning up classification")
         
-        # Configure service mocks for health checks
-        app_instance.queue_service.is_connected.return_value = True
-        app_instance.storage_service.is_initialized.return_value = True
-        app_instance.classification_service.is_ready.return_value = True
+        # Verify that the running flag is set to False despite errors
+        assert app.running is False
         
-        # Create test client
-        client = TestClient(app_instance.api_app)
+        # Verify that the success message was still logged
+        mock_logger.info.assert_any_call("Document Service application stopped successfully")
+
+
+# ===== Document Processing Tests =====
+
+@pytest.mark.asyncio
+async def test_process_document(monkeypatch):
+    """Test that the _process_document method correctly processes documents."""
+    # Mock the setup_logger function
+    mock_logger = MagicMock()
+    monkeypatch.setattr("src.app.setup_logger", lambda: mock_logger)
+    
+    # Mock the service classes
+    mock_queue_service = MagicMock()
+    mock_queue_service.publish_classification_result = AsyncMock()
+    mock_queue_service.handle_processing_error = AsyncMock()
+    
+    mock_storage_service = MagicMock()
+    mock_storage_service.download_document = AsyncMock(return_value=b"test document content")
+    
+    mock_classification_service = MagicMock()
+    mock_classification_result = MagicMock()
+    mock_classification_service.classify_document = AsyncMock(return_value=mock_classification_result)
+    
+    mock_document_routing_service = MagicMock()
+    mock_routing_result = MagicMock()
+    mock_document_routing_service.route_document.return_value = mock_routing_result
+    
+    monkeypatch.setattr("src.app.QueueService", lambda config: mock_queue_service)
+    monkeypatch.setattr("src.app.StorageService", lambda config: mock_storage_service)
+    monkeypatch.setattr("src.app.ClassificationService", lambda config: mock_classification_service)
+    monkeypatch.setattr("src.app.DocumentRoutingService", lambda: mock_document_routing_service)
+    
+    # Mock FastAPI and router imports
+    monkeypatch.setattr("src.app.FastAPI", MagicMock)
+    monkeypatch.setattr("src.app.CORSMiddleware", MagicMock)
+    monkeypatch.setattr("src.app.health_router", MagicMock())
+    monkeypatch.setattr("src.app.status_router", MagicMock())
+    monkeypatch.setattr("src.app.diagnostics_router", MagicMock())
+    monkeypatch.setattr("src.app.documents_router", MagicMock())
+    
+    # Create a mock config
+    mock_config = MagicMock()
+    
+    with patch("src.app.app_config.load_config", return_value=mock_config):
+        # Initialize the application
+        app = Application()
         
-        # Test liveness endpoint
-        with patch('fastapi.testclient.TestClient.get') as mock_get:
-            mock_get.return_value.status_code = 200
-            mock_get.return_value.json.return_value = {"status": "alive"}
-            
-            response = client.get("/health/liveness")
-            
-            assert response.status_code == 200
-            assert response.json() == {"status": "alive"}
-        
-        # Test readiness endpoint - all services ready
-        with patch('fastapi.testclient.TestClient.get') as mock_get:
-            mock_get.return_value.status_code = 200
-            mock_get.return_value.json.return_value = {
-                "status": "ready",
-                "rabbitmq": True,
-                "s3": True,
-                "classification": True
+        # Create a test message
+        test_message = {
+            "document_id": "test-doc-123",
+            "s3_key": "test-document.pdf",
+            "metadata": {
+                "filename": "test-document.pdf",
+                "size": 1024,
+                "content_type": "application/pdf"
             }
-            
-            response = client.get("/health/readiness")
-            
-            assert response.status_code == 200
-            assert response.json() == {
-                "status": "ready",
-                "rabbitmq": True,
-                "s3": True,
-                "classification": True
-            }
+        }
         
-        # Test readiness endpoint - RabbitMQ not ready
-        app_instance.queue_service.is_connected.return_value = False
+        # Process the document
+        await app._process_document(test_message)
         
-        with patch('fastapi.testclient.TestClient.get') as mock_get:
-            mock_get.return_value.status_code = 503
-            mock_get.return_value.json.return_value = {
-                "status": "not ready",
-                "rabbitmq": False,
-                "s3": True,
-                "classification": True
+        # Verify that the document was downloaded
+        mock_storage_service.download_document.assert_called_once_with(test_message)
+        
+        # Verify that the document was classified
+        mock_classification_service.classify_document.assert_called_once_with(b"test document content")
+        
+        # Verify that the document was routed
+        mock_document_routing_service.route_document.assert_called_once_with(mock_classification_result)
+        
+        # Verify that the classification result was published
+        mock_queue_service.publish_classification_result.assert_called_once_with(mock_routing_result)
+        
+        # Verify that the success message was logged
+        mock_logger.info.assert_any_call("Document processed successfully: test-doc-123")
+
+
+@pytest.mark.asyncio
+async def test_process_document_error(monkeypatch):
+    """Test that the _process_document method handles errors correctly."""
+    # Mock the setup_logger function
+    mock_logger = MagicMock()
+    monkeypatch.setattr("src.app.setup_logger", lambda: mock_logger)
+    
+    # Mock the service classes with an error
+    mock_queue_service = MagicMock()
+    mock_queue_service.handle_processing_error = AsyncMock()
+    
+    mock_storage_service = MagicMock()
+    mock_storage_service.download_document = AsyncMock(side_effect=Exception("Download error"))
+    
+    mock_classification_service = MagicMock()
+    mock_document_routing_service = MagicMock()
+    
+    monkeypatch.setattr("src.app.QueueService", lambda config: mock_queue_service)
+    monkeypatch.setattr("src.app.StorageService", lambda config: mock_storage_service)
+    monkeypatch.setattr("src.app.ClassificationService", lambda config: mock_classification_service)
+    monkeypatch.setattr("src.app.DocumentRoutingService", lambda: mock_document_routing_service)
+    
+    # Mock FastAPI and router imports
+    monkeypatch.setattr("src.app.FastAPI", MagicMock)
+    monkeypatch.setattr("src.app.CORSMiddleware", MagicMock)
+    monkeypatch.setattr("src.app.health_router", MagicMock())
+    monkeypatch.setattr("src.app.status_router", MagicMock())
+    monkeypatch.setattr("src.app.diagnostics_router", MagicMock())
+    monkeypatch.setattr("src.app.documents_router", MagicMock())
+    
+    # Create a mock config
+    mock_config = MagicMock()
+    
+    with patch("src.app.app_config.load_config", return_value=mock_config):
+        # Initialize the application
+        app = Application()
+        
+        # Create a test message
+        test_message = {
+            "document_id": "test-doc-123",
+            "s3_key": "test-document.pdf",
+            "metadata": {
+                "filename": "test-document.pdf",
+                "size": 1024,
+                "content_type": "application/pdf"
             }
-            
-            response = client.get("/health/readiness")
-            
-            assert response.status_code == 503
-            assert response.json() == {
-                "status": "not ready",
-                "rabbitmq": False,
-                "s3": True,
-                "classification": True
-            }
-
-    def test_initialize(self, app_instance):
-        """Test the complete initialization sequence."""
-        # Mock all dependencies
-        with patch('src.app.logging'), 
-             patch('src.services.QueueService'), 
-             patch('src.services.StorageService'), 
-             patch('src.services.ClassificationService'), 
-             patch('src.services.DocumentRoutingService'), 
-             patch('src.app.FastAPI'), 
-             patch('src.api.router'):
-            
-            # Initialize the application
-            app_instance.initialize()
-            
-            # Verify initialization sequence
-            assert app_instance.logger is not None
-            assert app_instance.config is not None
-            assert app_instance.queue_service is not None
-            assert app_instance.storage_service is not None
-            assert app_instance.classification_service is not None
-            assert app_instance.document_routing_service is not None
-            assert app_instance.api_app is not None
-
-    def test_initialize_with_error(self, app_instance):
-        """Test initialization with an error."""
-        # Mock logger
-        with patch('src.app.logging') as mock_logging:
-            mock_logger = MagicMock()
-            mock_logging.getLogger.return_value = mock_logger
-            
-            # Force an error during config loading
-            with patch.object(app_instance, 'load_config', side_effect=ValueError("Configuration error")):
-                
-                # Initialize the application
-                with pytest.raises(ValueError, match="Configuration error"):
-                    app_instance.initialize()
-                
-                # Verify error was logged
-                mock_logger.error.assert_called_with("Failed to initialize application: Configuration error")
+        }
+        
+        # Process the document
+        await app._process_document(test_message)
+        
+        # Verify that the error was logged
+        mock_logger.error.assert_called_with("Error processing document: Download error")
+        
+        # Verify that the error was handled
+        mock_queue_service.handle_processing_error.assert_called_once_with(test_message, "Download error")
 
 
-if __name__ == "__main__":
-    pytest.main(['-xvs', __file__])
+# ===== Signal Handler Tests =====
+
+@pytest.mark.asyncio
+async def test_setup_signal_handlers(monkeypatch):
+    """Test that the setup_signal_handlers method sets up signal handlers correctly."""
+    # Mock the signal module
+    mock_signal = MagicMock()
+    monkeypatch.setattr("src.app.signal", mock_signal)
+    
+    # Mock the setup_logger function
+    mock_logger = MagicMock()
+    monkeypatch.setattr("src.app.setup_logger", lambda: mock_logger)
+    
+    # Mock the service classes
+    monkeypatch.setattr("src.app.QueueService", MagicMock)
+    monkeypatch.setattr("src.app.StorageService", MagicMock)
+    monkeypatch.setattr("src.app.ClassificationService", MagicMock)
+    monkeypatch.setattr("src.app.DocumentRoutingService", MagicMock)
+    
+    # Mock FastAPI and router imports
+    monkeypatch.setattr("src.app.FastAPI", MagicMock)
+    monkeypatch.setattr("src.app.CORSMiddleware", MagicMock)
+    monkeypatch.setattr("src.app.health_router", MagicMock())
+    monkeypatch.setattr("src.app.status_router", MagicMock())
+    monkeypatch.setattr("src.app.diagnostics_router", MagicMock())
+    monkeypatch.setattr("src.app.documents_router", MagicMock())
+    
+    # Create a mock config
+    mock_config = MagicMock()
+    
+    with patch("src.app.app_config.load_config", return_value=mock_config):
+        # Initialize the application
+        app = Application()
+        
+        # Set up signal handlers
+        app.setup_signal_handlers()
+        
+        # Verify that signal handlers were set up
+        assert mock_signal.signal.call_count == 2
+        mock_signal.signal.assert_any_call(mock_signal.SIGINT, mock_signal.signal.call_args[0][1])
+        mock_signal.signal.assert_any_call(mock_signal.SIGTERM, mock_signal.signal.call_args[0][1])
+        
+        # Verify that the success message was logged
+        mock_logger.info.assert_any_call("Signal handlers set up for graceful shutdown")
+
+
+# ===== Global Application Instance Tests =====
+
+@pytest.mark.asyncio
+async def test_get_app(monkeypatch):
+    """Test that the get_app function returns a singleton Application instance."""
+    # Mock the Application class
+    mock_application = MagicMock()
+    monkeypatch.setattr("src.app.Application", lambda: mock_application)
+    
+    # Reset the global app_instance
+    import src.app
+    src.app.app_instance = None
+    
+    # Get the application instance
+    app1 = src.app.get_app()
+    app2 = src.app.get_app()
+    
+    # Verify that the same instance was returned
+    assert app1 is app2
+    assert app1 is mock_application
+
+
+@pytest.mark.asyncio
+async def test_get_application_dependency(monkeypatch):
+    """Test that the get_application dependency returns the global Application instance."""
+    # Mock the get_app function
+    mock_app = MagicMock()
+    mock_get_app = MagicMock(return_value=mock_app)
+    monkeypatch.setattr("src.app.get_app", mock_get_app)
+    
+    # Get the application instance via the dependency
+    import src.app
+    app = src.app.get_application()
+    
+    # Verify that get_app was called
+    mock_get_app.assert_called_once()
+    
+    # Verify that the correct instance was returned
+    assert app is mock_app
+
+
+@pytest.mark.asyncio
+async def test_app_export(monkeypatch):
+    """Test that the app export provides the FastAPI application instance."""
+    # Mock the Application class
+    mock_fastapi_app = MagicMock()
+    mock_application = MagicMock()
+    mock_application.app = mock_fastapi_app
+    
+    # Mock the get_app function
+    mock_get_app = MagicMock(return_value=mock_application)
+    monkeypatch.setattr("src.app.get_app", mock_get_app)
+    
+    # Get the exported FastAPI app
+    import src.app
+    app = src.app.app
+    
+    # Verify that the correct instance was exported
+    assert app is mock_fastapi_app
