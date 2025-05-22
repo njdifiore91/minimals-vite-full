@@ -1,0 +1,38 @@
+{{- /*
+headless-service.yaml
+
+This template creates a headless Kubernetes Service for PostgreSQL StatefulSet.
+The headless service enables DNS-based discovery for individual PostgreSQL pods,
+allowing replicas to find the primary instance and enabling proper replication setup.
+
+A headless service (clusterIP: None) provides the following benefits for StatefulSets:
+1. Stable network identities for each pod in the format:
+   <pod-name>.<service-name>.<namespace>.svc.cluster.local
+2. DNS-based discovery for pods, enabling direct communication
+3. Essential for PostgreSQL replication setup between primary and replicas
+*/}}
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "postgresql.fullname" . }}-headless
+  labels:
+    {{- include "postgresql.labels" . | nindent 4 }}
+  {{- with .Values.headlessService.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- if not .Values.headlessService.annotations }}
+  annotations:
+    service.alpha.kubernetes.io/tolerate-unready-endpoints: "true"
+  {{- end }}
+spec:
+  type: ClusterIP
+  clusterIP: None
+  ports:
+    - name: postgresql
+      port: {{ .Values.service.port | default 5432 }}
+      targetPort: postgresql
+      protocol: TCP
+  selector:
+    {{- include "postgresql.selectorLabels" . | nindent 4 }}
