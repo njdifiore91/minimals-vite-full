@@ -34,10 +34,8 @@ terraform {
     # State file versioning is enabled at the bucket level
     # This allows for state recovery in case of accidental corruption
     
-    # Workspace support for feature branch isolation
-    # When using Terraform workspaces, the state path will include the workspace name
+    # Workspace support - if using Terraform workspaces, the state path will include the workspace name
     # For example, with workspace 'feature-x', the state would be at mca/development/feature-x/terraform.tfstate
-    # This enables isolated infrastructure for feature development and testing
   }
   
   # Experimental features can be enabled here if needed
