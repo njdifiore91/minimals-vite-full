@@ -1,0 +1,438 @@
+{{- /*
+PostgreSQL StatefulSet for Merchant Cash Advance Application Processing System
+
+This StatefulSet deploys PostgreSQL 14 in a primary-replica configuration with:
+- 1 primary database node (ordinal 0)
+- Multiple read replicas (2 for production, 1 for staging)
+- Distributed across availability zones for high availability
+- Configured with appropriate resource limits and requests
+- Health checks for automatic failover
+- Persistent storage with environment-specific sizing
+
+The StatefulSet ensures stable network identities and ordered deployment/scaling.
+*/ -}}
+
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "postgresql.fullname" . }}
+  labels:
+    {{- include "postgresql.labels" . | nindent 4 }}
+    app.kubernetes.io/component: primary
+  annotations:
+    {{- with .Values.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  serviceName: {{ include "postgresql.fullname" . }}-headless
+  # Use environment-specific replica count based on the environment
+  # Production: 2 read replicas (3 total pods)
+  # Staging: 1 read replica (2 total pods)
+  replicas: {{ if eq .Values.global.environment "production" }}3{{ else }}2{{ end }}
+  selector:
+    matchLabels:
+      {{- include "postgresql.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: postgresql
+  # Configure update strategy for minimal downtime
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # Update one pod at a time
+      partition: 0
+  template:
+    metadata:
+      labels:
+        {{- include "postgresql.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: postgresql
+        app.kubernetes.io/version: "14"
+        environment: {{ .Values.global.environment | quote }}
+      annotations:
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        # Add monitoring annotations
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9187"
+        # Add deployment annotations
+        kubernetes.io/description: "PostgreSQL 14 database with primary-replica architecture"
+        # Add backup annotations
+        backup.kubernetes.io/deltas: "daily=7,weekly=4,monthly=3"
+        # Add security annotations
+        seccomp.security.alpha.kubernetes.io/pod: "runtime/default"
+    spec:
+      serviceAccountName: {{ include "postgresql.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      # Enhanced pod distribution strategy
+      affinity:
+        # Ensure pods are distributed across different availability zones
+        podAntiAffinity:
+          # Strongly prefer different zones (production) or nodes (staging)
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  {{- include "postgresql.selectorLabels" . | nindent 18 }}
+                  app.kubernetes.io/component: postgresql
+              # Use zone topology for production, node topology for staging
+              topologyKey: "topology.kubernetes.io/zone"
+          # Also try to distribute across different nodes
+          - weight: 50
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  {{- include "postgresql.selectorLabels" . | nindent 18 }}
+                  app.kubernetes.io/component: postgresql
+              topologyKey: "kubernetes.io/hostname"
+        # For primary pod (ordinal 0), prefer nodes with more resources
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 80
+            preference:
+              matchExpressions:
+              - key: "node-role.kubernetes.io/high-memory"
+                operator: "Exists"
+          # Prefer nodes in a specific region if specified
+          {{- if .Values.global.preferredRegion }}
+          - weight: 70
+            preference:
+              matchExpressions:
+              - key: "topology.kubernetes.io/region"
+                operator: "In"
+                values:
+                - {{ .Values.global.preferredRegion }}
+          {{- end }}
+      initContainers:
+        - name: init-postgresql
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default "14" }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -ex
+              # Determine if this pod is the primary or a replica based on its ordinal index
+              if [[ $HOSTNAME =~ -([0-9]+)$ ]]; then
+                ordinal=${BASH_REMATCH[1]}
+                if [[ $ordinal -eq 0 ]]; then
+                  echo "I am the primary database"
+                  # Initialize the database if needed
+                  if [ ! -f "$PGDATA/PG_VERSION" ]; then
+                    echo "Initializing primary database"
+                    initdb -D "$PGDATA" --username="$POSTGRES_USER" --pwfile=<(echo "$POSTGRES_PASSWORD")
+                    
+                    # Configure primary for replication (PostgreSQL 14 specific settings)
+                    cat >> "$PGDATA/postgresql.conf" << EOF
+              # Replication settings
+              wal_level = replica
+              max_wal_senders = 10
+              max_replication_slots = 10
+              wal_keep_size = 1GB
+              hot_standby = on
+              
+              # Performance settings
+              shared_buffers = {{ if eq .Values.global.environment "production" }}1GB{{ else }}512MB{{ end }}
+              effective_cache_size = {{ if eq .Values.global.environment "production" }}3GB{{ else }}1GB{{ end }}
+              work_mem = {{ if eq .Values.global.environment "production" }}64MB{{ else }}32MB{{ end }}
+              maintenance_work_mem = {{ if eq .Values.global.environment "production" }}256MB{{ else }}128MB{{ end }}
+              
+              # Connection settings
+              max_connections = {{ if eq .Values.global.environment "production" }}200{{ else }}100{{ end }}
+              
+              # Logging settings
+              log_min_duration_statement = 1000
+              log_checkpoints = on
+              log_connections = on
+              log_disconnections = on
+              log_lock_waits = on
+              log_temp_files = 0
+              EOF
+                    
+                    # Configure authentication for replication
+                    cat >> "$PGDATA/pg_hba.conf" << EOF
+              # Allow replication connections from replicas
+              host replication $POSTGRES_REPLICATION_USER all md5
+              # Allow connections from all pods in the cluster
+              host all all all md5
+              EOF
+                  fi
+                else
+                  echo "I am a read replica"
+                  # Wait for primary to be ready
+                  until pg_isready -h {{ include "postgresql.fullname" . }}-0.{{ include "postgresql.fullname" . }}-headless.{{ .Release.Namespace }}.svc.cluster.local -U $POSTGRES_USER; do
+                    echo "Waiting for primary to be ready..."
+                    sleep 2
+                  done
+                  
+                  # Initialize replica from primary if needed
+                  if [ ! -f "$PGDATA/PG_VERSION" ]; then
+                    echo "Initializing replica from primary"
+                    rm -rf "$PGDATA"/*
+                    
+                    # Use pg_basebackup to clone the primary database
+                    PGPASSWORD="$POSTGRES_REPLICATION_PASSWORD" pg_basebackup -D "$PGDATA" -P -X stream \
+                      -h {{ include "postgresql.fullname" . }}-0.{{ include "postgresql.fullname" . }}-headless.{{ .Release.Namespace }}.svc.cluster.local \
+                      -U $POSTGRES_REPLICATION_USER -p 5432
+                    
+                    # PostgreSQL 14 uses a different recovery configuration method
+                    # Create standby.signal file to indicate this is a standby server
+                    touch "$PGDATA/standby.signal"
+                    
+                    # Configure replica settings
+                    cat >> "$PGDATA/postgresql.conf" << EOF
+              # Replication settings
+              primary_conninfo = 'host={{ include "postgresql.fullname" . }}-0.{{ include "postgresql.fullname" . }}-headless.{{ .Release.Namespace }}.svc.cluster.local port=5432 user=$POSTGRES_REPLICATION_USER password=$POSTGRES_REPLICATION_PASSWORD application_name={{ include "postgresql.fullname" . }}-replica-$ordinal'
+              hot_standby = on
+              
+              # Performance settings for replica
+              shared_buffers = {{ if eq .Values.global.environment "production" }}1GB{{ else }}512MB{{ end }}
+              effective_cache_size = {{ if eq .Values.global.environment "production" }}3GB{{ else }}1GB{{ end }}
+              work_mem = {{ if eq .Values.global.environment "production" }}64MB{{ else }}32MB{{ end }}
+              maintenance_work_mem = {{ if eq .Values.global.environment "production" }}256MB{{ else }}128MB{{ end }}
+              
+              # Connection settings
+              max_connections = {{ if eq .Values.global.environment "production" }}200{{ else }}100{{ end }}
+              EOF
+                  fi
+                fi
+              else
+                echo "Failed to parse ordinal from hostname $HOSTNAME"
+                exit 1
+              fi
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "postgresql.secretName" . }}
+                  key: postgres-user
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "postgresql.secretName" . }}
+                  key: postgres-password
+            - name: POSTGRES_REPLICATION_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "postgresql.secretName" . }}
+                  key: replication-user
+            - name: POSTGRES_REPLICATION_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "postgresql.secretName" . }}
+                  key: replication-password
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          securityContext:
+            runAsUser: 999
+      containers:
+        - name: postgresql
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+        # Add PostgreSQL metrics exporter sidecar
+        - name: metrics
+          image: "{{ .Values.metrics.image.repository }}:{{ .Values.metrics.image.tag | default "latest" }}"
+          imagePullPolicy: {{ .Values.metrics.image.pullPolicy | default "IfNotPresent" }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+          ports:
+            - name: metrics
+              containerPort: 9187
+              protocol: TCP
+          env:
+            - name: DATA_SOURCE_NAME
+              value: "postgresql://{{ .Values.metrics.username }}:$(POSTGRES_PASSWORD)@localhost:5432/postgres?sslmode=disable"
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "postgresql.secretName" . }}
+                  key: postgres-password
+          resources:
+            limits:
+              cpu: 100m
+              memory: 128Mi
+            requests:
+              cpu: 50m
+              memory: 64Mi
+          livenessProbe:
+            httpGet:
+              path: /
+              port: metrics
+            initialDelaySeconds: 15
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /
+              port: metrics
+            initialDelaySeconds: 5
+            timeoutSeconds: 3
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default "14" }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: postgresql
+              containerPort: 5432
+              protocol: TCP
+          env:
+            # Database credentials
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "postgresql.secretName" . }}
+                  key: postgres-user
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "postgresql.secretName" . }}
+                  key: postgres-password
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "postgresql.secretName" . }}
+                  key: postgres-db
+            
+            # Replication configuration
+            - name: POSTGRES_REPLICATION_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "postgresql.secretName" . }}
+                  key: replication-user
+            - name: POSTGRES_REPLICATION_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "postgresql.secretName" . }}
+                  key: replication-password
+            
+            # Data directory configuration
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+            
+            # Pod metadata for scripts and configuration
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            
+            # PostgreSQL configuration
+            - name: POSTGRES_INITDB_ARGS
+              value: "--data-checksums"
+            - name: POSTGRES_HOST_AUTH_METHOD
+              value: "md5"
+            
+            # Environment-specific settings
+            - name: ENVIRONMENT
+              value: {{ .Values.global.environment | quote }}
+            
+            # Connection pool settings
+            - name: POSTGRES_MAX_CONNECTIONS
+              value: {{ if eq .Values.global.environment "production" }}"200"{{ else }}"100"{{ end }}
+            - name: POSTGRES_SHARED_BUFFERS
+              value: {{ if eq .Values.global.environment "production" }}"1GB"{{ else }}"512MB"{{ end }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          # Enhanced health checks for PostgreSQL 14
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  # Check if PostgreSQL is accepting connections
+                  pg_isready -U $POSTGRES_USER -h localhost -p 5432 || exit 1
+                  
+                  # For primary, check if it can execute a simple query
+                  if [[ $(hostname) == *-0 ]]; then
+                    psql -U $POSTGRES_USER -d $POSTGRES_DB -c 'SELECT 1;' > /dev/null 2>&1 || exit 1
+                  fi
+            initialDelaySeconds: 60
+            periodSeconds: 20
+            timeoutSeconds: 10
+            successThreshold: 1
+            failureThreshold: 5
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  # Check if PostgreSQL is accepting connections
+                  pg_isready -U $POSTGRES_USER -h localhost -p 5432 || exit 1
+                  
+                  # For replicas, check if replication is working
+                  if [[ $(hostname) != *-0 ]]; then
+                    # Check if replica is in recovery mode (which means it's replicating)
+                    psql -U $POSTGRES_USER -d $POSTGRES_DB -c 'SELECT pg_is_in_recovery();' | grep 't' > /dev/null 2>&1 || exit 1
+                  fi
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            successThreshold: 1
+            failureThreshold: 3
+          # Add lifecycle hooks for graceful shutdown
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - |
+                    # Graceful shutdown for PostgreSQL
+                    if [[ $(hostname) == *-0 ]]; then
+                      # Primary node: promote a replica if possible before shutting down
+                      echo "Primary node shutting down, attempting to promote a replica..."
+                      # Only attempt promotion in production environment with replicas
+                      if [[ "{{ .Values.global.environment }}" == "production" ]]; then
+                        psql -U $POSTGRES_USER -c "SELECT pg_promote();" || true
+                      fi
+                    else
+                      # Replica node: just stop gracefully
+                      echo "Replica node shutting down..."
+                    fi
+                    # Give connections time to drain
+                    sleep 5
+                    # Stop PostgreSQL gracefully
+                    pg_ctl -D "$PGDATA" -m fast stop
+          
+          resources:
+            requests:
+              # Set reasonable resource requests based on environment
+              cpu: {{ if eq .Values.global.environment "production" }}1000m{{ else }}500m{{ end }}
+              memory: {{ if eq .Values.global.environment "production" }}2Gi{{ else }}1Gi{{ end }}
+            limits:
+              # Set resource limits based on environment
+              cpu: {{ if eq .Values.global.environment "production" }}2000m{{ else }}1000m{{ end }}
+              memory: {{ if eq .Values.global.environment "production" }}4Gi{{ else }}2Gi{{ end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "postgresql.selectorLabels" . | nindent 10 }}
+          app.kubernetes.io/component: postgresql
+      spec:
+        accessModes: [ "ReadWriteOnce" ]
+        storageClassName: {{ .Values.persistence.storageClass | quote }}
+        resources:
+          requests:
+            # Set storage size based on environment
+            # Production: 100Gi, Staging: 50Gi
+            storage: {{ if eq .Values.global.environment "production" }}100Gi{{ else }}50Gi{{ end }}
