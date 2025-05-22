@@ -1,40 +1,34 @@
-/**
- * MCA Application Action Hooks
- * 
- * This file implements custom React hooks for MCA application data fetching and manipulation
- * using SWR. These hooks standardize data access patterns, handle loading/error states,
- * and ensure consistent caching across the application.
- */
-
-import { useMemo, useCallback, useState } from 'react';
-import useSWR, { mutate, useSWRConfig, type SWRConfiguration, type SWRResponse } from 'swr';
-import { applicationEndpoints, type NormalizedError } from '../lib/axios';
+import type { SWRConfiguration, SWRResponse } from 'swr';
 import type {
   IApplicationItem,
-  IApplicationFilters,
   IApplicationStatus,
+  IApplicationFilters,
   IBulkActionParams,
-} from '../types/application';
+} from 'src/types/application';
+
+import useSWR, { mutate } from 'swr';
+import { useMemo, useCallback } from 'react';
+
+import axiosInstance, { API_ENDPOINTS, NormalizedError } from 'src/lib/axios';
 
 // ----------------------------------------------------------------------
 
 /**
- * SWR configuration options for application data
- * - Disables automatic revalidation on stale data, focus, and reconnect
- * - Configures error retry behavior
+ * SWR configuration options for application data fetching.
+ * - Disables automatic revalidation on stale data
+ * - Disables automatic revalidation on focus
+ * - Disables automatic revalidation on reconnect
  */
 const swrOptions: SWRConfiguration = {
   revalidateIfStale: false,
   revalidateOnFocus: false,
   revalidateOnReconnect: false,
-  errorRetryCount: 3,
-  errorRetryInterval: 5000,
 };
 
 // ----------------------------------------------------------------------
 
 /**
- * Pagination parameters for application list
+ * Interface for pagination parameters.
  */
 export interface IPaginationParams {
   page: number;
@@ -42,7 +36,7 @@ export interface IPaginationParams {
 }
 
 /**
- * Response structure for paginated application list
+ * Interface for the response data from the applications list endpoint.
  */
 interface ApplicationsListResponse {
   applications: IApplicationItem[];
@@ -53,34 +47,80 @@ interface ApplicationsListResponse {
 }
 
 /**
- * Hook for fetching paginated list of MCA applications with filtering options
+ * Interface for the response data from the application details endpoint.
+ */
+interface ApplicationDetailResponse {
+  application: IApplicationItem;
+}
+
+/**
+ * Interface for the response data from the application status update endpoint.
+ */
+interface ApplicationStatusUpdateResponse {
+  success: boolean;
+  application: IApplicationItem;
+}
+
+/**
+ * Interface for the response data from the bulk action endpoint.
+ */
+interface BulkActionResponse {
+  success: boolean;
+  processed: number;
+  failed: number;
+  applications: IApplicationItem[];
+}
+
+/**
+ * Custom hook for fetching a paginated list of applications with filtering options.
  * 
- * @param pagination - Pagination parameters (page, limit)
- * @param filters - Optional filters (status, date range, merchant name)
- * @returns Memoized object with applications data and loading states
+ * @param pagination - Pagination parameters (page and limit)
+ * @param filters - Optional filters for status, date range, and merchant name
+ * @returns Object containing applications data, loading state, error state, and empty state
  */
 export function useGetApplications(
   pagination: IPaginationParams,
   filters?: Partial<IApplicationFilters>
 ) {
-  // Construct query parameters
-  const params = {
+  // Construct the query parameters
+  const params: Record<string, any> = {
     page: pagination.page,
     limit: pagination.limit,
-    status: filters?.status || '',
-    startDate: filters?.dateRange?.startDate ? filters.dateRange.startDate.toISOString() : '',
-    endDate: filters?.dateRange?.endDate ? filters.dateRange.endDate.toISOString() : '',
-    merchantName: filters?.merchantName || '',
   };
 
+  // Add filters to params if they exist
+  if (filters) {
+    if (filters.status && filters.status !== 'all') {
+      params.status = filters.status;
+    }
+
+    if (filters.merchantName) {
+      params.merchantName = filters.merchantName;
+    }
+
+    if (filters.dateRange?.startDate) {
+      params.startDate = filters.dateRange.startDate?.toISOString();
+    }
+
+    if (filters.dateRange?.endDate) {
+      params.endDate = filters.dateRange.endDate?.toISOString();
+    }
+  }
+
+  // Create the SWR key with the endpoint and params
+  const url = [API_ENDPOINTS.applications.list, { params }];
+
   // Fetch data using SWR
-  const { data, error, isLoading, isValidating, mutate } = useSWR<
-    ApplicationsListResponse,
-    NormalizedError
-  >(
-    ['applications', params],
-    () => applicationEndpoints.list(params).then(response => response.data),
-    swrOptions
+  const { data, error, isLoading, isValidating, mutate } = useSWR<ApplicationsListResponse, NormalizedError>(
+    url,
+    async ([endpoint, config]) => {
+      const response = await axiosInstance.get(endpoint, config);
+      return response.data;
+    },
+    {
+      ...swrOptions,
+      keepPreviousData: true,
+    }
   );
 
   // Memoize the return value to prevent unnecessary re-renders
@@ -97,7 +137,7 @@ export function useGetApplications(
       applicationsError: error,
       applicationsValidating: isValidating,
       applicationsEmpty: !isLoading && !isValidating && !data?.applications.length,
-      refetch: mutate,
+      refetch: () => mutate(),
     }),
     [data, error, isLoading, isValidating, mutate, pagination.limit, pagination.page]
   );
@@ -108,29 +148,22 @@ export function useGetApplications(
 // ----------------------------------------------------------------------
 
 /**
- * Response structure for detailed application data
- */
-interface ApplicationDetailResponse {
-  application: IApplicationItem;
-}
-
-/**
- * Hook for retrieving detailed application data with related metadata
+ * Custom hook for fetching detailed information about a specific application.
  * 
- * @param applicationId - ID of the application to retrieve
- * @returns Memoized object with application data and loading states
+ * @param applicationId - The ID of the application to fetch
+ * @returns Object containing application data, loading state, and error state
  */
 export function useGetApplicationById(applicationId: string) {
-  // Only fetch if we have an applicationId
-  const shouldFetch = Boolean(applicationId);
+  // Only create a URL if we have an applicationId
+  const url = applicationId ? [API_ENDPOINTS.applications.details(applicationId)] : null;
 
   // Fetch data using SWR
-  const { data, error, isLoading, isValidating, mutate } = useSWR<
-    ApplicationDetailResponse,
-    NormalizedError
-  >(
-    shouldFetch ? ['application', applicationId] : null,
-    () => applicationEndpoints.getById(applicationId).then(response => response.data),
+  const { data, error, isLoading, isValidating, mutate } = useSWR<ApplicationDetailResponse, NormalizedError>(
+    url,
+    async ([endpoint]) => {
+      const response = await axiosInstance.get(endpoint);
+      return response.data;
+    },
     swrOptions
   );
 
@@ -141,7 +174,7 @@ export function useGetApplicationById(applicationId: string) {
       applicationLoading: isLoading,
       applicationError: error,
       applicationValidating: isValidating,
-      refetch: mutate,
+      refetch: () => mutate(),
     }),
     [data?.application, error, isLoading, isValidating, mutate]
   );
@@ -152,155 +185,186 @@ export function useGetApplicationById(applicationId: string) {
 // ----------------------------------------------------------------------
 
 /**
- * Hook for optimistic updates to application status with backend synchronization
+ * Custom hook for updating the status of an application with optimistic updates.
  * 
- * @returns Object with update function and loading state
+ * @returns Object containing update function and loading state
  */
 export function useUpdateApplicationStatus() {
   // Track loading state
-  const [isUpdating, setIsUpdating] = useState(false);
-  
-  // Get SWR config including cache
-  const { cache } = useSWRConfig();
-  
-  // Update function with optimistic UI updates
+  const [isUpdating, setIsUpdating] = useMemo(() => [false, () => {}], []);
+
+  /**
+   * Updates the status of an application with optimistic UI updates.
+   * 
+   * @param applicationId - The ID of the application to update
+   * @param newStatus - The new status to set
+   * @param notes - Optional notes to add to the application
+   * @returns Promise resolving to the updated application or rejecting with an error
+   */
   const updateStatus = useCallback(
-    async (applicationId: string, newStatus: IApplicationStatus) => {
-      if (!applicationId) return false;
-      
-      // Start loading
-      setIsUpdating(true);
-      
-      // Get the current cache key
-      const cacheKey = ['application', applicationId];
-      
-      // Initialize listCacheKeys outside the try block
-      let listCacheKeys: any[] = [];
-      
+    async (applicationId: string, newStatus: IApplicationStatus, notes?: string) => {
+      // Endpoint for the specific application
+      const endpoint = API_ENDPOINTS.applications.status(applicationId);
+      // Key for the application detail in SWR cache
+      const detailKey = [API_ENDPOINTS.applications.details(applicationId)];
+
       try {
-        // Get current data from cache
-        const currentData = cache.get(cacheKey)?.data as ApplicationDetailResponse | undefined;
-        
-        // Get list cache keys
-        listCacheKeys = Array.from(cache.keys()).filter(key => 
-          typeof key === 'string' && key.startsWith('applications')
+        setIsUpdating(true);
+
+        // Optimistically update the application in the cache
+        await mutate(
+          detailKey,
+          async (currentData: ApplicationDetailResponse | undefined) => {
+            if (!currentData) return currentData;
+
+            // Create an optimistically updated version of the application
+            const updatedApplication = {
+              ...currentData.application,
+              status: newStatus,
+              updated_at: new Date().toISOString(),
+              notes: notes || currentData.application.notes,
+            };
+
+            // Return the updated data
+            return {
+              application: updatedApplication,
+            };
+          },
+          // Don't revalidate immediately as we're doing an optimistic update
+          { revalidate: false }
         );
-        
-        if (currentData) {
-          // Optimistically update the cache
-          mutate(
-            cacheKey,
-            {
-              application: {
-                ...currentData.application,
-                status: newStatus,
-                updated_at: new Date().toISOString(),
-              },
-            },
-            false // Don't revalidate yet
-          );
-          
-          // Also update in the list view if it exists in cache
-          listCacheKeys.forEach(listKey => {
-            const listData = cache.get(listKey)?.data as ApplicationsListResponse | undefined;
-            
-            if (listData) {
-              const updatedApplications = listData.applications.map(app => 
-                app.id === applicationId 
-                  ? { ...app, status: newStatus, updated_at: new Date().toISOString() }
-                  : app
-              );
-              
-              mutate(
-                listKey,
-                { ...listData, applications: updatedApplications },
-                false // Don't revalidate yet
-              );
-            }
-          });
-        }
-        
-        // Make the actual API call
-        await applicationEndpoints.updateStatus(applicationId, newStatus);
-        
-        // Revalidate the cache to ensure it's in sync with the server
-        await mutate(cacheKey);
-        await Promise.all(listCacheKeys.map(key => mutate(key)));
-        
-        setIsUpdating(false);
-        return true;
+
+        // Make the actual API call to update the status
+        const response = await axiosInstance.patch(endpoint, {
+          status: newStatus,
+          notes,
+        });
+
+        // Get the updated application from the response
+        const updatedApplication = response.data.application;
+
+        // Update all lists that might contain this application
+        // This will update any application list views that are currently loaded
+        mutate(
+          (key) => Array.isArray(key) && key[0] === API_ENDPOINTS.applications.list,
+          async (currentData: ApplicationsListResponse | undefined) => {
+            if (!currentData) return currentData;
+
+            // Update the application in the list if it exists
+            const updatedApplications = currentData.applications.map((app) =>
+              app.id === applicationId ? updatedApplication : app
+            );
+
+            // Return the updated list
+            return {
+              ...currentData,
+              applications: updatedApplications,
+            };
+          },
+          // Don't revalidate as we already have the updated data
+          { revalidate: false }
+        );
+
+        // Update the detail view with the actual response data
+        mutate(detailKey, { application: updatedApplication }, { revalidate: false });
+
+        return updatedApplication;
       } catch (error) {
-        console.error('Failed to update application status:', error);
+        // If the API call fails, revalidate the cache to get the correct data
+        mutate(detailKey);
         
-        // Revalidate to restore the correct data
-        await mutate(['application', applicationId]);
+        // Also revalidate any application lists
+        mutate((key) => Array.isArray(key) && key[0] === API_ENDPOINTS.applications.list);
         
-        // Revalidate list views - use the listCacheKeys we already defined
-        await Promise.all(listCacheKeys.map(key => mutate(key)));
-        
+        // Re-throw the error for the caller to handle
+        throw error;
+      } finally {
         setIsUpdating(false);
-        return false;
       }
     },
-    [cache]
+    [setIsUpdating]
   );
-  
+
   return { updateStatus, isUpdating };
 }
 
 // ----------------------------------------------------------------------
 
 /**
- * Hook for batch operations on multiple selected applications
+ * Custom hook for performing bulk actions on multiple applications.
  * 
- * @returns Object with bulk action function and loading state
+ * @returns Object containing bulk action function and loading state
  */
 export function useBulkActionApplications() {
   // Track loading state
-  const [isProcessing, setIsProcessing] = useState(false);
-  
-  // Get SWR config including cache
-  const { cache } = useSWRConfig();
-  
-  // Bulk action function
-  const performBulkAction = useCallback(
+  const [isProcessing, setIsProcessing] = useMemo(() => [false, () => {}], []);
+
+  /**
+   * Performs a bulk action on multiple applications.
+   * 
+   * @param params - Bulk action parameters including IDs and action type
+   * @returns Promise resolving to the result of the bulk action
+   */
+  const bulkAction = useCallback(
     async (params: IBulkActionParams) => {
-      if (!params.ids.length) return false;
-      
-      // Start loading
-      setIsProcessing(true);
-      
       try {
-        // Make the API call
-        await applicationEndpoints.bulkAction(params.ids, params.action);
-        
-        // Revalidate all application list caches
-        const listCacheKeys = Array.from(cache.keys()).filter(key => 
-          typeof key === 'string' && key.startsWith('applications')
+        setIsProcessing(true);
+
+        // Make the API call to perform the bulk action
+        const response = await axiosInstance.post(
+          API_ENDPOINTS.applications.bulkActions,
+          params
         );
-        await Promise.all(listCacheKeys.map(key => mutate(key)));
-        
-        // Revalidate individual application caches if they exist
-        await Promise.all(
-          params.ids.map(id => {
-            const cacheKey = ['application', id];
-            if (cache.has(cacheKey)) {
-              return mutate(cacheKey);
-            }
-            return Promise.resolve();
-          })
+
+        // Get the result from the response
+        const result = response.data as BulkActionResponse;
+
+        // Update all application lists that might contain these applications
+        mutate(
+          (key) => Array.isArray(key) && key[0] === API_ENDPOINTS.applications.list,
+          async (currentData: ApplicationsListResponse | undefined) => {
+            if (!currentData) return currentData;
+
+            // Create a map of updated applications for quick lookup
+            const updatedAppsMap = new Map(
+              result.applications.map((app) => [app.id, app])
+            );
+
+            // Update applications in the list if they exist
+            const updatedApplications = currentData.applications.map((app) => {
+              const updatedApp = updatedAppsMap.get(app.id);
+              return updatedApp || app;
+            });
+
+            // Return the updated list
+            return {
+              ...currentData,
+              applications: updatedApplications,
+            };
+          },
+          // Don't revalidate as we already have the updated data
+          { revalidate: false }
         );
-        
-        setIsProcessing(false);
-        return true;
+
+        // Also update any individual application detail views that might be open
+        for (const app of result.applications) {
+          const detailKey = [API_ENDPOINTS.applications.details(app.id)];
+          mutate(detailKey, { application: app }, { revalidate: false });
+        }
+
+        return result;
       } catch (error) {
-        console.error('Failed to perform bulk action:', error);
+        // If the API call fails, revalidate all application lists
+        mutate((key) => Array.isArray(key) && key[0] === API_ENDPOINTS.applications.list);
+        
+        // Re-throw the error for the caller to handle
+        throw error;
+      } finally {
         setIsProcessing(false);
-        return false;
       }
     },
-    [cache]
+    [setIsProcessing]
   );
-  
-  return { performBulkAction, isProcessing };
+
+  return { bulkAction, isProcessing };
 }
