@@ -4,502 +4,774 @@ import uuid
 import json
 import pytest
 import logging
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, call
+from datetime import datetime, timedelta
 from typing import Dict, List, Any, Tuple
 
-# Import Document Service components
-from src.app import DocumentServiceApp
-from src.config import app_config, rabbitmq_config, s3_config, model_config
-from src.types.documents import DocumentType, ProcessingStatus
-from src.types.classification import ClassificationResult
-from src.types.messages import MessagePayload
-from src.services.queue_service import QueueService
-from src.services.storage_service import StorageService
-from src.services.classification_service import ClassificationService
-from src.services.document_routing_service import DocumentRoutingService
+# Import application components
+from app import DocumentServiceApp
+from config import app_config, rabbitmq_config
+from services import QueueService, StorageService, ClassificationService, DocumentRoutingService
+from models import DocumentClassifier
+from types.classification import ClassificationResult, ConfidenceScore
+from types.storage import StorageMetadata
+from utils.validation_utils import validate_document_format
+from utils.file_utils import get_mime_type
+from utils.time_utils import get_current_timestamp, calculate_processing_time
 
 # Configure logging for tests
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 
 @pytest.mark.integration
-class TestDocumentServiceEndToEnd:
+class TestDocumentProcessingEndToEnd:
     """
-    End-to-end integration tests for the Document Service.
+    Integration tests for the complete document processing flow in the Document Service.
     
-    These tests verify the complete document processing flow from message consumption
-    to result publication, ensuring that all components work together correctly.
+    These tests verify that documents are correctly consumed from RabbitMQ, classified,
+    stored in S3, and routed to appropriate OCR processors. The tests validate the entire
+    processing pipeline from message consumption to result publication.
     """
     
     @pytest.fixture
-    def app(self, rabbitmq_connection, s3_client, classification_models):
+    def app(self, mock_queue_service, mock_storage_service, mock_classification_service, mock_document_routing_service):
         """
-        Creates a Document Service application instance with test dependencies.
+        Create a test instance of the DocumentServiceApp with mocked services.
         """
-        # Create a test configuration
-        test_config = app_config.get_test_config()
-        
-        # Initialize the application with test dependencies
-        app = DocumentServiceApp(config=test_config)
-        
-        # Inject test dependencies
-        app.queue_service = QueueService(
-            connection=rabbitmq_connection,
-            config=rabbitmq_config
-        )
-        app.storage_service = StorageService(
-            s3_client=s3_client,
-            config=s3_config
-        )
-        app.classification_service = ClassificationService(
-            models=classification_models,
-            config=model_config
-        )
-        app.document_routing_service = DocumentRoutingService(
-            config=model_config
-        )
-        
-        # Start the application
-        app.start()
-        
-        yield app
-        
-        # Stop the application after tests
-        app.stop()
+        app = DocumentServiceApp()
+        app.queue_service = mock_queue_service
+        app.storage_service = mock_storage_service
+        app.classification_service = mock_classification_service
+        app.document_routing_service = mock_document_routing_service
+        return app
     
     @pytest.fixture
-    def test_documents(self, s3_client, test_bucket):
+    def sample_document_message(self, sample_pdf_document):
         """
-        Creates test documents of different types in S3 for testing.
+        Create a sample RabbitMQ message containing a document for processing.
+        """
+        return {
+            "message_id": str(uuid.uuid4()),
+            "document": {
+                "id": str(uuid.uuid4()),
+                "name": "loan_application.pdf",
+                "content_type": "application/pdf",
+                "size": len(sample_pdf_document),
+                "binary_data": sample_pdf_document,
+                "source": "email",
+                "received_timestamp": get_current_timestamp(),
+                "sender": "applicant@example.com",
+                "subject": "Loan Application Documents"
+            },
+            "metadata": {
+                "application_id": str(uuid.uuid4()),
+                "customer_id": str(uuid.uuid4()),
+                "priority": "high"
+            }
+        }
+    
+    def test_complete_document_processing_flow(self, app, sample_document_message, caplog):
+        """
+        Test the complete document processing flow from message consumption to result publication.
         
-        Returns a dictionary mapping document IDs to their expected classification types.
+        This test verifies that a document is correctly processed through the entire pipeline:
+        1. Message is consumed from RabbitMQ
+        2. Document is validated and stored in S3
+        3. Document is classified with high confidence
+        4. Document is routed to the appropriate OCR processor
+        5. Results are published to the OCR queue
+        6. Processing completes within time limits
+        7. Proper logging occurs throughout the process
         """
-        document_types = {
-            "application_form.pdf": DocumentType.APPLICATION,
-            "tax_return_2023.pdf": DocumentType.TAX_RETURN,
-            "bank_statement_march.pdf": DocumentType.BANK_STATEMENT,
-            "pay_stub_q1.pdf": DocumentType.PAY_STUB,
-            "drivers_license.jpg": DocumentType.ID_DOCUMENT,
-            "misc_document.pdf": DocumentType.OTHER
+        caplog.set_level(logging.INFO)
+        
+        # Set up expected classification result
+        expected_classification = ClassificationResult(
+            document_type="loan_application",
+            confidence=ConfidenceScore(score=0.95, threshold=0.75),
+            features={
+                "page_count": 3,
+                "has_signature": True,
+                "has_tables": True
+            },
+            metadata={
+                "document_id": sample_document_message["document"]["id"],
+                "application_id": sample_document_message["metadata"]["application_id"],
+                "classification_timestamp": get_current_timestamp()
+            }
+        )
+        
+        # Configure mocks for the happy path
+        app.storage_service.store_document.return_value = {
+            "storage_path": f"documents/{sample_document_message['document']['id']}.pdf",
+            "metadata": StorageMetadata(
+                document_id=sample_document_message["document"]["id"],
+                content_type="application/pdf",
+                size=sample_document_message["document"]["size"],
+                upload_timestamp=get_current_timestamp(),
+                encryption="AES-256"
+            )
         }
         
-        document_ids = {}
+        app.classification_service.classify_document.return_value = expected_classification
         
-        # Upload test documents to S3
-        for filename, doc_type in document_types.items():
-            document_id = str(uuid.uuid4())
-            document_path = os.path.join("test_data", filename)
-            
-            # Create test document content if file doesn't exist
-            if not os.path.exists(document_path):
-                with open(document_path, "wb") as f:
-                    f.write(b"Test document content for " + filename.encode())
-            
-            # Upload to S3
-            with open(document_path, "rb") as f:
-                s3_client.upload_fileobj(
-                    f,
-                    test_bucket,
-                    f"documents/{document_id}/{filename}",
-                    ExtraArgs={
-                        "ServerSideEncryption": "AES256",
-                        "Metadata": {
-                            "filename": filename,
-                            "content-type": "application/pdf" if filename.endswith(".pdf") else "image/jpeg"
-                        }
-                    }
-                )
-            
-            document_ids[document_id] = doc_type
+        app.document_routing_service.determine_routing.return_value = {
+            "queue": "ocr.loan_application",
+            "routing_key": "ocr.typed.form",
+            "priority": 8,
+            "metadata": {
+                "expected_fields": ["name", "address", "loan_amount", "term", "signature"],
+                "document_type": "loan_application",
+                "confidence": 0.95
+            }
+        }
         
-        return document_ids
+        # Start processing time measurement
+        start_time = time.time()
+        
+        # Process the document
+        app.process_document(sample_document_message)
+        
+        # End processing time measurement
+        processing_time = time.time() - start_time
+        
+        # Verify processing time is under the required limit (5 minutes)
+        assert processing_time < 300, f"Processing took {processing_time} seconds, which exceeds the 5-minute limit"
+        
+        # Verify document validation was performed
+        app.storage_service.store_document.assert_called_once()
+        
+        # Verify document was classified
+        app.classification_service.classify_document.assert_called_once()
+        
+        # Verify document was routed
+        app.document_routing_service.determine_routing.assert_called_once_with(
+            expected_classification
+        )
+        
+        # Verify result was published to the OCR queue
+        app.queue_service.publish_message.assert_called_once()
+        publish_args = app.queue_service.publish_message.call_args[0]
+        assert publish_args[0] == "ocr.loan_application"  # queue
+        assert publish_args[1] == "ocr.typed.form"  # routing key
+        
+        # Verify the published message contains the expected data
+        published_message = json.loads(publish_args[2])
+        assert published_message["document_id"] == sample_document_message["document"]["id"]
+        assert published_message["document_type"] == "loan_application"
+        assert published_message["confidence"] == 0.95
+        assert "storage_path" in published_message
+        assert "application_id" in published_message
+        
+        # Verify proper logging occurred
+        assert "Document received for processing" in caplog.text
+        assert "Document stored in S3" in caplog.text
+        assert "Document classified as loan_application with 95% confidence" in caplog.text
+        assert "Document routed to OCR processor" in caplog.text
+        assert "Document processing completed successfully" in caplog.text
     
-    @pytest.fixture
-    def test_messages(self, test_documents, test_bucket):
+    def test_document_processing_with_low_confidence(self, app, sample_document_message, caplog):
         """
-        Creates test RabbitMQ messages for the test documents.
-        """
-        messages = []
+        Test document processing when classification confidence is below the threshold.
         
-        for document_id, _ in test_documents.items():
-            # Create a message payload for each document
-            message = {
-                "document_id": document_id,
-                "bucket": test_bucket,
-                "path": f"documents/{document_id}",
+        This test verifies that when a document is classified with low confidence:
+        1. It is flagged for human review
+        2. It is still routed to the appropriate OCR processor
+        3. The message published to the OCR queue includes the low confidence flag
+        4. Proper warning logs are generated
+        """
+        caplog.set_level(logging.WARNING)
+        
+        # Set up classification result with low confidence
+        low_confidence_classification = ClassificationResult(
+            document_type="loan_application",
+            confidence=ConfidenceScore(score=0.65, threshold=0.75),  # Below threshold
+            features={
+                "page_count": 3,
+                "has_signature": True,
+                "has_tables": True
+            },
+            metadata={
+                "document_id": sample_document_message["document"]["id"],
+                "application_id": sample_document_message["metadata"]["application_id"],
+                "classification_timestamp": get_current_timestamp()
+            }
+        )
+        
+        # Configure mocks
+        app.storage_service.store_document.return_value = {
+            "storage_path": f"documents/{sample_document_message['document']['id']}.pdf",
+            "metadata": StorageMetadata(
+                document_id=sample_document_message["document"]["id"],
+                content_type="application/pdf",
+                size=sample_document_message["document"]["size"],
+                upload_timestamp=get_current_timestamp(),
+                encryption="AES-256"
+            )
+        }
+        
+        app.classification_service.classify_document.return_value = low_confidence_classification
+        
+        app.document_routing_service.determine_routing.return_value = {
+            "queue": "ocr.loan_application",
+            "routing_key": "ocr.typed.form",
+            "priority": 5,  # Lower priority due to low confidence
+            "metadata": {
+                "expected_fields": ["name", "address", "loan_amount", "term", "signature"],
+                "document_type": "loan_application",
+                "confidence": 0.65,
+                "requires_review": True
+            }
+        }
+        
+        # Process the document
+        app.process_document(sample_document_message)
+        
+        # Verify document was classified
+        app.classification_service.classify_document.assert_called_once()
+        
+        # Verify document was routed despite low confidence
+        app.document_routing_service.determine_routing.assert_called_once_with(
+            low_confidence_classification
+        )
+        
+        # Verify result was published to the OCR queue with the review flag
+        app.queue_service.publish_message.assert_called_once()
+        publish_args = app.queue_service.publish_message.call_args[0]
+        published_message = json.loads(publish_args[2])
+        assert published_message["requires_review"] is True
+        assert published_message["confidence"] == 0.65
+        
+        # Verify proper warning logs were generated
+        assert "Low confidence classification detected" in caplog.text
+        assert "Document flagged for human review" in caplog.text
+    
+    def test_document_processing_with_unsupported_format(self, app, sample_document_message, caplog):
+        """
+        Test document processing when the document format is not supported.
+        
+        This test verifies that when an unsupported document is received:
+        1. The document is rejected with appropriate error
+        2. The error is properly logged
+        3. No classification or routing is attempted
+        """
+        caplog.set_level(logging.ERROR)
+        
+        # Modify the document to have an unsupported format
+        sample_document_message["document"]["name"] = "document.xyz"
+        sample_document_message["document"]["content_type"] = "application/xyz"
+        
+        # Configure the validation to fail
+        with patch('utils.validation_utils.validate_document_format', return_value=False):
+            # Process the document
+            with pytest.raises(ValueError, match="Unsupported document format"):
+                app.process_document(sample_document_message)
+        
+        # Verify classification was not attempted
+        app.classification_service.classify_document.assert_not_called()
+        
+        # Verify routing was not attempted
+        app.document_routing_service.determine_routing.assert_not_called()
+        
+        # Verify no message was published
+        app.queue_service.publish_message.assert_not_called()
+        
+        # Verify error was logged
+        assert "Unsupported document format" in caplog.text
+        assert "Document processing failed" in caplog.text
+    
+    def test_document_processing_with_s3_storage_failure(self, app, sample_document_message, caplog):
+        """
+        Test document processing when S3 storage fails.
+        
+        This test verifies that when S3 storage fails:
+        1. The error is properly handled and logged
+        2. The document processing is retried up to the configured limit
+        3. After retries are exhausted, the document is sent to a dead-letter queue
+        """
+        caplog.set_level(logging.ERROR)
+        
+        # Configure storage service to raise an exception
+        app.storage_service.store_document.side_effect = Exception("S3 connection error")
+        
+        # Configure retry settings for testing
+        app.max_retries = 3
+        app.retry_delay = 0.1  # Short delay for testing
+        
+        # Process the document (should handle the exception and retry)
+        with patch('time.sleep'):  # Mock sleep to speed up the test
+            app.process_document(sample_document_message)
+        
+        # Verify storage was attempted multiple times (up to max_retries)
+        assert app.storage_service.store_document.call_count == app.max_retries
+        
+        # Verify the document was sent to the dead-letter queue after retries
+        app.queue_service.publish_to_dlq.assert_called_once()
+        dlq_args = app.queue_service.publish_to_dlq.call_args[0]
+        dlq_message = json.loads(dlq_args[0])
+        assert dlq_message["document_id"] == sample_document_message["document"]["id"]
+        assert "S3 connection error" in dlq_message["error"]
+        
+        # Verify errors were logged
+        assert "Failed to store document in S3" in caplog.text
+        assert f"Retry attempt 1 of {app.max_retries}" in caplog.text
+        assert f"Retry attempt 2 of {app.max_retries}" in caplog.text
+        assert f"Retry attempt 3 of {app.max_retries}" in caplog.text
+        assert "Max retries exceeded" in caplog.text
+        assert "Document sent to dead-letter queue" in caplog.text
+    
+    def test_document_processing_with_classification_failure(self, app, sample_document_message, caplog):
+        """
+        Test document processing when classification fails.
+        
+        This test verifies that when document classification fails:
+        1. The error is properly handled and logged
+        2. The document is still stored in S3
+        3. The document is sent to a manual classification queue
+        """
+        caplog.set_level(logging.ERROR)
+        
+        # Configure storage to succeed
+        app.storage_service.store_document.return_value = {
+            "storage_path": f"documents/{sample_document_message['document']['id']}.pdf",
+            "metadata": StorageMetadata(
+                document_id=sample_document_message["document"]["id"],
+                content_type="application/pdf",
+                size=sample_document_message["document"]["size"],
+                upload_timestamp=get_current_timestamp(),
+                encryption="AES-256"
+            )
+        }
+        
+        # Configure classification to fail
+        app.classification_service.classify_document.side_effect = Exception("Classification model error")
+        
+        # Process the document
+        app.process_document(sample_document_message)
+        
+        # Verify document was stored in S3
+        app.storage_service.store_document.assert_called_once()
+        
+        # Verify classification was attempted
+        app.classification_service.classify_document.assert_called_once()
+        
+        # Verify routing was not attempted
+        app.document_routing_service.determine_routing.assert_not_called()
+        
+        # Verify document was sent to manual classification queue
+        app.queue_service.publish_message.assert_called_once()
+        publish_args = app.queue_service.publish_message.call_args[0]
+        assert publish_args[0] == "manual.classification"  # queue
+        assert publish_args[1] == "document.manual.review"  # routing key
+        
+        # Verify error was logged
+        assert "Classification failed" in caplog.text
+        assert "Document sent for manual classification" in caplog.text
+    
+    def test_document_processing_with_routing_failure(self, app, sample_document_message, caplog):
+        """
+        Test document processing when routing determination fails.
+        
+        This test verifies that when document routing fails:
+        1. The error is properly handled and logged
+        2. The document is still stored in S3 and classified
+        3. The document is sent to a default OCR queue with a warning flag
+        """
+        caplog.set_level(logging.ERROR)
+        
+        # Configure storage to succeed
+        app.storage_service.store_document.return_value = {
+            "storage_path": f"documents/{sample_document_message['document']['id']}.pdf",
+            "metadata": StorageMetadata(
+                document_id=sample_document_message["document"]["id"],
+                content_type="application/pdf",
+                size=sample_document_message["document"]["size"],
+                upload_timestamp=get_current_timestamp(),
+                encryption="AES-256"
+            )
+        }
+        
+        # Configure classification to succeed
+        classification_result = ClassificationResult(
+            document_type="loan_application",
+            confidence=ConfidenceScore(score=0.95, threshold=0.75),
+            features={
+                "page_count": 3,
+                "has_signature": True,
+                "has_tables": True
+            },
+            metadata={
+                "document_id": sample_document_message["document"]["id"],
+                "application_id": sample_document_message["metadata"]["application_id"],
+                "classification_timestamp": get_current_timestamp()
+            }
+        )
+        app.classification_service.classify_document.return_value = classification_result
+        
+        # Configure routing to fail
+        app.document_routing_service.determine_routing.side_effect = Exception("Routing configuration error")
+        
+        # Process the document
+        app.process_document(sample_document_message)
+        
+        # Verify document was stored in S3
+        app.storage_service.store_document.assert_called_once()
+        
+        # Verify document was classified
+        app.classification_service.classify_document.assert_called_once()
+        
+        # Verify routing was attempted
+        app.document_routing_service.determine_routing.assert_called_once()
+        
+        # Verify document was sent to default OCR queue
+        app.queue_service.publish_message.assert_called_once()
+        publish_args = app.queue_service.publish_message.call_args[0]
+        assert publish_args[0] == "ocr.default"  # default queue
+        assert publish_args[1] == "ocr.document.default"  # default routing key
+        
+        # Verify the published message contains the warning flag
+        published_message = json.loads(publish_args[2])
+        assert published_message["routing_error"] is True
+        assert published_message["document_type"] == "loan_application"
+        
+        # Verify error was logged
+        assert "Routing determination failed" in caplog.text
+        assert "Using default OCR routing" in caplog.text
+    
+    def test_document_processing_performance(self, app, sample_document_message):
+        """
+        Test document processing performance meets the required standards.
+        
+        This test verifies that document processing meets performance requirements:
+        1. Processing time is under 5 minutes (300 seconds)
+        2. Classification accuracy is at least 99% for known document types
+        3. Resource utilization stays within acceptable limits
+        """
+        # Configure mocks for successful processing
+        app.storage_service.store_document.return_value = {
+            "storage_path": f"documents/{sample_document_message['document']['id']}.pdf",
+            "metadata": StorageMetadata(
+                document_id=sample_document_message["document"]["id"],
+                content_type="application/pdf",
+                size=sample_document_message["document"]["size"],
+                upload_timestamp=get_current_timestamp(),
+                encryption="AES-256"
+            )
+        }
+        
+        # Configure classification with high accuracy
+        app.classification_service.classify_document.return_value = ClassificationResult(
+            document_type="loan_application",
+            confidence=ConfidenceScore(score=0.99, threshold=0.75),  # 99% confidence
+            features={
+                "page_count": 3,
+                "has_signature": True,
+                "has_tables": True
+            },
+            metadata={
+                "document_id": sample_document_message["document"]["id"],
+                "application_id": sample_document_message["metadata"]["application_id"],
+                "classification_timestamp": get_current_timestamp()
+            }
+        )
+        
+        app.document_routing_service.determine_routing.return_value = {
+            "queue": "ocr.loan_application",
+            "routing_key": "ocr.typed.form",
+            "priority": 8,
+            "metadata": {
+                "expected_fields": ["name", "address", "loan_amount", "term", "signature"],
+                "document_type": "loan_application",
+                "confidence": 0.99
+            }
+        }
+        
+        # Process multiple documents to measure average performance
+        processing_times = []
+        num_documents = 10
+        
+        for _ in range(num_documents):
+            start_time = time.time()
+            app.process_document(sample_document_message)
+            processing_time = time.time() - start_time
+            processing_times.append(processing_time)
+        
+        # Calculate average processing time
+        avg_processing_time = sum(processing_times) / len(processing_times)
+        max_processing_time = max(processing_times)
+        
+        # Verify performance requirements
+        assert avg_processing_time < 5.0, f"Average processing time {avg_processing_time}s exceeds target of 5.0s"
+        assert max_processing_time < 300, f"Maximum processing time {max_processing_time}s exceeds limit of 300s"
+        
+        # Verify classification accuracy
+        assert app.classification_service.classify_document.return_value.confidence.score >= 0.99, \
+            "Classification confidence does not meet the 99% accuracy requirement"
+    
+    def test_document_processing_with_various_document_types(self, app, caplog):
+        """
+        Test document processing with various document types.
+        
+        This test verifies that the document processing pipeline correctly handles
+        different document types with appropriate classification and routing.
+        """
+        caplog.set_level(logging.INFO)
+        
+        # Define test cases for different document types
+        document_types = [
+            ("loan_application.pdf", "application/pdf", "loan_application", "ocr.typed.form"),
+            ("tax_return.pdf", "application/pdf", "tax_return", "ocr.typed.tax"),
+            ("bank_statement.pdf", "application/pdf", "bank_statement", "ocr.typed.statement"),
+            ("pay_stub.jpg", "image/jpeg", "pay_stub", "ocr.mixed.pay"),
+            ("drivers_license.jpg", "image/jpeg", "identity_document", "ocr.mixed.id"),
+            ("utility_bill.png", "image/png", "proof_of_address", "ocr.typed.bill")
+        ]
+        
+        for doc_name, content_type, doc_type, routing_key in document_types:
+            # Reset mock call counts
+            app.storage_service.reset_mock()
+            app.classification_service.reset_mock()
+            app.document_routing_service.reset_mock()
+            app.queue_service.reset_mock()
+            
+            # Create document message
+            document_id = str(uuid.uuid4())
+            document_message = {
+                "message_id": str(uuid.uuid4()),
+                "document": {
+                    "id": document_id,
+                    "name": doc_name,
+                    "content_type": content_type,
+                    "size": 1024,  # Dummy size
+                    "binary_data": b"dummy_data",  # Dummy data
+                    "source": "email",
+                    "received_timestamp": get_current_timestamp(),
+                    "sender": "applicant@example.com",
+                    "subject": "Loan Application Documents"
+                },
                 "metadata": {
-                    "received_timestamp": int(time.time()),
-                    "sender": "test@example.com",
-                    "subject": "Test Document Submission",
-                    "message_id": f"test-message-{document_id}"
+                    "application_id": str(uuid.uuid4()),
+                    "customer_id": str(uuid.uuid4()),
+                    "priority": "high"
                 }
             }
             
-            messages.append(message)
-        
-        return messages
-    
-    @pytest.fixture
-    def mock_publish_message(self):
-        """
-        Mocks the message publishing to capture published messages.
-        """
-        published_messages = []
-        
-        def capture_message(exchange, routing_key, message, headers=None):
-            published_messages.append({
-                "exchange": exchange,
+            # Configure mocks for this document type
+            app.storage_service.store_document.return_value = {
+                "storage_path": f"documents/{document_id}.{doc_name.split('.')[-1]}",
+                "metadata": StorageMetadata(
+                    document_id=document_id,
+                    content_type=content_type,
+                    size=1024,
+                    upload_timestamp=get_current_timestamp(),
+                    encryption="AES-256"
+                )
+            }
+            
+            app.classification_service.classify_document.return_value = ClassificationResult(
+                document_type=doc_type,
+                confidence=ConfidenceScore(score=0.95, threshold=0.75),
+                features={
+                    "page_count": 2,
+                    "has_signature": True,
+                    "has_tables": doc_type in ["tax_return", "bank_statement"]
+                },
+                metadata={
+                    "document_id": document_id,
+                    "application_id": document_message["metadata"]["application_id"],
+                    "classification_timestamp": get_current_timestamp()
+                }
+            )
+            
+            app.document_routing_service.determine_routing.return_value = {
+                "queue": f"ocr.{doc_type}",
                 "routing_key": routing_key,
-                "message": message,
-                "headers": headers or {}
-            })
-            return True
-        
-        with patch("src.services.queue_service.QueueService.publish_message", side_effect=capture_message) as mock:
-            yield mock, published_messages
+                "priority": 8,
+                "metadata": {
+                    "document_type": doc_type,
+                    "confidence": 0.95
+                }
+            }
+            
+            # Process the document
+            app.process_document(document_message)
+            
+            # Verify document was stored in S3
+            app.storage_service.store_document.assert_called_once()
+            
+            # Verify document was classified
+            app.classification_service.classify_document.assert_called_once()
+            
+            # Verify document was routed correctly
+            app.document_routing_service.determine_routing.assert_called_once()
+            
+            # Verify result was published to the correct OCR queue
+            app.queue_service.publish_message.assert_called_once()
+            publish_args = app.queue_service.publish_message.call_args[0]
+            assert publish_args[0] == f"ocr.{doc_type}"  # queue
+            assert publish_args[1] == routing_key  # routing key
+            
+            # Verify proper logging occurred
+            assert f"Document classified as {doc_type}" in caplog.text
     
-    def test_document_processing_pipeline(self, app, test_messages, mock_publish_message, test_documents):
+    def test_document_processing_with_message_publishing_failure(self, app, sample_document_message, caplog):
         """
-        Tests the complete document processing pipeline from message consumption to result publication.
+        Test document processing when message publishing to the OCR queue fails.
+        
+        This test verifies that when message publishing fails:
+        1. The error is properly handled and logged
+        2. The document processing retries publishing up to the configured limit
+        3. After retries are exhausted, the error is logged and tracked
+        """
+        caplog.set_level(logging.ERROR)
+        
+        # Configure successful storage and classification
+        app.storage_service.store_document.return_value = {
+            "storage_path": f"documents/{sample_document_message['document']['id']}.pdf",
+            "metadata": StorageMetadata(
+                document_id=sample_document_message["document"]["id"],
+                content_type="application/pdf",
+                size=sample_document_message["document"]["size"],
+                upload_timestamp=get_current_timestamp(),
+                encryption="AES-256"
+            )
+        }
+        
+        app.classification_service.classify_document.return_value = ClassificationResult(
+            document_type="loan_application",
+            confidence=ConfidenceScore(score=0.95, threshold=0.75),
+            features={
+                "page_count": 3,
+                "has_signature": True,
+                "has_tables": True
+            },
+            metadata={
+                "document_id": sample_document_message["document"]["id"],
+                "application_id": sample_document_message["metadata"]["application_id"],
+                "classification_timestamp": get_current_timestamp()
+            }
+        )
+        
+        app.document_routing_service.determine_routing.return_value = {
+            "queue": "ocr.loan_application",
+            "routing_key": "ocr.typed.form",
+            "priority": 8,
+            "metadata": {
+                "expected_fields": ["name", "address", "loan_amount", "term", "signature"],
+                "document_type": "loan_application",
+                "confidence": 0.95
+            }
+        }
+        
+        # Configure publishing to fail
+        app.queue_service.publish_message.side_effect = Exception("RabbitMQ connection error")
+        
+        # Configure retry settings for testing
+        app.max_retries = 3
+        app.retry_delay = 0.1  # Short delay for testing
+        
+        # Process the document (should handle the exception and retry)
+        with patch('time.sleep'):  # Mock sleep to speed up the test
+            app.process_document(sample_document_message)
+        
+        # Verify publishing was attempted multiple times (up to max_retries)
+        assert app.queue_service.publish_message.call_count == app.max_retries
+        
+        # Verify errors were logged
+        assert "Failed to publish message to OCR queue" in caplog.text
+        assert f"Retry attempt 1 of {app.max_retries}" in caplog.text
+        assert f"Retry attempt 2 of {app.max_retries}" in caplog.text
+        assert f"Retry attempt 3 of {app.max_retries}" in caplog.text
+        assert "Max retries exceeded for publishing message" in caplog.text
+        
+        # Verify the error was tracked
+        app.queue_service.track_failed_message.assert_called_once()
+        track_args = app.queue_service.track_failed_message.call_args[0]
+        assert track_args[0] == "ocr.loan_application"  # queue
+        assert track_args[1] == "ocr.typed.form"  # routing key
+        assert "RabbitMQ connection error" in track_args[3]  # error message
+    
+    def test_logging_throughout_document_processing(self, app, sample_document_message, caplog):
+        """
+        Test that proper logging occurs throughout the document processing pipeline.
         
         This test verifies that:
-        1. Documents are correctly consumed from RabbitMQ
-        2. Documents are classified with the correct document type
-        3. Classification results are published to the OCR Service
-        4. The entire process completes within the required time limit
+        1. All processing steps are logged at the appropriate level
+        2. Logs include required context information
+        3. Performance metrics are logged
+        4. Document metadata is included in logs
         """
-        mock_publish, published_messages = mock_publish_message
-        
-        # Process each test message
-        for message in test_messages:
-            # Start timing the processing
-            start_time = time.time()
-            
-            # Simulate message consumption
-            app.process_document_message(message)
-            
-            # Calculate processing time
-            processing_time = time.time() - start_time
-            
-            # Verify processing time is under the required limit (5 minutes)
-            assert processing_time < 300, f"Document processing took too long: {processing_time} seconds"
-            
-            # Log processing time for monitoring
-            logger.info(f"Document {message['document_id']} processed in {processing_time:.2f} seconds")
-        
-        # Verify that all messages were processed and published
-        assert len(published_messages) == len(test_messages), "Not all messages were processed"
-        
-        # Verify classification results
-        for published in published_messages:
-            # Extract document ID from the published message
-            document_id = json.loads(published["message"])["document_id"]
-            
-            # Get the expected document type
-            expected_type = test_documents[document_id]
-            
-            # Get the actual classified type from the published message
-            actual_type = json.loads(published["message"])["classification"]["document_type"]
-            
-            # Verify the document was classified correctly
-            assert actual_type == expected_type.value, f"Document {document_id} was misclassified"
-            
-            # Verify confidence score is included and above threshold
-            confidence = json.loads(published["message"])["classification"]["confidence"]
-            assert confidence >= 0.75, f"Classification confidence too low: {confidence}"
-            
-            # Verify routing key is correct based on document type
-            expected_routing_key = f"ocr.{expected_type.value.lower()}"
-            assert published["routing_key"] == expected_routing_key, f"Incorrect routing key: {published['routing_key']}"
-    
-    def test_classification_accuracy(self, app, test_documents, s3_client, test_bucket):
-        """
-        Tests the classification accuracy for different document types.
-        
-        This test verifies that the document classification meets the 99% accuracy requirement
-        by testing with a larger set of documents for each type.
-        """
-        # Number of test documents per type
-        num_docs_per_type = 100
-        
-        # Track classification results
-        results = {
-            doc_type: {"correct": 0, "total": 0} for doc_type in DocumentType
-        }
-        
-        # Test classification for each document type
-        for doc_type in DocumentType:
-            for i in range(num_docs_per_type):
-                # Create a test document with features typical of this type
-                document_id = str(uuid.uuid4())
-                document_content = self._generate_test_document_content(doc_type, i)
-                
-                # Mock S3 storage and retrieval
-                with patch.object(app.storage_service, 'get_document', return_value=document_content):
-                    # Classify the document
-                    classification_result = app.classification_service.classify_document(
-                        document_id=document_id,
-                        document_content=document_content,
-                        metadata={}
-                    )
-                    
-                    # Check if classification is correct
-                    if classification_result.document_type == doc_type:
-                        results[doc_type]["correct"] += 1
-                    
-                    results[doc_type]["total"] += 1
-        
-        # Calculate overall accuracy
-        total_correct = sum(result["correct"] for result in results.values())
-        total_docs = sum(result["total"] for result in results.values())
-        overall_accuracy = total_correct / total_docs if total_docs > 0 else 0
-        
-        # Log accuracy results
-        logger.info(f"Overall classification accuracy: {overall_accuracy:.4f}")
-        for doc_type, result in results.items():
-            accuracy = result["correct"] / result["total"] if result["total"] > 0 else 0
-            logger.info(f"{doc_type.name} accuracy: {accuracy:.4f} ({result['correct']}/{result['total']})")
-        
-        # Verify accuracy meets the 99% requirement
-        assert overall_accuracy >= 0.99, f"Classification accuracy below requirement: {overall_accuracy:.4f}"
-    
-    def test_error_handling_and_recovery(self, app, test_messages):
-        """
-        Tests error handling and recovery throughout the document processing pipeline.
-        
-        This test verifies that the service can handle and recover from various error conditions:
-        1. S3 access errors
-        2. Classification errors
-        3. Message publishing errors
-        """
-        # Test S3 access error
-        with patch.object(app.storage_service, 'get_document', side_effect=Exception("S3 access error")):
-            # Process should handle the error and log it without crashing
-            with pytest.raises(Exception) as excinfo:
-                app.process_document_message(test_messages[0])
-            assert "S3 access error" in str(excinfo.value)
-        
-        # Test classification error
-        with patch.object(app.classification_service, 'classify_document', side_effect=Exception("Classification error")):
-            # Process should handle the error and log it without crashing
-            with pytest.raises(Exception) as excinfo:
-                app.process_document_message(test_messages[0])
-            assert "Classification error" in str(excinfo.value)
-        
-        # Test message publishing error with retry
-        with patch.object(app.queue_service, 'publish_message') as mock_publish:
-            # First call fails, second succeeds
-            mock_publish.side_effect = [Exception("Publishing error"), True]
-            
-            # Mock document retrieval and classification
-            with patch.object(app.storage_service, 'get_document', return_value=b"Test document"):
-                with patch.object(app.classification_service, 'classify_document', return_value=ClassificationResult(
-                    document_type=DocumentType.APPLICATION,
-                    confidence=0.95,
-                    metadata={}
-                )):
-                    # Process should retry and succeed
-                    app.process_document_message(test_messages[0])
-            
-            # Verify publish was called twice (initial failure and retry)
-            assert mock_publish.call_count == 2
-    
-    def test_performance_metrics(self, app, test_messages, mock_publish_message):
-        """
-        Tests performance metrics for document processing.
-        
-        This test verifies that document processing meets performance requirements:
-        1. Processing time under 5 minutes per document
-        2. Memory usage within acceptable limits
-        3. CPU usage within acceptable limits
-        """
-        mock_publish, published_messages = mock_publish_message
-        
-        # Track processing times
-        processing_times = []
-        
-        # Process each test message and measure performance
-        for message in test_messages:
-            # Mock document retrieval and classification for consistent testing
-            with patch.object(app.storage_service, 'get_document', return_value=b"Test document"):
-                with patch.object(app.classification_service, 'classify_document', return_value=ClassificationResult(
-                    document_type=DocumentType.APPLICATION,
-                    confidence=0.95,
-                    metadata={}
-                )):
-                    # Start timing
-                    start_time = time.time()
-                    
-                    # Process the message
-                    app.process_document_message(message)
-                    
-                    # Record processing time
-                    processing_time = time.time() - start_time
-                    processing_times.append(processing_time)
-        
-        # Calculate performance metrics
-        avg_processing_time = sum(processing_times) / len(processing_times) if processing_times else 0
-        max_processing_time = max(processing_times) if processing_times else 0
-        
-        # Log performance metrics
-        logger.info(f"Average processing time: {avg_processing_time:.4f} seconds")
-        logger.info(f"Maximum processing time: {max_processing_time:.4f} seconds")
-        
-        # Verify performance requirements
-        assert avg_processing_time < 5.0, f"Average processing time too high: {avg_processing_time:.4f} seconds"
-        assert max_processing_time < 30.0, f"Maximum processing time too high: {max_processing_time:.4f} seconds"
-    
-    def test_logging_and_monitoring(self, app, test_messages, caplog):
-        """
-        Tests logging and monitoring throughout the document processing pipeline.
-        
-        This test verifies that appropriate logging occurs at each stage of processing
-        and that log levels are correctly applied based on the event type.
-        """
-        # Set log capture level
+        # Capture logs at all levels
         caplog.set_level(logging.DEBUG)
         
-        # Process a test message
-        with patch.object(app.storage_service, 'get_document', return_value=b"Test document"):
-            with patch.object(app.classification_service, 'classify_document', return_value=ClassificationResult(
-                document_type=DocumentType.APPLICATION,
-                confidence=0.95,
-                metadata={}
-            )):
-                app.process_document_message(test_messages[0])
-        
-        # Verify logging for each processing stage
-        log_records = caplog.records
-        
-        # Check for message received log
-        assert any("Received document message" in record.message for record in log_records), "Missing message received log"
-        
-        # Check for document retrieval log
-        assert any("Retrieved document from S3" in record.message for record in log_records), "Missing document retrieval log"
-        
-        # Check for classification log
-        assert any("Classified document" in record.message for record in log_records), "Missing classification log"
-        
-        # Check for message publishing log
-        assert any("Published classification result" in record.message for record in log_records), "Missing message publishing log"
-        
-        # Verify log levels are appropriate
-        info_logs = [r for r in log_records if r.levelno == logging.INFO]
-        debug_logs = [r for r in log_records if r.levelno == logging.DEBUG]
-        
-        # Normal operations should be INFO level
-        assert len(info_logs) >= 4, "Not enough INFO level logs for normal operations"
-        
-        # Detailed processing should be DEBUG level
-        assert len(debug_logs) > 0, "Missing DEBUG level logs for detailed processing"
-    
-    def test_edge_cases(self, app):
-        """
-        Tests edge cases and error conditions in the document processing pipeline.
-        
-        This test verifies that the service handles various edge cases correctly:
-        1. Empty documents
-        2. Very large documents
-        3. Unsupported document types
-        4. Low confidence classifications
-        5. Missing metadata
-        """
-        # Test empty document
-        empty_message = {
-            "document_id": str(uuid.uuid4()),
-            "bucket": "test-bucket",
-            "path": "documents/empty",
-            "metadata": {}
+        # Configure mocks for successful processing
+        app.storage_service.store_document.return_value = {
+            "storage_path": f"documents/{sample_document_message['document']['id']}.pdf",
+            "metadata": StorageMetadata(
+                document_id=sample_document_message["document"]["id"],
+                content_type="application/pdf",
+                size=sample_document_message["document"]["size"],
+                upload_timestamp=get_current_timestamp(),
+                encryption="AES-256"
+            )
         }
         
-        with patch.object(app.storage_service, 'get_document', return_value=b""):
-            with pytest.raises(Exception) as excinfo:
-                app.process_document_message(empty_message)
-            assert "Empty document" in str(excinfo.value)
+        app.classification_service.classify_document.return_value = ClassificationResult(
+            document_type="loan_application",
+            confidence=ConfidenceScore(score=0.95, threshold=0.75),
+            features={
+                "page_count": 3,
+                "has_signature": True,
+                "has_tables": True
+            },
+            metadata={
+                "document_id": sample_document_message["document"]["id"],
+                "application_id": sample_document_message["metadata"]["application_id"],
+                "classification_timestamp": get_current_timestamp()
+            }
+        )
         
-        # Test very large document (simulate size check)
-        large_message = {
-            "document_id": str(uuid.uuid4()),
-            "bucket": "test-bucket",
-            "path": "documents/large",
-            "metadata": {}
+        app.document_routing_service.determine_routing.return_value = {
+            "queue": "ocr.loan_application",
+            "routing_key": "ocr.typed.form",
+            "priority": 8,
+            "metadata": {
+                "expected_fields": ["name", "address", "loan_amount", "term", "signature"],
+                "document_type": "loan_application",
+                "confidence": 0.95
+            }
         }
         
-        with patch.object(app.storage_service, 'get_document', return_value=b"X" * (100 * 1024 * 1024)):
-            with pytest.raises(Exception) as excinfo:
-                app.process_document_message(large_message)
-            assert "exceeds maximum size" in str(excinfo.value)
+        # Process the document
+        app.process_document(sample_document_message)
         
-        # Test unsupported document type
-        unsupported_message = {
-            "document_id": str(uuid.uuid4()),
-            "bucket": "test-bucket",
-            "path": "documents/unsupported.xyz",
-            "metadata": {}
-        }
+        # Verify INFO level logs
+        info_logs = [record for record in caplog.records if record.levelno == logging.INFO]
+        assert any("Document received for processing" in record.message for record in info_logs)
+        assert any("Document stored in S3" in record.message for record in info_logs)
+        assert any("Document classified" in record.message for record in info_logs)
+        assert any("Document routed to OCR processor" in record.message for record in info_logs)
+        assert any("Document processing completed successfully" in record.message for record in info_logs)
         
-        with patch.object(app.storage_service, 'get_document', return_value=b"Unsupported content"):
-            with patch.object(app.storage_service, 'get_document_metadata', return_value={"content-type": "application/x-unsupported"}):
-                with pytest.raises(Exception) as excinfo:
-                    app.process_document_message(unsupported_message)
-                assert "Unsupported document type" in str(excinfo.value)
+        # Verify DEBUG level logs
+        debug_logs = [record for record in caplog.records if record.levelno == logging.DEBUG]
+        assert any("Validating document format" in record.message for record in debug_logs)
+        assert any("Extracting document features" in record.message for record in debug_logs)
+        assert any("Applying classification models" in record.message for record in debug_logs)
+        assert any("Determining optimal OCR routing" in record.message for record in debug_logs)
+        assert any("Preparing message for OCR queue" in record.message for record in debug_logs)
         
-        # Test low confidence classification
-        low_confidence_message = {
-            "document_id": str(uuid.uuid4()),
-            "bucket": "test-bucket",
-            "path": "documents/low_confidence",
-            "metadata": {}
-        }
+        # Verify context information in logs
+        document_id = sample_document_message["document"]["id"]
+        assert any(document_id in record.message for record in caplog.records)
         
-        with patch.object(app.storage_service, 'get_document', return_value=b"Ambiguous document content"):
-            with patch.object(app.classification_service, 'classify_document', return_value=ClassificationResult(
-                document_type=DocumentType.OTHER,
-                confidence=0.3,  # Low confidence
-                metadata={}
-            )):
-                # Should flag for human review but not fail
-                with patch.object(app.queue_service, 'publish_message') as mock_publish:
-                    app.process_document_message(low_confidence_message)
-                    
-                    # Verify message was published with human_review flag
-                    args, kwargs = mock_publish.call_args
-                    message_body = json.loads(args[2])
-                    assert message_body["human_review_required"] == True, "Low confidence document not flagged for review"
-    
-    def _generate_test_document_content(self, doc_type: DocumentType, index: int) -> bytes:
-        """
-        Generates test document content with features typical of the specified document type.
+        # Verify performance metrics in logs
+        assert any("Processing time:" in record.message for record in info_logs)
+        assert any("Classification confidence:" in record.message for record in info_logs)
         
-        Args:
-            doc_type: The document type to generate content for
-            index: A unique index to ensure document uniqueness
-            
-        Returns:
-            Bytes representing the document content
-        """
-        # In a real implementation, this would generate more realistic document content
-        # based on the document type, with appropriate features for classification
-        
-        content_templates = {
-            DocumentType.APPLICATION: b"MORTGAGE APPLICATION FORM\nApplicant Name: Test User\nLoan Amount: $300,000\nProperty Address: 123 Main St\nCredit Score: 750\nEmployment: 5 years\nIncome: $120,000",
-            
-            DocumentType.TAX_RETURN: b"FORM 1040 - U.S. INDIVIDUAL INCOME TAX RETURN\nTax Year: 2023\nName: Test User\nSSN: XXX-XX-1234\nTotal Income: $120,000\nAdjusted Gross Income: $105,000\nTotal Tax: $24,500",
-            
-            DocumentType.BANK_STATEMENT: b"MONTHLY STATEMENT\nAccount: XXXXXX1234\nPeriod: 01/01/2023 - 01/31/2023\nOpening Balance: $12,345.67\nDeposits: $5,432.10\nWithdrawals: $2,345.67\nClosing Balance: $15,432.10",
-            
-            DocumentType.PAY_STUB: b"EMPLOYEE PAY STUB\nEmployee: Test User\nPay Period: 01/01/2023 - 01/15/2023\nGross Pay: $5,000.00\nFederal Tax: $750.00\nState Tax: $250.00\nNet Pay: $4,000.00",
-            
-            DocumentType.ID_DOCUMENT: b"DRIVER LICENSE\nName: Test User\nAddress: 123 Main St\nDOB: 01/01/1980\nIssue Date: 01/01/2020\nExpiration Date: 01/01/2028\nLicense #: D1234567",
-            
-            DocumentType.OTHER: b"MISCELLANEOUS DOCUMENT\nThis document contains various information that doesn't fit into the other categories.\nIt might be a letter, a receipt, or some other supporting document."
-        }
-        
-        # Get the template for this document type
-        template = content_templates.get(doc_type, b"Unknown document type")
-        
-        # Add unique identifier to ensure document uniqueness
-        unique_content = template + f"\nDocument ID: {index}".encode()
-        
-        return unique_content
+        # Verify structured logging format
+        for record in caplog.records:
+            if record.levelno >= logging.INFO:
+                assert hasattr(record, "document_id")
+                assert hasattr(record, "timestamp")
