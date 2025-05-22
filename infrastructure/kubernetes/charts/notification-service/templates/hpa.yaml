@@ -1,0 +1,50 @@
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "notification-service.fullname" . }}
+  labels:
+    {{- include "notification-service.labels" . | nindent 4 }}
+annotations:
+  description: "HorizontalPodAutoscaler for the Notification Service to handle webhook delivery loads"
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "notification-service.fullname" . }}
+  minReplicas: {{ .Values.autoscaling.minReplicas | default 2 }}
+  maxReplicas: {{ .Values.autoscaling.maxReplicas | default 10 }}
+  metrics:
+  # CPU-based scaling for Node.js workloads
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: {{ .Values.autoscaling.targetCPUUtilizationPercentage | default 70 }}
+  # Memory-based scaling for webhook processing
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: AverageValue
+        averageValue: {{ .Values.autoscaling.targetMemoryAverageValue | default "512Mi" }}
+  behavior:
+    scaleUp:
+      # Quick scale up to handle sudden increases in webhook delivery load
+      stabilizationWindowSeconds: {{ .Values.autoscaling.scaleUp.stabilizationWindowSeconds | default 60 }}
+      policies:
+      - type: Percent
+        value: {{ .Values.autoscaling.scaleUp.percentValue | default 100 }}
+        periodSeconds: {{ .Values.autoscaling.scaleUp.periodSeconds | default 60 }}
+      - type: Pods
+        value: {{ .Values.autoscaling.scaleUp.podsValue | default 2 }}
+        periodSeconds: {{ .Values.autoscaling.scaleUp.periodSeconds | default 60 }}
+      selectPolicy: Max
+    scaleDown:
+      # Gradual scale down to ensure stable performance during load changes
+      stabilizationWindowSeconds: {{ .Values.autoscaling.scaleDown.stabilizationWindowSeconds | default 300 }}
+      policies:
+      - type: Percent
+        value: {{ .Values.autoscaling.scaleDown.percentValue | default 25 }}
+        periodSeconds: {{ .Values.autoscaling.scaleDown.periodSeconds | default 300 }}
+      selectPolicy: Max
