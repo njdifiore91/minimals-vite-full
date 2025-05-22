@@ -46,10 +46,49 @@ service:
 # Ingress configuration
 ingress:
   enabled: false
-  className: ""
+  className: ""  # Default is nginx, can be set to kong for Kong Ingress Controller
   annotations: {}
-  hosts: []
-  tls: []
+  labels: {}
+  path: "/"  # Default path when hosts are not specified
+  pathType: "Prefix"  # Can be Prefix, Exact, or ImplementationSpecific
+  hosts: []  # List of host configurations
+  # Example host configuration:
+  # - host: example.com
+  #   paths:
+  #   - path: /api
+  #     pathType: Prefix
+  tls: []  # TLS configuration
+  tlsEnabled: false  # Enable TLS without specifying tls section
+  sslRedirect: true  # Redirect HTTP to HTTPS
+  forceSSLRedirect: true  # Force SSL redirect even when TLS is not configured
+  proxyBodySize: "10m"  # Maximum request body size
+  
+  # CORS configuration
+  cors:
+    enabled: true
+    allowOrigin: "https://app.dollarfunding.com,https://staging.dollarfunding.com,http://localhost:3000"
+    allowMethods: "GET, PUT, POST, DELETE, PATCH, OPTIONS"
+    allowHeaders: "Accept,Authorization,Content-Type,X-Auth-Token,X-Correlation-ID"
+    maxAge: 3600
+    allowCredentials: true
+  
+  # Rate limiting configuration
+  rateLimit:
+    requestsPerSecond: 10
+    connections: 5
+    burstMultiplier: 3
+  
+  # Kong-specific configuration
+  kong:
+    stripPath: false
+    preserveHost: true
+    protocols: "https"
+    httpsRedirectStatusCode: 301
+    plugins: "cors,jwt,rate-limiting,request-transformer,response-transformer,correlation-id"
+    rateLimit:
+      minute: 60
+      hour: 3000
+      policy: "redis"
 
 # Liveness and readiness probes for self-healing services as mentioned in section 8.5.4
 probes:
