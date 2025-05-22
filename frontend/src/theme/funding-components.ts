@@ -1,28 +1,8 @@
 import { Components, Theme } from '@mui/material/styles';
 
-// ----------------------------------------------------------------------
-
-/**
- * Declare module augmentation for custom component variants
- */
-declare module '@mui/material/Button' {
-  interface ButtonPropsVariantOverrides {
-    fundingAction: true;
-  }
-}
-
-declare module '@mui/material/Chip' {
-  interface ChipPropsVariantOverrides {
-    fundingLabel: true;
-  }
-}
-
 /**
  * Funding-specific component variants for the MCA application
- * 
- * This module defines style overrides for MuiButton (fundingAction variant)
- * and MuiChip (fundingLabel variant) components, using the funding-specific
- * colors from the theme palette.
+ * These component overrides use the funding-specific colors from the theme palette
  */
 export const fundingComponents = {
   MuiButton: {
@@ -30,14 +10,16 @@ export const fundingComponents = {
       {
         props: { variant: 'fundingAction' },
         style: ({ theme }: { theme: Theme }) => ({
-          backgroundColor: theme.palette.fundingPrimary.main,
-          color: theme.palette.fundingPrimary.contrastText,
+          backgroundColor: theme.palette.fundingPrimary,
+          color: theme.palette.common.white,
           fontWeight: 600,
+          boxShadow: theme.shadows[2],
           '&:hover': {
-            backgroundColor: theme.palette.fundingPrimary.dark,
+            backgroundColor: theme.palette.fundingSecondary,
+            boxShadow: theme.shadows[4],
           },
           '&:active': {
-            backgroundColor: theme.palette.fundingPrimary.darker,
+            boxShadow: theme.shadows[1],
           },
           '&.Mui-disabled': {
             backgroundColor: theme.palette.action.disabledBackground,
@@ -52,33 +34,17 @@ export const fundingComponents = {
       {
         props: { variant: 'fundingLabel' },
         style: ({ theme }: { theme: Theme }) => ({
-          backgroundColor: theme.palette.fundingPrimary.lighter,
-          color: theme.palette.fundingPrimary.darker,
+          backgroundColor: theme.palette.fundingPrimary,
+          color: theme.palette.common.white,
           fontWeight: 500,
-          '& .MuiChip-icon': {
-            color: theme.palette.fundingPrimary.main,
-          },
-          '& .MuiChip-deleteIcon': {
-            color: theme.palette.fundingPrimary.main,
+          '&.MuiChip-filled': {
             '&:hover': {
-              color: theme.palette.fundingPrimary.dark,
+              backgroundColor: theme.palette.fundingPrimary,
+              opacity: 0.9,
             },
           },
         }),
       },
     ],
   },
-};
-
-/**
- * Extends the theme with funding-specific component variants
- * 
- * @param baseComponents - Base components configuration to extend
- * @returns Extended components configuration with funding-specific variants
- */
-export function extendThemeWithFundingComponents(baseComponents: Components<Theme> = {}): Components<Theme> {
-  return {
-    ...baseComponents,
-    ...fundingComponents,
-  };
-}
+} as Components<Omit<Theme, 'components'>>;
