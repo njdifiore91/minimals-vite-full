@@ -1,579 +1,1077 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+"""
+Unit tests for the Document Service's s3_config.py module.
+
+These tests verify that S3 configuration correctly sets up connection parameters,
+bucket settings, encryption options, and access controls. They ensure that document
+storage works correctly with proper security measures.
+
+Test coverage includes:
+- S3 client connection configuration
+- AES-256 encryption configuration
+- Bucket configuration for different environments
+- Credential management configuration
+- Connection option configuration
+"""
+
 import os
+import sys
 import pytest
+from unittest.mock import patch, MagicMock, mock_open
+from pathlib import Path
 import boto3
-from unittest.mock import patch, MagicMock
-from moto import mock_s3
 from botocore.config import Config
 from botocore.exceptions import ClientError
 
 # Import the module to test
-from src.config import s3_config
+from src.config.s3_config import (
+    get_bucket_name,
+    get_s3_config,
+    create_s3_client,
+    create_s3_resource,
+    upload_file_with_encryption,
+    download_file,
+    check_bucket_exists,
+    create_bucket_if_not_exists,
+    BUCKET_NAMES,
+    DEFAULT_TIMEOUT,
+    MAX_RETRIES,
+    RETRY_MODE
+)
 
 
-# ===== Test Environment Variables and Bucket Names =====
+# ===== Test Bucket Name Configuration =====
 
-@pytest.mark.parametrize("env,expected_bucket", [
-    ("production", "mca-documents-production"),
-    ("staging", "mca-documents-staging"),
-    ("development", "mca-documents-development"),
-    ("test", "mca-documents-test"),
-    ("unknown", "mca-documents-development"),  # Default to development for unknown env
-])
-def test_get_bucket_name(monkeypatch, env, expected_bucket):
-    """Test that get_bucket_name returns the correct bucket name for different environments."""
+@pytest.mark.parametrize(
+    "environment,expected_bucket",
+    [
+        ("development", "mca-documents-development"),
+        ("staging", "mca-documents-staging"),
+        ("production", "mca-documents-production"),
+        ("test", "mca-documents-test"),
+        # Test fallback to development for unknown environment
+        ("unknown", "mca-documents-development"),
+    ],
+)
+def test_get_bucket_name(environment, expected_bucket, mock_env):
+    """Test that the correct bucket name is returned based on the environment."""
     # Set the environment variable
-    monkeypatch.setenv("ENVIRONMENT", env)
+    mock_env({"ENVIRONMENT": environment})
     
-    # Call the function and check the result
-    bucket_name = s3_config.get_bucket_name()
+    # Get the bucket name
+    bucket_name = get_bucket_name()
+    
+    # Verify the bucket name
     assert bucket_name == expected_bucket
 
 
-def test_get_bucket_name_with_custom_prefix(monkeypatch):
-    """Test that get_bucket_name uses a custom bucket prefix if provided."""
-    # Set environment variables
-    monkeypatch.setenv("ENVIRONMENT", "production")
-    monkeypatch.setenv("S3_BUCKET_PREFIX", "custom-prefix")
+def test_get_bucket_name_with_custom_prefix(mock_env):
+    """Test that the bucket name uses a custom prefix if provided."""
+    # Set the environment variables
+    mock_env({
+        "ENVIRONMENT": "production",
+        "S3_BUCKET_PREFIX": "custom-prefix"
+    })
     
-    # Call the function and check the result
-    bucket_name = s3_config.get_bucket_name()
+    # Get the bucket name
+    bucket_name = get_bucket_name()
+    
+    # Verify the bucket name
     assert bucket_name == "custom-prefix-production"
 
 
 # ===== Test S3 Configuration =====
 
-def test_get_s3_config():
-    """Test that get_s3_config returns a correctly configured Config object."""
-    # Call the function
-    config = s3_config.get_s3_config()
+def test_get_s3_config_default_values():
+    """Test that the S3 configuration has the correct default values."""
+    # Get the S3 configuration
+    config = get_s3_config()
     
-    # Verify it's a Config object
+    # Verify the configuration
     assert isinstance(config, Config)
-    
-    # Verify the configuration settings
-    assert config.retries["max_attempts"] == s3_config.MAX_RETRIES
-    assert config.retries["mode"] == s3_config.RETRY_MODE
-    assert config.connect_timeout == s3_config.DEFAULT_TIMEOUT
-    assert config.read_timeout == s3_config.DEFAULT_TIMEOUT
+    assert config.retries["max_attempts"] == MAX_RETRIES
+    assert config.retries["mode"] == RETRY_MODE
+    assert config.connect_timeout == DEFAULT_TIMEOUT
+    assert config.read_timeout == DEFAULT_TIMEOUT
     assert config.parameter_validation is True
     assert config.s3["addressing_style"] == "path"
 
 
+def test_get_s3_config_custom_values(monkeypatch):
+    """Test that the S3 configuration can be customized with environment variables."""
+    # Mock the environment variables
+    monkeypatch.setenv("S3_MAX_RETRIES", "5")
+    monkeypatch.setenv("S3_RETRY_MODE", "adaptive")
+    monkeypatch.setenv("S3_TIMEOUT", "120")
+    
+    # Mock the constants
+    monkeypatch.setattr("src.config.s3_config.MAX_RETRIES", 5)
+    monkeypatch.setattr("src.config.s3_config.RETRY_MODE", "adaptive")
+    monkeypatch.setattr("src.config.s3_config.DEFAULT_TIMEOUT", 120)
+    
+    # Get the S3 configuration
+    config = get_s3_config()
+    
+    # Verify the configuration
+    assert config.retries["max_attempts"] == 5
+    assert config.retries["mode"] == "adaptive"
+    assert config.connect_timeout == 120
+    assert config.read_timeout == 120
+
+
 # ===== Test S3 Client Creation =====
 
-@mock_s3
-def test_create_s3_client_default_settings():
-    """Test that create_s3_client creates a client with default settings."""
-    # Call the function
-    client = s3_config.create_s3_client()
+def test_create_s3_client_default_config(mock_env):
+    """Test creating an S3 client with default configuration."""
+    # Set the environment variables
+    mock_env({
+        "ENVIRONMENT": "development",
+        "S3_REGION": "us-east-1"
+    })
     
-    # Verify it's an S3 client
-    assert client.__class__.__name__ == "S3"
-    
-    # Test the client works by creating a bucket
-    client.create_bucket(Bucket="test-bucket")
-    response = client.list_buckets()
-    assert len(response["Buckets"]) == 1
-    assert response["Buckets"][0]["Name"] == "test-bucket"
-
-
-@mock_s3
-def test_create_s3_client_with_custom_endpoint(monkeypatch):
-    """Test that create_s3_client uses a custom endpoint if provided."""
-    # Set environment variables
-    monkeypatch.setenv("S3_ENDPOINT", "http://localhost:4566")
-    
-    # Mock the get_s3_config function to avoid interference
-    with patch("src.config.s3_config.get_s3_config", return_value=Config()):
-        # Call the function
-        client = s3_config.create_s3_client()
+    # Mock boto3.client
+    with patch("boto3.client") as mock_client:
+        # Create the S3 client
+        client = create_s3_client()
         
-        # Verify it's an S3 client
-        assert client.__class__.__name__ == "S3"
+        # Verify the client creation
+        mock_client.assert_called_once()
+        args, kwargs = mock_client.call_args
         
-        # Test the client works by creating a bucket
-        client.create_bucket(Bucket="test-bucket")
-        response = client.list_buckets()
-        assert len(response["Buckets"]) == 1
-        assert response["Buckets"][0]["Name"] == "test-bucket"
-
-
-@mock_s3
-def test_create_s3_client_with_credentials(monkeypatch):
-    """Test that create_s3_client uses credentials if provided."""
-    # Set environment variables
-    monkeypatch.setenv("S3_ACCESS_KEY", "test-access-key")
-    monkeypatch.setenv("S3_SECRET_KEY", "test-secret-key")
-    
-    # Mock boto3.client to verify the credentials are passed
-    original_client = boto3.client
-    
-    def mock_client(*args, **kwargs):
-        assert kwargs.get("aws_access_key_id") == "test-access-key"
-        assert kwargs.get("aws_secret_access_key") == "test-secret-key"
-        return original_client(*args, **kwargs)
-    
-    with patch("boto3.client", side_effect=mock_client):
-        # Call the function
-        client = s3_config.create_s3_client()
+        # Verify the arguments
+        assert kwargs["service_name"] == "s3"
+        assert kwargs["region_name"] == "us-east-1"
+        assert isinstance(kwargs["config"], Config)
         
-        # Verify it's an S3 client
-        assert client.__class__.__name__ == "S3"
+        # Verify that endpoint_url is not set
+        assert "endpoint_url" not in kwargs
+        
+        # Verify that credentials are not set
+        assert "aws_access_key_id" not in kwargs
+        assert "aws_secret_access_key" not in kwargs
 
 
-@mock_s3
+def test_create_s3_client_with_endpoint(mock_env):
+    """Test creating an S3 client with a custom endpoint."""
+    # Set the environment variables
+    mock_env({
+        "ENVIRONMENT": "development",
+        "S3_REGION": "us-east-1",
+        "S3_ENDPOINT": "http://localhost:4566"
+    })
+    
+    # Mock boto3.client
+    with patch("boto3.client") as mock_client:
+        # Create the S3 client
+        client = create_s3_client()
+        
+        # Verify the client creation
+        mock_client.assert_called_once()
+        args, kwargs = mock_client.call_args
+        
+        # Verify the arguments
+        assert kwargs["service_name"] == "s3"
+        assert kwargs["region_name"] == "us-east-1"
+        assert isinstance(kwargs["config"], Config)
+        
+        # Verify that endpoint_url is set
+        assert kwargs["endpoint_url"] == "http://localhost:4566"
+
+
+def test_create_s3_client_with_credentials(mock_env):
+    """Test creating an S3 client with credentials."""
+    # Set the environment variables
+    mock_env({
+        "ENVIRONMENT": "production",
+        "S3_REGION": "us-east-1",
+        "S3_ACCESS_KEY": "test-access-key",
+        "S3_SECRET_KEY": "test-secret-key"
+    })
+    
+    # Mock boto3.client
+    with patch("boto3.client") as mock_client:
+        # Create the S3 client
+        client = create_s3_client()
+        
+        # Verify the client creation
+        mock_client.assert_called_once()
+        args, kwargs = mock_client.call_args
+        
+        # Verify the arguments
+        assert kwargs["service_name"] == "s3"
+        assert kwargs["region_name"] == "us-east-1"
+        assert isinstance(kwargs["config"], Config)
+        
+        # Verify that credentials are set
+        assert kwargs["aws_access_key_id"] == "test-access-key"
+        assert kwargs["aws_secret_access_key"] == "test-secret-key"
+
+
 def test_create_s3_client_error_handling():
-    """Test that create_s3_client handles errors correctly."""
+    """Test error handling when creating an S3 client."""
     # Mock boto3.client to raise an exception
-    with patch("boto3.client", side_effect=Exception("Test exception")):
-        # Call the function and check that it raises the exception
-        with pytest.raises(Exception) as excinfo:
-            s3_config.create_s3_client()
+    with patch("boto3.client", side_effect=Exception("Test error")), \
+         patch("src.config.s3_config.logger") as mock_logger:
         
-        # Verify the exception message
-        assert "Test exception" in str(excinfo.value)
+        # Attempt to create the S3 client
+        with pytest.raises(Exception, match="Test error"):
+            create_s3_client()
+        
+        # Verify that the error is logged
+        mock_logger.error.assert_called_once()
 
 
 # ===== Test S3 Resource Creation =====
 
-@mock_s3
-def test_create_s3_resource_default_settings():
-    """Test that create_s3_resource creates a resource with default settings."""
-    # Call the function
-    resource = s3_config.create_s3_resource()
+def test_create_s3_resource_default_config(mock_env):
+    """Test creating an S3 resource with default configuration."""
+    # Set the environment variables
+    mock_env({
+        "ENVIRONMENT": "development",
+        "S3_REGION": "us-east-1"
+    })
     
-    # Verify it's an S3 resource
-    assert resource.__class__.__name__ == "ServiceResource"
-    assert resource.meta.service_name == "s3"
-    
-    # Test the resource works by creating a bucket
-    resource.create_bucket(Bucket="test-bucket")
-    buckets = list(resource.buckets.all())
-    assert len(buckets) == 1
-    assert buckets[0].name == "test-bucket"
-
-
-@mock_s3
-def test_create_s3_resource_with_custom_endpoint(monkeypatch):
-    """Test that create_s3_resource uses a custom endpoint if provided."""
-    # Set environment variables
-    monkeypatch.setenv("S3_ENDPOINT", "http://localhost:4566")
-    
-    # Mock the get_s3_config function to avoid interference
-    with patch("src.config.s3_config.get_s3_config", return_value=Config()):
-        # Call the function
-        resource = s3_config.create_s3_resource()
+    # Mock boto3.resource
+    with patch("boto3.resource") as mock_resource:
+        # Create the S3 resource
+        resource = create_s3_resource()
         
-        # Verify it's an S3 resource
-        assert resource.__class__.__name__ == "ServiceResource"
-        assert resource.meta.service_name == "s3"
+        # Verify the resource creation
+        mock_resource.assert_called_once()
+        args, kwargs = mock_resource.call_args
         
-        # Test the resource works by creating a bucket
-        resource.create_bucket(Bucket="test-bucket")
-        buckets = list(resource.buckets.all())
-        assert len(buckets) == 1
-        assert buckets[0].name == "test-bucket"
-
-
-@mock_s3
-def test_create_s3_resource_with_credentials(monkeypatch):
-    """Test that create_s3_resource uses credentials if provided."""
-    # Set environment variables
-    monkeypatch.setenv("S3_ACCESS_KEY", "test-access-key")
-    monkeypatch.setenv("S3_SECRET_KEY", "test-secret-key")
-    
-    # Mock boto3.resource to verify the credentials are passed
-    original_resource = boto3.resource
-    
-    def mock_resource(*args, **kwargs):
-        assert kwargs.get("aws_access_key_id") == "test-access-key"
-        assert kwargs.get("aws_secret_access_key") == "test-secret-key"
-        return original_resource(*args, **kwargs)
-    
-    with patch("boto3.resource", side_effect=mock_resource):
-        # Call the function
-        resource = s3_config.create_s3_resource()
+        # Verify the arguments
+        assert kwargs["service_name"] == "s3"
+        assert kwargs["region_name"] == "us-east-1"
+        assert isinstance(kwargs["config"], Config)
         
-        # Verify it's an S3 resource
-        assert resource.__class__.__name__ == "ServiceResource"
-        assert resource.meta.service_name == "s3"
+        # Verify that endpoint_url is not set
+        assert "endpoint_url" not in kwargs
+        
+        # Verify that credentials are not set
+        assert "aws_access_key_id" not in kwargs
+        assert "aws_secret_access_key" not in kwargs
 
 
-@mock_s3
+def test_create_s3_resource_with_endpoint(mock_env):
+    """Test creating an S3 resource with a custom endpoint."""
+    # Set the environment variables
+    mock_env({
+        "ENVIRONMENT": "development",
+        "S3_REGION": "us-east-1",
+        "S3_ENDPOINT": "http://localhost:4566"
+    })
+    
+    # Mock boto3.resource
+    with patch("boto3.resource") as mock_resource:
+        # Create the S3 resource
+        resource = create_s3_resource()
+        
+        # Verify the resource creation
+        mock_resource.assert_called_once()
+        args, kwargs = mock_resource.call_args
+        
+        # Verify the arguments
+        assert kwargs["service_name"] == "s3"
+        assert kwargs["region_name"] == "us-east-1"
+        assert isinstance(kwargs["config"], Config)
+        
+        # Verify that endpoint_url is set
+        assert kwargs["endpoint_url"] == "http://localhost:4566"
+
+
+def test_create_s3_resource_with_credentials(mock_env):
+    """Test creating an S3 resource with credentials."""
+    # Set the environment variables
+    mock_env({
+        "ENVIRONMENT": "production",
+        "S3_REGION": "us-east-1",
+        "S3_ACCESS_KEY": "test-access-key",
+        "S3_SECRET_KEY": "test-secret-key"
+    })
+    
+    # Mock boto3.resource
+    with patch("boto3.resource") as mock_resource:
+        # Create the S3 resource
+        resource = create_s3_resource()
+        
+        # Verify the resource creation
+        mock_resource.assert_called_once()
+        args, kwargs = mock_resource.call_args
+        
+        # Verify the arguments
+        assert kwargs["service_name"] == "s3"
+        assert kwargs["region_name"] == "us-east-1"
+        assert isinstance(kwargs["config"], Config)
+        
+        # Verify that credentials are set
+        assert kwargs["aws_access_key_id"] == "test-access-key"
+        assert kwargs["aws_secret_access_key"] == "test-secret-key"
+
+
 def test_create_s3_resource_error_handling():
-    """Test that create_s3_resource handles errors correctly."""
+    """Test error handling when creating an S3 resource."""
     # Mock boto3.resource to raise an exception
-    with patch("boto3.resource", side_effect=Exception("Test exception")):
-        # Call the function and check that it raises the exception
-        with pytest.raises(Exception) as excinfo:
-            s3_config.create_s3_resource()
+    with patch("boto3.resource", side_effect=Exception("Test error")), \
+         patch("src.config.s3_config.logger") as mock_logger:
         
-        # Verify the exception message
-        assert "Test exception" in str(excinfo.value)
+        # Attempt to create the S3 resource
+        with pytest.raises(Exception, match="Test error"):
+            create_s3_resource()
+        
+        # Verify that the error is logged
+        mock_logger.error.assert_called_once()
 
 
 # ===== Test File Upload with Encryption =====
 
-@mock_s3
-def test_upload_file_with_encryption(tmpdir):
-    """Test that upload_file_with_encryption uploads a file with AES-256 encryption."""
-    # Create a test file
-    test_file = tmpdir.join("test_file.txt")
-    test_file.write("Test content")
-    file_path = str(test_file)
+def test_upload_file_with_encryption_success(mock_env):
+    """Test successful file upload with encryption."""
+    # Set the environment variables
+    mock_env({
+        "ENVIRONMENT": "production",
+        "S3_REGION": "us-east-1",
+        "S3_ACCESS_KEY": "test-access-key",
+        "S3_SECRET_KEY": "test-secret-key"
+    })
     
-    # Create a test bucket
-    s3 = boto3.client("s3", region_name="us-east-1")
-    bucket_name = "mca-documents-test"
-    s3.create_bucket(Bucket=bucket_name)
+    # Mock the S3 client
+    mock_client = MagicMock()
     
-    # Mock the create_s3_client function to return our test client
-    with patch("src.config.s3_config.create_s3_client", return_value=s3):
-        # Mock the get_bucket_name function to return our test bucket
-        with patch("src.config.s3_config.get_bucket_name", return_value=bucket_name):
-            # Call the function
-            result = s3_config.upload_file_with_encryption(
-                file_path=file_path,
-                object_key="test_file.txt",
-                metadata={"test_key": "test_value"}
-            )
-            
-            # Verify the result
-            assert result is True
-            
-            # Verify the file was uploaded with encryption
-            response = s3.head_object(Bucket=bucket_name, Key="test_file.txt")
-            assert response["ServerSideEncryption"] == "AES256"
-            assert response["Metadata"]["test_key"] == "test_value"
+    # Mock create_s3_client to return the mock client
+    with patch("src.config.s3_config.create_s3_client", return_value=mock_client), \
+         patch("src.config.s3_config.get_bucket_name", return_value="mca-documents-production"), \
+         patch("src.config.s3_config.logger") as mock_logger:
+        
+        # Upload a file with encryption
+        result = upload_file_with_encryption(
+            file_path="/tmp/test.pdf",
+            object_key="documents/test.pdf",
+            metadata={"document_type": "invoice"}
+        )
+        
+        # Verify the result
+        assert result is True
+        
+        # Verify that the client's upload_file method was called
+        mock_client.upload_file.assert_called_once_with(
+            Filename="/tmp/test.pdf",
+            Bucket="mca-documents-production",
+            Key="documents/test.pdf",
+            ExtraArgs={
+                "ServerSideEncryption": "AES256",
+                "Metadata": {"document_type": "invoice"}
+            }
+        )
+        
+        # Verify that success is logged
+        mock_logger.info.assert_called_once()
 
 
-@mock_s3
-def test_upload_file_with_encryption_client_error():
-    """Test that upload_file_with_encryption handles ClientError correctly."""
-    # Mock the create_s3_client function to return a client that raises ClientError
+def test_upload_file_with_encryption_no_metadata(mock_env):
+    """Test file upload with encryption but without metadata."""
+    # Set the environment variables
+    mock_env({
+        "ENVIRONMENT": "production",
+        "S3_REGION": "us-east-1",
+        "S3_ACCESS_KEY": "test-access-key",
+        "S3_SECRET_KEY": "test-secret-key"
+    })
+    
+    # Mock the S3 client
+    mock_client = MagicMock()
+    
+    # Mock create_s3_client to return the mock client
+    with patch("src.config.s3_config.create_s3_client", return_value=mock_client), \
+         patch("src.config.s3_config.get_bucket_name", return_value="mca-documents-production"), \
+         patch("src.config.s3_config.logger") as mock_logger:
+        
+        # Upload a file with encryption but without metadata
+        result = upload_file_with_encryption(
+            file_path="/tmp/test.pdf",
+            object_key="documents/test.pdf"
+        )
+        
+        # Verify the result
+        assert result is True
+        
+        # Verify that the client's upload_file method was called
+        mock_client.upload_file.assert_called_once_with(
+            Filename="/tmp/test.pdf",
+            Bucket="mca-documents-production",
+            Key="documents/test.pdf",
+            ExtraArgs={
+                "ServerSideEncryption": "AES256"
+            }
+        )
+        
+        # Verify that success is logged
+        mock_logger.info.assert_called_once()
+
+
+def test_upload_file_with_encryption_client_error(mock_env):
+    """Test error handling for ClientError during file upload."""
+    # Set the environment variables
+    mock_env({
+        "ENVIRONMENT": "production",
+        "S3_REGION": "us-east-1",
+        "S3_ACCESS_KEY": "test-access-key",
+        "S3_SECRET_KEY": "test-secret-key"
+    })
+    
+    # Mock the S3 client
     mock_client = MagicMock()
     mock_client.upload_file.side_effect = ClientError(
-        {"Error": {"Code": "NoSuchBucket", "Message": "The specified bucket does not exist"}},
+        {"Error": {"Code": "AccessDenied", "Message": "Access Denied"}},
         "upload_file"
     )
     
-    with patch("src.config.s3_config.create_s3_client", return_value=mock_client):
-        # Call the function
-        result = s3_config.upload_file_with_encryption(
-            file_path="nonexistent_file.txt",
-            object_key="test_file.txt"
+    # Mock create_s3_client to return the mock client
+    with patch("src.config.s3_config.create_s3_client", return_value=mock_client), \
+         patch("src.config.s3_config.get_bucket_name", return_value="mca-documents-production"), \
+         patch("src.config.s3_config.logger") as mock_logger:
+        
+        # Attempt to upload a file
+        result = upload_file_with_encryption(
+            file_path="/tmp/test.pdf",
+            object_key="documents/test.pdf"
         )
         
         # Verify the result
         assert result is False
+        
+        # Verify that the error is logged
+        mock_logger.error.assert_called_once()
 
 
-@mock_s3
-def test_upload_file_with_encryption_general_exception():
-    """Test that upload_file_with_encryption handles general exceptions correctly."""
-    # Mock the create_s3_client function to return a client that raises an exception
-    mock_client = MagicMock()
-    mock_client.upload_file.side_effect = Exception("Test exception")
+def test_upload_file_with_encryption_unexpected_error(mock_env):
+    """Test error handling for unexpected errors during file upload."""
+    # Set the environment variables
+    mock_env({
+        "ENVIRONMENT": "production",
+        "S3_REGION": "us-east-1",
+        "S3_ACCESS_KEY": "test-access-key",
+        "S3_SECRET_KEY": "test-secret-key"
+    })
     
-    with patch("src.config.s3_config.create_s3_client", return_value=mock_client):
-        # Call the function
-        result = s3_config.upload_file_with_encryption(
-            file_path="nonexistent_file.txt",
-            object_key="test_file.txt"
+    # Mock the S3 client
+    mock_client = MagicMock()
+    mock_client.upload_file.side_effect = Exception("Unexpected error")
+    
+    # Mock create_s3_client to return the mock client
+    with patch("src.config.s3_config.create_s3_client", return_value=mock_client), \
+         patch("src.config.s3_config.get_bucket_name", return_value="mca-documents-production"), \
+         patch("src.config.s3_config.logger") as mock_logger:
+        
+        # Attempt to upload a file
+        result = upload_file_with_encryption(
+            file_path="/tmp/test.pdf",
+            object_key="documents/test.pdf"
         )
         
         # Verify the result
         assert result is False
+        
+        # Verify that the error is logged
+        mock_logger.error.assert_called_once()
 
 
 # ===== Test File Download =====
 
-@mock_s3
-def test_download_file(tmpdir):
-    """Test that download_file downloads a file correctly."""
-    # Create a test bucket and upload a test file
-    s3 = boto3.client("s3", region_name="us-east-1")
-    bucket_name = "mca-documents-test"
-    s3.create_bucket(Bucket=bucket_name)
-    s3.put_object(Bucket=bucket_name, Key="test_file.txt", Body="Test content")
+def test_download_file_success(mock_env):
+    """Test successful file download."""
+    # Set the environment variables
+    mock_env({
+        "ENVIRONMENT": "production",
+        "S3_REGION": "us-east-1",
+        "S3_ACCESS_KEY": "test-access-key",
+        "S3_SECRET_KEY": "test-secret-key"
+    })
     
-    # Create a download path
-    download_path = str(tmpdir.join("downloaded_file.txt"))
+    # Mock the S3 client
+    mock_client = MagicMock()
     
-    # Mock the create_s3_client function to return our test client
-    with patch("src.config.s3_config.create_s3_client", return_value=s3):
-        # Mock the get_bucket_name function to return our test bucket
-        with patch("src.config.s3_config.get_bucket_name", return_value=bucket_name):
-            # Call the function
-            result = s3_config.download_file(
-                object_key="test_file.txt",
-                download_path=download_path
-            )
-            
-            # Verify the result
-            assert result is True
-            
-            # Verify the file was downloaded correctly
-            with open(download_path, "r") as f:
-                content = f.read()
-                assert content == "Test content"
+    # Mock create_s3_client to return the mock client
+    with patch("src.config.s3_config.create_s3_client", return_value=mock_client), \
+         patch("src.config.s3_config.get_bucket_name", return_value="mca-documents-production"), \
+         patch("src.config.s3_config.logger") as mock_logger:
+        
+        # Download a file
+        result = download_file(
+            object_key="documents/test.pdf",
+            download_path="/tmp/downloaded.pdf"
+        )
+        
+        # Verify the result
+        assert result is True
+        
+        # Verify that the client's download_file method was called
+        mock_client.download_file.assert_called_once_with(
+            Bucket="mca-documents-production",
+            Key="documents/test.pdf",
+            Filename="/tmp/downloaded.pdf"
+        )
+        
+        # Verify that success is logged
+        mock_logger.info.assert_called_once()
 
 
-@mock_s3
-def test_download_file_client_error():
-    """Test that download_file handles ClientError correctly."""
-    # Mock the create_s3_client function to return a client that raises ClientError
+def test_download_file_client_error(mock_env):
+    """Test error handling for ClientError during file download."""
+    # Set the environment variables
+    mock_env({
+        "ENVIRONMENT": "production",
+        "S3_REGION": "us-east-1",
+        "S3_ACCESS_KEY": "test-access-key",
+        "S3_SECRET_KEY": "test-secret-key"
+    })
+    
+    # Mock the S3 client
     mock_client = MagicMock()
     mock_client.download_file.side_effect = ClientError(
-        {"Error": {"Code": "NoSuchKey", "Message": "The specified key does not exist"}},
+        {"Error": {"Code": "NoSuchKey", "Message": "The specified key does not exist."}},
         "download_file"
     )
     
-    with patch("src.config.s3_config.create_s3_client", return_value=mock_client):
-        # Call the function
-        result = s3_config.download_file(
-            object_key="nonexistent_file.txt",
-            download_path="nonexistent_path.txt"
+    # Mock create_s3_client to return the mock client
+    with patch("src.config.s3_config.create_s3_client", return_value=mock_client), \
+         patch("src.config.s3_config.get_bucket_name", return_value="mca-documents-production"), \
+         patch("src.config.s3_config.logger") as mock_logger:
+        
+        # Attempt to download a file
+        result = download_file(
+            object_key="documents/nonexistent.pdf",
+            download_path="/tmp/downloaded.pdf"
         )
         
         # Verify the result
         assert result is False
+        
+        # Verify that the error is logged
+        mock_logger.error.assert_called_once()
 
 
-@mock_s3
-def test_download_file_general_exception():
-    """Test that download_file handles general exceptions correctly."""
-    # Mock the create_s3_client function to return a client that raises an exception
-    mock_client = MagicMock()
-    mock_client.download_file.side_effect = Exception("Test exception")
+def test_download_file_unexpected_error(mock_env):
+    """Test error handling for unexpected errors during file download."""
+    # Set the environment variables
+    mock_env({
+        "ENVIRONMENT": "production",
+        "S3_REGION": "us-east-1",
+        "S3_ACCESS_KEY": "test-access-key",
+        "S3_SECRET_KEY": "test-secret-key"
+    })
     
-    with patch("src.config.s3_config.create_s3_client", return_value=mock_client):
-        # Call the function
-        result = s3_config.download_file(
-            object_key="nonexistent_file.txt",
-            download_path="nonexistent_path.txt"
+    # Mock the S3 client
+    mock_client = MagicMock()
+    mock_client.download_file.side_effect = Exception("Unexpected error")
+    
+    # Mock create_s3_client to return the mock client
+    with patch("src.config.s3_config.create_s3_client", return_value=mock_client), \
+         patch("src.config.s3_config.get_bucket_name", return_value="mca-documents-production"), \
+         patch("src.config.s3_config.logger") as mock_logger:
+        
+        # Attempt to download a file
+        result = download_file(
+            object_key="documents/test.pdf",
+            download_path="/tmp/downloaded.pdf"
         )
         
         # Verify the result
         assert result is False
+        
+        # Verify that the error is logged
+        mock_logger.error.assert_called_once()
 
 
 # ===== Test Bucket Existence Check =====
 
-@mock_s3
-def test_check_bucket_exists():
-    """Test that check_bucket_exists correctly identifies existing buckets."""
-    # Create a test bucket
-    s3 = boto3.client("s3", region_name="us-east-1")
-    bucket_name = "mca-documents-test"
-    s3.create_bucket(Bucket=bucket_name)
+def test_check_bucket_exists_success(mock_env):
+    """Test successful bucket existence check."""
+    # Set the environment variables
+    mock_env({
+        "ENVIRONMENT": "production",
+        "S3_REGION": "us-east-1",
+        "S3_ACCESS_KEY": "test-access-key",
+        "S3_SECRET_KEY": "test-secret-key"
+    })
     
-    # Mock the create_s3_client function to return our test client
-    with patch("src.config.s3_config.create_s3_client", return_value=s3):
-        # Call the function with an existing bucket
-        result = s3_config.check_bucket_exists(bucket_name)
+    # Mock the S3 client
+    mock_client = MagicMock()
+    
+    # Mock create_s3_client to return the mock client
+    with patch("src.config.s3_config.create_s3_client", return_value=mock_client), \
+         patch("src.config.s3_config.get_bucket_name", return_value="mca-documents-production"), \
+         patch("src.config.s3_config.logger") as mock_logger:
+        
+        # Check if the bucket exists
+        result = check_bucket_exists()
+        
+        # Verify the result
         assert result is True
         
-        # Call the function with a non-existent bucket
-        result = s3_config.check_bucket_exists("nonexistent-bucket")
-        assert result is False
+        # Verify that the client's head_bucket method was called
+        mock_client.head_bucket.assert_called_once_with(Bucket="mca-documents-production")
+        
+        # Verify that success is logged
+        mock_logger.info.assert_called_once()
 
 
-@mock_s3
-def test_check_bucket_exists_default_bucket():
-    """Test that check_bucket_exists uses the default bucket if none is provided."""
-    # Create a test bucket
-    s3 = boto3.client("s3", region_name="us-east-1")
-    bucket_name = "mca-documents-test"
-    s3.create_bucket(Bucket=bucket_name)
+def test_check_bucket_exists_custom_bucket(mock_env):
+    """Test bucket existence check with a custom bucket name."""
+    # Set the environment variables
+    mock_env({
+        "ENVIRONMENT": "production",
+        "S3_REGION": "us-east-1",
+        "S3_ACCESS_KEY": "test-access-key",
+        "S3_SECRET_KEY": "test-secret-key"
+    })
     
-    # Mock the create_s3_client function to return our test client
-    with patch("src.config.s3_config.create_s3_client", return_value=s3):
-        # Mock the get_bucket_name function to return our test bucket
-        with patch("src.config.s3_config.get_bucket_name", return_value=bucket_name):
-            # Call the function without specifying a bucket
-            result = s3_config.check_bucket_exists()
-            assert result is True
+    # Mock the S3 client
+    mock_client = MagicMock()
+    
+    # Mock create_s3_client to return the mock client
+    with patch("src.config.s3_config.create_s3_client", return_value=mock_client), \
+         patch("src.config.s3_config.logger") as mock_logger:
+        
+        # Check if a custom bucket exists
+        result = check_bucket_exists("custom-bucket")
+        
+        # Verify the result
+        assert result is True
+        
+        # Verify that the client's head_bucket method was called with the custom bucket
+        mock_client.head_bucket.assert_called_once_with(Bucket="custom-bucket")
+        
+        # Verify that success is logged
+        mock_logger.info.assert_called_once()
 
 
-@mock_s3
-def test_check_bucket_exists_client_error():
-    """Test that check_bucket_exists handles ClientError correctly."""
-    # Mock the create_s3_client function to return a client that raises ClientError
+def test_check_bucket_exists_not_found(mock_env):
+    """Test bucket existence check when the bucket doesn't exist."""
+    # Set the environment variables
+    mock_env({
+        "ENVIRONMENT": "production",
+        "S3_REGION": "us-east-1",
+        "S3_ACCESS_KEY": "test-access-key",
+        "S3_SECRET_KEY": "test-secret-key"
+    })
+    
+    # Mock the S3 client
     mock_client = MagicMock()
     mock_client.head_bucket.side_effect = ClientError(
-        {"Error": {"Code": "403", "Message": "Forbidden"}},
+        {"Error": {"Code": "404", "Message": "Not Found"}},
         "head_bucket"
     )
     
-    with patch("src.config.s3_config.create_s3_client", return_value=mock_client):
-        # Call the function
-        result = s3_config.check_bucket_exists("test-bucket")
+    # Mock create_s3_client to return the mock client
+    with patch("src.config.s3_config.create_s3_client", return_value=mock_client), \
+         patch("src.config.s3_config.get_bucket_name", return_value="mca-documents-production"), \
+         patch("src.config.s3_config.logger") as mock_logger:
+        
+        # Check if the bucket exists
+        result = check_bucket_exists()
+        
+        # Verify the result
         assert result is False
+        
+        # Verify that the warning is logged
+        mock_logger.warning.assert_called_once()
 
 
-@mock_s3
-def test_check_bucket_exists_general_exception():
-    """Test that check_bucket_exists handles general exceptions correctly."""
-    # Mock the create_s3_client function to return a client that raises an exception
-    mock_client = MagicMock()
-    mock_client.head_bucket.side_effect = Exception("Test exception")
+def test_check_bucket_exists_no_such_bucket(mock_env):
+    """Test bucket existence check with NoSuchBucket error."""
+    # Set the environment variables
+    mock_env({
+        "ENVIRONMENT": "production",
+        "S3_REGION": "us-east-1",
+        "S3_ACCESS_KEY": "test-access-key",
+        "S3_SECRET_KEY": "test-secret-key"
+    })
     
-    with patch("src.config.s3_config.create_s3_client", return_value=mock_client):
-        # Call the function
-        result = s3_config.check_bucket_exists("test-bucket")
+    # Mock the S3 client
+    mock_client = MagicMock()
+    mock_client.head_bucket.side_effect = ClientError(
+        {"Error": {"Code": "NoSuchBucket", "Message": "The specified bucket does not exist"}},
+        "head_bucket"
+    )
+    
+    # Mock create_s3_client to return the mock client
+    with patch("src.config.s3_config.create_s3_client", return_value=mock_client), \
+         patch("src.config.s3_config.get_bucket_name", return_value="mca-documents-production"), \
+         patch("src.config.s3_config.logger") as mock_logger:
+        
+        # Check if the bucket exists
+        result = check_bucket_exists()
+        
+        # Verify the result
         assert result is False
+        
+        # Verify that the warning is logged
+        mock_logger.warning.assert_called_once()
+
+
+def test_check_bucket_exists_other_client_error(mock_env):
+    """Test bucket existence check with other ClientError."""
+    # Set the environment variables
+    mock_env({
+        "ENVIRONMENT": "production",
+        "S3_REGION": "us-east-1",
+        "S3_ACCESS_KEY": "test-access-key",
+        "S3_SECRET_KEY": "test-secret-key"
+    })
+    
+    # Mock the S3 client
+    mock_client = MagicMock()
+    mock_client.head_bucket.side_effect = ClientError(
+        {"Error": {"Code": "AccessDenied", "Message": "Access Denied"}},
+        "head_bucket"
+    )
+    
+    # Mock create_s3_client to return the mock client
+    with patch("src.config.s3_config.create_s3_client", return_value=mock_client), \
+         patch("src.config.s3_config.get_bucket_name", return_value="mca-documents-production"), \
+         patch("src.config.s3_config.logger") as mock_logger:
+        
+        # Check if the bucket exists
+        result = check_bucket_exists()
+        
+        # Verify the result
+        assert result is False
+        
+        # Verify that the error is logged
+        mock_logger.error.assert_called_once()
+
+
+def test_check_bucket_exists_unexpected_error(mock_env):
+    """Test bucket existence check with unexpected error."""
+    # Set the environment variables
+    mock_env({
+        "ENVIRONMENT": "production",
+        "S3_REGION": "us-east-1",
+        "S3_ACCESS_KEY": "test-access-key",
+        "S3_SECRET_KEY": "test-secret-key"
+    })
+    
+    # Mock the S3 client
+    mock_client = MagicMock()
+    mock_client.head_bucket.side_effect = Exception("Unexpected error")
+    
+    # Mock create_s3_client to return the mock client
+    with patch("src.config.s3_config.create_s3_client", return_value=mock_client), \
+         patch("src.config.s3_config.get_bucket_name", return_value="mca-documents-production"), \
+         patch("src.config.s3_config.logger") as mock_logger:
+        
+        # Check if the bucket exists
+        result = check_bucket_exists()
+        
+        # Verify the result
+        assert result is False
+        
+        # Verify that the error is logged
+        mock_logger.error.assert_called_once()
 
 
 # ===== Test Bucket Creation =====
 
-@mock_s3
-def test_create_bucket_if_not_exists():
-    """Test that create_bucket_if_not_exists creates a bucket if it doesn't exist."""
-    # Create a test S3 client
-    s3 = boto3.client("s3", region_name="us-east-1")
-    bucket_name = "mca-documents-test"
+def test_create_bucket_if_not_exists_already_exists(mock_env):
+    """Test bucket creation when the bucket already exists."""
+    # Set the environment variables
+    mock_env({
+        "ENVIRONMENT": "production",
+        "S3_REGION": "us-east-1",
+        "S3_ACCESS_KEY": "test-access-key",
+        "S3_SECRET_KEY": "test-secret-key"
+    })
     
-    # Mock the create_s3_client function to return our test client
-    with patch("src.config.s3_config.create_s3_client", return_value=s3):
-        # Mock the check_bucket_exists function to return False (bucket doesn't exist)
-        with patch("src.config.s3_config.check_bucket_exists", return_value=False):
-            # Call the function
-            result = s3_config.create_bucket_if_not_exists(bucket_name)
-            assert result is True
-            
-            # Verify the bucket was created
-            response = s3.list_buckets()
-            assert len(response["Buckets"]) == 1
-            assert response["Buckets"][0]["Name"] == bucket_name
+    # Mock check_bucket_exists to return True
+    with patch("src.config.s3_config.check_bucket_exists", return_value=True), \
+         patch("src.config.s3_config.create_s3_client") as mock_create_client, \
+         patch("src.config.s3_config.get_bucket_name", return_value="mca-documents-production"):
+        
+        # Create the bucket if it doesn't exist
+        result = create_bucket_if_not_exists()
+        
+        # Verify the result
+        assert result is True
+        
+        # Verify that create_s3_client was not called
+        mock_create_client.assert_not_called()
 
 
-@mock_s3
-def test_create_bucket_if_not_exists_already_exists():
-    """Test that create_bucket_if_not_exists returns True if the bucket already exists."""
-    # Create a test bucket
-    s3 = boto3.client("s3", region_name="us-east-1")
-    bucket_name = "mca-documents-test"
-    s3.create_bucket(Bucket=bucket_name)
+def test_create_bucket_if_not_exists_create_success(mock_env):
+    """Test successful bucket creation."""
+    # Set the environment variables
+    mock_env({
+        "ENVIRONMENT": "production",
+        "S3_REGION": "us-east-1",
+        "S3_ACCESS_KEY": "test-access-key",
+        "S3_SECRET_KEY": "test-secret-key"
+    })
     
-    # Mock the create_s3_client function to return our test client
-    with patch("src.config.s3_config.create_s3_client", return_value=s3):
-        # Mock the check_bucket_exists function to return True (bucket exists)
-        with patch("src.config.s3_config.check_bucket_exists", return_value=True):
-            # Call the function
-            result = s3_config.create_bucket_if_not_exists(bucket_name)
-            assert result is True
-
-
-@mock_s3
-def test_create_bucket_if_not_exists_default_bucket():
-    """Test that create_bucket_if_not_exists uses the default bucket if none is provided."""
-    # Create a test S3 client
-    s3 = boto3.client("s3", region_name="us-east-1")
-    bucket_name = "mca-documents-test"
+    # Mock the S3 client
+    mock_client = MagicMock()
     
-    # Mock the create_s3_client function to return our test client
-    with patch("src.config.s3_config.create_s3_client", return_value=s3):
-        # Mock the check_bucket_exists function to return False (bucket doesn't exist)
-        with patch("src.config.s3_config.check_bucket_exists", return_value=False):
-            # Mock the get_bucket_name function to return our test bucket
-            with patch("src.config.s3_config.get_bucket_name", return_value=bucket_name):
-                # Call the function without specifying a bucket
-                result = s3_config.create_bucket_if_not_exists()
-                assert result is True
-                
-                # Verify the bucket was created
-                response = s3.list_buckets()
-                assert len(response["Buckets"]) == 1
-                assert response["Buckets"][0]["Name"] == bucket_name
+    # Mock check_bucket_exists to return False, then True
+    with patch("src.config.s3_config.check_bucket_exists", side_effect=[False, True]), \
+         patch("src.config.s3_config.create_s3_client", return_value=mock_client), \
+         patch("src.config.s3_config.get_bucket_name", return_value="mca-documents-production"), \
+         patch("src.config.s3_config.logger") as mock_logger:
+        
+        # Create the bucket if it doesn't exist
+        result = create_bucket_if_not_exists()
+        
+        # Verify the result
+        assert result is True
+        
+        # Verify that the client's create_bucket method was called
+        mock_client.create_bucket.assert_called_once_with(Bucket="mca-documents-production")
+        
+        # Verify that the client's put_bucket_encryption method was called
+        mock_client.put_bucket_encryption.assert_called_once_with(
+            Bucket="mca-documents-production",
+            ServerSideEncryptionConfiguration={
+                "Rules": [
+                    {
+                        "ApplyServerSideEncryptionByDefault": {
+                            "SSEAlgorithm": "AES256"
+                        },
+                        "BucketKeyEnabled": True
+                    }
+                ]
+            }
+        )
+        
+        # Verify that success is logged
+        mock_logger.info.assert_called_once()
 
 
-@mock_s3
-def test_create_bucket_if_not_exists_with_encryption():
-    """Test that create_bucket_if_not_exists enables encryption on the bucket."""
-    # Create a test S3 client
-    s3 = boto3.client("s3", region_name="us-east-1")
-    bucket_name = "mca-documents-test"
+def test_create_bucket_if_not_exists_create_with_region(mock_env):
+    """Test bucket creation with a non-default region."""
+    # Set the environment variables
+    mock_env({
+        "ENVIRONMENT": "production",
+        "S3_REGION": "us-west-2",
+        "S3_ACCESS_KEY": "test-access-key",
+        "S3_SECRET_KEY": "test-secret-key"
+    })
     
-    # Mock the create_s3_client function to return our test client
-    with patch("src.config.s3_config.create_s3_client", return_value=s3):
-        # Mock the check_bucket_exists function to return False (bucket doesn't exist)
-        with patch("src.config.s3_config.check_bucket_exists", return_value=False):
-            # Call the function
-            result = s3_config.create_bucket_if_not_exists(bucket_name)
-            assert result is True
-            
-            # Verify encryption was enabled on the bucket
-            # Note: moto doesn't fully support bucket encryption, so we can't verify this directly
-            # Instead, we'll verify that put_bucket_encryption was called
-            assert s3.put_bucket_encryption.call_count if hasattr(s3, "put_bucket_encryption") else True
+    # Mock the S3 client
+    mock_client = MagicMock()
+    
+    # Mock check_bucket_exists to return False, then True
+    with patch("src.config.s3_config.check_bucket_exists", side_effect=[False, True]), \
+         patch("src.config.s3_config.create_s3_client", return_value=mock_client), \
+         patch("src.config.s3_config.get_bucket_name", return_value="mca-documents-production"), \
+         patch("src.config.s3_config.S3_REGION", "us-west-2"), \
+         patch("src.config.s3_config.logger") as mock_logger:
+        
+        # Create the bucket if it doesn't exist
+        result = create_bucket_if_not_exists()
+        
+        # Verify the result
+        assert result is True
+        
+        # Verify that the client's create_bucket method was called with region configuration
+        mock_client.create_bucket.assert_called_once_with(
+            Bucket="mca-documents-production",
+            CreateBucketConfiguration={
+                "LocationConstraint": "us-west-2"
+            }
+        )
 
 
-@mock_s3
-def test_create_bucket_if_not_exists_client_error():
-    """Test that create_bucket_if_not_exists handles ClientError correctly."""
-    # Mock the create_s3_client function to return a client that raises ClientError
+def test_create_bucket_if_not_exists_custom_bucket(mock_env):
+    """Test bucket creation with a custom bucket name."""
+    # Set the environment variables
+    mock_env({
+        "ENVIRONMENT": "production",
+        "S3_REGION": "us-east-1",
+        "S3_ACCESS_KEY": "test-access-key",
+        "S3_SECRET_KEY": "test-secret-key"
+    })
+    
+    # Mock the S3 client
+    mock_client = MagicMock()
+    
+    # Mock check_bucket_exists to return False, then True
+    with patch("src.config.s3_config.check_bucket_exists", side_effect=[False, True]), \
+         patch("src.config.s3_config.create_s3_client", return_value=mock_client), \
+         patch("src.config.s3_config.logger") as mock_logger:
+        
+        # Create a custom bucket if it doesn't exist
+        result = create_bucket_if_not_exists("custom-bucket")
+        
+        # Verify the result
+        assert result is True
+        
+        # Verify that the client's create_bucket method was called with the custom bucket
+        mock_client.create_bucket.assert_called_once_with(Bucket="custom-bucket")
+        
+        # Verify that the client's put_bucket_encryption method was called with the custom bucket
+        mock_client.put_bucket_encryption.assert_called_once_with(
+            Bucket="custom-bucket",
+            ServerSideEncryptionConfiguration={
+                "Rules": [
+                    {
+                        "ApplyServerSideEncryptionByDefault": {
+                            "SSEAlgorithm": "AES256"
+                        },
+                        "BucketKeyEnabled": True
+                    }
+                ]
+            }
+        )
+
+
+def test_create_bucket_if_not_exists_client_error(mock_env):
+    """Test error handling for ClientError during bucket creation."""
+    # Set the environment variables
+    mock_env({
+        "ENVIRONMENT": "production",
+        "S3_REGION": "us-east-1",
+        "S3_ACCESS_KEY": "test-access-key",
+        "S3_SECRET_KEY": "test-secret-key"
+    })
+    
+    # Mock the S3 client
     mock_client = MagicMock()
     mock_client.create_bucket.side_effect = ClientError(
-        {"Error": {"Code": "BucketAlreadyExists", "Message": "The requested bucket name is not available"}},
+        {"Error": {"Code": "BucketAlreadyOwnedByYou", "Message": "Your previous request to create the named bucket succeeded and you already own it."}},
         "create_bucket"
     )
     
-    with patch("src.config.s3_config.create_s3_client", return_value=mock_client):
-        # Mock the check_bucket_exists function to return False (bucket doesn't exist)
-        with patch("src.config.s3_config.check_bucket_exists", return_value=False):
-            # Call the function
-            result = s3_config.create_bucket_if_not_exists("test-bucket")
-            assert result is False
+    # Mock check_bucket_exists to return False
+    with patch("src.config.s3_config.check_bucket_exists", return_value=False), \
+         patch("src.config.s3_config.create_s3_client", return_value=mock_client), \
+         patch("src.config.s3_config.get_bucket_name", return_value="mca-documents-production"), \
+         patch("src.config.s3_config.logger") as mock_logger:
+        
+        # Attempt to create the bucket
+        result = create_bucket_if_not_exists()
+        
+        # Verify the result
+        assert result is False
+        
+        # Verify that the error is logged
+        mock_logger.error.assert_called_once()
 
 
-@mock_s3
-def test_create_bucket_if_not_exists_general_exception():
-    """Test that create_bucket_if_not_exists handles general exceptions correctly."""
-    # Mock the create_s3_client function to return a client that raises an exception
-    mock_client = MagicMock()
-    mock_client.create_bucket.side_effect = Exception("Test exception")
+def test_create_bucket_if_not_exists_unexpected_error(mock_env):
+    """Test error handling for unexpected errors during bucket creation."""
+    # Set the environment variables
+    mock_env({
+        "ENVIRONMENT": "production",
+        "S3_REGION": "us-east-1",
+        "S3_ACCESS_KEY": "test-access-key",
+        "S3_SECRET_KEY": "test-secret-key"
+    })
     
-    with patch("src.config.s3_config.create_s3_client", return_value=mock_client):
-        # Mock the check_bucket_exists function to return False (bucket doesn't exist)
-        with patch("src.config.s3_config.check_bucket_exists", return_value=False):
-            # Call the function
-            result = s3_config.create_bucket_if_not_exists("test-bucket")
-            assert result is False
+    # Mock the S3 client
+    mock_client = MagicMock()
+    mock_client.create_bucket.side_effect = Exception("Unexpected error")
+    
+    # Mock check_bucket_exists to return False
+    with patch("src.config.s3_config.check_bucket_exists", return_value=False), \
+         patch("src.config.s3_config.create_s3_client", return_value=mock_client), \
+         patch("src.config.s3_config.get_bucket_name", return_value="mca-documents-production"), \
+         patch("src.config.s3_config.logger") as mock_logger:
+        
+        # Attempt to create the bucket
+        result = create_bucket_if_not_exists()
+        
+        # Verify the result
+        assert result is False
+        
+        # Verify that the error is logged
+        mock_logger.error.assert_called_once()
 
 
 # ===== Test Module Initialization =====
 
-@mock_s3
-def test_module_initialization():
+def test_module_initialization(mock_env):
     """Test that the module initializes S3 client and resource correctly."""
-    # Create a test S3 client and resource
-    s3_client_mock = MagicMock()
-    s3_resource_mock = MagicMock()
+    # Set the environment variables
+    mock_env({
+        "ENVIRONMENT": "production",
+        "S3_REGION": "us-east-1",
+        "S3_ACCESS_KEY": "test-access-key",
+        "S3_SECRET_KEY": "test-secret-key"
+    })
     
-    # Mock the create_s3_client and create_s3_resource functions
-    with patch("src.config.s3_config.create_s3_client", return_value=s3_client_mock):
-        with patch("src.config.s3_config.create_s3_resource", return_value=s3_resource_mock):
-            # Mock the check_bucket_exists function
-            with patch("src.config.s3_config.check_bucket_exists", return_value=True):
-                # Reload the module to trigger initialization
-                import importlib
-                importlib.reload(s3_config)
-                
-                # Verify that the module-level variables are set
-                assert s3_config.s3_client == s3_client_mock
-                assert s3_config.s3_resource == s3_resource_mock
-
-
-@mock_s3
-def test_module_initialization_error_handling():
-    """Test that the module handles initialization errors correctly."""
-    # Mock the create_s3_client function to raise an exception
-    with patch("src.config.s3_config.create_s3_client", side_effect=Exception("Test exception")):
-        # Reload the module to trigger initialization
-        import importlib
-        importlib.reload(s3_config)
+    # Mock the S3 client and resource
+    mock_client = MagicMock()
+    mock_resource = MagicMock()
+    
+    # Mock the functions
+    with patch("src.config.s3_config.create_s3_client", return_value=mock_client), \
+         patch("src.config.s3_config.create_s3_resource", return_value=mock_resource), \
+         patch("src.config.s3_config.check_bucket_exists", return_value=True), \
+         patch("src.config.s3_config.get_bucket_name", return_value="mca-documents-production"), \
+         patch("src.config.s3_config.logger") as mock_logger:
         
-        # Verify that the module-level variables are not set
-        assert not hasattr(s3_config, "s3_client") or s3_config.s3_client is None
-        assert not hasattr(s3_config, "s3_resource") or s3_config.s3_resource is None
+        # Import the module to trigger initialization
+        import importlib
+        importlib.reload(sys.modules["src.config.s3_config"])
+        
+        # Verify that the functions were called
+        assert sys.modules["src.config.s3_config"].create_s3_client.called
+        assert sys.modules["src.config.s3_config"].create_s3_resource.called
+        assert sys.modules["src.config.s3_config"].check_bucket_exists.called
+        assert sys.modules["src.config.s3_config"].get_bucket_name.called
+        
+        # Verify that success is logged
+        mock_logger.info.assert_called()
+
+
+def test_module_initialization_bucket_not_exists(mock_env):
+    """Test module initialization when the bucket doesn't exist."""
+    # Set the environment variables
+    mock_env({
+        "ENVIRONMENT": "production",
+        "S3_REGION": "us-east-1",
+        "S3_ACCESS_KEY": "test-access-key",
+        "S3_SECRET_KEY": "test-secret-key"
+    })
+    
+    # Mock the S3 client and resource
+    mock_client = MagicMock()
+    mock_resource = MagicMock()
+    
+    # Mock the functions
+    with patch("src.config.s3_config.create_s3_client", return_value=mock_client), \
+         patch("src.config.s3_config.create_s3_resource", return_value=mock_resource), \
+         patch("src.config.s3_config.check_bucket_exists", return_value=False), \
+         patch("src.config.s3_config.get_bucket_name", return_value="mca-documents-production"), \
+         patch("src.config.s3_config.logger") as mock_logger:
+        
+        # Import the module to trigger initialization
+        import importlib
+        importlib.reload(sys.modules["src.config.s3_config"])
+        
+        # Verify that the warning is logged
+        mock_logger.warning.assert_called_once()
+
+
+def test_module_initialization_error(mock_env):
+    """Test error handling during module initialization."""
+    # Set the environment variables
+    mock_env({
+        "ENVIRONMENT": "production",
+        "S3_REGION": "us-east-1",
+        "S3_ACCESS_KEY": "test-access-key",
+        "S3_SECRET_KEY": "test-secret-key"
+    })
+    
+    # Mock create_s3_client to raise an exception
+    with patch("src.config.s3_config.create_s3_client", side_effect=Exception("Test error")), \
+         patch("src.config.s3_config.logger") as mock_logger:
+        
+        # Import the module to trigger initialization
+        import importlib
+        importlib.reload(sys.modules["src.config.s3_config"])
+        
+        # Verify that the error is logged
+        mock_logger.error.assert_called_once()
+        mock_logger.warning.assert_called_once()
