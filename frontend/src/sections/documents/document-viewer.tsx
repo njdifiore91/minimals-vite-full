@@ -1,29 +1,29 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useTheme } from '@mui/material/styles';
-import { Document, Page, pdfjs } from 'react-pdf';
 import Box from '@mui/material/Box';
 import Card from '@mui/material/Card';
 import Stack from '@mui/material/Stack';
-import Alert from '@mui/material/Alert';
-import Skeleton from '@mui/material/Skeleton';
 import Typography from '@mui/material/Typography';
 import CircularProgress from '@mui/material/CircularProgress';
+import Alert from '@mui/material/Alert';
 import useMediaQuery from '@mui/material/useMediaQuery';
+import { Viewer, Worker, SpecialZoomLevel } from '@react-pdf-viewer/core';
+import { defaultLayoutPlugin } from '@react-pdf-viewer/default-layout';
 
+// Import styles
+import '@react-pdf-viewer/core/lib/styles/index.css';
+import '@react-pdf-viewer/default-layout/lib/styles/index.css';
+
+// Import components
 import { Iconify } from 'src/components/iconify';
-import { FileThumbnail } from 'src/components/file-thumbnail';
-
 import { DocumentControls } from './document-controls';
 import { DocumentClassificationInfo } from './document-classification-info';
 
+// Import types
 import type { IDocumentItem, IDocumentViewerConfig } from 'src/types/document';
 
-// Initialize PDF.js worker
-// This is required for react-pdf to work properly
-pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-  'pdfjs-dist/build/pdf.worker.min.mjs',
-  import.meta.url
-).toString();
+// Import services
+import { getSecureDocumentUrl } from 'src/services/document';
 
 // ----------------------------------------------------------------------
 
@@ -46,304 +46,256 @@ type Props = {
 export function DocumentViewer({ document, config, sx }: Props) {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
-  const isTablet = useMediaQuery(theme.breakpoints.down('md'));
+  const viewerContainerRef = useRef<HTMLDivElement>(null);
   
-  // Container ref for measuring available space
-  const containerRef = useRef<HTMLDivElement>(null);
-  
-  // Document state
-  const [numPages, setNumPages] = useState<number | null>(null);
-  const [currentPage, setCurrentPage] = useState<number>(1);
+  // State for document viewing
+  const [documentUrl, setDocumentUrl] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
   const [zoom, setZoom] = useState<number>(100);
   const [rotation, setRotation] = useState<number>(0);
+  const [currentPage, setCurrentPage] = useState<number>(1);
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
   
-  // Loading and error states
-  const [loading, setLoading] = useState<boolean>(true);
-  const [error, setError] = useState<string | null>(null);
-  const [documentUrl, setDocumentUrl] = useState<string | null>(null);
-
   // Default configuration values
   const {
     showClassification = true,
     showConfidence = true,
+    showExtractedFields = true,
     enableDownload = true,
+    enablePrint = false,
+    enableSharing = false,
+    enableAnnotation = false,
+    maxZoom = 300,
+    defaultZoom = 100,
+    showThumbnails = true,
     enableFullscreen = true,
     enableKeyboardShortcuts = true,
     showPageNavigation = true,
-    maxZoom = 300,
-    defaultZoom = 100,
+    onError,
+    onLoad,
+    onDownload,
   } = config || {};
-
-  // Determine if the document is a PDF or an image
-  const isPdf = document.type.toLowerCase().includes('pdf');
   
-  /**
-   * Fetches the document from S3 storage with secure token
-   * Uses AES-256 encryption for secure content delivery
-   */
-  const fetchDocument = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      
-      // Check if we already have a valid download URL
-      if (document.downloadUrl && document.downloadUrlExpiry) {
-        const expiryDate = new Date(document.downloadUrlExpiry);
-        if (expiryDate > new Date()) {
-          setDocumentUrl(document.downloadUrl);
-          return;
-        }
-      }
-      
-      // Simulate API call to get secure URL with token
-      // In a real implementation, this would be an API call to your backend
-      // that generates a signed URL for the S3 object with proper authentication
-      const response = await fetch(`/api/documents/${document.id}/secure-url`, {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-          // Include authentication token in the request
-          Authorization: `Bearer ${localStorage.getItem('accessToken')}`,
-        },
-      });
-      
-      if (!response.ok) {
-        throw new Error(`Failed to fetch document: ${response.statusText}`);
-      }
-      
-      const data = await response.json();
-      setDocumentUrl(data.url);
-    } catch (err) {
-      console.error('Error fetching document:', err);
-      setError(err instanceof Error ? err.message : 'Failed to load document');
-    } finally {
-      setLoading(false);
-    }
-  }, [document.id, document.downloadUrl, document.downloadUrlExpiry]);
-  
-  // Fetch document on component mount or when document changes
-  useEffect(() => {
-    fetchDocument();
-    
-    // Reset viewer state when document changes
-    setCurrentPage(1);
-    setZoom(defaultZoom);
-    setRotation(0);
-    setNumPages(null);
-    
-    // Clean up function to revoke object URL if needed
-    return () => {
-      if (documentUrl && documentUrl.startsWith('blob:')) {
-        URL.revokeObjectURL(documentUrl);
-      }
-    };
-  }, [document.id, defaultZoom, fetchDocument]);
-  
-  // Handle document load success
-  const handleDocumentLoadSuccess = ({ numPages }: { numPages: number }) => {
-    setNumPages(numPages);
-    setLoading(false);
-  };
-  
-  // Handle document load error
-  const handleDocumentLoadError = (error: Error) => {
-    console.error('Error loading document:', error);
-    setError('Failed to load document. Please try again later.');
-    setLoading(false);
-  };
+  // Set up PDF viewer plugins
+  const defaultLayoutPluginInstance = defaultLayoutPlugin({
+    sidebarTabs: (defaultTabs) => [
+      // Only show thumbnails tab if enabled
+      ...(showThumbnails ? [defaultTabs[0]] : []),
+    ],
+  });
   
   // Handle fullscreen toggle
-  const handleFullscreenToggle = () => {
-    setIsFullscreen(!isFullscreen);
+  const handleFullscreenToggle = useCallback(() => {
+    if (!viewerContainerRef.current) return;
     
-    // Apply fullscreen styles to container
-    if (containerRef.current) {
-      if (!isFullscreen) {
-        if (document.documentElement?.requestFullscreen) {
-          containerRef.current.requestFullscreen();
-        }
-      } else if (document.exitFullscreen) {
+    if (!isFullscreen) {
+      if (viewerContainerRef.current.requestFullscreen) {
+        viewerContainerRef.current.requestFullscreen();
+      }
+    } else {
+      if (document.exitFullscreen) {
         document.exitFullscreen();
       }
     }
-  };
+    
+    setIsFullscreen(!isFullscreen);
+  }, [isFullscreen]);
   
   // Handle document download
-  const handleDownload = async () => {
+  const handleDownload = useCallback(async () => {
+    if (!documentUrl) return;
+    
     try {
-      if (!documentUrl) {
-        throw new Error('Document URL not available');
+      // If custom download handler is provided, use it
+      if (onDownload) {
+        onDownload();
+        return;
       }
       
-      // Fetch the document as a blob
-      const response = await fetch(documentUrl);
-      if (!response.ok) {
-        throw new Error('Failed to download document');
-      }
-      
-      const blob = await response.blob();
-      
-      // Create a download link and trigger download
-      const downloadUrl = URL.createObjectURL(blob);
+      // Otherwise use default download behavior
       const link = document.createElement('a');
-      link.href = downloadUrl;
-      link.download = document.name;
-      document.body.appendChild(link);
+      link.href = documentUrl;
+      link.download = document.name || 'document';
+      link.target = '_blank';
       link.click();
-      document.body.removeChild(link);
-      
-      // Clean up the object URL
-      setTimeout(() => {
-        URL.revokeObjectURL(downloadUrl);
-      }, 100);
     } catch (err) {
       console.error('Error downloading document:', err);
-      setError(err instanceof Error ? err.message : 'Failed to download document');
+      setError('Failed to download document. Please try again.');
     }
-  };
+  }, [documentUrl, document.name, onDownload]);
   
-  // Calculate page dimensions based on container size, zoom, and rotation
-  const getPageDimensions = () => {
-    if (!containerRef.current) return { width: undefined };
+  // Listen for fullscreen change events
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
     
-    const containerWidth = containerRef.current.clientWidth;
-    const scaleFactor = zoom / 100;
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
     
-    // For rotated pages (90 or 270 degrees), we need to adjust dimensions
-    const isRotated = rotation === 90 || rotation === 270;
-    
-    // Calculate the width based on container size and zoom level
-    // For rotated pages, we use a different calculation to maintain proper scaling
-    const width = isRotated
-      ? (containerWidth * 0.7) * scaleFactor // Adjust for rotation
-      : containerWidth * scaleFactor;
-    
-    return { width };
-  };
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+    };
+  }, []);
   
-  // Render document content based on type (PDF or image)
-  const renderDocumentContent = () => {
-    if (loading) {
-      return (
-        <Stack
-          alignItems="center"
-          justifyContent="center"
-          sx={{ height: 400, width: '100%' }}
-        >
-          <CircularProgress />
-          <Typography variant="body2" sx={{ mt: 2, color: 'text.secondary' }}>
-            Loading document...
-          </Typography>
-        </Stack>
-      );
-    }
+  // Fetch document URL securely
+  useEffect(() => {
+    const fetchDocument = async () => {
+      if (!document || !document.storagePath) {
+        setError('Document information is missing or invalid.');
+        setIsLoading(false);
+        return;
+      }
+      
+      try {
+        setIsLoading(true);
+        setError(null);
+        
+        // Get secure URL with AES-256 encryption from S3-compatible storage
+        const url = await getSecureDocumentUrl(document.storagePath, document.id);
+        setDocumentUrl(url);
+        setIsLoading(false);
+        
+        // Call onLoad callback if provided
+        if (onLoad) {
+          onLoad();
+        }
+      } catch (err) {
+        console.error('Error loading document:', err);
+        setError('Failed to load document. Please try again later.');
+        setIsLoading(false);
+        
+        // Call onError callback if provided
+        if (onError && err instanceof Error) {
+          onError(err);
+        }
+      }
+    };
     
-    if (error) {
-      return (
-        <Alert severity="error" sx={{ width: '100%' }}>
-          {error}
-          <Typography variant="body2" sx={{ mt: 1 }}>
-            Please try again or contact support if the issue persists.
-          </Typography>
-        </Alert>
-      );
-    }
-    
-    if (!documentUrl) {
-      return (
-        <Alert severity="warning" sx={{ width: '100%' }}>
-          Document URL not available. Please try refreshing the page.
-        </Alert>
-      );
-    }
-    
-    // Render PDF document
-    if (isPdf) {
-      return (
-        <Document
-          file={documentUrl}
-          onLoadSuccess={handleDocumentLoadSuccess}
-          onLoadError={handleDocumentLoadError}
-          loading={<Skeleton variant="rectangular" width="100%" height={400} />}
-          options={{
-            cMapUrl: 'https://unpkg.com/pdfjs-dist/cmaps/',
-            cMapPacked: true,
-          }}
-        >
-          <Page
-            pageNumber={currentPage}
-            width={getPageDimensions().width}
-            rotate={rotation}
-            renderTextLayer={true}
-            renderAnnotationLayer={true}
-            loading={<Skeleton variant="rectangular" width="100%" height={400} />}
-          />
-        </Document>
-      );
-    }
-    
-    // Render image document
+    fetchDocument();
+  }, [document, onError, onLoad]);
+  
+  // Determine if the document is a PDF or an image
+  const isPdf = document.type?.toLowerCase().includes('pdf');
+  
+  // Render loading state
+  if (isLoading) {
     return (
-      <Box
-        sx={{
-          display: 'flex',
-          justifyContent: 'center',
-          alignItems: 'center',
-          width: '100%',
-          height: '100%',
-          overflow: 'auto',
-        }}
+      <Card
+        sx={[
+          {
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            height: 400,
+            width: '100%',
+            p: 3,
+          },
+          ...(Array.isArray(sx) ? sx : [sx]),
+        ]}
       >
-        <Box
-          component="img"
-          src={documentUrl}
-          alt={document.name}
-          onLoad={() => setLoading(false)}
-          onError={() => {
-            setError('Failed to load image');
-            setLoading(false);
-          }}
-          sx={{
-            maxWidth: '100%',
-            maxHeight: '100%',
-            transform: `scale(${zoom / 100}) rotate(${rotation}deg)`,
-            transition: 'transform 0.2s ease-in-out',
-          }}
-        />
-      </Box>
+        <CircularProgress />
+        <Typography variant="body2" sx={{ mt: 2 }}>
+          Loading document...
+        </Typography>
+      </Card>
     );
-  };
+  }
+  
+  // Render error state
+  if (error) {
+    return (
+      <Card
+        sx={[
+          {
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            height: 400,
+            width: '100%',
+            p: 3,
+          },
+          ...(Array.isArray(sx) ? sx : [sx]),
+        ]}
+      >
+        <Alert severity="error" sx={{ width: '100%', mb: 2 }}>
+          {error}
+        </Alert>
+        <Iconify icon="eva:file-text-outline" width={64} height={64} sx={{ color: 'text.secondary', mb: 2 }} />
+        <Typography variant="body2" sx={{ color: 'text.secondary' }}>
+          Unable to display document. Please try again later or contact support.
+        </Typography>
+      </Card>
+    );
+  }
+  
+  // Render document not found state
+  if (!documentUrl) {
+    return (
+      <Card
+        sx={[
+          {
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            height: 400,
+            width: '100%',
+            p: 3,
+          },
+          ...(Array.isArray(sx) ? sx : [sx]),
+        ]}
+      >
+        <Iconify icon="eva:file-text-outline" width={64} height={64} sx={{ color: 'text.secondary', mb: 2 }} />
+        <Typography variant="body2" sx={{ color: 'text.secondary' }}>
+          Document not found or has been removed.
+        </Typography>
+      </Card>
+    );
+  }
   
   return (
-    <Card
-      ref={containerRef}
+    <Stack
+      spacing={2}
       sx={[
         {
-          display: 'flex',
-          flexDirection: 'column',
           width: '100%',
-          height: isFullscreen ? '100vh' : 'auto',
-          overflow: 'hidden',
-          position: isFullscreen ? 'fixed' : 'relative',
-          top: isFullscreen ? 0 : 'auto',
-          left: isFullscreen ? 0 : 'auto',
-          right: isFullscreen ? 0 : 'auto',
-          bottom: isFullscreen ? 0 : 'auto',
-          zIndex: isFullscreen ? theme.zIndex.modal : 'auto',
-          bgcolor: isFullscreen ? theme.palette.background.paper : 'transparent',
+          height: '100%',
+          minHeight: 400,
         },
         ...(Array.isArray(sx) ? sx : [sx]),
       ]}
     >
-      {/* Document Controls */}
-      <Box sx={{ p: 1, borderBottom: `1px solid ${theme.palette.divider}` }}>
+      {/* Document Viewer Container */}
+      <Card
+        ref={viewerContainerRef}
+        sx={{
+          display: 'flex',
+          flexDirection: 'column',
+          width: '100%',
+          height: isFullscreen ? '100vh' : 500,
+          overflow: 'hidden',
+          position: 'relative',
+          ...(isFullscreen && {
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            zIndex: theme.zIndex.modal + 1,
+            borderRadius: 0,
+          }),
+        }}
+      >
+        {/* Document Controls */}
         <DocumentControls
           document={document}
           zoom={zoom}
           rotation={rotation}
           currentPage={currentPage}
-          totalPages={numPages || 1}
+          totalPages={document.pageCount || 1}
           isFullscreen={isFullscreen}
           config={{
             enableDownload,
@@ -357,94 +309,93 @@ export function DocumentViewer({ document, config, sx }: Props) {
           onPageChange={setCurrentPage}
           onFullscreenToggle={handleFullscreenToggle}
           onDownload={enableDownload ? handleDownload : undefined}
+          sx={{
+            borderBottom: `1px solid ${theme.palette.divider}`,
+          }}
         />
-      </Box>
-      
-      {/* Main Content Area */}
-      <Stack direction="row" sx={{ flex: 1, overflow: 'hidden' }}>
-        {/* Document Viewer */}
+        
+        {/* Document Content */}
         <Box
           sx={{
-            flex: 1,
-            overflow: 'auto',
             display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            p: 2,
-            bgcolor: theme.palette.mode === 'dark' 
-              ? 'rgba(0, 0, 0, 0.2)' 
-              : 'rgba(0, 0, 0, 0.03)',
+            flexDirection: { xs: 'column', md: 'row' },
+            flexGrow: 1,
+            overflow: 'hidden',
           }}
         >
-          {renderDocumentContent()}
-        </Box>
-        
-        {/* Classification Info Sidebar - Only shown on larger screens or when not in fullscreen */}
-        {showClassification && !isMobile && !isFullscreen && (
+          {/* Document Viewer */}
           <Box
             sx={{
-              width: isTablet ? 280 : 320,
-              borderLeft: `1px solid ${theme.palette.divider}`,
+              flexGrow: 1,
+              height: '100%',
               overflow: 'auto',
               display: 'flex',
               flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              p: 2,
+              transform: `rotate(${rotation}deg)`,
+              transition: 'transform 0.3s ease',
             }}
           >
-            <DocumentClassificationInfo document={document} />
+            {isPdf ? (
+              // PDF Viewer
+              <Worker workerUrl="https://unpkg.com/pdfjs-dist@3.4.120/build/pdf.worker.min.js">
+                <Viewer
+                  fileUrl={documentUrl}
+                  defaultScale={zoom / 100}
+                  plugins={[defaultLayoutPluginInstance]}
+                  onPageChange={(e) => setCurrentPage(e.currentPage)}
+                  renderError={(error) => (
+                    <Alert severity="error" sx={{ width: '100%', mb: 2 }}>
+                      {error.message || 'Failed to load PDF document'}
+                    </Alert>
+                  )}
+                />
+              </Worker>
+            ) : (
+              // Image Viewer
+              <Box
+                component="img"
+                src={documentUrl}
+                alt={document.name || 'Document'}
+                sx={{
+                  maxWidth: '100%',
+                  maxHeight: '100%',
+                  objectFit: 'contain',
+                  transform: `scale(${zoom / 100})`,
+                  transition: 'transform 0.3s ease',
+                }}
+                onError={() => {
+                  setError('Failed to load image. The format may be unsupported or the file may be corrupted.');
+                }}
+              />
+            )}
           </Box>
-        )}
-      </Stack>
-      
-      {/* Mobile Classification Info - Shown below document on mobile */}
-      {showClassification && isMobile && !isFullscreen && (
-        <Box sx={{ p: 2, borderTop: `1px solid ${theme.palette.divider}` }}>
-          <DocumentClassificationInfo document={document} />
-        </Box>
-      )}
-      
-      {/* Fallback for unsupported document types */}
-      {!isPdf && !document.type.match(/^image\/(jpeg|jpg|png|gif|bmp|webp)$/i) && (
-        <Box sx={{ p: 3, textAlign: 'center' }}>
-          <FileThumbnail
-            file={document.type}
-            sx={{ width: 160, height: 160, mx: 'auto', mb: 2 }}
-          />
-          <Typography variant="h6">{document.name}</Typography>
-          <Typography variant="body2" sx={{ color: 'text.secondary', mt: 1 }}>
-            This document type cannot be previewed. Please download to view.
-          </Typography>
-          {enableDownload && (
-            <Box sx={{ mt: 2 }}>
-              <Stack direction="row" justifyContent="center">
-                <Box
-                  component="button"
-                  onClick={handleDownload}
-                  sx={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: 1,
-                    py: 1,
-                    px: 2,
-                    bgcolor: 'primary.main',
-                    color: 'primary.contrastText',
-                    borderRadius: 1,
-                    border: 'none',
-                    cursor: 'pointer',
-                    '&:hover': {
-                      bgcolor: 'primary.dark',
-                    },
-                  }}
-                >
-                  <Iconify icon="eva:cloud-download-fill" width={20} />
-                  Download
-                </Box>
-              </Stack>
+          
+          {/* Classification Info Panel - Only show if enabled and not in mobile view */}
+          {showClassification && !isMobile && (
+            <Box
+              sx={{
+                width: { xs: '100%', md: 320 },
+                height: { xs: 'auto', md: '100%' },
+                borderLeft: { xs: 'none', md: `1px solid ${theme.palette.divider}` },
+                borderTop: { xs: `1px solid ${theme.palette.divider}`, md: 'none' },
+                overflow: 'auto',
+              }}
+            >
+              <DocumentClassificationInfo document={document} />
             </Box>
           )}
         </Box>
+      </Card>
+      
+      {/* Classification Info Panel - Only show in mobile view */}
+      {showClassification && isMobile && (
+        <Card sx={{ width: '100%', overflow: 'hidden' }}>
+          <DocumentClassificationInfo document={document} />
+        </Card>
       )}
-    </Card>
+    </Stack>
   );
 }
