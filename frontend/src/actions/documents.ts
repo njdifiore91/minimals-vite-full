@@ -1,25 +1,71 @@
-/**
- * Document Management Hooks for MCA Application Processing System
- * 
- * This file implements custom React hooks for document management using SWR:
- * - useGetDocuments: Retrieves documents associated with an application
- * - useGetDocumentById: Fetches single document with classification metadata
- * - useDocumentDownload: Generates secure download URLs with expiration timestamps
- */
-
-import { useMemo, useState } from 'react';
-import useSWR from 'swr';
 import type { SWRConfiguration } from 'swr';
+import useSWR from 'swr';
+import { useMemo } from 'react';
 
-import axiosInstance, { fetcher } from '../lib/axios';
-import type { IDocumentItem } from '../types/document';
+import axiosInstance, { API_ENDPOINTS, NormalizedError } from 'src/lib/axios';
+
+// ----------------------------------------------------------------------
+// MCA Document Management Hooks
+// These hooks provide standardized document access patterns for the MCA application system
+// They handle loading/error states and ensure consistent caching across the application
+
+/**
+ * Document classification types supported by the system
+ */
+export enum DocumentClassification {
+  BANK_STATEMENT = 'BANK_STATEMENT',
+  BUSINESS_LICENSE = 'BUSINESS_LICENSE',
+  TAX_RETURN = 'TAX_RETURN',
+  INVOICE = 'INVOICE',
+  IDENTITY_DOCUMENT = 'IDENTITY_DOCUMENT',
+  UTILITY_BILL = 'UTILITY_BILL',
+  CREDIT_CARD_STATEMENT = 'CREDIT_CARD_STATEMENT',
+  MERCHANT_PROCESSING_STATEMENT = 'MERCHANT_PROCESSING_STATEMENT',
+  LEASE_AGREEMENT = 'LEASE_AGREEMENT',
+  OTHER = 'OTHER',
+}
+
+/**
+ * Document interface representing a document in the MCA system
+ */
+export interface IDocument {
+  id: string;
+  applicationId: string;
+  fileName: string;
+  fileType: string;
+  fileSize: number;
+  uploadedAt: string;
+  classification: DocumentClassification;
+  confidenceScore: number;
+  metadata: {
+    pageCount?: number;
+    extractedData?: Record<string, any>;
+    [key: string]: any;
+  };
+  storagePath: string;
+}
+
+/**
+ * Document download URL interface with expiration
+ */
+export interface IDocumentDownloadUrl {
+  url: string;
+  expiresAt: string;
+}
 
 // ----------------------------------------------------------------------
 
-/**
- * SWR configuration options for document-related hooks
- * Disables automatic revalidation to prevent unnecessary API calls
- */
+// Custom fetcher function for SWR that uses our axios instance
+const fetcher = async (url: string, params?: any) => {
+  try {
+    const response = await axiosInstance.get(url, { params });
+    return response.data;
+  } catch (error) {
+    throw error;
+  }
+};
+
+// SWR configuration to disable automatic revalidation
 const swrOptions: SWRConfiguration = {
   revalidateIfStale: false,
   revalidateOnFocus: false,
@@ -31,66 +77,31 @@ const swrOptions: SWRConfiguration = {
 /**
  * Response type for document list API
  */
-interface DocumentsResponse {
-  documents: IDocumentItem[];
-  total: number;
-  page: number;
-  limit: number;
-}
+type DocumentsData = {
+  documents: IDocument[];
+};
 
 /**
- * Hook return type for useGetDocuments
+ * Hook to retrieve documents associated with an application
+ * @param applicationId - ID of the application to fetch documents for
+ * @returns Object containing documents array and loading/error states
  */
-interface UseGetDocumentsReturn {
-  documents: IDocumentItem[];
-  documentsLoading: boolean;
-  documentsError: any;
-  documentsValidating: boolean;
-  documentsEmpty: boolean;
-  pagination: {
-    total: number;
-    page: number;
-    limit: number;
-  };
-}
-
-/**
- * Retrieves documents associated with an application
- * 
- * @param applicationId - Optional application ID to filter documents
- * @param params - Optional query parameters for filtering and pagination
- * @returns Documents data with loading/error states and pagination info
- */
-export function useGetDocuments(
-  applicationId?: string,
-  params?: Record<string, any>
-): UseGetDocumentsReturn {
-  // Only fetch if applicationId is provided
-  const enabled = Boolean(applicationId);
-  
-  const { data, isLoading, error, isValidating } = useSWR<DocumentsResponse>(
-    enabled ? [`/api/v1/documents`, { params: { application_id: applicationId, ...params } }] : null,
-    fetcher,
-    {
-      ...swrOptions,
-      keepPreviousData: true,
-    }
+export function useGetDocuments(applicationId: string) {
+  const { data, error, isLoading, isValidating } = useSWR<DocumentsData, NormalizedError>(
+    applicationId ? [API_ENDPOINTS.documents.list, { applicationId }] : null,
+    ([url, params]) => fetcher(url, params),
+    swrOptions
   );
 
-  const memoizedValue = useMemo<UseGetDocumentsReturn>(
+  const memoizedValue = useMemo(
     () => ({
       documents: data?.documents || [],
       documentsLoading: isLoading,
       documentsError: error,
       documentsValidating: isValidating,
       documentsEmpty: !isLoading && !isValidating && !data?.documents.length,
-      pagination: {
-        total: data?.total || 0,
-        page: data?.page || 1,
-        limit: data?.limit || 10,
-      },
     }),
-    [data, error, isLoading, isValidating]
+    [data?.documents, error, isLoading, isValidating]
   );
 
   return memoizedValue;
@@ -101,37 +112,23 @@ export function useGetDocuments(
 /**
  * Response type for single document API
  */
-interface DocumentResponse {
-  document: IDocumentItem;
-}
+type DocumentData = {
+  document: IDocument;
+};
 
 /**
- * Hook return type for useGetDocumentById
+ * Hook to fetch a single document with classification metadata
+ * @param documentId - ID of the document to fetch
+ * @returns Object containing document data and loading/error states
  */
-interface UseGetDocumentByIdReturn {
-  document: IDocumentItem | undefined;
-  documentLoading: boolean;
-  documentError: any;
-  documentValidating: boolean;
-}
-
-/**
- * Fetches a single document with classification metadata
- * 
- * @param documentId - Document ID to retrieve
- * @returns Document data with loading/error states
- */
-export function useGetDocumentById(documentId?: string): UseGetDocumentByIdReturn {
-  // Only fetch if documentId is provided
-  const enabled = Boolean(documentId);
-  
-  const { data, isLoading, error, isValidating } = useSWR<DocumentResponse>(
-    enabled ? `/api/v1/documents/${documentId}` : null,
-    fetcher,
+export function useGetDocumentById(documentId: string) {
+  const { data, error, isLoading, isValidating } = useSWR<DocumentData, NormalizedError>(
+    documentId ? [API_ENDPOINTS.documents.details(documentId), {}] : null,
+    ([url, params]) => fetcher(url, params),
     swrOptions
   );
 
-  const memoizedValue = useMemo<UseGetDocumentByIdReturn>(
+  const memoizedValue = useMemo(
     () => ({
       document: data?.document,
       documentLoading: isLoading,
@@ -147,99 +144,62 @@ export function useGetDocumentById(documentId?: string): UseGetDocumentByIdRetur
 // ----------------------------------------------------------------------
 
 /**
- * Response type for document download API
+ * Response type for document download URL API
  */
-interface DocumentDownloadResponse {
-  downloadUrl: string;
-  expiresAt: number; // Timestamp in milliseconds
-}
+type DocumentDownloadData = {
+  downloadUrl: IDocumentDownloadUrl;
+};
 
 /**
- * Hook return type for useDocumentDownload
+ * Hook to generate secure download URLs with expiration timestamps
+ * @param documentId - ID of the document to generate download URL for
+ * @returns Object containing download URL data and loading/error states
  */
-interface UseDocumentDownloadReturn {
-  downloadUrl: string | null;
-  expiresAt: number | null;
-  isGenerating: boolean;
-  error: any;
-  generateDownloadUrl: () => Promise<string | null>;
-  downloadDocument: () => Promise<void>;
-}
-
-/**
- * Generates secure download URLs with expiration timestamps
- * 
- * @param documentId - Document ID to download
- * @returns Download URL data with generation and download functions
- */
-export function useDocumentDownload(documentId?: string): UseDocumentDownloadReturn {
-  const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
-  const [expiresAt, setExpiresAt] = useState<number | null>(null);
-  const [isGenerating, setIsGenerating] = useState<boolean>(false);
-  const [error, setError] = useState<any>(null);
-
-  /**
-   * Generates a new download URL for the document
-   * @returns Promise resolving to the download URL or null on error
-   */
-  const generateDownloadUrl = async (): Promise<string | null> => {
-    if (!documentId) return null;
-    
-    try {
-      setIsGenerating(true);
-      setError(null);
-      
-      const response = await axiosInstance.get(`/api/v1/documents/${documentId}/download`);
-      
-      // Extract the download URL and expiration from the response
-      const { downloadUrl, expiresAt } = response.data;
-      
-      setDownloadUrl(downloadUrl);
-      setExpiresAt(expiresAt);
-      
-      return downloadUrl;
-    } catch (err) {
-      setError(err);
-      return null;
-    } finally {
-      setIsGenerating(false);
+export function useDocumentDownload(documentId: string) {
+  const { data, error, isLoading, isValidating } = useSWR<DocumentDownloadData, NormalizedError>(
+    documentId ? [API_ENDPOINTS.documents.download(documentId), {}] : null,
+    ([url, params]) => fetcher(url, params),
+    {
+      ...swrOptions,
+      // Don't cache download URLs as they expire
+      revalidateOnMount: true,
+      // Set a short dedupingInterval to allow frequent refreshing of download URLs
+      dedupingInterval: 5000, // 5 seconds
     }
-  };
+  );
 
-  /**
-   * Initiates document download in the browser
-   */
-  const downloadDocument = async (): Promise<void> => {
-    if (!documentId) return;
-    
-    try {
-      setIsGenerating(true);
-      setError(null);
-      
-      // Get a fresh download URL if none exists or the current one is expired
-      const currentTime = Date.now();
-      let url = downloadUrl;
-      
-      if (!url || !expiresAt || currentTime >= expiresAt) {
-        url = await generateDownloadUrl();
-        if (!url) throw new Error('Failed to generate download URL');
-      }
-      
-      // Trigger the download by opening the URL in a new tab/window
-      window.open(url, '_blank');
-    } catch (err) {
-      setError(err);
-    } finally {
-      setIsGenerating(false);
-    }
-  };
+  const memoizedValue = useMemo(
+    () => ({
+      downloadUrl: data?.downloadUrl,
+      downloadLoading: isLoading,
+      downloadError: error,
+      downloadValidating: isValidating,
+      // Helper function to trigger download in the browser
+      triggerDownload: () => {
+        if (data?.downloadUrl?.url) {
+          // Create a temporary anchor element to trigger the download
+          const link = document.createElement('a');
+          link.href = data.downloadUrl.url;
+          link.setAttribute('download', ''); // This will use the server's suggested filename
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          return true;
+        }
+        return false;
+      },
+      // Check if the download URL is still valid
+      isExpired: () => {
+        if (data?.downloadUrl?.expiresAt) {
+          const expiresAt = new Date(data.downloadUrl.expiresAt).getTime();
+          const now = new Date().getTime();
+          return now > expiresAt;
+        }
+        return true; // If no expiration time, consider it expired
+      },
+    }),
+    [data?.downloadUrl, error, isLoading, isValidating]
+  );
 
-  return {
-    downloadUrl,
-    expiresAt,
-    isGenerating,
-    error,
-    generateDownloadUrl,
-    downloadDocument,
-  };
+  return memoizedValue;
 }
