@@ -1,4 +1,4 @@
-import { ReactNode, useMemo } from 'react';
+import type { ReactNode } from 'react';
 import type { ThemeProviderProps as MuiThemeProviderProps } from '@mui/material/styles';
 
 import CssBaseline from '@mui/material/CssBaseline';
@@ -9,71 +9,148 @@ import { useSettingsContext } from 'src/components/settings';
 
 import { createTheme } from './create-theme';
 import { Rtl } from './with-settings/right-to-left';
-
-// Import funding-specific utilities
 import { getFundingPalette, FundingSource } from './funding-colors';
-import { fundingComponents, extendThemeWithFundingComponents } from './funding-components';
+import { extendThemeWithFundingComponents } from './funding-components';
 
 import type {} from './extend-theme-types';
 import type { ThemeOptions } from './types';
 
+// Declare module augmentation for funding-specific palette entries
+declare module '@mui/material/styles' {
+  interface Palette {
+    fundingPrimary: Palette['primary'];
+    fundingSecondary: Palette['secondary'];
+    fundingAccent?: Palette['info'];
+  }
+  
+  interface PaletteOptions {
+    fundingPrimary?: PaletteOptions['primary'];
+    fundingSecondary?: PaletteOptions['secondary'];
+    fundingAccent?: PaletteOptions['info'];
+  }
+}
+
 // ----------------------------------------------------------------------
 
+/**
+ * Props for the FundingThemeProvider component
+ */
 export type FundingThemeProviderProps = Partial<MuiThemeProviderProps> & {
-  fundingSource: FundingSource;
+  /**
+   * The funding source to use for theming ('alpha', 'beta', 'gamma', or 'default')
+   */
+  fundingSource?: FundingSource;
+  
+  /**
+   * Additional theme overrides to apply
+   */
+  themeOverrides?: ThemeOptions;
+  
+  /**
+   * Children to render within the theme provider
+   */
   children: ReactNode;
 };
 
 /**
- * FundingThemeProvider - A specialized theme provider that applies funding-specific
- * theming to UI sections based on the provided funding source.
+ * A theme provider that applies funding-specific theming to UI sections
  * 
- * This component wraps UI sections with a theme that includes funding-specific colors
- * and component variants, while maintaining integration with the application's settings
- * and localization systems.
+ * This component wraps UI sections with funding-specific theming based on the
+ * provided fundingSource parameter. It integrates with the application's settings
+ * and localization systems to ensure consistent theming across the application.
  * 
- * @param {FundingThemeProviderProps} props - Component props including fundingSource and children
- * @returns {JSX.Element} The themed UI section
+ * @example
+ * ```tsx
+ * <FundingThemeProvider fundingSource="alpha">
+ *   <ApplicationCard />
+ * </FundingThemeProvider>
+ * ```
  */
 export function FundingThemeProvider({
-  fundingSource,
+  fundingSource = 'default',
+  themeOverrides,
   children,
   ...other
 }: FundingThemeProviderProps) {
   const { currentLang } = useTranslate();
   const settings = useSettingsContext();
 
-  // Get the funding-specific palette based on the provided source
-  const fundingPalette = useMemo(() => getFundingPalette(fundingSource), [fundingSource]);
+  // Get funding-specific palette based on source
+  const fundingPalette = getFundingPalette(fundingSource);
 
-  // Create a theme with funding-specific overrides
-  const theme = useMemo(
-    () =>
-      createTheme({
-        settingsState: settings.state,
-        localeComponents: currentLang?.systemValue,
-        themeOverrides: {
-          colorSchemes: {
-            light: {
-              palette: {
-                fundingPrimary: fundingPalette.primary,
-                fundingSecondary: fundingPalette.secondary,
-              },
+  // Create theme with funding-specific overrides
+  const theme = createTheme({
+    settingsState: settings.state,
+    localeComponents: currentLang?.systemValue,
+    themeOverrides: {
+      ...themeOverrides,
+      // Add funding-specific palette entries
+      colorSchemes: {
+        light: {
+          palette: {
+            fundingPrimary: {
+              main: fundingPalette.fundingPrimary,
+              light: fundingPalette.fundingPrimary + '99', // 60% opacity
+              dark: fundingPalette.fundingPrimary + 'CC',  // 80% opacity
+              darker: fundingPalette.fundingPrimary,       // 100% opacity
+              lighter: fundingPalette.fundingPrimary + '33', // 20% opacity
+              contrastText: '#FFFFFF',
             },
-            dark: {
-              palette: {
-                fundingPrimary: fundingPalette.primaryDark,
-                fundingSecondary: fundingPalette.secondaryDark,
-              },
+            fundingSecondary: {
+              main: fundingPalette.fundingSecondary,
+              light: fundingPalette.fundingSecondary + '99', // 60% opacity
+              dark: fundingPalette.fundingSecondary + 'CC',  // 80% opacity
+              darker: fundingPalette.fundingSecondary,       // 100% opacity
+              lighter: fundingPalette.fundingSecondary + '33', // 20% opacity
+              contrastText: '#FFFFFF',
             },
+            ...(fundingPalette.fundingAccent && {
+              fundingAccent: {
+                main: fundingPalette.fundingAccent,
+                light: fundingPalette.fundingAccent + '99', // 60% opacity
+                dark: fundingPalette.fundingAccent + 'CC',  // 80% opacity
+                darker: fundingPalette.fundingAccent,       // 100% opacity
+                lighter: fundingPalette.fundingAccent + '33', // 20% opacity
+                contrastText: '#FFFFFF',
+              },
+            }),
           },
-          // Apply funding-specific component variants
-          components: extendThemeWithFundingComponents({}),
-          
         },
-      }),
-    [settings.state, currentLang?.systemValue, fundingPalette]
-  );
+        dark: {
+          palette: {
+            fundingPrimary: {
+              main: fundingPalette.fundingPrimary,
+              light: fundingPalette.fundingPrimary + '99', // 60% opacity
+              dark: fundingPalette.fundingPrimary + 'CC',  // 80% opacity
+              darker: fundingPalette.fundingPrimary,       // 100% opacity
+              lighter: fundingPalette.fundingPrimary + '33', // 20% opacity
+              contrastText: '#FFFFFF',
+            },
+            fundingSecondary: {
+              main: fundingPalette.fundingSecondary,
+              light: fundingPalette.fundingSecondary + '99', // 60% opacity
+              dark: fundingPalette.fundingSecondary + 'CC',  // 80% opacity
+              darker: fundingPalette.fundingSecondary,       // 100% opacity
+              lighter: fundingPalette.fundingSecondary + '33', // 20% opacity
+              contrastText: '#FFFFFF',
+            },
+            ...(fundingPalette.fundingAccent && {
+              fundingAccent: {
+                main: fundingPalette.fundingAccent,
+                light: fundingPalette.fundingAccent + '99', // 60% opacity
+                dark: fundingPalette.fundingAccent + 'CC',  // 80% opacity
+                darker: fundingPalette.fundingAccent,       // 100% opacity
+                lighter: fundingPalette.fundingAccent + '33', // 20% opacity
+                contrastText: '#FFFFFF',
+              },
+            }),
+          },
+        },
+      },
+      // Add funding-specific component variants
+      components: extendThemeWithFundingComponents(),
+    },
+  });
 
   return (
     <ThemeVarsProvider disableTransitionOnChange theme={theme} {...other}>
