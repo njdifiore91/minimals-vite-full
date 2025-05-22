@@ -1,346 +1,563 @@
 /**
- * Logger utility functions for the Email Service
+ * Logger Utilities for Email Service
  * 
- * This module provides utility functions for structured logging with context information,
- * error logging with stack traces, and request ID tracking for distributed tracing.
- * It works with the logger configuration defined in src/config/logger.ts.
- *
- * The utility functions in this module help maintain consistent logging practices across
- * the Email Service, ensuring that all logs include necessary context information and
- * follow the specified log level guidelines (ERROR, WARN, INFO, DEBUG).
+ * This module provides utility functions for structured logging in the Email Service.
+ * It builds on top of the base logger configuration to provide easy-to-use functions
+ * for creating contextual log entries, formatting log messages, and handling different
+ * log levels consistently across the service.
+ * 
+ * Key features:
+ * - Simplified logging functions for different log levels
+ * - Context enrichment for structured logging
+ * - Request ID tracking for distributed tracing
+ * - Error logging with stack traces
+ * - Performance measurement utilities
  */
 
-import { fDateTime } from './format-time';
+import { v4 as uuidv4 } from 'uuid';
+import {
+  logger as baseLogger,
+  createChildLogger,
+  createRequestLogger,
+  createComponentLogger,
+  logError as baseLogError,
+} from '../config/logger';
 
-// Types for logger context and log levels
-export type LogContext = Record<string, any>;
-
+/**
+ * Log levels as defined in the logger configuration
+ */
 export enum LogLevel {
-  ERROR = 'error',
-  WARN = 'warn',
-  INFO = 'info',
-  DEBUG = 'debug'
+  ERROR = 'ERROR',
+  WARN = 'WARN',
+  INFO = 'INFO',
+  DEBUG = 'DEBUG',
 }
 
 /**
- * Creates a context object for logging with standard fields
- * @param context Additional context information to include in logs
- * @returns A context object with standard fields
+ * Context interface for structured logging
  */
-export function createLogContext(context: LogContext = {}): LogContext {
-  return {
-    timestamp: fDateTime(new Date(), 'YYYY-MM-DD HH:mm:ss.SSS'),
-    service: 'email-service',
-    environment: process.env.NODE_ENV || 'development',
-    pid: process.pid,
-    hostname: process.env.HOSTNAME || 'localhost',
-    ...context
-  };
+export interface LogContext {
+  [key: string]: any;
 }
 
 /**
- * Creates a log entry with request ID for distributed tracing
- * @param requestId The request ID for distributed tracing
- * @param context Additional context information
- * @returns A log context with request ID
+ * Default logger instance
+ * 
+ * This is the main logger instance that should be used for general logging.
+ * For context-specific logging, use the createLogger function.
  */
-export function createRequestContext(requestId: string, context: LogContext = {}): LogContext {
-  return createLogContext({
-    requestId,
-    ...context
-  });
-}
+export const logger = baseLogger;
 
 /**
- * Formats an error object for logging, including stack trace
- * @param error The error object to format
- * @param context Additional context information
- * @returns A log context with error details
+ * Create a logger with component context
+ * 
+ * This function creates a logger with a specific component name as context,
+ * which is useful for identifying the source of log entries.
+ * 
+ * Example usage:
+ * ```
+ * const logger = createLogger('EmailProcessor');
+ * logger.info('Processing email', { emailId: '123' });
+ * ```
+ * 
+ * @param component The component name to include in logs
+ * @returns A logger instance with component context
  */
-export function formatError(error: Error, context: LogContext = {}): LogContext {
-  // Extract additional properties from error object if they exist
-  const errorDetails: Record<string, any> = {
-    name: error.name,
-    message: error.message,
-    stack: error.stack
-  };
-
-  // Add any additional properties from the error object
-  for (const key in error) {
-    if (Object.prototype.hasOwnProperty.call(error, key) && !errorDetails[key]) {
-      // @ts-ignore - We're intentionally extracting custom properties
-      errorDetails[key] = error[key];
-    }
-  }
-
-  return {
-    ...createLogContext(context),
-    error: errorDetails
-  };
-}
-
-/**
- * Formats a log message with context information
- * @param message The log message
- * @param context Additional context information
- * @returns A formatted log object
- */
-export function formatLogMessage(message: string, context: LogContext = {}): { message: string; context: LogContext } {
-  return {
-    message,
-    context: createLogContext(context)
-  };
-}
-
-/**
- * Formats a log message as a JSON string
- * @param message The log message
- * @param level The log level
- * @param context Additional context information
- * @returns A JSON string representation of the log entry
- */
-export function formatLogAsJson(message: string, level: LogLevel, context: LogContext = {}): string {
-  const logEntry = {
-    level,
-    message,
-    ...createLogContext(context)
-  };
-  
-  return JSON.stringify(logEntry);
-}
-
-/**
- * Formats a log message for machine parsing with consistent field ordering
- * @param message The log message
- * @param level The log level
- * @param context Additional context information
- * @returns A formatted string for machine parsing
- */
-export function formatLogForMachine(message: string, level: LogLevel, context: LogContext = {}): string {
-  const timestamp = fDateTime(new Date(), 'YYYY-MM-DD HH:mm:ss.SSS');
-  const logContext = sanitizeLogContext(context);
-  const contextStr = Object.entries(logContext)
-    .map(([key, value]) => `${key}=${typeof value === 'object' ? JSON.stringify(value) : value}`)
-    .join(' ');
-  
-  return `${timestamp} [${level.toUpperCase()}] [email-service] ${message} ${contextStr}`;
-}
-
-/**
- * Creates a child logger with predefined context
- * @param baseContext The base context to include in all logs from this logger
- * @returns An object with logging functions that include the base context
- */
-export function createContextLogger(baseContext: LogContext = {}) {
-  // Sanitize the base context to ensure no sensitive data is included
-  const sanitizedBaseContext = sanitizeLogContext(baseContext);
-  
-  return {
-    /**
-     * Log an error message with optional error object and context
-     * @param message The error message
-     * @param error Optional error object to include stack trace and details
-     * @param context Additional context for this specific log
-     */
-    error: (message: string, error?: Error, context: LogContext = {}) => {
-      const combinedContext = { ...sanitizedBaseContext, ...sanitizeLogContext(context) };
-      return error ? formatError(error, combinedContext) : formatLogMessage(message, combinedContext);
-    },
-    
-    /**
-     * Log a warning message with optional context
-     * @param message The warning message
-     * @param context Additional context for this specific log
-     */
-    warn: (message: string, context: LogContext = {}) => {
-      return formatLogMessage(message, { ...sanitizedBaseContext, ...sanitizeLogContext(context) });
-    },
-    
-    /**
-     * Log an informational message with optional context
-     * @param message The info message
-     * @param context Additional context for this specific log
-     */
-    info: (message: string, context: LogContext = {}) => {
-      return formatLogMessage(message, { ...sanitizedBaseContext, ...sanitizeLogContext(context) });
-    },
-    
-    /**
-     * Log a debug message with optional context
-     * @param message The debug message
-     * @param context Additional context for this specific log
-     */
-    debug: (message: string, context: LogContext = {}) => {
-      return formatLogMessage(message, { ...sanitizedBaseContext, ...sanitizeLogContext(context) });
-    },
-    
-    /**
-     * Create a new logger with additional context merged with the current context
-     * @param additionalContext Additional context to merge with the current context
-     */
-    withContext: (additionalContext: LogContext) => {
-      return createContextLogger({ ...sanitizedBaseContext, ...sanitizeLogContext(additionalContext) });
-    }
-  };
-}
-
-/**
- * Log level priorities - lower numbers are higher priority
- */
-export const LOG_LEVEL_PRIORITIES = {
-  [LogLevel.ERROR]: 0,
-  [LogLevel.WARN]: 1,
-  [LogLevel.INFO]: 2,
-  [LogLevel.DEBUG]: 3
+export const createLogger = (component: string) => {
+  return createComponentLogger(component);
 };
 
 /**
- * Determines if a log level should be logged based on the current environment configuration
- * @param level The log level to check
- * @param configuredLevel The configured minimum log level
- * @returns True if the log level should be logged
+ * Create a logger with request context
+ * 
+ * This function creates a logger with a specific request ID as context,
+ * which is essential for tracing related log entries across the email processing flow.
+ * 
+ * Example usage:
+ * ```
+ * const requestId = getRequestId();
+ * const logger = createRequestLogger(requestId);
+ * logger.info('Processing attachment');
+ * ```
+ * 
+ * @param requestId The request ID to include in logs
+ * @returns A logger instance with request ID context
  */
-export function shouldLog(level: LogLevel, configuredLevel: LogLevel): boolean {
-  return LOG_LEVEL_PRIORITIES[level] <= LOG_LEVEL_PRIORITIES[configuredLevel];
-}
+export const createRequestContextLogger = (requestId: string) => {
+  return createRequestLogger(requestId);
+};
 
 /**
- * Gets the appropriate log level based on the environment
- * @returns The log level appropriate for the current environment
+ * Generate a new request ID
+ * 
+ * This function generates a unique request ID using UUID v4,
+ * which is useful for tracking a specific email processing flow.
+ * 
+ * Example usage:
+ * ```
+ * const requestId = generateRequestId();
+ * const logger = createRequestContextLogger(requestId);
+ * ```
+ * 
+ * @returns A unique request ID
  */
-export function getLogLevelForEnvironment(): LogLevel {
-  const env = process.env.NODE_ENV || 'development';
-  
-  switch (env) {
-    case 'production':
-      return LogLevel.INFO; // In production, log INFO and above
-    case 'staging':
-      return LogLevel.INFO; // In staging, log INFO and above
-    case 'test':
-      return LogLevel.WARN; // In test, log WARN and above to reduce noise
-    case 'development':
-    default:
-      return LogLevel.DEBUG; // In development, log everything
+export const generateRequestId = (): string => {
+  return uuidv4();
+};
+
+/**
+ * Extract request ID from email or generate a new one
+ * 
+ * This function attempts to extract a request ID from email headers
+ * or generates a new one if not found. This is useful for maintaining
+ * request context across service boundaries.
+ * 
+ * @param email The email object to extract request ID from
+ * @param headerName The header name to look for (default: 'X-Request-ID')
+ * @returns The extracted or generated request ID
+ */
+export const getRequestId = (email?: any, headerName: string = 'X-Request-ID'): string => {
+  if (email?.headers?.[headerName]) {
+    return email.headers[headerName];
+  }
+  return generateRequestId();
+};
+
+/**
+ * Log an error with stack trace and context
+ * 
+ * This function logs an error with its stack trace and additional context,
+ * which is essential for debugging and troubleshooting.
+ * 
+ * Example usage:
+ * ```
+ * try {
+ *   // Some code that might throw
+ * } catch (error) {
+ *   logError(logger, 'Failed to process email', error, { emailId: '123' });
+ * }
+ * ```
+ * 
+ * @param logger The logger instance to use
+ * @param message The error message
+ * @param error The error object
+ * @param context Additional context to include in the log
+ */
+export const logError = (
+  logger: any,
+  message: string,
+  error: Error,
+  context: LogContext = {}
+): void => {
+  baseLogError(logger, message, error, context);
+};
+
+/**
+ * Log a warning message with context
+ * 
+ * This function logs a warning message with additional context,
+ * which is useful for potential issues that might lead to errors.
+ * 
+ * Example usage:
+ * ```
+ * logWarning(logger, 'Email size exceeds recommended limit', { size: emailSize, limit: MAX_SIZE });
+ * ```
+ * 
+ * @param logger The logger instance to use
+ * @param message The warning message
+ * @param context Additional context to include in the log
+ */
+export const logWarning = (
+  logger: any,
+  message: string,
+  context: LogContext = {}
+): void => {
+  logger.warn(message, context);
+};
+
+/**
+ * Log an info message with context
+ * 
+ * This function logs an info message with additional context,
+ * which is useful for normal operations and significant events.
+ * 
+ * Example usage:
+ * ```
+ * logInfo(logger, 'Email received', { from: email.from, subject: email.subject });
+ * ```
+ * 
+ * @param logger The logger instance to use
+ * @param message The info message
+ * @param context Additional context to include in the log
+ */
+export const logInfo = (
+  logger: any,
+  message: string,
+  context: LogContext = {}
+): void => {
+  logger.info(message, context);
+};
+
+/**
+ * Log a debug message with context
+ * 
+ * This function logs a debug message with additional context,
+ * which is useful for detailed information for troubleshooting.
+ * 
+ * Example usage:
+ * ```
+ * logDebug(logger, 'Processing attachment', { filename: attachment.filename, size: attachment.size });
+ * ```
+ * 
+ * @param logger The logger instance to use
+ * @param message The debug message
+ * @param context Additional context to include in the log
+ */
+export const logDebug = (
+  logger: any,
+  message: string,
+  context: LogContext = {}
+): void => {
+  logger.debug(message, context);
+};
+
+/**
+ * Performance measurement utility
+ * 
+ * This class provides utilities for measuring and logging the performance of operations,
+ * which is useful for identifying bottlenecks and optimizing performance.
+ * 
+ * Example usage:
+ * ```
+ * const perf = new PerformanceLogger(logger, 'EmailProcessing');
+ * perf.start('processAttachments');
+ * // Process attachments
+ * perf.end('processAttachments');
+ * ```
+ */
+export class PerformanceLogger {
+  private timers: Record<string, number> = {};
+  private logger: any;
+  private component: string;
+
+  /**
+   * Create a new PerformanceLogger
+   * 
+   * @param logger The logger instance to use
+   * @param component The component name for context
+   */
+  constructor(logger: any, component: string) {
+    this.logger = logger;
+    this.component = component;
+  }
+
+  /**
+   * Start a timer for a specific operation
+   * 
+   * @param operation The operation name
+   */
+  start(operation: string): void {
+    this.timers[operation] = Date.now();
+    logDebug(this.logger, `Starting operation: ${operation}`, {
+      component: this.component,
+      operation,
+      action: 'start',
+    });
+  }
+
+  /**
+   * End a timer and log the duration
+   * 
+   * @param operation The operation name
+   * @param context Additional context to include in the log
+   * @returns The duration in milliseconds
+   */
+  end(operation: string, context: LogContext = {}): number {
+    const startTime = this.timers[operation];
+    if (!startTime) {
+      logWarning(this.logger, `Timer not started for operation: ${operation}`, {
+        component: this.component,
+        operation,
+      });
+      return 0;
+    }
+
+    const duration = Date.now() - startTime;
+    delete this.timers[operation];
+
+    logInfo(this.logger, `Completed operation: ${operation}`, {
+      component: this.component,
+      operation,
+      durationMs: duration,
+      ...context,
+    });
+
+    return duration;
+  }
+
+  /**
+   * Measure the execution time of an async function
+   * 
+   * @param operation The operation name
+   * @param fn The async function to measure
+   * @param context Additional context to include in the log
+   * @returns The result of the async function
+   */
+  async measure<T>(
+    operation: string,
+    fn: () => Promise<T>,
+    context: LogContext = {}
+  ): Promise<T> {
+    this.start(operation);
+    try {
+      const result = await fn();
+      this.end(operation, context);
+      return result;
+    } catch (error) {
+      this.end(operation, { ...context, error: true });
+      throw error;
+    }
+  }
+
+  /**
+   * Measure the execution time of a synchronous function
+   * 
+   * @param operation The operation name
+   * @param fn The synchronous function to measure
+   * @param context Additional context to include in the log
+   * @returns The result of the synchronous function
+   */
+  measureSync<T>(
+    operation: string,
+    fn: () => T,
+    context: LogContext = {}
+  ): T {
+    this.start(operation);
+    try {
+      const result = fn();
+      this.end(operation, context);
+      return result;
+    } catch (error) {
+      this.end(operation, { ...context, error: true });
+      throw error;
+    }
   }
 }
 
 /**
- * Default sensitive keys that should be redacted from logs
- * This list includes common patterns for sensitive information
+ * Create a performance logger
+ * 
+ * This function creates a new PerformanceLogger instance,
+ * which is useful for measuring and logging the performance of operations.
+ * 
+ * Example usage:
+ * ```
+ * const perf = createPerformanceLogger(logger, 'EmailProcessing');
+ * perf.measure('processEmail', async () => {
+ *   // Process email
+ * });
+ * ```
+ * 
+ * @param logger The logger instance to use
+ * @param component The component name for context
+ * @returns A new PerformanceLogger instance
  */
-export const DEFAULT_SENSITIVE_KEYS = [
-  'password',
-  'token',
-  'secret',
-  'key',
-  'credential',
-  'auth',
-  'private',
-  'cert',
-  'ssn',
-  'social',
-  'ein',
-  'tax',
-  'account',
-  'card',
-  'cvv',
-  'passport'
-];
+export const createPerformanceLogger = (
+  logger: any,
+  component: string
+): PerformanceLogger => {
+  return new PerformanceLogger(logger, component);
+};
 
 /**
- * Sanitizes sensitive data from log context
- * @param context The log context to sanitize
- * @param sensitiveKeys Array of sensitive key patterns to redact
- * @returns Sanitized log context
+ * Log an API request with context
+ * 
+ * This function logs an API request with additional context,
+ * which is useful for tracking external API calls.
+ * 
+ * Example usage:
+ * ```
+ * logApiRequest(logger, 'GET', 'https://api.example.com/data', { params: { id: '123' } });
+ * ```
+ * 
+ * @param logger The logger instance to use
+ * @param method The HTTP method
+ * @param url The API URL
+ * @param context Additional context to include in the log
  */
-export function sanitizeLogContext(
-  context: LogContext, 
-  sensitiveKeys: string[] = DEFAULT_SENSITIVE_KEYS
-): LogContext {
-  // If context is null or undefined, return an empty object
-  if (!context) return {};
-  
-  const sanitized = { ...context };
-  
-  const redactNestedObject = (obj: Record<string, any>, path: string = '') => {
-    for (const [key, value] of Object.entries(obj)) {
-      const currentPath = path ? `${path}.${key}` : key;
-      
-      // Check if the current key matches any sensitive key pattern
-      const isSensitive = sensitiveKeys.some(pattern => 
-        key.toLowerCase().includes(pattern.toLowerCase())
-      );
-      
-      if (isSensitive) {
-        obj[key] = '[REDACTED]';
-      } else if (value && typeof value === 'object' && !Array.isArray(value)) {
-        // Recursively check nested objects
-        redactNestedObject(value, currentPath);
-      } else if (Array.isArray(value)) {
-        // Check each item in the array if it's an object
-        for (let i = 0; i < value.length; i++) {
-          if (value[i] && typeof value[i] === 'object') {
-            redactNestedObject(value[i], `${currentPath}[${i}]`);
-          }
-        }
-      }
-    }
-  };
-  
-  redactNestedObject(sanitized);
-  return sanitized;
-}
-
-/**
- * Creates a logger for a specific module or component
- * @param moduleName The name of the module or component
- * @returns A logger with the module name in context
- */
-export function createModuleLogger(moduleName: string) {
-  return createContextLogger({ module: moduleName });
-}
-
-/**
- * Creates a logger for tracking email processing
- * @param emailId The ID of the email being processed
- * @param additionalContext Additional context information
- * @returns A logger with email tracking context
- */
-export function createEmailLogger(emailId: string, additionalContext: LogContext = {}) {
-  return createContextLogger({
-    emailId,
-    operation: 'email-processing',
-    ...additionalContext
+export const logApiRequest = (
+  logger: any,
+  method: string,
+  url: string,
+  context: LogContext = {}
+): void => {
+  logInfo(logger, `API Request: ${method} ${url}`, {
+    api: {
+      method,
+      url,
+      ...context,
+    },
   });
-}
+};
 
 /**
- * Creates a logger for tracking attachment processing
- * @param emailId The ID of the email containing the attachment
- * @param attachmentId The ID of the attachment being processed
- * @param additionalContext Additional context information
- * @returns A logger with attachment tracking context
+ * Log an API response with context
+ * 
+ * This function logs an API response with additional context,
+ * which is useful for tracking external API responses.
+ * 
+ * Example usage:
+ * ```
+ * logApiResponse(logger, 'GET', 'https://api.example.com/data', 200, { responseTime: 150 });
+ * ```
+ * 
+ * @param logger The logger instance to use
+ * @param method The HTTP method
+ * @param url The API URL
+ * @param statusCode The HTTP status code
+ * @param context Additional context to include in the log
  */
-export function createAttachmentLogger(emailId: string, attachmentId: string, additionalContext: LogContext = {}) {
-  return createContextLogger({
-    emailId,
-    attachmentId,
-    operation: 'attachment-processing',
-    ...additionalContext
-  });
-}
+export const logApiResponse = (
+  logger: any,
+  method: string,
+  url: string,
+  statusCode: number,
+  context: LogContext = {}
+): void => {
+  const level = statusCode >= 400 ? LogLevel.ERROR : LogLevel.INFO;
+  const message = `API Response: ${method} ${url} ${statusCode}`;
+  
+  if (level === LogLevel.ERROR) {
+    logger.error(message, {
+      api: {
+        method,
+        url,
+        statusCode,
+        ...context,
+      },
+    });
+  } else {
+    logInfo(logger, message, {
+      api: {
+        method,
+        url,
+        statusCode,
+        ...context,
+      },
+    });
+  }
+};
 
 /**
- * Creates a logger for tracking message queue operations
- * @param operation The message queue operation (publish, subscribe, etc.)
- * @param exchange The message exchange being used
- * @param additionalContext Additional context information
- * @returns A logger with message queue context
+ * Log a message queue event with context
+ * 
+ * This function logs a message queue event with additional context,
+ * which is useful for tracking message publishing and consumption.
+ * 
+ * Example usage:
+ * ```
+ * logMessageQueueEvent(logger, 'publish', 'mca.documents', { messageId: '123', size: 1024 });
+ * ```
+ * 
+ * @param logger The logger instance to use
+ * @param action The message queue action (publish, consume, etc.)
+ * @param exchange The message exchange
+ * @param context Additional context to include in the log
  */
-export function createMessageQueueLogger(operation: string, exchange: string, additionalContext: LogContext = {}) {
-  return createContextLogger({
-    operation: `mq-${operation}`,
-    exchange,
-    ...additionalContext
+export const logMessageQueueEvent = (
+  logger: any,
+  action: string,
+  exchange: string,
+  context: LogContext = {}
+): void => {
+  logInfo(logger, `Message Queue: ${action} to ${exchange}`, {
+    messageQueue: {
+      action,
+      exchange,
+      ...context,
+    },
   });
-}
+};
+
+/**
+ * Log an email processing event with context
+ * 
+ * This function logs an email processing event with additional context,
+ * which is useful for tracking email processing flow.
+ * 
+ * Example usage:
+ * ```
+ * logEmailEvent(logger, 'received', { emailId: '123', from: 'sender@example.com' });
+ * ```
+ * 
+ * @param logger The logger instance to use
+ * @param event The email event (received, processed, etc.)
+ * @param context Additional context to include in the log
+ */
+export const logEmailEvent = (
+  logger: any,
+  event: string,
+  context: LogContext = {}
+): void => {
+  logInfo(logger, `Email ${event}`, {
+    email: {
+      event,
+      ...context,
+    },
+  });
+};
+
+/**
+ * Log an attachment processing event with context
+ * 
+ * This function logs an attachment processing event with additional context,
+ * which is useful for tracking attachment processing flow.
+ * 
+ * Example usage:
+ * ```
+ * logAttachmentEvent(logger, 'extracted', { attachmentId: '123', filename: 'document.pdf', size: 1024 });
+ * ```
+ * 
+ * @param logger The logger instance to use
+ * @param event The attachment event (extracted, uploaded, etc.)
+ * @param context Additional context to include in the log
+ */
+export const logAttachmentEvent = (
+  logger: any,
+  event: string,
+  context: LogContext = {}
+): void => {
+  logInfo(logger, `Attachment ${event}`, {
+    attachment: {
+      event,
+      ...context,
+    },
+  });
+};
+
+/**
+ * Create a logger with correlation context
+ * 
+ * This function creates a logger with correlation IDs as context,
+ * which is useful for tracing related log entries across service boundaries.
+ * 
+ * Example usage:
+ * ```
+ * const logger = createCorrelationLogger({
+ *   requestId: '123',
+ *   emailId: '456',
+ *   traceId: '789',
+ * });
+ * ```
+ * 
+ * @param correlationIds The correlation IDs to include in logs
+ * @returns A logger instance with correlation context
+ */
+export const createCorrelationLogger = (correlationIds: Record<string, string>) => {
+  return createChildLogger(correlationIds);
+};
+
+/**
+ * Default export for convenience
+ */
+export default logger;
