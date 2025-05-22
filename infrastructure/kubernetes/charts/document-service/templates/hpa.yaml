@@ -1,0 +1,85 @@
+{{- /*
+HorizontalPodAutoscaler template for Document Service.
+
+This template extends the common HPA template with Document Service specific configurations.
+It configures automatic scaling based on CPU and memory utilization metrics with appropriate
+scaling behavior to handle document processing load spikes efficiently.
+
+The Document Service requires specific scaling configurations to handle varying document
+processing workloads while maintaining high availability and performance.
+*/}}
+
+{{- $values := .Values -}}
+{{- $_ := set $values.autoscaling "scaleTargetRef" (dict "kind" "Deployment" "name" (include "common.fullname" .)) -}}
+
+{{- if .Values.global -}}
+  {{- if .Values.global.environment -}}
+    {{- if eq .Values.global.environment "production" -}}
+      {{- $_ := set $values.autoscaling "minReplicas" (default 3 .Values.autoscaling.minReplicas) -}}
+      {{- $_ := set $values.autoscaling "maxReplicas" (default 15 .Values.autoscaling.maxReplicas) -}}
+    {{- else if eq .Values.global.environment "staging" -}}
+      {{- $_ := set $values.autoscaling "minReplicas" (default 2 .Values.autoscaling.minReplicas) -}}
+      {{- $_ := set $values.autoscaling "maxReplicas" (default 10 .Values.autoscaling.maxReplicas) -}}
+    {{- else -}}
+      {{- $_ := set $values.autoscaling "minReplicas" (default 1 .Values.autoscaling.minReplicas) -}}
+      {{- $_ := set $values.autoscaling "maxReplicas" (default 5 .Values.autoscaling.maxReplicas) -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+
+{{- $_ := set $values.autoscaling "targetCPUUtilizationPercentage" (default 80 .Values.autoscaling.targetCPUUtilizationPercentage) -}}
+{{- $_ := set $values.autoscaling "targetMemoryUtilizationPercentage" (default 80 .Values.autoscaling.targetMemoryUtilizationPercentage) -}}
+
+{{- if not .Values.autoscaling.behavior -}}
+  {{- $_ := set $values.autoscaling "behavior" (dict 
+    "scaleUp" (dict 
+      "stabilizationWindowSeconds" 0 
+      "policies" (list 
+        (dict "type" "Percent" "value" 100 "periodSeconds" 60) 
+        (dict "type" "Pods" "value" 4 "periodSeconds" 60)
+      )
+      "selectPolicy" "Max"
+    )
+    "scaleDown" (dict 
+      "stabilizationWindowSeconds" 300 
+      "policies" (list 
+        (dict "type" "Percent" "value" 10 "periodSeconds" 60) 
+        (dict "type" "Pods" "value" 2 "periodSeconds" 60)
+      )
+      "selectPolicy" "Min"
+    )
+  ) -}}
+{{- end -}}
+
+{{- if not .Values.autoscaling.metrics -}}
+  {{- $_ := set $values.autoscaling "metrics" (list) -}}
+  
+  {{- /* Add custom metrics for document processing if needed */ -}}
+  {{- if .Values.autoscaling.enableQueueSizeMetric -}}
+    {{- $queueMetric := dict 
+      "type" "External" 
+      "external" (dict 
+        "metric" (dict 
+          "name" "rabbitmq_queue_messages" 
+          "selector" (dict "matchLabels" (dict "queue" "document-processing"))
+        )
+        "target" (dict 
+          "type" "AverageValue" 
+          "averageValue" (default "50" .Values.autoscaling.queueSizeThreshold)
+        )
+      ) 
+    -}}
+    {{- $_ := set $values.autoscaling "metrics" (append $values.autoscaling.metrics $queueMetric) -}}
+  {{- end -}}
+{{- end -}}
+
+{{- /* Add document service specific annotations */ -}}
+{{- if not .Values.autoscaling.annotations -}}
+  {{- $_ := set $values.autoscaling "annotations" (dict 
+    "autoscaling.kubernetes.io/behavior" "optimize-document-processing"
+    "metric-config.pods.monitor.kubernetes.io/document-service" "true"
+  ) -}}
+{{- end -}}
+
+{{- /* Include the common HPA template with our customized values */ -}}
+{{- include "common.hpa" . -}}
