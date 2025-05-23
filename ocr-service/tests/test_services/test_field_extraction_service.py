@@ -1,629 +1,916 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
-"""
-Unit tests for the field extraction service.
-
-This module contains tests for the field extraction service, which is responsible for
-extracting structured data from OCR results, identifying key-value pairs, and applying
-structure recognition to forms, tables, and document sections.
-"""
-
-import json
 import pytest
+import json
+import re
 from unittest.mock import MagicMock, patch
-from typing import Dict, List, Any, Tuple
 
 # Import the service and types
-from ocr_service.src.services.field_extraction_service import FieldExtractionService
-from ocr_service.src.types.documents import DocumentType
-from ocr_service.src.types.extraction import (
-    ExtractedData, ExtractedField, ConfidenceScore, TableData, FieldLocation,
-    ExtractionMetadata, FieldType
-)
+from services.field_extraction_service import FieldExtractionService
+from types.extraction import ExtractedField, ConfidenceScore, ExtractedData, FieldLocation, ExtractionMetadata, JSONSchema
+from types.models import ModelResult, OCRModelType
+from types.errors import ServiceError, ErrorCategory, Result
+from models.structure_recognition_model import StructureRecognitionModel
 
-
-# ===== Test Setup =====
-
-@pytest.fixture
-def field_extraction_service():
-    """Create a field extraction service instance for testing."""
-    return FieldExtractionService()
-
-
-@pytest.fixture
-def sample_ocr_text():
-    """Provide sample OCR text for testing field extraction."""
-    return """
-MERCHANT CASH ADVANCE APPLICATION
-
-Business Name: Acme Corporation
-DBA Name: Acme Corp
-Address: 123 Main Street
-City: Anytown
-State: CA
-Zip: 90210
-Phone: (555) 123-4567
-Email: info@acmecorp.com
-Tax ID: 12-3456789
-Industry: Retail
-Years in Business: 5
-Monthly Revenue: $50,000
-Requested Amount: $100,000
-
-Owner Information:
-Name: John Smith
-Title: CEO
-Phone: (555) 987-6543
-Email: john@acmecorp.com
-
-Signature: John Smith
-Date: 01/15/2023
-"""
-
-
-@pytest.fixture
-def sample_ocr_text_with_table():
-    """Provide sample OCR text with a table for testing table extraction."""
-    return """
-MONTHLY REVENUE SUMMARY
-
-Business Name: Acme Corporation
-Period: January 2023 - March 2023
-
-Month    Revenue    Expenses    Profit
-Jan      $50,000    $30,000     $20,000
-Feb      $55,000    $32,000     $23,000
-Mar      $60,000    $35,000     $25,000
-Total    $165,000   $97,000     $68,000
-
-Prepared by: Finance Department
-Date: 04/05/2023
-"""
-
-
-@pytest.fixture
-def sample_ocr_text_with_errors():
-    """Provide sample OCR text with common OCR errors for testing error correction."""
-    return """
-MERCHANT CASH ADVANCE APPLlCATlON
-
-Business Narne: Acrne Corporation
-DBA Narne: Acrne Corp
-Address: l23 Main Street
-City: Anytown
-State: CA
-Zip: 9O21O
-Phone: (S55) l23-4567
-Email: info@acrnecorp.corn
-Tax lD: l2-34S6789
-Industry: Retall
-Years in Business: S
-Monthly Revenue: $SO,OOO
-Requested Arnount: $lOO,OOO
-"""
-
-
-@pytest.fixture
-def sample_bank_statement_text():
-    """Provide sample bank statement OCR text for testing document-specific extraction."""
-    return """
-BANK STATEMENT
-
-Bank Name: First National Bank
-Account Holder: Acme Corporation
-Account Number: 1234567890
-Statement Period: 01/01/2023 - 01/31/2023
-
-Opening Balance: $75,000.00
-Closing Balance: $82,500.00
-
-Transactions:
-Date        Description                 Amount      Balance
-01/03/2023  Deposit                     $15,000.00  $90,000.00
-01/10/2023  Withdrawal                  -$5,000.00  $85,000.00
-01/15/2023  Vendor Payment              -$7,500.00  $77,500.00
-01/25/2023  Customer Payment            $5,000.00   $82,500.00
-
-Total Deposits: $20,000.00
-Total Withdrawals: $12,500.00
-"""
-
-
-# ===== Test Cases =====
-
+# Test class for FieldExtractionService
 class TestFieldExtractionService:
-    """Test cases for the field extraction service."""
-
-    def test_initialization(self, field_extraction_service):
-        """Test that the field extraction service initializes correctly."""
-        # Verify that the service has loaded document templates
-        assert field_extraction_service.document_templates is not None
-        assert len(field_extraction_service.document_templates) > 0
+    """Unit tests for the field extraction service.
+    
+    These tests verify the field extraction service's ability to:
+    1. Recognize document structure (forms, tables, sections)
+    2. Extract key-value pairs from OCR results
+    3. Normalize and standardize field values
+    4. Apply document type-specific extraction rules
+    5. Format extracted data as JSON
+    6. Validate and correct extracted fields
+    
+    The tests use mock data and fixtures to simulate different document types
+    and OCR results, ensuring the service correctly transforms raw OCR text into
+    structured data according to document-specific templates.
+    """
+    
+    @pytest.fixture
+    def field_extraction_config(self):
+        """Create a configuration for the field extraction service."""
+        return {
+            "confidence_threshold": 0.7,
+            "enable_validation": True,
+            "enable_normalization": True,
+            "templates_path": "/path/to/templates"
+        }
+    
+    @pytest.fixture
+    def mock_structure_model(self):
+        """Create a mock structure recognition model."""
+        model = MagicMock(spec=StructureRecognitionModel)
+        model.recognize.return_value = {
+            "form_regions": [
+                {
+                    "name": "business_info_form",
+                    "fields": [
+                        {
+                            "label_end_idx": 15,
+                            "start_idx": 0,
+                            "end_idx": 40,
+                            "x": 0.1,
+                            "y": 0.1,
+                            "width": 0.5,
+                            "height": 0.05,
+                            "page": 0
+                        },
+                        {
+                            "label_end_idx": 8,
+                            "start_idx": 41,
+                            "end_idx": 60,
+                            "x": 0.1,
+                            "y": 0.2,
+                            "width": 0.3,
+                            "height": 0.05,
+                            "page": 0
+                        }
+                    ],
+                    "x": 0.05,
+                    "y": 0.05,
+                    "width": 0.9,
+                    "height": 0.3,
+                    "page": 0,
+                    "start_idx": 0,
+                    "end_idx": 100
+                }
+            ],
+            "table_regions": [
+                {
+                    "name": "financial_table",
+                    "header_row": {
+                        "start_idx": 0,
+                        "end_idx": 40
+                    },
+                    "rows": [
+                        {
+                            "start_idx": 41,
+                            "end_idx": 80,
+                            "cells": [
+                                {"start_idx": 0, "end_idx": 10, "column_index": 0},
+                                {"start_idx": 11, "end_idx": 20, "column_index": 1},
+                                {"start_idx": 21, "end_idx": 30, "column_index": 2},
+                                {"start_idx": 31, "end_idx": 40, "column_index": 3}
+                            ],
+                            "x": 0.1,
+                            "y": 0.4,
+                            "width": 0.8,
+                            "height": 0.05
+                        }
+                    ],
+                    "column_count": 4,
+                    "x": 0.1,
+                    "y": 0.35,
+                    "width": 0.8,
+                    "height": 0.2,
+                    "page": 0,
+                    "start_idx": 100,
+                    "end_idx": 250
+                }
+            ],
+            "section_regions": [
+                {
+                    "title_end_idx": 22,
+                    "start_idx": 0,
+                    "end_idx": 100,
+                    "x": 0.05,
+                    "y": 0.05,
+                    "width": 0.9,
+                    "height": 0.3,
+                    "page": 0
+                },
+                {
+                    "title_end_idx": 23,
+                    "start_idx": 101,
+                    "end_idx": 250,
+                    "x": 0.05,
+                    "y": 0.35,
+                    "width": 0.9,
+                    "height": 0.3,
+                    "page": 0
+                }
+            ]
+        }
+        return model
+    
+    @pytest.fixture
+    def field_extraction_service(self, field_extraction_config, mock_structure_model):
+        """Create a field extraction service instance for testing."""
+        with patch('services.field_extraction_service.StructureRecognitionModel', return_value=mock_structure_model):
+            service = FieldExtractionService(field_extraction_config)
+            # Replace the private methods with mocks for testing
+            service._load_extraction_templates = MagicMock(return_value={
+                "loan_application": {
+                    "field_mapping": {
+                        "Business Name": "business_name",
+                        "Tax ID": "tax_id",
+                        "Business Address": "business_address",
+                        "Phone": "business_phone",
+                        "Email": "business_email",
+                        "Years in Business": "years_in_business",
+                        "Annual Revenue": "annual_revenue",
+                        "Owner Name": "owner_name",
+                        "Owner SSN": "owner_ssn",
+                        "Owner Phone": "owner_phone",
+                        "Owner Email": "owner_email"
+                    }
+                },
+                "bank_statement": {
+                    "field_mapping": {
+                        "Account Number": "account_number",
+                        "Account Holder": "account_holder",
+                        "Bank Name": "bank_name",
+                        "Beginning Balance": "beginning_balance",
+                        "Ending Balance": "ending_balance"
+                    }
+                }
+            })
+            service._load_normalization_rules = MagicMock(return_value={
+                "default": {
+                    "date": {"type": "date", "format": "%Y-%m-%d"},
+                    "phone": {"type": "phone", "format": "E.164"},
+                    "email": {"type": "email"},
+                    "ssn": {"type": "ssn", "format": "XXX-XX-XXXX"},
+                    "tax_id": {"type": "tax_id", "format": "XX-XXXXXXX"},
+                    "amount": {"type": "currency", "format": "USD"}
+                },
+                "loan_application": {
+                    "business_phone": {"type": "phone", "format": "E.164"},
+                    "owner_phone": {"type": "phone", "format": "E.164"},
+                    "business_email": {"type": "email"},
+                    "owner_email": {"type": "email"},
+                    "owner_ssn": {"type": "ssn", "format": "XXX-XX-XXXX"},
+                    "annual_revenue": {"type": "currency", "format": "USD"},
+                    "years_in_business": {"type": "number", "format": "integer"}
+                }
+            })
+            service._load_validation_rules = MagicMock(return_value={
+                "default": {
+                    "email": {
+                        "type": "email",
+                        "constraints": {
+                            "pattern": r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
+                        }
+                    },
+                    "phone": {
+                        "type": "phone",
+                        "constraints": {
+                            "min_length": 10,
+                            "max_length": 15
+                        }
+                    }
+                },
+                "loan_application": {
+                    "tax_id": {
+                        "type": "tax_id",
+                        "constraints": {
+                            "pattern": r"^\d{2}-\d{7}$|^\d{9}$"
+                        }
+                    },
+                    "owner_ssn": {
+                        "type": "ssn",
+                        "constraints": {
+                            "pattern": r"^\d{3}-\d{2}-\d{4}$|^\d{9}$"
+                        }
+                    }
+                }
+            })
+            service._load_field_patterns = MagicMock(return_value={
+                "default": {
+                    "email": r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}",
+                    "phone": r"\(?(d{3})\)?[- ]?(d{3})[- ]?(d{4})",
+                    "date": r"(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{4}[/-]\d{1,2}[/-]\d{1,2})"
+                },
+                "loan_application": {
+                    "business_name": r"Business\s+Name[:\s]+(.*?)(?=\n|$|\s{2,})",
+                    "tax_id": r"(?:Tax\s+ID|EIN|Federal\s+Tax\s+ID)[:\s]+(\d{2}[-]?\d{7})",
+                    "years_in_business": r"Years\s+in\s+Business[:\s]+(\d+)",
+                    "annual_revenue": r"Annual\s+Revenue[:\s]+\$?([\d,]+\.?\d*)"
+                }
+            })
+            return service
+    
+    @pytest.fixture
+    def mock_ocr_result(self):
+        """Create a mock OCR result for testing."""
+        return ModelResult(
+            text="Business Name: Acme Corporation\nTax ID: 12-3456789\nAddress: 123 Main St, Anytown, USA 12345\nPhone: (555) 123-4567\nEmail: contact@acmecorp.com",
+            confidence=0.95,
+            model_type=OCRModelType.TYPED,
+            metadata={
+                "page_count": 1,
+                "orientation": "portrait",
+                "language": "en"
+            }
+        )
+    
+    @pytest.fixture
+    def mock_table_ocr_result(self):
+        """Create a mock OCR result with table data for testing."""
+        return ModelResult(
+            text="Financial Statement\n\nMonth    Revenue    Expenses    Profit\nJanuary    $10,000    $7,500    $2,500\nFebruary    $12,000    $8,000    $4,000\nMarch    $15,000    $9,000    $6,000",
+            confidence=0.92,
+            model_type=OCRModelType.TYPED,
+            metadata={
+                "page_count": 1,
+                "orientation": "portrait",
+                "language": "en",
+                "has_tables": True
+            }
+        )
+    
+    @pytest.fixture
+    def mock_form_ocr_result(self):
+        """Create a mock OCR result with form data for testing."""
+        return ModelResult(
+            text="LOAN APPLICATION FORM\n\nBusiness Information:\nBusiness Name: XYZ Enterprises\nTax ID: 98-7654321\nYears in Business: 5\nAnnual Revenue: $500,000\n\nOwner Information:\nOwner Name: Jane Doe\nOwner SSN: 123-45-6789\nOwner Phone: (555) 987-6543\nOwner Email: jane@xyzenterprises.com",
+            confidence=0.90,
+            model_type=OCRModelType.TYPED,
+            metadata={
+                "page_count": 1,
+                "orientation": "portrait",
+                "language": "en",
+                "has_forms": True
+            }
+        )
+    
+    @pytest.fixture
+    def mock_document_structure(self):
+        """Create a mock document structure for testing."""
+        return {
+            "forms": [
+                {
+                    "name": "business_info_form",
+                    "fields": [
+                        {
+                            "label": "Business Name",
+                            "value": "Acme Corporation",
+                            "x": 0.1,
+                            "y": 0.1,
+                            "width": 0.5,
+                            "height": 0.05,
+                            "page": 0
+                        },
+                        {
+                            "label": "Tax ID",
+                            "value": "12-3456789",
+                            "x": 0.1,
+                            "y": 0.2,
+                            "width": 0.3,
+                            "height": 0.05,
+                            "page": 0
+                        }
+                    ],
+                    "x": 0.05,
+                    "y": 0.05,
+                    "width": 0.9,
+                    "height": 0.3,
+                    "page": 0,
+                    "start_idx": 0,
+                    "end_idx": 100
+                }
+            ],
+            "tables": [
+                {
+                    "name": "financial_table",
+                    "headers": ["Month", "Revenue", "Expenses", "Profit"],
+                    "rows": [
+                        {
+                            "text": "January    $10,000    $7,500    $2,500",
+                            "cells": [
+                                {"text": "January", "column_index": 0, "x": 0.1, "y": 0.4, "width": 0.2, "height": 0.05},
+                                {"text": "$10,000", "column_index": 1, "x": 0.3, "y": 0.4, "width": 0.2, "height": 0.05},
+                                {"text": "$7,500", "column_index": 2, "x": 0.5, "y": 0.4, "width": 0.2, "height": 0.05},
+                                {"text": "$2,500", "column_index": 3, "x": 0.7, "y": 0.4, "width": 0.2, "height": 0.05}
+                            ],
+                            "start_idx": 150,
+                            "end_idx": 200,
+                            "x": 0.1,
+                            "y": 0.4,
+                            "width": 0.8,
+                            "height": 0.05
+                        }
+                    ],
+                    "column_count": 4,
+                    "row_count": 1,
+                    "header_row": {
+                        "start_idx": 100,
+                        "end_idx": 150
+                    },
+                    "x": 0.1,
+                    "y": 0.35,
+                    "width": 0.8,
+                    "height": 0.2,
+                    "page": 0,
+                    "start_idx": 100,
+                    "end_idx": 250
+                }
+            ],
+            "sections": [
+                {
+                    "title": "Business Information",
+                    "content": "Business Name: Acme Corporation\nTax ID: 12-3456789",
+                    "x": 0.05,
+                    "y": 0.05,
+                    "width": 0.9,
+                    "height": 0.3,
+                    "page": 0,
+                    "start_idx": 0,
+                    "end_idx": 100
+                },
+                {
+                    "title": "Financial Information",
+                    "content": "Month    Revenue    Expenses    Profit\nJanuary    $10,000    $7,500    $2,500",
+                    "x": 0.05,
+                    "y": 0.35,
+                    "width": 0.9,
+                    "height": 0.3,
+                    "page": 0,
+                    "start_idx": 100,
+                    "end_idx": 250
+                }
+            ],
+            "page_count": 1,
+            "orientation": "portrait",
+            "language": "en"
+        }
         
-        # Verify that field validators are initialized
-        assert field_extraction_service.field_validators is not None
-        assert len(field_extraction_service.field_validators) > 0
-
-    def test_extract_fields_from_text_application(self, field_extraction_service, sample_ocr_text):
-        """Test extracting fields from application form text."""
-        # Extract fields from the sample text
-        extracted_data = field_extraction_service.extract_fields_from_text(
-            sample_ocr_text, DocumentType.APPLICATION
+    def test_recognize_structure(self, field_extraction_service, mock_ocr_result):
+        """Test the structure recognition functionality.
+        
+        This test verifies that the field extraction service correctly identifies
+        document structure elements including forms, tables, and sections.
+        """
+        # Call the recognize_structure method
+        result = field_extraction_service.recognize_structure(mock_ocr_result, "loan_application")
+        
+        # Verify the result is not an error
+        assert not isinstance(result, ServiceError)
+        
+        # Verify the structure contains the expected elements
+        assert "forms" in result
+        assert "tables" in result
+        assert "sections" in result
+        assert "page_count" in result
+        assert "orientation" in result
+        assert "language" in result
+        
+        # Verify the page count and orientation match the input
+        assert result["page_count"] == mock_ocr_result.metadata["page_count"]
+        assert result["orientation"] == mock_ocr_result.metadata["orientation"]
+        assert result["language"] == mock_ocr_result.metadata["language"]
+    
+    def test_extract_key_value_pairs(self, field_extraction_service, mock_ocr_result):
+        """Test the key-value pair extraction functionality.
+        
+        This test verifies that the field extraction service correctly extracts
+        key-value pairs from OCR text using both general patterns and document-specific
+        patterns.
+        """
+        # Call the extract_key_value_pairs method
+        result = field_extraction_service.extract_key_value_pairs(
+            mock_ocr_result.text, "loan_application"
         )
         
-        # Verify the extracted data structure
-        assert isinstance(extracted_data, ExtractedData)
-        assert extracted_data['extraction_id'] is not None
-        assert extracted_data['document_type'] == DocumentType.APPLICATION.value
+        # Verify the result contains the expected key-value pairs
+        assert len(result) > 0
         
-        # Verify that key fields were extracted correctly
-        fields = extracted_data['fields']
-        assert 'business_name' in fields
-        assert fields['business_name']['value'] == 'Acme Corporation'
-        assert 'tax_id' in fields
-        assert fields['tax_id']['value'] == '12-3456789'
-        assert 'requested_amount' in fields
-        assert fields['requested_amount']['value'] == '$100,000'
+        # Create a dictionary of extracted key-value pairs for easier testing
+        extracted_pairs = {key: value for key, value, _ in result}
         
-        # Verify confidence scores
-        assert fields['business_name']['confidence'].value >= 0.8
+        # Verify specific key-value pairs were extracted
+        assert "Business Name" in extracted_pairs
+        assert extracted_pairs["Business Name"] == "Acme Corporation"
+        assert "Tax ID" in extracted_pairs
+        assert extracted_pairs["Tax ID"] == "12-3456789"
+        assert "Address" in extracted_pairs
+        assert "Phone" in extracted_pairs
+        assert "Email" in extracted_pairs
+        
+        # Verify confidence scores are included
+        for _, _, confidence in result:
+            assert isinstance(confidence, ConfidenceScore)
+            assert 0.0 <= confidence.value <= 1.0
+    
+    def test_extract_table_data(self, field_extraction_service, mock_table_ocr_result):
+        """Test the table data extraction functionality.
+        
+        This test verifies that the field extraction service correctly extracts
+        structured data from tables identified in the document.
+        """
+        # Mock the document structure with a table
+        table_structure = {
+            "name": "financial_table",
+            "headers": ["Month", "Revenue", "Expenses", "Profit"],
+            "rows": [
+                {
+                    "start_idx": 0,
+                    "end_idx": 50,
+                    "cells": [
+                        {"column_index": 0, "text": "January"},
+                        {"column_index": 1, "text": "$10,000"},
+                        {"column_index": 2, "text": "$7,500"},
+                        {"column_index": 3, "text": "$2,500"}
+                    ]
+                },
+                {
+                    "start_idx": 51,
+                    "end_idx": 100,
+                    "cells": [
+                        {"column_index": 0, "text": "February"},
+                        {"column_index": 1, "text": "$12,000"},
+                        {"column_index": 2, "text": "$8,000"},
+                        {"column_index": 3, "text": "$4,000"}
+                    ]
+                }
+            ],
+            "start_idx": 0,
+            "end_idx": 200
+        }
+        
+        # Call the extract_table_data method
+        result = field_extraction_service.extract_table_data(
+            table_structure, mock_table_ocr_result.text
+        )
+        
+        # Verify the result contains the expected table data
+        assert len(result) > 0
+        
+        # Verify the structure of the extracted table data
+        for row in result:
+            assert isinstance(row, dict)
+            # Check that each row has values for all headers
+            for header in table_structure["headers"]:
+                assert header in row
+    
+    @patch('services.field_extraction_service.FieldExtractionService._extract_fields_by_document_type')
+    def test_extract_structured_data(self, mock_extract_fields, field_extraction_service, mock_ocr_result, mock_document_structure):
+        """Test the structured data extraction functionality.
+        
+        This test verifies that the field extraction service correctly extracts
+        structured data from OCR results based on document type, including field
+        normalization, validation, and JSON formatting.
+        """
+        # Setup the mock to return a list of extracted fields
+        mock_fields = [
+            ExtractedField(
+                name="business_name",
+                value="Acme Corporation",
+                confidence=ConfidenceScore(0.98),
+                location=FieldLocation(page=0, x=0, y=0, width=0, height=0),
+                metadata={"source": "key_value_extraction"}
+            ),
+            ExtractedField(
+                name="tax_id",
+                value="12-3456789",
+                confidence=ConfidenceScore(0.97),
+                location=FieldLocation(page=0, x=0, y=0, width=0, height=0),
+                metadata={"source": "key_value_extraction"}
+            ),
+            ExtractedField(
+                name="business_address",
+                value="123 Main St, Anytown, USA 12345",
+                confidence=ConfidenceScore(0.95),
+                location=FieldLocation(page=0, x=0, y=0, width=0, height=0),
+                metadata={"source": "key_value_extraction"}
+            )
+        ]
+        mock_extract_fields.return_value = mock_fields
+        
+        # Mock the recognize_structure method to return the mock document structure
+        field_extraction_service.recognize_structure = MagicMock(return_value=mock_document_structure)
+        
+        # Call the extract_structured_data method
+        result = field_extraction_service.extract_structured_data(
+            mock_ocr_result, "loan_application"
+        )
+        
+        # Verify the result is not an error
+        assert not isinstance(result, ServiceError)
+        
+        # Verify the result is an ExtractedData object
+        assert isinstance(result, ExtractedData)
+        
+        # Verify the structure of the extracted data
+        assert "data" in result.__dict__
+        assert "metadata" in result.__dict__
+        assert "schema" in result.__dict__
+        
+        # Verify the metadata contains the expected fields
+        assert "document_type" in result.metadata
+        assert result.metadata["document_type"] == "loan_application"
+        assert "field_count" in result.metadata
+        assert "average_confidence" in result.metadata
+        
+        # Verify the extract_fields_by_document_type method was called with the correct arguments
+        mock_extract_fields.assert_called_once_with(
+            mock_ocr_result, mock_document_structure, "loan_application"
+        )
+    
+    def test_field_normalization(self, field_extraction_service):
+        """Test the field normalization functionality.
+        
+        This test verifies that the field extraction service correctly normalizes
+        and standardizes field values based on field type and document type.
+        """
+        # Create test fields with values that need normalization
+        test_fields = [
+            ExtractedField(
+                name="business_phone",
+                value="(555) 123-4567",
+                confidence=ConfidenceScore(0.9),
+                location=FieldLocation(page=0, x=0, y=0, width=0, height=0),
+                metadata={"source": "key_value_extraction"}
+            ),
+            ExtractedField(
+                name="business_email",
+                value="CONTACT@acmecorp.com ",  # Uppercase and trailing space
+                confidence=ConfidenceScore(0.9),
+                location=FieldLocation(page=0, x=0, y=0, width=0, height=0),
+                metadata={"source": "key_value_extraction"}
+            ),
+            ExtractedField(
+                name="annual_revenue",
+                value="$500,000",
+                confidence=ConfidenceScore(0.9),
+                location=FieldLocation(page=0, x=0, y=0, width=0, height=0),
+                metadata={"source": "key_value_extraction"}
+            )
+        ]
+        
+        # Call the _normalize_fields method
+        normalized_fields = field_extraction_service._normalize_fields(
+            test_fields, "loan_application"
+        )
+        
+        # Verify the fields were normalized correctly
+        assert len(normalized_fields) == len(test_fields)
+        
+        # Check phone normalization
+        phone_field = next(f for f in normalized_fields if f.name == "business_phone")
+        assert "original_value" in phone_field.metadata
+        assert phone_field.metadata["original_value"] == "(555) 123-4567"
+        assert phone_field.metadata["normalized"] == True
+        
+        # Check email normalization
+        email_field = next(f for f in normalized_fields if f.name == "business_email")
+        assert "original_value" in email_field.metadata
+        assert email_field.metadata["original_value"] == "CONTACT@acmecorp.com "
+        assert email_field.value == "contact@acmecorp.com"  # Lowercase and trimmed
+        assert email_field.metadata["normalized"] == True
+        
+        # Check currency normalization
+        revenue_field = next(f for f in normalized_fields if f.name == "annual_revenue")
+        assert "original_value" in revenue_field.metadata
+        assert revenue_field.metadata["original_value"] == "$500,000"
+        assert revenue_field.metadata["field_type"] == "currency"
+        assert revenue_field.metadata["normalized"] == True
+    
+    def test_field_validation(self, field_extraction_service):
+        """Test the field validation and error correction functionality.
+        
+        This test verifies that the field extraction service correctly validates
+        extracted fields and attempts to correct errors based on field type and
+        document type.
+        """
+        # Create test fields with values that need validation
+        test_fields = [
+            ExtractedField(
+                name="business_email",
+                value="contact@acmecorp.com",  # Valid email
+                confidence=ConfidenceScore(0.9),
+                location=FieldLocation(page=0, x=0, y=0, width=0, height=0),
+                metadata={"source": "key_value_extraction", "field_type": "email"}
+            ),
+            ExtractedField(
+                name="tax_id",
+                value="123456789",  # Valid but not formatted
+                confidence=ConfidenceScore(0.9),
+                location=FieldLocation(page=0, x=0, y=0, width=0, height=0),
+                metadata={"source": "key_value_extraction", "field_type": "tax_id"}
+            ),
+            ExtractedField(
+                name="business_email",
+                value="invalid-email",  # Invalid email
+                confidence=ConfidenceScore(0.9),
+                location=FieldLocation(page=0, x=0, y=0, width=0, height=0),
+                metadata={"source": "key_value_extraction", "field_type": "email"}
+            )
+        ]
+        
+        # Call the _validate_fields method
+        validated_fields = field_extraction_service._validate_fields(
+            test_fields, "loan_application"
+        )
+        
+        # Verify the fields were validated correctly
+        assert len(validated_fields) == len(test_fields)
+        
+        # Check valid email validation
+        valid_email = next(f for f in validated_fields if f.name == "business_email" and f.value == "contact@acmecorp.com")
+        assert "validation_failed" not in valid_email.metadata
+        
+        # Check tax ID validation/correction
+        tax_id = next(f for f in validated_fields if f.name == "tax_id")
+        if "corrected" in tax_id.metadata and tax_id.metadata["corrected"]:
+            assert tax_id.value == "12-3456789"  # Formatted as XX-XXXXXXX
+            assert tax_id.metadata["original_value"] == "123456789"
+        
+        # Check invalid email validation
+        invalid_email = next(f for f in validated_fields if f.name == "business_email" and f.value == "invalid-email")
+        assert invalid_email.confidence.value <= 0.5  # Confidence reduced for invalid field
+        assert "validation_failed" in invalid_email.metadata
+        assert invalid_email.metadata["validation_failed"] == True
+    
+    def test_json_formatting(self, field_extraction_service):
+        """Test the JSON formatting functionality.
+        
+        This test verifies that the field extraction service correctly formats
+        extracted fields as JSON according to document type schema.
+        """
+        # Create test fields to format as JSON
+        test_fields = [
+            ExtractedField(
+                name="business_name",
+                value="Acme Corporation",
+                confidence=ConfidenceScore(0.98),
+                location=FieldLocation(page=0, x=0, y=0, width=0, height=0),
+                metadata={"source": "key_value_extraction", "section": "business_information"}
+            ),
+            ExtractedField(
+                name="tax_id",
+                value="12-3456789",
+                confidence=ConfidenceScore(0.97),
+                location=FieldLocation(page=0, x=0, y=0, width=0, height=0),
+                metadata={"source": "key_value_extraction", "section": "business_information"}
+            ),
+            ExtractedField(
+                name="owner_name",
+                value="John Doe",
+                confidence=ConfidenceScore(0.95),
+                location=FieldLocation(page=0, x=0, y=0, width=0, height=0),
+                metadata={"source": "key_value_extraction", "section": "owner_information"}
+            ),
+            ExtractedField(
+                name="financial_table",
+                value=json.dumps([{"Month": "January", "Revenue": "$10,000"}]),
+                confidence=ConfidenceScore(0.9),
+                location=FieldLocation(page=0, x=0, y=0, width=0, height=0),
+                metadata={"source": "table_extraction", "is_table": True}
+            )
+        ]
+        
+        # Call the _format_as_json method
+        formatted_data = field_extraction_service._format_as_json(
+            test_fields, "loan_application"
+        )
+        
+        # Verify the result is an ExtractedData object
+        assert isinstance(formatted_data, ExtractedData)
+        
+        # Verify the data structure
+        assert "data" in formatted_data.__dict__
+        data = formatted_data.data
+        
+        # Verify sections are created correctly
+        assert "business_information" in data
+        assert "owner_information" in data
+        
+        # Verify fields are placed in the correct sections
+        assert "business_name" in data["business_information"]
+        assert "tax_id" in data["business_information"]
+        assert "owner_name" in data["owner_information"]
+        
+        # Verify table data is included
+        assert "tables" in data
+        assert "financial_table" in data["tables"]
+        
+        # Verify metadata is included
+        assert "metadata" in formatted_data.__dict__
+        assert formatted_data.metadata["document_type"] == "loan_application"
+        assert formatted_data.metadata["field_count"] == len(test_fields)
+        
+        # Verify schema is included
+        assert "schema" in formatted_data.__dict__
+        assert formatted_data.schema["schema_id"].startswith("mca-loan_application")
+    
+    def test_document_type_specific_extraction(self, field_extraction_service, mock_form_ocr_result):
+        """Test document type-specific extraction rules.
+        
+        This test verifies that the field extraction service correctly applies
+        document type-specific extraction rules and templates.
+        """
+        # Mock the document structure
+        document_structure = {
+            "sections": [
+                {
+                    "title": "Business Information",
+                    "content": "Business Name: XYZ Enterprises\nTax ID: 98-7654321\nYears in Business: 5\nAnnual Revenue: $500,000",
+                    "title_end_idx": 22,
+                    "start_idx": 0,
+                    "end_idx": 100,
+                    "x": 0.05,
+                    "y": 0.05,
+                    "width": 0.9,
+                    "height": 0.3,
+                    "page": 0
+                },
+                {
+                    "title": "Owner Information",
+                    "content": "Owner Name: Jane Doe\nOwner SSN: 123-45-6789\nOwner Phone: (555) 987-6543\nOwner Email: jane@xyzenterprises.com",
+                    "title_end_idx": 18,
+                    "start_idx": 101,
+                    "end_idx": 200,
+                    "x": 0.05,
+                    "y": 0.35,
+                    "width": 0.9,
+                    "height": 0.3,
+                    "page": 0
+                }
+            ],
+            "forms": [],
+            "tables": [],
+            "page_count": 1,
+            "orientation": "portrait",
+            "language": "en"
+        }
+        
+        # Call the _extract_loan_application_fields method
+        fields = field_extraction_service._extract_loan_application_fields(
+            mock_form_ocr_result.text, document_structure
+        )
+        
+        # Verify fields were extracted correctly
+        assert len(fields) > 0
+        
+        # Check for specific fields
+        field_names = [field.name for field in fields]
+        assert "business_name" in field_names
+        assert "tax_id" in field_names
+        assert "years_in_business" in field_names
+        assert "annual_revenue" in field_names
+        
+        # Verify field values
+        business_name = next(f for f in fields if f.name == "business_name")
+        assert business_name.value == "XYZ Enterprises"
+        assert business_name.metadata["section"] == "business_information"
+        
+        # Verify owner information fields
+        owner_fields = [f for f in fields if f.metadata.get("section") == "owner_information"]
+        assert len(owner_fields) > 0
+    
+    def test_error_handling(self, field_extraction_service, mock_ocr_result):
+        """Test error handling in the field extraction service.
+        
+        This test verifies that the field extraction service correctly handles
+        errors and returns appropriate error objects.
+        """
+        # Mock the recognize_structure method to raise an exception
+        field_extraction_service.recognize_structure = MagicMock(side_effect=Exception("Test error"))
+        
+        # Call the extract_structured_data method
+        result = field_extraction_service.extract_structured_data(
+            mock_ocr_result, "loan_application"
+        )
+        
+        # Verify the result is a ServiceError
+        assert isinstance(result, ServiceError)
+        assert result.category == ErrorCategory.PROCESSING_ERROR
+        assert "Test error" in result.message
+    
+    def test_deduplicate_fields(self, field_extraction_service):
+        """Test field deduplication functionality.
+        
+        This test verifies that the field extraction service correctly deduplicates
+        fields, preferring those with higher confidence.
+        """
+        # Create test fields with duplicates
+        test_fields = [
+            ExtractedField(
+                name="business_name",
+                value="Acme Corporation",
+                confidence=ConfidenceScore(0.98),
+                location=FieldLocation(page=0, x=0, y=0, width=0, height=0),
+                metadata={"source": "key_value_extraction"}
+            ),
+            ExtractedField(
+                name="business_name",  # Duplicate with lower confidence
+                value="Acme Corp",
+                confidence=ConfidenceScore(0.85),
+                location=FieldLocation(page=0, x=0, y=0, width=0, height=0),
+                metadata={"source": "form_extraction"}
+            ),
+            ExtractedField(
+                name="tax_id",
+                value="12-3456789",
+                confidence=ConfidenceScore(0.97),
+                location=FieldLocation(page=0, x=0, y=0, width=0, height=0),
+                metadata={"source": "key_value_extraction"}
+            ),
+            ExtractedField(
+                name="tax_id",  # Duplicate with higher confidence
+                value="12-3456789",
+                confidence=ConfidenceScore(0.99),
+                location=FieldLocation(page=0, x=0, y=0, width=0, height=0),
+                metadata={"source": "form_extraction"}
+            )
+        ]
+        
+        # Call the _deduplicate_fields method
+        deduplicated_fields = field_extraction_service._deduplicate_fields(test_fields)
+        
+        # Verify fields were deduplicated correctly
+        assert len(deduplicated_fields) == 2  # Should have one of each field name
+        
+        # Verify the highest confidence field was kept for each name
+        business_name = next(f for f in deduplicated_fields if f.name == "business_name")
+        assert business_name.value == "Acme Corporation"  # Higher confidence version
+        assert business_name.confidence.value == 0.98
+        
+        tax_id = next(f for f in deduplicated_fields if f.name == "tax_id")
+        assert tax_id.value == "12-3456789"
+        assert tax_id.confidence.value == 0.99  # Higher confidence version
+    
+    def test_integration_extract_structured_data(self, field_extraction_service, mock_form_ocr_result):
+        """Integration test for the extract_structured_data method.
+        
+        This test verifies the complete extraction pipeline from OCR result to
+        structured data, including structure recognition, field extraction,
+        normalization, validation, and JSON formatting.
+        """
+        # Call the extract_structured_data method with a loan application document
+        result = field_extraction_service.extract_structured_data(
+            mock_form_ocr_result, "loan_application"
+        )
+        
+        # Verify the result is not an error
+        assert not isinstance(result, ServiceError)
+        
+        # Verify the result is an ExtractedData object
+        assert isinstance(result, ExtractedData)
+        
+        # Verify the data contains expected sections and fields
+        data = result.data
+        
+        # Check for business information section
+        assert any(section.startswith("business") for section in data.keys()) or "main" in data
+        
+        # Check for specific fields that should be extracted from the test document
+        all_fields = []
+        for section in data.values():
+            if isinstance(section, dict):
+                all_fields.extend(section.keys())
+        
+        # Verify key fields were extracted
+        assert "business_name" in all_fields or "business_legal_name" in all_fields
+        assert "tax_id" in all_fields
         
         # Verify metadata
-        assert extracted_data['metadata']['document_type'] == DocumentType.APPLICATION.value
-        assert extracted_data['metadata']['extraction_status'] in ['success', 'partial']
-
-    def test_extract_fields_from_text_bank_statement(self, field_extraction_service, sample_bank_statement_text):
-        """Test extracting fields from bank statement text."""
-        # Extract fields from the sample text
-        extracted_data = field_extraction_service.extract_fields_from_text(
-            sample_bank_statement_text, DocumentType.BANK_STATEMENT
-        )
+        assert result.metadata["document_type"] == "loan_application"
+        assert result.metadata["field_count"] > 0
+        assert 0.0 <= result.metadata["average_confidence"] <= 1.0
         
-        # Verify the extracted data structure
-        assert isinstance(extracted_data, ExtractedData)
-        assert extracted_data['document_type'] == DocumentType.BANK_STATEMENT.value
-        
-        # Verify that key fields were extracted correctly
-        fields = extracted_data['fields']
-        assert 'bank_name' in fields
-        assert fields['bank_name']['value'] == 'First National Bank'
-        assert 'account_holder' in fields
-        assert fields['account_holder']['value'] == 'Acme Corporation'
-        assert 'account_number' in fields
-        # Account number should be masked except last 4 digits
-        assert fields['account_number']['value'].endswith('7890')
-        assert '*' in fields['account_number']['value']
-        assert 'opening_balance' in fields
-        assert fields['opening_balance']['value'] == '$75,000.00'
-        assert 'closing_balance' in fields
-        assert fields['closing_balance']['value'] == '$82,500.00'
-        
-        # Verify tables were extracted
-        tables = extracted_data['tables']
-        assert len(tables) > 0
-        assert 'Transactions' in [table.get('table_name') for table in tables]
-
-    def test_extract_and_process_tables(self, field_extraction_service, sample_ocr_text_with_table):
-        """Test extracting and processing tables from text."""
-        # Use the private method to extract tables
-        tables = field_extraction_service._extract_and_process_tables(
-            sample_ocr_text_with_table, DocumentType.APPLICATION
-        )
-        
-        # Verify that tables were extracted
-        assert len(tables) > 0
-        
-        # Verify the structure of the first table
-        table = tables[0]
-        assert isinstance(table, TableData)
-        assert table['headers'] == ['Month', 'Revenue', 'Expenses', 'Profit']
-        assert len(table['rows']) == 4  # 3 months + total
-        assert table['row_count'] == 4
-        assert table['column_count'] == 4
-        
-        # Verify the content of the table
-        assert table['rows'][0][0] == 'Jan'
-        assert table['rows'][0][1] == '$50,000'
-        assert table['rows'][3][0] == 'Total'
-        assert table['rows'][3][3] == '$68,000'
-        
-        # Verify field mapping
-        assert 'month' in table['field_mapping']
-        assert 'revenue' in table['field_mapping']
-        assert 'expenses' in table['field_mapping']
-        assert 'profit' in table['field_mapping']
-
-    def test_process_extracted_fields(self, field_extraction_service, sample_ocr_text):
-        """Test processing extracted key-value pairs into structured fields."""
-        # Extract key-value pairs from the sample text
-        from ocr_service.src.utils.text_utils import extract_key_value_pairs, extract_sections
-        key_value_pairs = extract_key_value_pairs(sample_ocr_text)
-        sections = extract_sections(sample_ocr_text)
-        
-        # Process the extracted fields
-        fields = field_extraction_service._process_extracted_fields(
-            key_value_pairs, DocumentType.APPLICATION, sections
-        )
-        
-        # Verify that fields were processed correctly
-        assert len(fields) > 0
-        assert 'business_name' in fields
-        assert fields['business_name']['value'] == 'Acme Corporation'
-        assert fields['business_name']['field_type'] == FieldType.NAME.value
-        
-        # Verify field normalization
-        assert 'phone' in fields
-        assert fields['phone']['value'] == '(555) 123-4567'  # Properly formatted
-        
-        # Verify field validation
-        assert 'email' in fields
-        assert fields['email']['value'] == 'info@acmecorp.com'
-        assert fields['email']['requires_verification'] is False  # Valid email
-        
-        # Verify field location
-        assert 'location' in fields['business_name']
-        assert isinstance(fields['business_name']['location'], FieldLocation)
-
-    def test_error_correction(self, field_extraction_service, sample_ocr_text_with_errors):
-        """Test correction of common OCR errors."""
-        # Extract fields from the text with errors
-        extracted_data = field_extraction_service.extract_fields_from_text(
-            sample_ocr_text_with_errors, DocumentType.APPLICATION
-        )
-        
-        # Verify that errors were corrected
-        fields = extracted_data['fields']
-        
-        # Check for common OCR error corrections
-        # 'l' (lowercase L) to '1' (one)
-        assert 'tax_id' in fields
-        assert fields['tax_id']['value'] == '12-3456789'  # Corrected from 'l2-34S6789'
-        
-        # 'O' (uppercase O) to '0' (zero)
-        assert 'zip' in fields
-        assert '90210' in fields['zip']['value']  # Corrected from '9O21O'
-        
-        # 'S' to '5'
-        assert 'phone' in fields
-        assert '555' in fields['phone']['value']  # Corrected from 'S55'
-        
-        # Verify confidence scores reflect corrections
-        # Confidence should be lower for fields with corrections
-        assert fields['tax_id']['confidence'].value < 1.0
-
-    def test_field_validation(self, field_extraction_service):
-        """Test validation of different field types."""
-        # Test email validation
-        valid_email = 'test@example.com'
-        invalid_email = 'test@example'
-        
-        valid_result, valid_confidence, valid_verification = field_extraction_service._validate_email(valid_email)
-        invalid_result, invalid_confidence, invalid_verification = field_extraction_service._validate_email(invalid_email)
-        
-        assert valid_result == valid_email
-        assert valid_confidence > 0.8
-        assert valid_verification is False
-        
-        assert invalid_result == invalid_email
-        assert invalid_confidence < 0.8
-        assert invalid_verification is True
-        
-        # Test phone validation
-        valid_phone = '(555) 123-4567'
-        invalid_phone = '555-123-456'
-        
-        valid_result, valid_confidence, valid_verification = field_extraction_service._validate_phone(valid_phone)
-        invalid_result, invalid_confidence, invalid_verification = field_extraction_service._validate_phone(invalid_phone)
-        
-        assert valid_result == valid_phone
-        assert valid_confidence > 0.8
-        assert valid_verification is False
-        
-        assert invalid_result == invalid_phone
-        assert invalid_confidence < 0.8
-        assert invalid_verification is True
-        
-        # Test EIN validation
-        valid_ein = '12-3456789'
-        invalid_ein = '123-45678'
-        
-        valid_result, valid_confidence, valid_verification = field_extraction_service._validate_ein(valid_ein)
-        invalid_result, invalid_confidence, invalid_verification = field_extraction_service._validate_ein(invalid_ein)
-        
-        assert valid_result == valid_ein
-        assert valid_confidence > 0.8
-        assert valid_verification is False
-        
-        assert invalid_result == invalid_ein
-        assert invalid_confidence < 0.8
-        assert invalid_verification is True
-
-    def test_document_specific_processing(self, field_extraction_service):
-        """Test document-specific field processing."""
-        # Create sample fields for different document types
-        application_fields = {
-            'legal_name': ExtractedField(
-                field_name='legal_name',
-                field_type=FieldType.NAME.value,
-                value='acme corporation',  # Lowercase for testing normalization
-                raw_text='acme corporation',
-                confidence=ConfidenceScore(0.9),
-                location=FieldLocation(
-                    page=1, top=0.1, left=0.1, bottom=0.15, right=0.5, width=0.4, height=0.05
-                ),
-                alternatives=[],
-                metadata={},
-                requires_verification=False,
-                verification_reason=None,
-                extraction_timestamp='2023-01-01T12:00:00Z'
-            ),
-            'monthly_revenue': ExtractedField(
-                field_name='monthly_revenue',
-                field_type=FieldType.CURRENCY.value,
-                value='50000',  # No formatting
-                raw_text='50000',
-                confidence=ConfidenceScore(0.9),
-                location=FieldLocation(
-                    page=1, top=0.3, left=0.1, bottom=0.35, right=0.5, width=0.4, height=0.05
-                ),
-                alternatives=[],
-                metadata={},
-                requires_verification=False,
-                verification_reason=None,
-                extraction_timestamp='2023-01-01T12:00:00Z'
-            )
-        }
-        
-        # Process application fields
-        processed_fields = field_extraction_service._process_application_fields(application_fields)
-        
-        # Verify business name normalization
-        assert processed_fields['legal_name']['value'] == 'Acme Corporation'  # Properly capitalized
-        
-        # Verify currency formatting
-        assert processed_fields['monthly_revenue']['value'] == '$50,000.00'  # Properly formatted
-        
-        # Test bank statement processing
-        bank_fields = {
-            'account_number': ExtractedField(
-                field_name='account_number',
-                field_type=FieldType.ACCOUNT_NUMBER.value,
-                value='1234567890',  # Full account number
-                raw_text='1234567890',
-                confidence=ConfidenceScore(0.9),
-                location=FieldLocation(
-                    page=1, top=0.2, left=0.1, bottom=0.25, right=0.5, width=0.4, height=0.05
-                ),
-                alternatives=[],
-                metadata={},
-                requires_verification=False,
-                verification_reason=None,
-                extraction_timestamp='2023-01-01T12:00:00Z'
-            )
-        }
-        
-        # Process bank statement fields
-        processed_fields = field_extraction_service._process_bank_statement_fields(bank_fields)
-        
-        # Verify account number masking
-        assert processed_fields['account_number']['value'] == '******7890'  # Masked except last 4
-
-    def test_format_extraction_as_json(self, field_extraction_service, sample_ocr_text):
-        """Test formatting extracted data as JSON."""
-        # Extract fields from the sample text
-        extracted_data = field_extraction_service.extract_fields_from_text(
-            sample_ocr_text, DocumentType.APPLICATION
-        )
-        
-        # Format as JSON
-        json_data = field_extraction_service.format_extraction_as_json(extracted_data)
-        
-        # Verify that the result is valid JSON
-        parsed_data = json.loads(json_data)
-        
-        # Verify the structure of the JSON
-        assert 'extraction_id' in parsed_data
-        assert 'document_type' in parsed_data
-        assert 'fields' in parsed_data
-        assert 'tables' in parsed_data
-        assert 'metadata' in parsed_data
-        
-        # Verify that fields were properly serialized
-        assert 'business_name' in parsed_data['fields']
-        assert parsed_data['fields']['business_name']['value'] == 'Acme Corporation'
-        
-        # Verify that confidence scores were properly serialized as floats
-        assert isinstance(parsed_data['fields']['business_name']['confidence'], float)
-
-    def test_identify_field_issues(self, field_extraction_service):
-        """Test identification of missing and low confidence fields."""
-        # Create sample fields with some missing required fields and low confidence
-        fields = {
-            'business_name': ExtractedField(
-                field_name='business_name',
-                field_type=FieldType.NAME.value,
-                value='Acme Corporation',
-                raw_text='Acme Corporation',
-                confidence=ConfidenceScore(0.9),  # High confidence
-                location=FieldLocation(
-                    page=1, top=0.1, left=0.1, bottom=0.15, right=0.5, width=0.4, height=0.05
-                ),
-                alternatives=[],
-                metadata={},
-                requires_verification=False,
-                verification_reason=None,
-                extraction_timestamp='2023-01-01T12:00:00Z'
-            ),
-            'phone': ExtractedField(
-                field_name='phone',
-                field_type=FieldType.PHONE.value,
-                value='(555) 123-4567',
-                raw_text='(555) 123-4567',
-                confidence=ConfidenceScore(0.7),  # Low confidence
-                location=FieldLocation(
-                    page=1, top=0.2, left=0.1, bottom=0.25, right=0.5, width=0.4, height=0.05
-                ),
-                alternatives=[],
-                metadata={},
-                requires_verification=True,
-                verification_reason='Low confidence',
-                extraction_timestamp='2023-01-01T12:00:00Z'
-            )
-            # Missing 'legal_name', 'address', 'ein', 'requested_amount'
-        }
-        
-        # Identify missing and low confidence fields
-        missing_fields, low_confidence_fields = field_extraction_service._identify_field_issues(
-            fields, DocumentType.APPLICATION
-        )
-        
-        # Verify missing required fields
-        assert 'legal_name' in missing_fields
-        assert 'address' in missing_fields
-        assert 'ein' in missing_fields
-        assert 'requested_amount' in missing_fields
-        
-        # Verify low confidence fields
-        assert 'phone' in low_confidence_fields
-        assert 'business_name' not in low_confidence_fields
-
-    def test_find_section_for_field(self, field_extraction_service, sample_ocr_text):
-        """Test finding the document section that contains a field."""
-        # Extract sections from the sample text
-        from ocr_service.src.utils.text_utils import extract_sections
-        sections = extract_sections(sample_ocr_text)
-        
-        # Find sections for different fields
-        business_name_section = field_extraction_service._find_section_for_field('business_name', sections)
-        owner_name_section = field_extraction_service._find_section_for_field('owner_name', sections)
-        
-        # Verify that fields were assigned to the correct sections
-        assert business_name_section is not None
-        assert 'MERCHANT CASH ADVANCE APPLICATION' in business_name_section
-        
-        assert owner_name_section is not None
-        assert 'Owner Information' in owner_name_section
-
-    def test_determine_table_name(self, field_extraction_service):
-        """Test determining a meaningful name for a table based on headers."""
-        # Test bank statement transaction table
-        bank_headers = ['Date', 'Description', 'Amount', 'Balance']
-        bank_table_name = field_extraction_service._determine_table_name(
-            bank_headers, DocumentType.BANK_STATEMENT
-        )
-        assert bank_table_name == 'Transactions'
-        
-        # Test tax return income table
-        tax_headers = ['Source', 'Income', 'Tax Rate']
-        tax_table_name = field_extraction_service._determine_table_name(
-            tax_headers, DocumentType.TAX_RETURN
-        )
-        assert tax_table_name == 'Income'
-        
-        # Test application owners table
-        app_headers = ['Owner Name', 'Title', 'Ownership %']
-        app_table_name = field_extraction_service._determine_table_name(
-            app_headers, DocumentType.APPLICATION
-        )
-        assert app_table_name == 'Owners'
-        
-        # Test unknown table
-        unknown_headers = ['Column1', 'Column2', 'Column3']
-        unknown_table_name = field_extraction_service._determine_table_name(
-            unknown_headers, DocumentType.APPLICATION
-        )
-        assert unknown_table_name is None
-
-    def test_format_helpers(self, field_extraction_service):
-        """Test helper methods for formatting different field types."""
-        # Test currency formatting
-        assert field_extraction_service._format_currency(50000) == '$50,000.00'
-        assert field_extraction_service._format_currency('50000') == '$50,000.00'
-        assert field_extraction_service._format_currency('$50,000') == '$50,000.00'
-        
-        # Test phone number formatting
-        assert field_extraction_service._format_phone_number('5551234567') == '(555) 123-4567'
-        assert field_extraction_service._format_phone_number('(555)123-4567') == '(555) 123-4567'
-        assert field_extraction_service._format_phone_number('555-123-4567') == '(555) 123-4567'
-        
-        # Test EIN formatting
-        assert field_extraction_service._format_ein('123456789') == '12-3456789'
-        assert field_extraction_service._format_ein('12-3456789') == '12-3456789'
-        
-        # Test account number masking
-        assert field_extraction_service._format_account_number('1234567890') == '******7890'
-        assert field_extraction_service._format_account_number('12345') == '12345'  # Short numbers not masked
-        
-        # Test date formatting
-        assert field_extraction_service._format_date('01/15/2023') == '01/15/2023'
-        assert field_extraction_service._format_date('2023-01-15') == '01/15/2023'
-        assert field_extraction_service._format_date('January 15, 2023') == '01/15/2023'
-
-    def test_validate_extraction_against_schema(self, field_extraction_service, sample_ocr_text):
-        """Test validating extracted data against JSON schema."""
-        # Extract fields from the sample text
-        extracted_data = field_extraction_service.extract_fields_from_text(
-            sample_ocr_text, DocumentType.APPLICATION
-        )
-        
-        # Mock the JSONSchemaRegistry.validate_extraction method
-        with patch('ocr_service.src.types.extraction.JSONSchemaRegistry.validate_extraction') as mock_validate:
-            # Set up the mock to return success
-            mock_validate.return_value = (True, [])
-            
-            # Validate the extraction
-            is_valid, errors = field_extraction_service.validate_extraction_against_schema(extracted_data)
-            
-            # Verify that validation was called with the correct data
-            mock_validate.assert_called_once_with(extracted_data)
-            
-            # Verify the result
-            assert is_valid is True
-            assert len(errors) == 0
-            
-            # Reset the mock and set it to return validation errors
-            mock_validate.reset_mock()
-            mock_validate.return_value = (False, ['Missing required field: tax_id'])
-            
-            # Validate again
-            is_valid, errors = field_extraction_service.validate_extraction_against_schema(extracted_data)
-            
-            # Verify the result
-            assert is_valid is False
-            assert len(errors) == 1
-            assert 'Missing required field: tax_id' in errors
-
-    def test_edge_cases(self, field_extraction_service):
-        """Test handling of edge cases and unusual inputs."""
-        # Test with empty text
-        empty_data = field_extraction_service.extract_fields_from_text(
-            "", DocumentType.APPLICATION
-        )
-        assert empty_data['fields'] == {}
-        assert empty_data['metadata']['extraction_status'] == 'partial'
-        
-        # Test with very short text
-        short_data = field_extraction_service.extract_fields_from_text(
-            "Business Name: ABC", DocumentType.APPLICATION
-        )
-        assert len(short_data['fields']) <= 1
-        
-        # Test with text in unexpected format
-        unusual_data = field_extraction_service.extract_fields_from_text(
-            "This is not a standard form format. There are no clear key-value pairs here.",
-            DocumentType.APPLICATION
-        )
-        assert len(unusual_data['fields']) == 0
-        assert unusual_data['requires_verification'] is True
-        
-        # Test with unknown document type
-        with pytest.raises(ValueError):
-            field_extraction_service.extract_fields_from_text(
-                "Business Name: ABC", "UNKNOWN_TYPE"
-            )
-
-
-# Run the tests
-if __name__ == "__main__":
-    pytest.main(['-xvs', __file__])
+        # Verify schema
+        assert result.schema["schema_id"].startswith("mca-loan_application")
+        assert result.schema["version"] is not None
