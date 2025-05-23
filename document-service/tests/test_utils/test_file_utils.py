@@ -2,547 +2,387 @@
 # -*- coding: utf-8 -*-
 
 """
-Unit tests for file_utils.py module.
+Unit tests for file_utils.py in the Document Service.
 
-This module contains comprehensive tests for the file handling utilities in the Document Service.
-It verifies that file operations, MIME type detection, content type validation, file size formatting,
-and temporary file management functions work correctly. These tests ensure that document processing
-and preparation for classification and storage work as expected.
-
-The tests cover:
-1. File operations and buffer handling functions
-2. MIME type detection and validation
-3. File size calculation and formatting
-4. Content type mapping for different document formats
-5. Temporary file management for document processing
-
-These tests are critical for ensuring the Document Service can properly handle various document
-types (PDF, TIFF, JPEG, PNG) as specified in the MCA Application Processing System requirements.
+This module contains tests for the file handling utilities, including:
+- MIME type detection and validation
+- File size calculation and formatting
+- Temporary file management
+- Buffer handling and conversion
+- Content type mapping for document formats
+- File hashing and unique filename generation
 """
 
 import os
 import io
-import tempfile
-import pytest
 import shutil
-import hashlib
+import tempfile
+import unittest
 from unittest import mock
 from pathlib import Path
 
 # Import the module to test
-from src.utils import file_utils
-from src.types.documents import DocumentType
-from src.types.errors import ServiceError
+from document_service.src.utils import file_utils
 
 
-# Fixtures for test files
-@pytest.fixture
-def temp_dir():
-    """Create a temporary directory for test files."""
-    temp_dir = tempfile.mkdtemp()
-    yield temp_dir
-    # Cleanup after tests
-    shutil.rmtree(temp_dir)
+class TestFileUtils(unittest.TestCase):
+    """Test cases for file_utils.py"""
 
+    def setUp(self):
+        """Set up test fixtures before each test method."""
+        # Create a temporary directory for test files
+        self.test_dir = tempfile.mkdtemp()
+        
+        # Create sample test files
+        self.pdf_content = b'%PDF-1.5\n%Test PDF content'
+        self.pdf_file = os.path.join(self.test_dir, 'test.pdf')
+        with open(self.pdf_file, 'wb') as f:
+            f.write(self.pdf_content)
+            
+        self.txt_content = b'This is a plain text file.'
+        self.txt_file = os.path.join(self.test_dir, 'test.txt')
+        with open(self.txt_file, 'wb') as f:
+            f.write(self.txt_content)
+            
+        self.jpg_content = b'\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x01\x00H\x00H\x00\x00\xff\xdb\x00C\x00\x08\x06\x06'
+        self.jpg_file = os.path.join(self.test_dir, 'test.jpg')
+        with open(self.jpg_file, 'wb') as f:
+            f.write(self.jpg_content)
+            
+        # Create a large file that exceeds the maximum size
+        self.large_content = b'X' * (file_utils.MAX_FILE_SIZE + 1000)
+        self.large_file = os.path.join(self.test_dir, 'large_file.txt')
+        with open(self.large_file, 'wb') as f:
+            f.write(self.large_content)
 
-@pytest.fixture
-def pdf_test_file(temp_dir):
-    """Create a temporary PDF test file."""
-    file_path = os.path.join(temp_dir, "test.pdf")
-    # Create a simple PDF-like content
-    with open(file_path, "wb") as f:
-        f.write(b"%PDF-1.5\nTest PDF content")
-    yield file_path
+    def tearDown(self):
+        """Tear down test fixtures after each test method."""
+        # Remove the temporary directory and its contents
+        shutil.rmtree(self.test_dir)
 
+    def test_get_mime_type_from_file_path(self):
+        """Test get_mime_type with a file path."""
+        # Mock the magic.from_file function to return a known MIME type
+        with mock.patch('magic.from_file', return_value='application/pdf'):
+            mime_type = file_utils.get_mime_type(self.pdf_file)
+            self.assertEqual(mime_type, 'application/pdf')
 
-@pytest.fixture
-def jpeg_test_file(temp_dir):
-    """Create a temporary JPEG test file."""
-    file_path = os.path.join(temp_dir, "test.jpg")
-    # Create a simple JPEG-like content
-    with open(file_path, "wb") as f:
-        f.write(b"\xff\xd8\xff\xe0\x00\x10JFIF\x00Test JPEG content")
-    yield file_path
+    def test_get_mime_type_from_bytes(self):
+        """Test get_mime_type with a bytes object."""
+        # Mock the magic.from_buffer function to return a known MIME type
+        with mock.patch('magic.from_buffer', return_value='application/pdf'):
+            mime_type = file_utils.get_mime_type(self.pdf_content)
+            self.assertEqual(mime_type, 'application/pdf')
 
+    def test_get_mime_type_from_file_object(self):
+        """Test get_mime_type with a file-like object."""
+        # Mock the magic.from_buffer function to return a known MIME type
+        with mock.patch('magic.from_buffer', return_value='application/pdf'):
+            file_obj = io.BytesIO(self.pdf_content)
+            mime_type = file_utils.get_mime_type(file_obj)
+            self.assertEqual(mime_type, 'application/pdf')
+            # Verify that the file position was reset
+            self.assertEqual(file_obj.tell(), 0)
 
-@pytest.fixture
-def png_test_file(temp_dir):
-    """Create a temporary PNG test file."""
-    file_path = os.path.join(temp_dir, "test.png")
-    # Create a simple PNG-like content
-    with open(file_path, "wb") as f:
-        f.write(b"\x89PNG\r\n\x1a\n\x00Test PNG content")
-    yield file_path
-
-
-@pytest.fixture
-def tiff_test_file(temp_dir):
-    """Create a temporary TIFF test file."""
-    file_path = os.path.join(temp_dir, "test.tiff")
-    # Create a simple TIFF-like content
-    with open(file_path, "wb") as f:
-        f.write(b"II*\x00\x08\x00\x00\x00Test TIFF content")
-    yield file_path
-
-
-@pytest.fixture
-def unsupported_test_file(temp_dir):
-    """Create a temporary unsupported file type."""
-    file_path = os.path.join(temp_dir, "test.xyz")
-    with open(file_path, "wb") as f:
-        f.write(b"Unsupported file content")
-    yield file_path
-
-
-@pytest.fixture
-def test_buffer():
-    """Create a test buffer."""
-    return b"Test buffer content"
-
-
-# Tests for file operations and buffer handling
-class TestFileOperations:
-    """Tests for file operations and buffer handling functions."""
-
-    def test_get_file_size(self, pdf_test_file):
-        """Test getting file size in bytes."""
-        size = file_utils.get_file_size(pdf_test_file)
-        assert size > 0
-        assert size == os.path.getsize(pdf_test_file)
-
-    def test_get_file_size_from_buffer(self, test_buffer):
-        """Test getting size from a buffer."""
-        size = file_utils.get_file_size_from_buffer(test_buffer)
-        assert size == len(test_buffer)
-
-    def test_read_file_to_buffer(self, pdf_test_file):
-        """Test reading a file into a buffer."""
-        buffer = file_utils.read_file_to_buffer(pdf_test_file)
-        assert isinstance(buffer, bytes)
-        with open(pdf_test_file, "rb") as f:
-            expected = f.read()
-        assert buffer == expected
-
-    def test_write_buffer_to_file(self, temp_dir, test_buffer):
-        """Test writing a buffer to a file."""
-        file_path = os.path.join(temp_dir, "buffer_test.txt")
-        file_utils.write_buffer_to_file(test_buffer, file_path)
-        assert os.path.exists(file_path)
-        with open(file_path, "rb") as f:
-            content = f.read()
-        assert content == test_buffer
-
-    def test_read_file_in_chunks(self, pdf_test_file):
-        """Test reading a file in chunks."""
-        chunks = list(file_utils.read_file_in_chunks(pdf_test_file, chunk_size=5))
-        assert len(chunks) > 0
-        # Reconstruct the file content from chunks
-        reconstructed = b"".join(chunks)
-        with open(pdf_test_file, "rb") as f:
-            expected = f.read()
-        assert reconstructed == expected
-
-    def test_copy_file(self, pdf_test_file, temp_dir):
-        """Test copying a file."""
-        dest_path = os.path.join(temp_dir, "copied_file.pdf")
-        file_utils.copy_file(pdf_test_file, dest_path)
-        assert os.path.exists(dest_path)
-        # Verify content is the same
-        with open(pdf_test_file, "rb") as f1, open(dest_path, "rb") as f2:
-            assert f1.read() == f2.read()
-
-    def test_ensure_directory_exists(self, temp_dir):
-        """Test ensuring a directory exists."""
-        new_dir = os.path.join(temp_dir, "new_directory")
-        file_utils.ensure_directory_exists(new_dir)
-        assert os.path.exists(new_dir)
-        assert os.path.isdir(new_dir)
-        # Test idempotence - should not raise an error if directory already exists
-        file_utils.ensure_directory_exists(new_dir)
-
-    def test_remove_file(self, temp_dir):
-        """Test removing a file."""
-        file_path = os.path.join(temp_dir, "to_remove.txt")
-        with open(file_path, "w") as f:
-            f.write("Test content")
-        assert os.path.exists(file_path)
-        file_utils.remove_file(file_path)
-        assert not os.path.exists(file_path)
-        # Should not raise an error if file doesn't exist
-        file_utils.remove_file(file_path)
-
-    def test_remove_directory(self, temp_dir):
-        """Test removing a directory."""
-        dir_path = os.path.join(temp_dir, "dir_to_remove")
-        os.makedirs(dir_path)
-        nested_dir = os.path.join(dir_path, "nested")
-        os.makedirs(nested_dir)
-        with open(os.path.join(nested_dir, "test.txt"), "w") as f:
-            f.write("Test content")
-
-        assert os.path.exists(dir_path)
-        file_utils.remove_directory(dir_path)
-        assert not os.path.exists(dir_path)
-
-        # Test non-recursive removal
-        empty_dir = os.path.join(temp_dir, "empty_dir")
-        os.makedirs(empty_dir)
-        file_utils.remove_directory(empty_dir, recursive=False)
-        assert not os.path.exists(empty_dir)
-
-    def test_buffer_to_stream(self, test_buffer):
-        """Test converting a buffer to a BytesIO stream."""
-        stream = file_utils.buffer_to_stream(test_buffer)
-        assert isinstance(stream, io.BytesIO)
-        assert stream.getvalue() == test_buffer
-
-    def test_stream_to_buffer(self):
-        """Test converting a BytesIO stream to a buffer."""
-        test_data = b"Test stream data"
-        stream = io.BytesIO(test_data)
-        # Move the position to simulate some operations
-        stream.seek(5)
-        buffer = file_utils.stream_to_buffer(stream)
-        assert buffer == test_data
-        # Verify the stream position is restored
-        assert stream.tell() == 5
-
-    def test_calculate_file_hash(self, pdf_test_file):
-        """Test calculating file hash."""
-        # Calculate expected hash
-        with open(pdf_test_file, "rb") as f:
-            content = f.read()
-        expected_hash = hashlib.sha256(content).hexdigest()
-
-        # Test the function
-        file_hash = file_utils.calculate_file_hash(pdf_test_file)
-        assert file_hash == expected_hash
-
-        # Test with different algorithms
-        md5_hash = file_utils.calculate_file_hash(pdf_test_file, algorithm="md5")
-        assert md5_hash == hashlib.md5(content).hexdigest()
-
-    def test_calculate_buffer_hash(self, test_buffer):
-        """Test calculating buffer hash."""
-        expected_hash = hashlib.sha256(test_buffer).hexdigest()
-        buffer_hash = file_utils.calculate_buffer_hash(test_buffer)
-        assert buffer_hash == expected_hash
-
-        # Test with different algorithms
-        md5_hash = file_utils.calculate_buffer_hash(test_buffer, algorithm="md5")
-        assert md5_hash == hashlib.md5(test_buffer).hexdigest()
-
-    def test_get_file_metadata(self, pdf_test_file):
-        """Test getting file metadata."""
-        metadata = file_utils.get_file_metadata(pdf_test_file)
-        assert "file_name" in metadata
-        assert "file_path" in metadata
-        assert "file_size" in metadata
-        assert "file_size_formatted" in metadata
-        assert "mime_type" in metadata
-        assert "file_extension" in metadata
-        assert "created_at" in metadata
-        assert "modified_at" in metadata
-        assert "accessed_at" in metadata
-
-        assert metadata["file_name"] == os.path.basename(pdf_test_file)
-        assert metadata["file_path"] == pdf_test_file
-        assert metadata["file_size"] > 0
-        assert metadata["file_extension"] == ".pdf"
-
-    def test_file_operation_decorator_error_handling(self):
-        """Test error handling in file operation decorator."""
-        # Create a function that will raise an exception
-        @file_utils.file_operation_decorator
-        def failing_function():
-            raise IOError("Test error")
-
-        # The decorator should catch the exception and raise a ServiceError
-        with pytest.raises(ServiceError) as excinfo:
-            failing_function()
-        assert "Test error" in str(excinfo.value)
-
-
-# Tests for MIME type detection and validation
-class TestMimeTypeOperations:
-    """Tests for MIME type detection and validation functions."""
-
-    def test_get_mime_type(self, pdf_test_file, jpeg_test_file, png_test_file, tiff_test_file):
-        """Test MIME type detection from file path."""
-        # Test with different file types
-        assert file_utils.get_mime_type(pdf_test_file) == "application/pdf"
-        assert file_utils.get_mime_type(jpeg_test_file) == "image/jpeg"
-        assert file_utils.get_mime_type(png_test_file) == "image/png"
-        assert file_utils.get_mime_type(tiff_test_file) == "image/tiff"
-
-    def test_get_mime_type_fallback(self, pdf_test_file):
-        """Test MIME type detection fallback when python-magic is not available."""
-        # Mock ImportError for python-magic
-        with mock.patch.dict("sys.modules", {"magic": None}):
-            with mock.patch("importlib.import_module", side_effect=ImportError):
-                mime_type = file_utils.get_mime_type(pdf_test_file)
-                assert mime_type == "application/pdf"
-
-    def test_get_mime_type_from_buffer(self, test_buffer):
-        """Test MIME type detection from buffer."""
-        # This is harder to test without actual file content
-        # Just verify it returns something and doesn't crash
-        mime_type = file_utils.get_mime_type_from_buffer(test_buffer)
-        assert isinstance(mime_type, str)
-
-    def test_get_mime_type_from_filename(self):
-        """Test MIME type detection from filename."""
-        assert file_utils.get_mime_type_from_filename("test.pdf") == "application/pdf"
-        assert file_utils.get_mime_type_from_filename("test.jpg") == "image/jpeg"
-        assert file_utils.get_mime_type_from_filename("test.png") == "image/png"
-        assert file_utils.get_mime_type_from_filename("test.tiff") == "image/tiff"
-        assert file_utils.get_mime_type_from_filename("test.unknown") == "application/octet-stream"
+    def test_get_mime_type_error(self):
+        """Test get_mime_type with an error condition."""
+        # Mock the magic.from_file function to raise an exception
+        with mock.patch('magic.from_file', side_effect=Exception('Test error')):
+            with self.assertRaises(ValueError):
+                file_utils.get_mime_type(self.pdf_file)
 
     def test_is_supported_mime_type(self):
-        """Test checking if a MIME type is supported."""
-        assert file_utils.is_supported_mime_type("application/pdf")
-        assert file_utils.is_supported_mime_type("image/jpeg")
-        assert file_utils.is_supported_mime_type("image/png")
-        assert file_utils.is_supported_mime_type("image/tiff")
-        assert not file_utils.is_supported_mime_type("text/plain")
-        assert not file_utils.is_supported_mime_type("application/zip")
+        """Test is_supported_mime_type function."""
+        # Test with supported MIME types
+        self.assertTrue(file_utils.is_supported_mime_type('application/pdf'))
+        self.assertTrue(file_utils.is_supported_mime_type('image/jpeg'))
+        self.assertTrue(file_utils.is_supported_mime_type('image/png'))
+        
+        # Test with unsupported MIME types
+        self.assertFalse(file_utils.is_supported_mime_type('application/x-executable'))
+        self.assertFalse(file_utils.is_supported_mime_type('video/mp4'))
+        self.assertFalse(file_utils.is_supported_mime_type('audio/mpeg'))
 
-    def test_is_supported_file_extension(self):
-        """Test checking if a file extension is supported."""
-        assert file_utils.is_supported_file_extension("test.pdf")
-        assert file_utils.is_supported_file_extension("test.jpg")
-        assert file_utils.is_supported_file_extension("test.jpeg")
-        assert file_utils.is_supported_file_extension("test.png")
-        assert file_utils.is_supported_file_extension("test.tiff")
-        assert file_utils.is_supported_file_extension("test.tif")
-        assert not file_utils.is_supported_file_extension("test.txt")
-        assert not file_utils.is_supported_file_extension("test.docx")
+    def test_get_extension_for_mime_type(self):
+        """Test get_extension_for_mime_type function."""
+        # Test with supported MIME types
+        self.assertEqual(file_utils.get_extension_for_mime_type('application/pdf'), '.pdf')
+        self.assertEqual(file_utils.get_extension_for_mime_type('image/jpeg'), '.jpg')
+        self.assertEqual(file_utils.get_extension_for_mime_type('image/png'), '.png')
+        
+        # Test with unsupported MIME types
+        self.assertIsNone(file_utils.get_extension_for_mime_type('application/x-executable'))
+        self.assertIsNone(file_utils.get_extension_for_mime_type('video/mp4'))
 
-    def test_get_file_extension(self):
-        """Test getting file extension from path."""
-        assert file_utils.get_file_extension("/path/to/file.pdf") == ".pdf"
-        assert file_utils.get_file_extension("file.jpg") == ".jpg"
-        assert file_utils.get_file_extension("file") == ""
-        assert file_utils.get_file_extension("/path/to/file.with.multiple.dots.png") == ".png"
+    def test_get_mime_type_for_extension(self):
+        """Test get_mime_type_for_extension function."""
+        # Test with supported extensions
+        self.assertEqual(file_utils.get_mime_type_for_extension('.pdf'), 'application/pdf')
+        self.assertEqual(file_utils.get_mime_type_for_extension('pdf'), 'application/pdf')
+        self.assertEqual(file_utils.get_mime_type_for_extension('.jpg'), 'image/jpeg')
+        self.assertEqual(file_utils.get_mime_type_for_extension('jpg'), 'image/jpeg')
+        
+        # Test with unsupported extensions
+        self.assertIsNone(file_utils.get_mime_type_for_extension('.exe'))
+        self.assertIsNone(file_utils.get_mime_type_for_extension('mp4'))
 
-    def test_get_file_extension_from_mime_type(self):
-        """Test getting file extension from MIME type."""
-        assert file_utils.get_file_extension_from_mime_type("application/pdf") == ".pdf"
-        assert file_utils.get_file_extension_from_mime_type("image/jpeg") == ".jpg"
-        assert file_utils.get_file_extension_from_mime_type("image/png") == ".png"
-        assert file_utils.get_file_extension_from_mime_type("image/tiff") == ".tiff"
-        # Test with unsupported MIME type
-        ext = file_utils.get_file_extension_from_mime_type("text/plain")
-        # This might return .txt or None depending on the system's mimetypes database
-        assert ext is None or ext.startswith(".")
+    def test_validate_file_type_valid(self):
+        """Test validate_file_type with valid file types."""
+        # Mock get_mime_type to return a supported MIME type
+        with mock.patch('document_service.src.utils.file_utils.get_mime_type', return_value='application/pdf'):
+            is_valid, mime_type = file_utils.validate_file_type(self.pdf_file)
+            self.assertTrue(is_valid)
+            self.assertEqual(mime_type, 'application/pdf')
 
-    def test_is_valid_document_for_type(self, pdf_test_file, jpeg_test_file, tiff_test_file):
-        """Test validating document type compatibility."""
-        # APPLICATION documents should only be PDF
-        assert file_utils.is_valid_document_for_type(pdf_test_file, DocumentType.APPLICATION.value)
-        assert not file_utils.is_valid_document_for_type(jpeg_test_file, DocumentType.APPLICATION.value)
+    def test_validate_file_type_invalid(self):
+        """Test validate_file_type with invalid file types."""
+        # Mock get_mime_type to return an unsupported MIME type
+        with mock.patch('document_service.src.utils.file_utils.get_mime_type', return_value='application/x-executable'):
+            is_valid, mime_type = file_utils.validate_file_type(self.pdf_file)
+            self.assertFalse(is_valid)
+            self.assertEqual(mime_type, 'application/x-executable')
 
-        # TAX_RETURN documents can be PDF or TIFF
-        assert file_utils.is_valid_document_for_type(pdf_test_file, DocumentType.TAX_RETURN.value)
-        assert file_utils.is_valid_document_for_type(tiff_test_file, DocumentType.TAX_RETURN.value)
-        assert not file_utils.is_valid_document_for_type(jpeg_test_file, DocumentType.TAX_RETURN.value)
+    def test_validate_file_type_error(self):
+        """Test validate_file_type with an error condition."""
+        # Mock get_mime_type to raise a ValueError
+        with mock.patch('document_service.src.utils.file_utils.get_mime_type', side_effect=ValueError('Test error')):
+            is_valid, mime_type = file_utils.validate_file_type(self.pdf_file)
+            self.assertFalse(is_valid)
+            self.assertEqual(mime_type, "")
 
-        # BANK_STATEMENT, PAY_STUB, and ID_DOCUMENT can be any supported format
-        assert file_utils.is_valid_document_for_type(pdf_test_file, DocumentType.BANK_STATEMENT.value)
-        assert file_utils.is_valid_document_for_type(jpeg_test_file, DocumentType.BANK_STATEMENT.value)
-        assert file_utils.is_valid_document_for_type(tiff_test_file, DocumentType.BANK_STATEMENT.value)
+    def test_calculate_file_size_from_path(self):
+        """Test calculate_file_size with a file path."""
+        # Create a file with known size
+        test_content = b'X' * 1024  # 1KB
+        test_file = os.path.join(self.test_dir, 'size_test.txt')
+        with open(test_file, 'wb') as f:
+            f.write(test_content)
+            
+        size = file_utils.calculate_file_size(test_file)
+        self.assertEqual(size, 1024)
 
-        # Test with invalid document type
-        assert not file_utils.is_valid_document_for_type(pdf_test_file, "invalid_type")
+    def test_calculate_file_size_from_bytes(self):
+        """Test calculate_file_size with a bytes object."""
+        test_content = b'X' * 2048  # 2KB
+        size = file_utils.calculate_file_size(test_content)
+        self.assertEqual(size, 2048)
 
+    def test_calculate_file_size_from_file_object(self):
+        """Test calculate_file_size with a file-like object."""
+        test_content = b'X' * 4096  # 4KB
+        file_obj = io.BytesIO(test_content)
+        size = file_utils.calculate_file_size(file_obj)
+        self.assertEqual(size, 4096)
+        # Verify that the file position was reset
+        self.assertEqual(file_obj.tell(), 0)
 
-# Tests for file size formatting
-class TestFileSizeFormatting:
-    """Tests for file size formatting functions."""
+    def test_calculate_file_size_error(self):
+        """Test calculate_file_size with an error condition."""
+        # Test with a non-existent file
+        non_existent_file = os.path.join(self.test_dir, 'non_existent.txt')
+        with self.assertRaises(ValueError):
+            file_utils.calculate_file_size(non_existent_file)
 
     def test_format_file_size(self):
-        """Test formatting file size in human-readable format."""
-        assert file_utils.format_file_size(0) == "0 B"
-        assert file_utils.format_file_size(1024) == "1 KB"
-        assert file_utils.format_file_size(1536) == "1.5 KB"
-        assert file_utils.format_file_size(1048576) == "1 MB"
-        assert file_utils.format_file_size(1073741824) == "1 GB"
-        assert file_utils.format_file_size(1099511627776) == "1 TB"
+        """Test format_file_size function."""
+        # Test with various file sizes
+        self.assertEqual(file_utils.format_file_size(0), "0 bytes")
+        self.assertEqual(file_utils.format_file_size(1023), "1023.00 bytes")
+        self.assertEqual(file_utils.format_file_size(1024), "1.00 KB")
+        self.assertEqual(file_utils.format_file_size(1536), "1.50 KB")
+        self.assertEqual(file_utils.format_file_size(1048576), "1.00 MB")
+        self.assertEqual(file_utils.format_file_size(1073741824), "1.00 GB")
 
-        # Test with different decimal places
-        assert file_utils.format_file_size(1500, decimal_places=0) == "1 KB"
-        assert file_utils.format_file_size(1500, decimal_places=1) == "1.5 KB"
-        assert file_utils.format_file_size(1500, decimal_places=3) == "1.465 KB"
+    def test_is_file_size_valid(self):
+        """Test is_file_size_valid function."""
+        # Test with a file smaller than the maximum size
+        small_content = b'X' * 1024  # 1KB
+        small_file = os.path.join(self.test_dir, 'small_file.txt')
+        with open(small_file, 'wb') as f:
+            f.write(small_content)
+            
+        self.assertTrue(file_utils.is_file_size_valid(small_file))
+        self.assertTrue(file_utils.is_file_size_valid(small_content))
+        
+        # Test with a file larger than the maximum size
+        self.assertFalse(file_utils.is_file_size_valid(self.large_file))
+        self.assertFalse(file_utils.is_file_size_valid(self.large_content))
 
-    def test_convert_size_to_bytes(self):
-        """Test converting size from specific unit to bytes."""
-        assert file_utils.convert_size_to_bytes(1, "B") == 1
-        assert file_utils.convert_size_to_bytes(1, "KB") == 1024
-        assert file_utils.convert_size_to_bytes(1.5, "KB") == 1536
-        assert file_utils.convert_size_to_bytes(1, "MB") == 1048576
-        assert file_utils.convert_size_to_bytes(1, "GB") == 1073741824
-        assert file_utils.convert_size_to_bytes(1, "TB") == 1099511627776
+    def test_is_file_size_valid_error(self):
+        """Test is_file_size_valid with an error condition."""
+        # Mock calculate_file_size to raise a ValueError
+        with mock.patch('document_service.src.utils.file_utils.calculate_file_size', side_effect=ValueError('Test error')):
+            self.assertFalse(file_utils.is_file_size_valid(self.pdf_file))
 
-        # Test with invalid unit
-        with pytest.raises(ValueError):
-            file_utils.convert_size_to_bytes(1, "XB")
+    def test_calculate_file_hash(self):
+        """Test calculate_file_hash function."""
+        # Create a file with known content
+        test_content = b'test content for hashing'
+        test_file = os.path.join(self.test_dir, 'hash_test.txt')
+        with open(test_file, 'wb') as f:
+            f.write(test_content)
+            
+        # Calculate expected hash
+        import hashlib
+        expected_hash = hashlib.sha256(test_content).hexdigest()
+        
+        # Test with file path
+        hash_from_path = file_utils.calculate_file_hash(test_file)
+        self.assertEqual(hash_from_path, expected_hash)
+        
+        # Test with bytes
+        hash_from_bytes = file_utils.calculate_file_hash(test_content)
+        self.assertEqual(hash_from_bytes, expected_hash)
+        
+        # Test with file-like object
+        file_obj = io.BytesIO(test_content)
+        hash_from_obj = file_utils.calculate_file_hash(file_obj)
+        self.assertEqual(hash_from_obj, expected_hash)
+        # Verify that the file position was reset
+        self.assertEqual(file_obj.tell(), 0)
+        
+        # Test with different algorithm
+        md5_hash = file_utils.calculate_file_hash(test_content, algorithm='md5')
+        expected_md5 = hashlib.md5(test_content).hexdigest()
+        self.assertEqual(md5_hash, expected_md5)
 
-
-# Tests for temporary file management
-class TestTempFileManagement:
-    """Tests for temporary file management functions."""
+    def test_calculate_file_hash_error(self):
+        """Test calculate_file_hash with an error condition."""
+        # Test with a non-existent file
+        non_existent_file = os.path.join(self.test_dir, 'non_existent.txt')
+        with self.assertRaises(ValueError):
+            file_utils.calculate_file_hash(non_existent_file)
+            
+        # Test with an invalid algorithm
+        with self.assertRaises(ValueError):
+            file_utils.calculate_file_hash(self.pdf_content, algorithm='invalid_algorithm')
 
     def test_create_temp_file(self):
-        """Test creating a temporary file."""
-        path, file_obj = file_utils.create_temp_file(suffix=".txt")
-        try:
-            assert os.path.exists(path)
-            assert path.endswith(".txt")
-            assert file_obj.mode == "wb"
-            # Write some data to the file
-            file_obj.write(b"Test content")
-            file_obj.close()
-            # Verify the content was written
-            with open(path, "rb") as f:
-                assert f.read() == b"Test content"
-        finally:
-            # Clean up
-            if os.path.exists(path):
-                os.remove(path)
-
-    def test_create_named_temp_file(self):
-        """Test creating a named temporary file."""
-        temp_file = file_utils.create_named_temp_file(suffix=".txt")
-        try:
-            assert os.path.exists(temp_file.name)
-            assert temp_file.name.endswith(".txt")
-            # Write some data to the file
-            temp_file.write(b"Test content")
-            temp_file.flush()
-            # Verify the content was written
-            with open(temp_file.name, "rb") as f:
-                assert f.read() == b"Test content"
-        finally:
-            # Clean up
-            temp_file.close()
+        """Test create_temp_file context manager."""
+        # Test with string content
+        with file_utils.create_temp_file("test content") as temp_file:
+            self.assertTrue(os.path.exists(temp_file))
+            with open(temp_file, 'r') as f:
+                content = f.read()
+                self.assertEqual(content, "test content")
+                
+        # Verify that the file was deleted after the context
+        self.assertFalse(os.path.exists(temp_file))
+        
+        # Test with bytes content and suffix
+        with file_utils.create_temp_file(b"test bytes", suffix=".txt") as temp_file:
+            self.assertTrue(os.path.exists(temp_file))
+            self.assertTrue(temp_file.endswith(".txt"))
+            with open(temp_file, 'rb') as f:
+                content = f.read()
+                self.assertEqual(content, b"test bytes")
+                
+        # Verify that the file was deleted after the context
+        self.assertFalse(os.path.exists(temp_file))
 
     def test_create_temp_directory(self):
-        """Test creating a temporary directory."""
-        dir_path = file_utils.create_temp_directory()
-        try:
-            assert os.path.exists(dir_path)
-            assert os.path.isdir(dir_path)
-            # Create a file in the directory
-            test_file = os.path.join(dir_path, "test.txt")
-            with open(test_file, "w") as f:
-                f.write("Test content")
-            assert os.path.exists(test_file)
-        finally:
-            # Clean up
-            if os.path.exists(dir_path):
-                shutil.rmtree(dir_path)
-
-    def test_temp_file_manager(self):
-        """Test TempFileManager context manager."""
-        with file_utils.TempFileManager(suffix=".txt") as manager:
-            # Create a temporary file
-            file_path = manager.create_temp_file(b"Test content")
-            assert os.path.exists(file_path)
-            assert file_path.endswith(".txt")
-            # Verify the content was written
-            with open(file_path, "rb") as f:
-                assert f.read() == b"Test content"
-
-            # Create a temporary directory
-            dir_path = manager.create_temp_directory()
-            assert os.path.exists(dir_path)
-            assert os.path.isdir(dir_path)
-
-            # Remember paths for checking cleanup
-            temp_file_path = file_path
-            temp_dir_path = dir_path
-
-        # After the context manager exits, files should be cleaned up
-        assert not os.path.exists(temp_file_path)
-        assert not os.path.exists(temp_dir_path)
-
-    def test_temp_file_manager_cleanup(self):
-        """Test TempFileManager cleanup method."""
-        manager = file_utils.TempFileManager()
-        file_path = manager.create_temp_file()
-        dir_path = manager.create_temp_directory()
-
-        assert os.path.exists(file_path)
-        assert os.path.exists(dir_path)
-
-        # Manually call cleanup
-        manager.cleanup()
-
-        assert not os.path.exists(file_path)
-        assert not os.path.exists(dir_path)
-
-    def test_spooled_temp_file_manager(self):
-        """Test SpooledTempFileManager context manager."""
-        with file_utils.SpooledTempFileManager(max_size=1024) as manager:
-            # Create a spooled temporary file
-            temp_file = manager.create_spooled_temp_file()
-            assert temp_file is not None
-
-            # Write some data to the file
-            temp_file.write(b"Test content")
-            temp_file.flush()
-
-            # Verify the content was written
-            temp_file.seek(0)
-            assert temp_file.read() == b"Test content"
-
-            # Remember the file for checking cleanup
-            spooled_file = temp_file
-
-        # After the context manager exits, the file should be closed
-        with pytest.raises(ValueError):
-            # This should raise an error because the file is closed
-            spooled_file.write(b"More content")
-
-    def test_get_document_page_count(self, pdf_test_file, jpeg_test_file):
-        """Test getting document page count."""
-        # Mock PyPDF2 for PDF page count
-        with mock.patch("src.utils.file_utils.PdfReader") as mock_pdf_reader:
-            mock_pdf_reader.return_value.pages = [None, None, None]  # 3 pages
-            page_count = file_utils.get_document_page_count(pdf_test_file)
-            assert page_count == 3
-
-        # For JPEG, it should return 1
-        assert file_utils.get_document_page_count(jpeg_test_file) == 1
-
-    def test_split_pdf_into_pages(self, pdf_test_file, temp_dir):
-        """Test splitting PDF into pages."""
-        # Mock PyPDF2 for PDF splitting
-        with mock.patch("src.utils.file_utils.PdfReader") as mock_pdf_reader, \
-             mock.patch("src.utils.file_utils.PdfWriter") as mock_pdf_writer:
-            # Mock 3 pages in the PDF
-            mock_pdf_reader.return_value.pages = [mock.MagicMock(), mock.MagicMock(), mock.MagicMock()]
+        """Test create_temp_directory context manager."""
+        with file_utils.create_temp_directory() as temp_dir:
+            self.assertTrue(os.path.exists(temp_dir))
+            self.assertTrue(os.path.isdir(temp_dir))
             
-            # Call the function
-            output_dir = os.path.join(temp_dir, "pdf_pages")
-            page_paths = file_utils.split_pdf_into_pages(pdf_test_file, output_dir)
+            # Create a file in the temporary directory
+            test_file = os.path.join(temp_dir, 'test.txt')
+            with open(test_file, 'w') as f:
+                f.write("test content")
+                
+            self.assertTrue(os.path.exists(test_file))
             
-            # Verify the results
-            assert len(page_paths) == 3
-            for i, path in enumerate(page_paths):
-                assert path == os.path.join(output_dir, f"page_{i + 1}.pdf")
+        # Verify that the directory and its contents were deleted after the context
+        self.assertFalse(os.path.exists(temp_dir))
 
-    def test_create_document_metadata(self, pdf_test_file):
-        """Test creating document metadata."""
-        metadata = file_utils.create_document_metadata(pdf_test_file)
-        assert "id" in metadata
-        assert "filename" in metadata
-        assert "size" in metadata
-        assert "mime_type" in metadata
-        assert "created_at" in metadata
-        assert "updated_at" in metadata
-        assert "checksum" in metadata
+    def test_ensure_directory_exists(self):
+        """Test ensure_directory_exists function."""
+        # Test with a non-existent directory
+        test_dir = os.path.join(self.test_dir, 'new_directory')
+        self.assertFalse(os.path.exists(test_dir))
         
-        assert metadata["filename"] == os.path.basename(pdf_test_file)
-        assert metadata["mime_type"] == "application/pdf"
-        assert metadata["size"] > 0
+        file_utils.ensure_directory_exists(test_dir)
+        self.assertTrue(os.path.exists(test_dir))
+        self.assertTrue(os.path.isdir(test_dir))
+        
+        # Test with an existing directory (should not raise an error)
+        file_utils.ensure_directory_exists(test_dir)
+        self.assertTrue(os.path.exists(test_dir))
+        
+        # Test with nested directories
+        nested_dir = os.path.join(self.test_dir, 'parent/child/grandchild')
+        self.assertFalse(os.path.exists(nested_dir))
+        
+        file_utils.ensure_directory_exists(nested_dir)
+        self.assertTrue(os.path.exists(nested_dir))
+        self.assertTrue(os.path.isdir(nested_dir))
+
+    def test_get_document_category_for_mime_type(self):
+        """Test get_document_category_for_mime_type function."""
+        # Test with MIME types that have categories
+        self.assertEqual(file_utils.get_document_category_for_mime_type('application/pdf'), 'loan_application')
+        self.assertEqual(file_utils.get_document_category_for_mime_type('image/jpeg'), 'bank_statement')
+        
+        # Test with a MIME type that doesn't have a specific category
+        self.assertIsNone(file_utils.get_document_category_for_mime_type('application/x-executable'))
+
+    def test_bytes_to_file_and_file_to_bytes(self):
+        """Test bytes_to_file and file_to_bytes functions."""
+        # Test bytes_to_file
+        test_content = b"test content for conversion"
+        test_file = os.path.join(self.test_dir, 'conversion_test.txt')
+        
+        file_utils.bytes_to_file(test_content, test_file)
+        self.assertTrue(os.path.exists(test_file))
+        
+        # Test file_to_bytes
+        content = file_utils.file_to_bytes(test_file)
+        self.assertEqual(content, test_content)
+        
+        # Test with nested directory structure
+        nested_file = os.path.join(self.test_dir, 'nested/path/file.txt')
+        file_utils.bytes_to_file(test_content, nested_file)
+        self.assertTrue(os.path.exists(nested_file))
+        
+        content = file_utils.file_to_bytes(nested_file)
+        self.assertEqual(content, test_content)
+
+    def test_get_safe_filename(self):
+        """Test get_safe_filename function."""
+        # Test with a safe filename
+        safe_name = "safe_filename.txt"
+        result = file_utils.get_safe_filename(safe_name)
+        self.assertEqual(result, safe_name)
+        
+        # Test with unsafe characters
+        unsafe_name = "unsafe/file:name?.txt"
+        result = file_utils.get_safe_filename(unsafe_name)
+        self.assertEqual(result, "unsafe_file_name_.txt")
+        
+        # Test with a very long filename
+        long_name = "a" * 300 + ".txt"
+        result = file_utils.get_safe_filename(long_name)
+        self.assertEqual(len(result), 255)
+        self.assertTrue(result.endswith(".txt"))
+
+    def test_generate_unique_filename(self):
+        """Test generate_unique_filename function."""
+        # Test with a filename and content
+        original_name = "test_file.txt"
+        content = b"test content for unique filename"
+        
+        # Mock calculate_file_hash to return a known hash
+        with mock.patch('document_service.src.utils.file_utils.calculate_file_hash', return_value="abcdef1234567890"):
+            unique_name = file_utils.generate_unique_filename(original_name, content)
+            self.assertEqual(unique_name, "test_file_abcdef12.txt")
+            
+        # Test with unsafe characters in the filename
+        unsafe_name = "unsafe/file:name?.txt"
+        with mock.patch('document_service.src.utils.file_utils.calculate_file_hash', return_value="abcdef1234567890"):
+            unique_name = file_utils.generate_unique_filename(unsafe_name, content)
+            self.assertEqual(unique_name, "unsafe_file_name__abcdef12.txt")
+
+
+if __name__ == '__main__':
+    unittest.main()
