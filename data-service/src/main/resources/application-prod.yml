@@ -1,190 +1,236 @@
 # ===============================
-# PRODUCTION ENVIRONMENT CONFIGURATION
+# DATA SERVICE - PRODUCTION CONFIGURATION
 # ===============================
 
-# Application configuration
+# This file contains production-specific configurations that override the base application.yml settings
+# It is automatically loaded when the application is run with the 'prod' profile
+# e.g., java -jar app.jar --spring.profiles.active=prod
+
+# ===============================
+# SERVER CONFIGURATION
+# ===============================
+server:
+  port: ${SERVER_PORT:8080}
+  error:
+    include-message: never
+    include-binding-errors: never
+    include-stacktrace: never
+    include-exception: false
+  compression:
+    enabled: true
+    mime-types: application/json,application/xml,text/html,text/xml,text/plain
+    min-response-size: 1024
+  http2:
+    enabled: true
+  ssl:
+    enabled: true
+    key-store: ${SERVER_SSL_KEY_STORE}
+    key-store-password: ${SERVER_SSL_KEY_STORE_PASSWORD}
+    key-store-type: PKCS12
+    key-alias: mca-data-service
+
+# ===============================
+# SPRING CONFIGURATION
+# ===============================
 spring:
+  # Application name
   application:
     name: mca-data-service
   
-  # Database configuration with 2 read replicas
+  # Database configuration - Production with 2 read replicas
   datasource:
-    url: jdbc:postgresql://mca-postgres-primary.production.svc.cluster.local:5432/mca_db
-    username: ${DB_USERNAME}
-    password: ${DB_PASSWORD}
+    url: ${SPRING_DATASOURCE_URL}
+    username: ${SPRING_DATASOURCE_USERNAME}
+    password: ${SPRING_DATASOURCE_PASSWORD}
     driver-class-name: org.postgresql.Driver
-    # Connection pooling optimized for production workloads
     hikari:
-      maximum-pool-size: 20
-      minimum-idle: 5
-      idle-timeout: 120000
-      connection-timeout: 30000
+      connection-timeout: 10000
+      maximum-pool-size: 50
+      minimum-idle: 10
+      idle-timeout: 300000
       max-lifetime: 1800000
-    # Read replica configuration
-    replica:
-      enabled: true
-      nodes:
-        - url: jdbc:postgresql://mca-postgres-replica-1.production.svc.cluster.local:5432/mca_db
-          username: ${DB_READONLY_USERNAME}
-          password: ${DB_READONLY_PASSWORD}
-        - url: jdbc:postgresql://mca-postgres-replica-2.production.svc.cluster.local:5432/mca_db
-          username: ${DB_READONLY_USERNAME}
-          password: ${DB_READONLY_PASSWORD}
+      auto-commit: false
+      pool-name: MCAHikariCP-Prod
+      # Read replica configuration
+      read-only-replicas: true
+      replica-urls: ${SPRING_DATASOURCE_REPLICA_URLS}
   
-  # JPA configuration
+  # JPA/Hibernate configuration
   jpa:
     hibernate:
       ddl-auto: validate
+    show-sql: false
     properties:
       hibernate:
-        dialect: org.hibernate.dialect.PostgreSQLDialect
         format_sql: false
-        show_sql: false
-        use_sql_comments: false
-        jdbc.batch_size: 50
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        jdbc:
+          time_zone: UTC
+        # Performance optimizations
+        jdbc.batch_size: 100
         order_inserts: true
         order_updates: true
-    open-in-view: false
+        connection.provider_disables_autocommit: true
+        query.in_clause_parameter_padding: true
+        query.fail_on_pagination_over_collection_fetch: true
+        cache:
+          use_second_level_cache: true
+          use_query_cache: true
+          region.factory_class: org.hibernate.cache.jcache.JCacheRegionFactory
   
   # Flyway migration configuration
   flyway:
     enabled: true
     baseline-on-migrate: true
     locations: classpath:db/migrations
-    table: schema_version
+    table: flyway_schema_history
     validate-on-migrate: true
+    out-of-order: false
   
-  # RabbitMQ configuration with TLS and client certificate authentication
+  # RabbitMQ configuration - Production with TLS
   rabbitmq:
-    host: mca-rabbitmq.production.svc.cluster.local
-    port: 5671
-    username: ${RABBITMQ_USERNAME}
-    password: ${RABBITMQ_PASSWORD}
-    virtual-host: mca
+    host: ${SPRING_RABBITMQ_HOST}
+    port: ${SPRING_RABBITMQ_PORT:5671}
+    username: ${SPRING_RABBITMQ_USERNAME}
+    password: ${SPRING_RABBITMQ_PASSWORD}
+    virtual-host: ${SPRING_RABBITMQ_VIRTUAL_HOST:/}
     ssl:
       enabled: true
+      algorithm: TLSv1.3
+      validate-server-certificate: true
+      verify-hostname: true
       key-store: ${RABBITMQ_KEYSTORE_LOCATION}
       key-store-password: ${RABBITMQ_KEYSTORE_PASSWORD}
       trust-store: ${RABBITMQ_TRUSTSTORE_LOCATION}
       trust-store-password: ${RABBITMQ_TRUSTSTORE_PASSWORD}
-      algorithm: TLSv1.3
-      verify-hostname: true
     connection-timeout: 5000
+    requested-heartbeat: 30
     template:
-      receive-timeout: 10000
-      reply-timeout: 10000
+      retry:
+        enabled: true
+        initial-interval: 1000
+        max-attempts: 5
+        max-interval: 10000
+        multiplier: 2.0
     listener:
       simple:
-        concurrency: 5
-        max-concurrency: 10
-        prefetch: 10
+        concurrency: 10
+        max-concurrency: 20
+        prefetch: 1
         default-requeue-rejected: false
         retry:
           enabled: true
           initial-interval: 1000
-          max-attempts: 3
+          max-attempts: 5
           max-interval: 10000
           multiplier: 2.0
   
-  # Redis cluster configuration
+  # Redis configuration - Production cluster
   redis:
-    cluster:
-      nodes:
-        - mca-redis-0.production.svc.cluster.local:6379
-        - mca-redis-1.production.svc.cluster.local:6379
-        - mca-redis-2.production.svc.cluster.local:6379
-    password: ${REDIS_PASSWORD}
+    host: ${SPRING_REDIS_HOST}
+    port: ${SPRING_REDIS_PORT:6379}
+    password: ${SPRING_REDIS_PASSWORD}
     ssl: true
-    timeout: 5000
-    connect-timeout: 5000
-    # Cache TTL settings
-    cache:
-      application-data:
-        ttl: 900  # 15 minutes in seconds
-      user-sessions:
-        ttl: 86400  # 24 hours in seconds
-  
-  # S3 bucket configuration with strict security settings
-  cloud:
-    aws:
-      s3:
-        bucket: mca-documents-production
-        region: us-east-1
-        endpoint: https://s3.amazonaws.com
-        access-key: ${AWS_ACCESS_KEY}
-        secret-key: ${AWS_SECRET_KEY}
-        encryption:
-          enabled: true
-          type: AES256
-  
-  # Security configuration
+    timeout: 2000
+    cluster:
+      enabled: true
+      nodes: ${SPRING_REDIS_CLUSTER_NODES}
+    lettuce:
+      pool:
+        max-active: 50
+        max-idle: 20
+        min-idle: 10
+        max-wait: -1ms
+      shutdown-timeout: 200ms
+
+# ===============================
+# APPLICATION-SPECIFIC CONFIGURATION
+# ===============================
+application:
+  # Security Configuration
   security:
     jwt:
-      token:
-        secret-key: ${JWT_SECRET_KEY}
-        expiration: 3600  # 60 minutes in seconds
-        issuer: dollarfunding-mca
-        audience: mca-api
-        algorithm: RS256
-      refresh-token:
-        expiration: 604800  # 7 days in seconds
+      algorithm: RS256
+      public-key-path: ${JWT_PUBLIC_KEY_PATH}
+      token-expiry-minutes: 60
+      refresh-token-expiry-days: 7
     encryption:
-      field-level:
-        enabled: true
-        algorithm: AES/GCM/NoPadding
-        key: ${FIELD_ENCRYPTION_KEY}
-  
-  # Actuator endpoints configuration
-  management:
-    endpoints:
-      web:
-        exposure:
-          include: health,info,metrics
-        base-path: /actuator
-    endpoint:
-      health:
-        show-details: never
-      info:
-        enabled: true
-    health:
-      db:
-        enabled: true
-      redis:
-        enabled: true
-      rabbit:
-        enabled: true
-  
-  # CORS configuration for production
-  web:
+      # Field-level encryption for PII
+      enabled: true
+      algorithm: AES/GCM/NoPadding
+      secret-key: ${ENCRYPTION_SECRET_KEY}
+      pii-fields:
+        - legalName
+        - dbaName
+        - ein
+        - address
+        - contactName
+        - contactEmail
+        - contactPhone
+        - bankAccountNumber
+        - routingNumber
+        - ssn
     cors:
-      allowed-origins: https://app.dollarfunding.com
+      allowed-origins: ${CORS_ALLOWED_ORIGINS}
       allowed-methods: GET,POST,PUT,DELETE,OPTIONS
       allowed-headers: Authorization,Content-Type,X-Requested-With
+      exposed-headers: X-Total-Count
       allow-credentials: true
       max-age: 3600
+  
+  # S3 Storage Configuration - Production bucket
+  storage:
+    s3:
+      endpoint: ${S3_ENDPOINT}
+      region: ${S3_REGION:us-east-1}
+      access-key: ${S3_ACCESS_KEY}
+      secret-key: ${S3_SECRET_KEY}
+      bucket-name: ${S3_BUCKET_NAME:mca-documents-production}
+      encryption:
+        enabled: true
+        type: AES256
+      expiration:
+        presigned-url-seconds: 300
+  
+  # Cache Configuration
+  cache:
+    redis:
+      enabled: true
+      ttl:
+        application-data: 900  # 15 minutes in seconds
+        user-sessions: 86400  # 24 hours in seconds
+  
+  # RabbitMQ Exchange and Queue Configuration
+  messaging:
+    exchanges:
+      documents:
+        name: mca.documents
+        type: fanout
+        durable: true
+    queues:
+      document-processing:
+        name: document-processing
+        durable: true
+      data-extraction:
+        name: data-extraction
+        durable: true
+      notification:
+        name: notification
+        durable: true
+    bindings:
+      - exchange: mca.documents
+        queue: document-processing
+        routing-key: ''
+      - exchange: mca.documents
+        queue: data-extraction
+        routing-key: ''
+      - exchange: mca.documents
+        queue: notification
+        routing-key: ''
 
-# Server configuration
-server:
-  port: 8080
-  servlet:
-    context-path: /api/v1
-  tomcat:
-    max-threads: 200
-    min-spare-threads: 20
-    max-connections: 10000
-    connection-timeout: 20000
-    accept-count: 100
-  compression:
-    enabled: true
-    mime-types: application/json,application/xml,text/html,text/xml,text/plain
-    min-response-size: 2048
-  error:
-    include-stacktrace: never
-    include-message: never
-    whitelabel:
-      enabled: false
-
-# Logging configuration for production (ERROR and WARN levels only)
+# ===============================
+# LOGGING CONFIGURATION
+# ===============================
 logging:
   level:
     root: WARN
@@ -192,33 +238,66 @@ logging:
     org.springframework: ERROR
     org.hibernate: ERROR
   pattern:
-    console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
-    file: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
+    console: '%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n'
+    file: '%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n'
   file:
-    name: /var/log/mca/data-service.log
+    name: ${LOG_FILE_PATH:/var/log/mca-data-service.log}
     max-size: 100MB
     max-history: 30
 
-# Application-specific configuration
-app:
-  document-storage:
-    base-path: /mca-documents
-    temp-directory: /tmp/mca-documents
-    allowed-extensions: pdf,jpg,jpeg,png,tiff,doc,docx,xls,xlsx
-    max-file-size: 10485760  # 10MB in bytes
-  processing:
-    batch-size: 50
-    max-concurrent-processes: 10
-    timeout: 300000  # 5 minutes in milliseconds
-  notification:
-    webhook:
-      retry-count: 3
-      retry-delay: 60000  # 1 minute in milliseconds
-      signature-header: X-MCA-Signature
-      hmac-algorithm: HmacSHA256
-  field-encryption:
-    fields:
-      - entity: com.dollarfunding.mca.entity.MerchantDetails
-        properties: [legalName, dbaName, ein, address]
-      - entity: com.dollarfunding.mca.entity.ApplicationEntity
-        properties: [metadata]
+# ===============================
+# MANAGEMENT AND MONITORING
+# ===============================
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+      base-path: /actuator
+  endpoint:
+    health:
+      show-details: never
+      probes:
+        enabled: true
+      group:
+        readiness:
+          include: db,redis,rabbitmq,diskSpace
+  health:
+    livenessState:
+      enabled: true
+    readinessState:
+      enabled: true
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+  info:
+    git:
+      mode: simple
+    env:
+      enabled: false
+    build:
+      enabled: true
+
+# ===============================
+# PERFORMANCE TUNING
+# ===============================
+performance:
+  # Thread pool configuration
+  thread-pool:
+    core-size: 20
+    max-size: 50
+    queue-capacity: 100
+    keep-alive-seconds: 60
+  
+  # Connection timeouts
+  timeouts:
+    connect-ms: 5000
+    read-ms: 10000
+    write-ms: 10000
+  
+  # Rate limiting
+  rate-limiting:
+    enabled: true
+    default-limit: 100
+    default-duration: 60
