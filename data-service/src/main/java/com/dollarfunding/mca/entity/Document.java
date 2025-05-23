@@ -4,23 +4,24 @@ import com.dollarfunding.mca.util.JsonUtil;
 import com.fasterxml.jackson.core.type.TypeReference;
 
 import javax.persistence.*;
+import javax.validation.constraints.NotNull;
+import javax.validation.constraints.Size;
 import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
-import java.util.ArrayList;
-import java.util.List;
 
 /**
  * JPA entity class representing document metadata in the database.
  * 
- * This entity maps to the Documents schema and stores metadata about documents
- * uploaded as part of an MCA application. The actual document content is stored
- * in S3-compatible storage with AES-256 encryption, and this entity maintains a reference 
- * to the storage path. It has a Many-to-One relationship with the Application entity.
+ * This entity maps to the Documents schema and stores metadata about documents uploaded
+ * as part of an MCA application. The actual document content is stored in S3-compatible
+ * storage with AES-256 encryption, while this entity maintains references and metadata.
  * 
- * The document classification is performed by the Document Service with 99% accuracy,
- * and data extraction is performed by the OCR Service using machine learning models.
+ * It maintains a Many-to-One relationship with the Application entity and uses JPA
+ * annotations for ORM mapping. The Document Service classifies documents into categories
+ * with 99% accuracy, and the OCR Service extracts data from these documents using
+ * machine learning models.
  */
 @Entity
 @Table(name = "documents")
@@ -37,6 +38,7 @@ public class Document {
     /**
      * ID of the application this document belongs to
      */
+    @NotNull
     @Column(name = "application_id", nullable = false)
     private UUID applicationId;
     
@@ -50,33 +52,38 @@ public class Document {
     /**
      * Type of document (e.g., BANK_STATEMENT, TAX_RETURN, etc.)
      */
+    @NotNull
     @Enumerated(EnumType.STRING)
     @Column(name = "type", nullable = false)
     private DocumentType type;
 
     /**
-     * Path to the document in S3-compatible storage with AES-256 encryption
-     * Format: s3://bucket-name/path/to/document
+     * Path to the document in S3-compatible storage
+     * Format: bucket/path/to/document.pdf
      */
+    @NotNull
+    @Size(max = 1024)
     @Column(name = "storage_path", nullable = false)
     private String storagePath;
 
     /**
-     * Document classification determined by the Document Service
-     * This can be more specific than the general document type
+     * Classification result from document processing
      */
-    @Column(name = "classification")
-    private String classification;
+    @NotNull
+    @Enumerated(EnumType.STRING)
+    @Column(name = "classification", nullable = false)
+    private DocumentClassification classification;
 
     /**
      * Timestamp when the document was uploaded
      */
+    @NotNull
     @Column(name = "uploaded_at", nullable = false)
     private LocalDateTime uploadedAt;
 
     /**
      * JSON string representation of the document metadata
-     * Includes OCR extraction results, confidence scores, etc.
+     * Includes OCR confidence scores, extracted fields, etc.
      */
     @Column(name = "metadata", columnDefinition = "jsonb")
     private String metadataJson;
@@ -93,6 +100,8 @@ public class Document {
      */
     public Document() {
         this.metadata = new HashMap<>();
+        this.classification = DocumentClassification.UNCLASSIFIED;
+        this.uploadedAt = LocalDateTime.now();
     }
 
     /**
@@ -103,11 +112,10 @@ public class Document {
      * @param storagePath The path to the document in S3-compatible storage
      */
     public Document(UUID applicationId, DocumentType type, String storagePath) {
+        this();
         this.applicationId = applicationId;
         this.type = type;
         this.storagePath = storagePath;
-        this.uploadedAt = LocalDateTime.now();
-        this.metadata = new HashMap<>();
     }
 
     /**
@@ -116,18 +124,30 @@ public class Document {
      * @param applicationId The ID of the application this document belongs to
      * @param type The type of document
      * @param storagePath The path to the document in S3-compatible storage
-     * @param classification The document classification
+     * @param classification The classification result from document processing
      * @param uploadedAt The timestamp when the document was uploaded
      * @param metadata The document metadata
      */
-    public Document(UUID applicationId, DocumentType type, String storagePath, 
-                   String classification, LocalDateTime uploadedAt, Map<String, Object> metadata) {
+    public Document(UUID applicationId, DocumentType type, String storagePath,
+                   DocumentClassification classification, LocalDateTime uploadedAt,
+                   Map<String, Object> metadata) {
         this.applicationId = applicationId;
         this.type = type;
         this.storagePath = storagePath;
-        this.classification = classification;
-        this.uploadedAt = uploadedAt;
+        this.classification = classification != null ? classification : DocumentClassification.UNCLASSIFIED;
+        this.uploadedAt = uploadedAt != null ? uploadedAt : LocalDateTime.now();
         this.metadata = metadata != null ? metadata : new HashMap<>();
+        
+        // Convert metadata map to JSON string
+        if (metadata != null) {
+            try {
+                this.metadataJson = JsonUtil.toJson(metadata);
+            } catch (JsonUtil.JsonConversionException e) {
+                this.metadataJson = "{}";
+            }
+        } else {
+            this.metadataJson = "{}";
+        }
     }
 
     /**
@@ -157,7 +177,7 @@ public class Document {
     public void setApplicationId(UUID applicationId) {
         this.applicationId = applicationId;
     }
-    
+
     /**
      * @return the application this document belongs to
      */
@@ -176,7 +196,7 @@ public class Document {
     }
 
     /**
-     * @return the document type
+     * @return the type of document
      */
     public DocumentType getType() {
         return type;
@@ -190,7 +210,7 @@ public class Document {
     }
 
     /**
-     * @return the storage path in S3-compatible storage
+     * @return the path to the document in S3-compatible storage
      */
     public String getStoragePath() {
         return storagePath;
@@ -204,21 +224,21 @@ public class Document {
     }
 
     /**
-     * @return the document classification
+     * @return the classification result from document processing
      */
-    public String getClassification() {
+    public DocumentClassification getClassification() {
         return classification;
     }
 
     /**
-     * @param classification the document classification to set
+     * @param classification the classification to set
      */
-    public void setClassification(String classification) {
-        this.classification = classification;
+    public void setClassification(DocumentClassification classification) {
+        this.classification = classification != null ? classification : DocumentClassification.UNCLASSIFIED;
     }
 
     /**
-     * @return the upload timestamp
+     * @return the timestamp when the document was uploaded
      */
     public LocalDateTime getUploadedAt() {
         return uploadedAt;
@@ -238,7 +258,7 @@ public class Document {
         if (metadata == null && metadataJson != null && !metadataJson.isEmpty()) {
             try {
                 metadata = JsonUtil.fromJson(metadataJson, new TypeReference<Map<String, Object>>() {});
-            } catch (Exception e) {
+            } catch (JsonUtil.JsonConversionException e) {
                 metadata = new HashMap<>();
             }
         }
@@ -253,7 +273,7 @@ public class Document {
         if (metadata != null) {
             try {
                 this.metadataJson = JsonUtil.toJson(metadata);
-            } catch (Exception e) {
+            } catch (JsonUtil.JsonConversionException e) {
                 this.metadataJson = "{}";
             }
         } else {
@@ -280,7 +300,7 @@ public class Document {
         if (metadataJson != null && !metadataJson.isEmpty()) {
             try {
                 this.metadata = JsonUtil.fromJson(metadataJson, new TypeReference<Map<String, Object>>() {});
-            } catch (Exception e) {
+            } catch (JsonUtil.JsonConversionException e) {
                 this.metadata = new HashMap<>();
             }
         } else {
@@ -301,7 +321,7 @@ public class Document {
         metadata.put(key, value);
         try {
             this.metadataJson = JsonUtil.toJson(metadata);
-        } catch (Exception e) {
+        } catch (JsonUtil.JsonConversionException e) {
             // Log error but continue
         }
     }
@@ -323,147 +343,144 @@ public class Document {
     }
 
     /**
-     * Adds confidence scores to the metadata
+     * Gets the confidence score for this document's classification
      * 
-     * @param confidenceScores the confidence scores to add
+     * @return the confidence score, or 0.0 if not available
      */
-    public void addConfidenceScores(Map<String, Double> confidenceScores) {
-        if (confidenceScores == null || confidenceScores.isEmpty()) {
-            return;
+    public double getConfidenceScore() {
+        Double score = getMetadataValue("confidenceScore");
+        return score != null ? score : 0.0;
+    }
+
+    /**
+     * Sets the confidence score for this document's classification
+     * 
+     * @param score the confidence score to set
+     */
+    public void setConfidenceScore(double score) {
+        addMetadata("confidenceScore", score);
+        // Update classification based on confidence score
+        this.classification = DocumentClassification.fromConfidenceScore(score);
+    }
+
+    /**
+     * Gets the file name of the document from the storage path
+     * 
+     * @return the file name, or the full path if parsing fails
+     */
+    public String getFileName() {
+        if (storagePath == null || storagePath.isEmpty()) {
+            return "";
         }
-        Map<String, Object> metadataMap = getMetadata();
-        metadataMap.put("confidenceScores", confidenceScores);
-        setMetadata(metadataMap);
-    }
-
-    /**
-     * Gets the confidence scores from the metadata
-     * 
-     * @return the confidence scores, or an empty map if not available
-     */
-    @SuppressWarnings("unchecked")
-    public Map<String, Double> getConfidenceScores() {
-        Map<String, Object> metadataMap = getMetadata();
-        if (metadataMap == null || !metadataMap.containsKey("confidenceScores")) {
-            return new HashMap<>();
+        
+        int lastSlashIndex = storagePath.lastIndexOf('/');
+        if (lastSlashIndex >= 0 && lastSlashIndex < storagePath.length() - 1) {
+            return storagePath.substring(lastSlashIndex + 1);
         }
-        return (Map<String, Double>) metadataMap.get("confidenceScores");
+        
+        return storagePath;
     }
 
     /**
-     * Gets the confidence score for a specific field
+     * Gets the file extension of the document
      * 
-     * @param fieldName the field name to get the confidence score for
-     * @return the confidence score, or null if not available
+     * @return the file extension, or an empty string if not available
      */
-    public Double getConfidenceScore(String fieldName) {
-        Map<String, Double> scores = getConfidenceScores();
-        if (scores.isEmpty()) {
-            return null;
+    public String getFileExtension() {
+        String fileName = getFileName();
+        int lastDotIndex = fileName.lastIndexOf('.');
+        
+        if (lastDotIndex > 0 && lastDotIndex < fileName.length() - 1) {
+            return fileName.substring(lastDotIndex + 1).toLowerCase();
         }
-        return scores.get(fieldName);
+        
+        return "";
     }
 
     /**
-     * Checks if this document contains personally identifiable information (PII)
+     * Gets the MIME type of the document based on its file extension
      * 
-     * @return true if the document contains PII, false otherwise
+     * @return the MIME type, or "application/octet-stream" if not determinable
      */
-    public boolean containsPII() {
-        return type != null && type.containsPII();
+    public String getMimeType() {
+        String extension = getFileExtension();
+        
+        switch (extension) {
+            case "pdf":
+                return "application/pdf";
+            case "jpg":
+            case "jpeg":
+                return "image/jpeg";
+            case "png":
+                return "image/png";
+            case "tiff":
+            case "tif":
+                return "image/tiff";
+            case "doc":
+                return "application/msword";
+            case "docx":
+                return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+            case "xls":
+                return "application/vnd.ms-excel";
+            case "xlsx":
+                return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+            default:
+                return "application/octet-stream";
+        }
     }
 
     /**
-     * Checks if this document is a financial document
+     * Checks if this document requires manual review based on its classification
      * 
-     * @return true if the document is financial, false otherwise
+     * @return true if the document requires manual review
      */
-    public boolean isFinancialDocument() {
-        return type != null && type.isFinancialDocument();
+    public boolean requiresManualReview() {
+        return classification != null && classification.requiresManualReview();
     }
 
     /**
-     * Gets the expected OCR confidence threshold for this document type
+     * Checks if this document is acceptable for processing based on its classification
      * 
-     * @return the minimum confidence threshold (0.0-1.0) for OCR extraction
+     * @return true if the document is acceptable for processing
      */
-    public double getOcrConfidenceThreshold() {
-        return type != null ? type.getOcrConfidenceThreshold() : 0.65;
-    }
-
-    /**
-     * Checks if this document has been classified with high confidence
-     * 
-     * @return true if the document has been classified with high confidence
-     */
-    public boolean isClassifiedWithHighConfidence() {
-        Double classificationConfidence = getConfidenceScore("classification");
-        return classificationConfidence != null && classificationConfidence >= getOcrConfidenceThreshold();
+    public boolean isAcceptable() {
+        return classification != null && classification.isAcceptable();
     }
 
     /**
      * Gets the S3 bucket name from the storage path
      * 
-     * @return the S3 bucket name, or null if the storage path is invalid
+     * @return the bucket name, or an empty string if parsing fails
      */
     public String getBucketName() {
-        if (storagePath == null || !storagePath.startsWith("s3://")) {
-            return null;
+        if (storagePath == null || storagePath.isEmpty()) {
+            return "";
         }
-        String path = storagePath.substring(5); // Remove "s3://"
-        int slashIndex = path.indexOf('/');
-        if (slashIndex == -1) {
-            return path;
+        
+        int firstSlashIndex = storagePath.indexOf('/');
+        if (firstSlashIndex > 0) {
+            return storagePath.substring(0, firstSlashIndex);
         }
-        return path.substring(0, slashIndex);
+        
+        return "";
     }
 
     /**
      * Gets the S3 object key from the storage path
      * 
-     * @return the S3 object key, or null if the storage path is invalid
+     * @return the object key, or the full path if parsing fails
      */
     public String getObjectKey() {
-        if (storagePath == null || !storagePath.startsWith("s3://")) {
-            return null;
-        }
-        String path = storagePath.substring(5); // Remove "s3://"
-        int slashIndex = path.indexOf('/');
-        if (slashIndex == -1) {
+        if (storagePath == null || storagePath.isEmpty()) {
             return "";
         }
-        return path.substring(slashIndex + 1);
-    }
-
-    /**
-     * Checks if this document has valid storage information
-     * 
-     * @return true if the document has valid storage information
-     */
-    public boolean hasValidStorage() {
-        return storagePath != null && !storagePath.isEmpty() && storagePath.startsWith("s3://");
-    }
-
-    /**
-     * Checks if this document has metadata
-     * 
-     * @return true if the document has metadata
-     */
-    public boolean hasMetadata() {
-        Map<String, Object> metadataMap = getMetadata();
-        return metadataMap != null && !metadataMap.isEmpty();
-    }
-
-    /**
-     * Checks if this document is valid for processing
-     * 
-     * @return true if the document is valid for processing
-     */
-    public boolean isValidForProcessing() {
-        return applicationId != null && 
-               type != null && 
-               storagePath != null && !storagePath.isEmpty() &&
-               uploadedAt != null;
+        
+        int firstSlashIndex = storagePath.indexOf('/');
+        if (firstSlashIndex > 0 && firstSlashIndex < storagePath.length() - 1) {
+            return storagePath.substring(firstSlashIndex + 1);
+        }
+        
+        return storagePath;
     }
 
     /**
@@ -477,10 +494,10 @@ public class Document {
                 "id=" + id +
                 ", applicationId=" + applicationId +
                 ", type=" + type +
-                ", classification='" + classification + '\'' +
+                ", fileName=" + getFileName() +
+                ", classification=" + classification +
                 ", uploadedAt=" + uploadedAt +
-                ", hasMetadata=" + hasMetadata() +
-                ", hasValidStorage=" + hasValidStorage() +
+                ", confidenceScore=" + getConfidenceScore() +
                 "}";
     }
 
@@ -517,19 +534,17 @@ public class Document {
         private UUID applicationId;
         private DocumentType type;
         private String storagePath;
-        private String classification;
-        private LocalDateTime uploadedAt;
-        private Map<String, Object> metadata;
+        private DocumentClassification classification = DocumentClassification.UNCLASSIFIED;
+        private LocalDateTime uploadedAt = LocalDateTime.now();
+        private Map<String, Object> metadata = new HashMap<>();
 
         public Builder(UUID applicationId, DocumentType type, String storagePath) {
             this.applicationId = applicationId;
             this.type = type;
             this.storagePath = storagePath;
-            this.uploadedAt = LocalDateTime.now();
-            this.metadata = new HashMap<>();
         }
 
-        public Builder withClassification(String classification) {
+        public Builder withClassification(DocumentClassification classification) {
             this.classification = classification;
             return this;
         }
@@ -545,18 +560,13 @@ public class Document {
         }
 
         public Builder addMetadata(String key, Object value) {
-            if (this.metadata == null) {
-                this.metadata = new HashMap<>();
-            }
             this.metadata.put(key, value);
             return this;
         }
 
-        public Builder withConfidenceScores(Map<String, Double> confidenceScores) {
-            if (this.metadata == null) {
-                this.metadata = new HashMap<>();
-            }
-            this.metadata.put("confidenceScores", confidenceScores);
+        public Builder withConfidenceScore(double score) {
+            this.metadata.put("confidenceScore", score);
+            this.classification = DocumentClassification.fromConfidenceScore(score);
             return this;
         }
 
