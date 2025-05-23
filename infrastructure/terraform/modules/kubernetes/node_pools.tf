@@ -1,566 +1,700 @@
-# Node pool configuration for Kubernetes clusters across different cloud providers
-# This file defines the node pools for the MCA Application Processing System,
+# Node Pools Configuration for MCA Application Processing System
+# This file defines the various node pools for the Kubernetes cluster,
 # including specialized GPU-enabled nodes for the OCR service.
 
-# Node pool configuration variables
-variable "node_pools" {
-  description = "Configuration for node pools in the Kubernetes cluster"
-  type = object({
-    # Standard node pool for general workloads
-    standard = object({
-      name                = string
-      min_count           = number
-      max_count           = number
-      desired_count       = number
-      disk_size_gb        = number
-      labels              = map(string)
-      taints              = list(object({
-        key    = string
-        value  = string
-        effect = string
-      }))
-      # Cloud-specific machine types
-      machine_type = object({
-        aws    = string
-        azure  = string
-        google = string
-      })
-    })
-    
-    # Service-specific node pool for data processing
-    service = object({
-      name                = string
-      min_count           = number
-      max_count           = number
-      desired_count       = number
-      disk_size_gb        = number
-      labels              = map(string)
-      taints              = list(object({
-        key    = string
-        value  = string
-        effect = string
-      }))
-      # Cloud-specific machine types
-      machine_type = object({
-        aws    = string
-        azure  = string
-        google = string
-      })
-    })
-    
-    # GPU-enabled node pool for OCR service
-    gpu = object({
-      name                = string
-      min_count           = number
-      max_count           = number
-      desired_count       = number
-      disk_size_gb        = number
-      labels              = map(string)
-      taints              = list(object({
-        key    = string
-        value  = string
-        effect = string
-      }))
-      # Cloud-specific machine types with GPU
-      machine_type = object({
-        aws    = string
-        azure  = string
-        google = string
-      })
-      # GPU configuration
-      gpu_type = object({
-        aws    = string
-        azure  = string
-        google = string
-      })
-      gpu_count = number
-    })
-  })
-  
-  default = {
-    standard = {
-      name          = "standard"
-      min_count     = 2
-      max_count     = 5
-      desired_count = 3
-      disk_size_gb  = 100
-      labels = {
-        "node-type" = "standard"
-        "workload"  = "general"
-      }
-      taints = []
-      machine_type = {
-        aws    = "m5.large"
-        azure  = "Standard_D2s_v3"
-        google = "e2-standard-2"
-      }
-    },
-    service = {
-      name          = "service"
-      min_count     = 2
-      max_count     = 8
-      desired_count = 3
-      disk_size_gb  = 150
-      labels = {
-        "node-type" = "service"
-        "workload"  = "data-processing"
-      }
-      taints = [{
-        key    = "dedicated"
-        value  = "service"
-        effect = "NoSchedule"
-      }]
-      machine_type = {
-        aws    = "m5.xlarge"
-        azure  = "Standard_D4s_v3"
-        google = "e2-standard-4"
-      }
-    },
-    gpu = {
-      name          = "ocr-gpu"
-      min_count     = 1
-      max_count     = 4
-      desired_count = 2
-      disk_size_gb  = 200
-      labels = {
-        "node-type" = "gpu"
-        "workload"  = "ocr-processing"
-        "accelerator" = "nvidia-tesla"
-      }
-      taints = [{
-        key    = "nvidia.com/gpu"
-        value  = "present"
-        effect = "NoSchedule"
-      }]
-      machine_type = {
-        aws    = "p3.2xlarge"
-        azure  = "Standard_NC6s_v3"
-        google = "n1-standard-4"
-      }
-      gpu_type = {
-        aws    = "nvidia-tesla-v100"
-        azure  = "nvidia-tesla-v100"
-        google = "nvidia-tesla-v100"
-      }
-      gpu_count = 1
-    }
-  }
-}
-
-# AWS EKS Node Groups
-resource "aws_eks_node_group" "standard" {
-  count = var.cloud_provider == "aws" ? 1 : 0
-  
-  cluster_name    = var.cluster_name
-  node_group_name = var.node_pools.standard.name
-  node_role_arn   = var.node_role_arn
-  subnet_ids      = var.subnet_ids
-  
-  scaling_config {
-    desired_size = var.node_pools.standard.desired_count
-    max_size     = var.node_pools.standard.max_count
-    min_size     = var.node_pools.standard.min_count
-  }
-  
-  instance_types = [var.node_pools.standard.machine_type.aws]
-  disk_size      = var.node_pools.standard.disk_size_gb
-  
-  labels = var.node_pools.standard.labels
-  
-  # Ensure zero-downtime upgrades
-  update_config {
-    max_unavailable_percentage = 25
-  }
-  
-  # Enable autoscaling
-  tags = {
-    "k8s.io/cluster-autoscaler/enabled"             = "true"
-    "k8s.io/cluster-autoscaler/${var.cluster_name}" = "owned"
-  }
-  
-  lifecycle {
-    ignore_changes = [scaling_config[0].desired_size]
-  }
-}
-
-resource "aws_eks_node_group" "service" {
-  count = var.cloud_provider == "aws" ? 1 : 0
-  
-  cluster_name    = var.cluster_name
-  node_group_name = var.node_pools.service.name
-  node_role_arn   = var.node_role_arn
-  subnet_ids      = var.subnet_ids
-  
-  scaling_config {
-    desired_size = var.node_pools.service.desired_count
-    max_size     = var.node_pools.service.max_count
-    min_size     = var.node_pools.service.min_count
-  }
-  
-  instance_types = [var.node_pools.service.machine_type.aws]
-  disk_size      = var.node_pools.service.disk_size_gb
-  
-  labels = var.node_pools.service.labels
-  
-  # Apply taints
-  taint {
-    key    = var.node_pools.service.taints[0].key
-    value  = var.node_pools.service.taints[0].value
-    effect = var.node_pools.service.taints[0].effect
-  }
-  
-  # Ensure zero-downtime upgrades
-  update_config {
-    max_unavailable_percentage = 25
-  }
-  
-  # Enable autoscaling
-  tags = {
-    "k8s.io/cluster-autoscaler/enabled"             = "true"
-    "k8s.io/cluster-autoscaler/${var.cluster_name}" = "owned"
-  }
-  
-  lifecycle {
-    ignore_changes = [scaling_config[0].desired_size]
-  }
-}
-
-resource "aws_eks_node_group" "gpu" {
-  count = var.cloud_provider == "aws" ? 1 : 0
-  
-  cluster_name    = var.cluster_name
-  node_group_name = var.node_pools.gpu.name
-  node_role_arn   = var.node_role_arn
-  subnet_ids      = var.subnet_ids
-  
-  scaling_config {
-    desired_size = var.node_pools.gpu.desired_count
-    max_size     = var.node_pools.gpu.max_count
-    min_size     = var.node_pools.gpu.min_count
-  }
-  
-  # GPU-enabled instance type
-  instance_types = [var.node_pools.gpu.machine_type.aws]
-  disk_size      = var.node_pools.gpu.disk_size_gb
-  
-  labels = var.node_pools.gpu.labels
-  
-  # Apply GPU taints
-  taint {
-    key    = var.node_pools.gpu.taints[0].key
-    value  = var.node_pools.gpu.taints[0].value
-    effect = var.node_pools.gpu.taints[0].effect
-  }
-  
-  # Ensure zero-downtime upgrades
-  update_config {
-    max_unavailable = 1
-  }
-  
-  # Enable autoscaling
-  tags = {
-    "k8s.io/cluster-autoscaler/enabled"             = "true"
-    "k8s.io/cluster-autoscaler/${var.cluster_name}" = "owned"
-  }
-  
-  lifecycle {
-    ignore_changes = [scaling_config[0].desired_size]
-  }
-}
-
-# Azure AKS Node Pools
-resource "azurerm_kubernetes_cluster_node_pool" "standard" {
-  count = var.cloud_provider == "azure" ? 1 : 0
-  
-  name                  = var.node_pools.standard.name
-  kubernetes_cluster_id = var.cluster_id
-  vm_size               = var.node_pools.standard.machine_type.azure
-  os_disk_size_gb       = var.node_pools.standard.disk_size_gb
-  
-  node_count           = var.node_pools.standard.desired_count
-  enable_auto_scaling  = true
-  min_count            = var.node_pools.standard.min_count
-  max_count            = var.node_pools.standard.max_count
-  
-  node_labels = var.node_pools.standard.labels
-  
-  # Ensure zero-downtime upgrades
-  upgrade_settings {
-    max_surge = "25%"
-  }
-  
-  lifecycle {
-    ignore_changes = [node_count]
-  }
-}
-
-resource "azurerm_kubernetes_cluster_node_pool" "service" {
-  count = var.cloud_provider == "azure" ? 1 : 0
-  
-  name                  = var.node_pools.service.name
-  kubernetes_cluster_id = var.cluster_id
-  vm_size               = var.node_pools.service.machine_type.azure
-  os_disk_size_gb       = var.node_pools.service.disk_size_gb
-  
-  node_count           = var.node_pools.service.desired_count
-  enable_auto_scaling  = true
-  min_count            = var.node_pools.service.min_count
-  max_count            = var.node_pools.service.max_count
-  
-  node_labels = var.node_pools.service.labels
-  
-  # Apply taints
-  node_taints = [
-    "${var.node_pools.service.taints[0].key}=${var.node_pools.service.taints[0].value}:${var.node_pools.service.taints[0].effect}"
-  ]
-  
-  # Ensure zero-downtime upgrades
-  upgrade_settings {
-    max_surge = "25%"
-  }
-  
-  lifecycle {
-    ignore_changes = [node_count]
-  }
-}
-
-resource "azurerm_kubernetes_cluster_node_pool" "gpu" {
-  count = var.cloud_provider == "azure" ? 1 : 0
-  
-  name                  = var.node_pools.gpu.name
-  kubernetes_cluster_id = var.cluster_id
-  vm_size               = var.node_pools.gpu.machine_type.azure
-  os_disk_size_gb       = var.node_pools.gpu.disk_size_gb
-  
-  node_count           = var.node_pools.gpu.desired_count
-  enable_auto_scaling  = true
-  min_count            = var.node_pools.gpu.min_count
-  max_count            = var.node_pools.gpu.max_count
-  
-  node_labels = var.node_pools.gpu.labels
-  
-  # Apply GPU taints
-  node_taints = [
-    "${var.node_pools.gpu.taints[0].key}=${var.node_pools.gpu.taints[0].value}:${var.node_pools.gpu.taints[0].effect}"
-  ]
-  
-  # Ensure zero-downtime upgrades
-  upgrade_settings {
-    max_surge = "25%"
-  }
-  
-  lifecycle {
-    ignore_changes = [node_count]
-  }
-}
-
-# Google GKE Node Pools
-resource "google_container_node_pool" "standard" {
-  count = var.cloud_provider == "google" ? 1 : 0
-  
-  name       = var.node_pools.standard.name
-  cluster    = var.cluster_name
-  location   = var.location
-  node_count = var.node_pools.standard.desired_count
-  
-  autoscaling {
-    min_node_count = var.node_pools.standard.min_count
-    max_node_count = var.node_pools.standard.max_count
-  }
-  
-  node_config {
-    machine_type = var.node_pools.standard.machine_type.google
-    disk_size_gb = var.node_pools.standard.disk_size_gb
-    
-    labels = var.node_pools.standard.labels
-    
-    oauth_scopes = [
-      "https://www.googleapis.com/auth/devstorage.read_only",
-      "https://www.googleapis.com/auth/logging.write",
-      "https://www.googleapis.com/auth/monitoring",
-    ]
-  }
-  
-  # Ensure zero-downtime upgrades
-  upgrade_settings {
-    max_surge       = 1
-    max_unavailable = 0
-  }
-  
-  lifecycle {
-    ignore_changes = [node_count]
-  }
-}
-
-resource "google_container_node_pool" "service" {
-  count = var.cloud_provider == "google" ? 1 : 0
-  
-  name       = var.node_pools.service.name
-  cluster    = var.cluster_name
-  location   = var.location
-  node_count = var.node_pools.service.desired_count
-  
-  autoscaling {
-    min_node_count = var.node_pools.service.min_count
-    max_node_count = var.node_pools.service.max_count
-  }
-  
-  node_config {
-    machine_type = var.node_pools.service.machine_type.google
-    disk_size_gb = var.node_pools.service.disk_size_gb
-    
-    labels = var.node_pools.service.labels
-    
-    # Apply taints
-    taint {
-      key    = var.node_pools.service.taints[0].key
-      value  = var.node_pools.service.taints[0].value
-      effect = var.node_pools.service.taints[0].effect
-    }
-    
-    oauth_scopes = [
-      "https://www.googleapis.com/auth/devstorage.read_only",
-      "https://www.googleapis.com/auth/logging.write",
-      "https://www.googleapis.com/auth/monitoring",
-    ]
-  }
-  
-  # Ensure zero-downtime upgrades
-  upgrade_settings {
-    max_surge       = 1
-    max_unavailable = 0
-  }
-  
-  lifecycle {
-    ignore_changes = [node_count]
-  }
-}
-
-resource "google_container_node_pool" "gpu" {
-  count = var.cloud_provider == "google" ? 1 : 0
-  
-  name       = var.node_pools.gpu.name
-  cluster    = var.cluster_name
-  location   = var.location
-  node_count = var.node_pools.gpu.desired_count
-  
-  autoscaling {
-    min_node_count = var.node_pools.gpu.min_count
-    max_node_count = var.node_pools.gpu.max_count
-  }
-  
-  node_config {
-    machine_type = var.node_pools.gpu.machine_type.google
-    disk_size_gb = var.node_pools.gpu.disk_size_gb
-    
-    labels = var.node_pools.gpu.labels
-    
-    # Apply GPU taints
-    taint {
-      key    = var.node_pools.gpu.taints[0].key
-      value  = var.node_pools.gpu.taints[0].value
-      effect = var.node_pools.gpu.taints[0].effect
-    }
-    
-    # Configure GPU
-    guest_accelerator {
-      type  = var.node_pools.gpu.gpu_type.google
-      count = var.node_pools.gpu.gpu_count
-    }
-    
-    oauth_scopes = [
-      "https://www.googleapis.com/auth/devstorage.read_only",
-      "https://www.googleapis.com/auth/logging.write",
-      "https://www.googleapis.com/auth/monitoring",
-    ]
-  }
-  
-  # Ensure zero-downtime upgrades
-  upgrade_settings {
-    max_surge       = 1
-    max_unavailable = 0
-  }
-  
-  lifecycle {
-    ignore_changes = [node_count]
-  }
-}
-
-# Additional variables needed for node pools
 variable "cluster_name" {
   description = "Name of the Kubernetes cluster"
   type        = string
 }
 
-variable "cluster_id" {
-  description = "ID of the Kubernetes cluster (required for Azure)"
+variable "kubernetes_version" {
+  description = "Kubernetes version to use for the node pools"
   type        = string
-  default     = ""
 }
 
-variable "location" {
-  description = "Location/region where the cluster is deployed"
+variable "node_pools_labels" {
+  description = "Map of maps containing node labels by node-pool name"
+  type        = map(map(string))
+  default     = {}
+}
+
+variable "node_pools_taints" {
+  description = "Map of lists containing node taints by node-pool name"
+  type        = map(list(object({ key = string, value = string, effect = string })))
+  default     = {}
+}
+
+variable "environment" {
+  description = "Environment (development, staging, production)"
   type        = string
-  default     = ""
-}
-
-variable "node_role_arn" {
-  description = "ARN of the IAM role for nodes (required for AWS)"
-  type        = string
-  default     = ""
-}
-
-variable "subnet_ids" {
-  description = "List of subnet IDs where nodes will be deployed (required for AWS)"
-  type        = list(string)
-  default     = []
-}
-
-# Outputs for node pools
-output "node_pools" {
-  description = "Details of the created node pools"
-  value = {
-    standard = var.cloud_provider == "aws" ? aws_eks_node_group.standard : (
-              var.cloud_provider == "azure" ? azurerm_kubernetes_cluster_node_pool.standard : (
-              var.cloud_provider == "google" ? google_container_node_pool.standard : null))
-    service = var.cloud_provider == "aws" ? aws_eks_node_group.service : (
-              var.cloud_provider == "azure" ? azurerm_kubernetes_cluster_node_pool.service : (
-              var.cloud_provider == "google" ? google_container_node_pool.service : null))
-    gpu = var.cloud_provider == "aws" ? aws_eks_node_group.gpu : (
-          var.cloud_provider == "azure" ? azurerm_kubernetes_cluster_node_pool.gpu : (
-          var.cloud_provider == "google" ? google_container_node_pool.gpu : null))
+  validation {
+    condition     = contains(["development", "staging", "production"], var.environment)
+    error_message = "Environment must be one of: development, staging, production."
   }
 }
 
-# NVIDIA GPU Operator installation (optional)
-variable "install_gpu_operator" {
-  description = "Whether to install the NVIDIA GPU Operator for GPU support"
-  type        = bool
-  default     = true
+variable "cloud_provider" {
+  description = "Cloud provider where the cluster is deployed (gcp, azure, aws)"
+  type        = string
+  default     = "gcp"
+  validation {
+    condition     = contains(["gcp", "azure", "aws"], var.cloud_provider)
+    error_message = "Cloud provider must be one of: gcp, azure, aws."
+  }
 }
 
-# Helm release for NVIDIA GPU Operator
-resource "helm_release" "gpu_operator" {
-  count = var.install_gpu_operator && var.cloud_provider != "" ? 1 : 0
-  
-  name       = "gpu-operator"
-  repository = "https://nvidia.github.io/gpu-operator"
-  chart      = "gpu-operator"
-  namespace  = "gpu-operator"
-  version    = "v23.3.2"  # Use appropriate version
-  
-  # Create namespace if it doesn't exist
-  create_namespace = true
-  
-  # Values for the GPU Operator
-  set {
-    name  = "operator.defaultRuntime"
-    value = "containerd"
+variable "region" {
+  description = "Region where the cluster is deployed"
+  type        = string
+}
+
+# Local variables for node pool configuration based on environment
+locals {
+  # Cloud provider specific configurations
+  cloud_configs = {
+    gcp = {
+      # GCP machine types and disk types
+      standard_machine_types = {
+        development = "n2-standard-4"
+        staging     = "n2-standard-8"
+        production  = "n2-standard-8"
+      }
+      ocr_machine_types = {
+        development = "n1-standard-8"
+        staging     = "n1-standard-8"
+        production  = "n1-standard-16"
+      }
+      data_machine_types = {
+        development = "n2-standard-8"
+        staging     = "n2-standard-16"
+        production  = "n2-standard-16"
+      }
+      disk_types = {
+        standard = "pd-standard"
+        ssd      = "pd-ssd"
+      }
+      gpu_types = {
+        development = "nvidia-tesla-t4"
+        staging     = "nvidia-tesla-t4"
+        production  = "nvidia-tesla-v100"
+      }
+    }
+    azure = {
+      # Azure VM sizes and disk types
+      standard_machine_types = {
+        development = "Standard_D4s_v3"
+        staging     = "Standard_D8s_v3"
+        production  = "Standard_D8s_v3"
+      }
+      ocr_machine_types = {
+        development = "Standard_NC6s_v3"
+        staging     = "Standard_NC6s_v3"
+        production  = "Standard_NC12s_v3"
+      }
+      data_machine_types = {
+        development = "Standard_D8s_v3"
+        staging     = "Standard_D16s_v3"
+        production  = "Standard_D16s_v3"
+      }
+      disk_types = {
+        standard = "Standard_LRS"
+        ssd      = "Premium_LRS"
+      }
+      gpu_types = {
+        development = "nvidia-tesla-t4"
+        staging     = "nvidia-tesla-t4"
+        production  = "nvidia-tesla-v100"
+      }
+    }
+    aws = {
+      # AWS instance types and volume types
+      standard_machine_types = {
+        development = "m5.xlarge"
+        staging     = "m5.2xlarge"
+        production  = "m5.2xlarge"
+      }
+      ocr_machine_types = {
+        development = "g4dn.2xlarge"
+        staging     = "g4dn.2xlarge"
+        production  = "p3.2xlarge"
+      }
+      data_machine_types = {
+        development = "m5.2xlarge"
+        staging     = "m5.4xlarge"
+        production  = "m5.4xlarge"
+      }
+      disk_types = {
+        standard = "gp2"
+        ssd      = "gp3"
+      }
+      gpu_types = {
+        development = "nvidia-tesla-t4"
+        staging     = "nvidia-tesla-t4"
+        production  = "nvidia-tesla-v100"
+      }
+    }
   }
-  
-  depends_on = [
-    aws_eks_node_group.gpu,
-    azurerm_kubernetes_cluster_node_pool.gpu,
-    google_container_node_pool.gpu
+
+  # Get the cloud provider specific configuration
+  cloud_config = local.cloud_configs[var.cloud_provider]
+
+  # Standard node pool configuration
+  standard_node_pool_config = {
+    development = {
+      min_count     = 1
+      max_count     = 3
+      machine_type  = local.cloud_config.standard_machine_types.development
+      disk_size_gb  = 100
+      disk_type     = local.cloud_config.disk_types.standard
+    }
+    staging = {
+      min_count     = 2
+      max_count     = 5
+      machine_type  = local.cloud_config.standard_machine_types.staging
+      disk_size_gb  = 100
+      disk_type     = local.cloud_config.disk_types.standard
+    }
+    production = {
+      min_count     = 3
+      max_count     = 10
+      machine_type  = local.cloud_config.standard_machine_types.production
+      disk_size_gb  = 100
+      disk_type     = local.cloud_config.disk_types.ssd
+    }
+  }
+
+  # OCR service node pool configuration with GPU
+  ocr_node_pool_config = {
+    development = {
+      min_count        = 1
+      max_count        = 2
+      machine_type     = local.cloud_config.ocr_machine_types.development
+      accelerator_type = local.cloud_config.gpu_types.development
+      accelerator_count = 1
+      disk_size_gb     = 100
+      disk_type        = local.cloud_config.disk_types.ssd
+    }
+    staging = {
+      min_count        = 1
+      max_count        = 3
+      machine_type     = local.cloud_config.ocr_machine_types.staging
+      accelerator_type = local.cloud_config.gpu_types.staging
+      accelerator_count = 1
+      disk_size_gb     = 200
+      disk_type        = local.cloud_config.disk_types.ssd
+    }
+    production = {
+      min_count        = 2
+      max_count        = 5
+      machine_type     = local.cloud_config.ocr_machine_types.production
+      accelerator_type = local.cloud_config.gpu_types.production
+      accelerator_count = 1
+      disk_size_gb     = 200
+      disk_type        = local.cloud_config.disk_types.ssd
+    }
+  }
+
+  # Data service node pool configuration
+  data_node_pool_config = {
+    development = {
+      min_count     = 1
+      max_count     = 3
+      machine_type  = local.cloud_config.data_machine_types.development
+      disk_size_gb  = 100
+      disk_type     = local.cloud_config.disk_types.standard
+    }
+    staging = {
+      min_count     = 2
+      max_count     = 5
+      machine_type  = local.cloud_config.data_machine_types.staging
+      disk_size_gb  = 200
+      disk_type     = local.cloud_config.disk_types.standard
+    }
+    production = {
+      min_count     = 3
+      max_count     = 8
+      machine_type  = local.cloud_config.data_machine_types.production
+      disk_size_gb  = 200
+      disk_type     = local.cloud_config.disk_types.ssd
+    }
+  }
+
+  # Default node labels
+  default_node_labels = {
+    "app.kubernetes.io/managed-by" = "terraform"
+    "environment"                  = var.environment
+  }
+
+  # Default node taints
+  default_node_taints = []
+
+  # OCR node taints to ensure GPU workloads are scheduled appropriately
+  ocr_node_taints = [
+    {
+      key    = "nvidia.com/gpu"
+      value  = "present"
+      effect = "NoSchedule"
+    }
   ]
+}
+
+# Standard node pool for general workloads
+resource "google_container_node_pool" "standard" {
+  count      = var.cloud_provider == "gcp" ? 1 : 0
+  name       = "standard-pool"
+  cluster    = var.cluster_name
+  version    = var.kubernetes_version
+  node_count = null
+  location   = var.region
+
+  autoscaling {
+    min_node_count = local.standard_node_pool_config[var.environment].min_count
+    max_node_count = local.standard_node_pool_config[var.environment].max_count
+  }
+
+  management {
+    auto_repair  = true
+    auto_upgrade = true
+  }
+
+  upgrade_settings {
+    max_surge       = 1
+    max_unavailable = 0
+  }
+
+  node_config {
+    machine_type = local.standard_node_pool_config[var.environment].machine_type
+    disk_size_gb = local.standard_node_pool_config[var.environment].disk_size_gb
+    disk_type    = local.standard_node_pool_config[var.environment].disk_type
+    
+    oauth_scopes = [
+      "https://www.googleapis.com/auth/logging.write",
+      "https://www.googleapis.com/auth/monitoring",
+      "https://www.googleapis.com/auth/devstorage.read_only"
+    ]
+
+    labels = merge(
+      local.default_node_labels,
+      { "node-pool" = "standard" },
+      lookup(var.node_pools_labels, "standard", {})
+    )
+
+    dynamic "taint" {
+      for_each = concat(
+        local.default_node_taints,
+        lookup(var.node_pools_taints, "standard", [])
+      )
+      content {
+        key    = taint.value.key
+        value  = taint.value.value
+        effect = taint.value.effect
+      }
+    }
+  }
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+# Azure AKS node pool for standard workloads
+resource "azurerm_kubernetes_cluster_node_pool" "standard" {
+  count                 = var.cloud_provider == "azure" ? 1 : 0
+  name                  = "standard"
+  kubernetes_cluster_id = var.cluster_name
+  vm_size               = local.standard_node_pool_config[var.environment].machine_type
+  os_disk_size_gb       = local.standard_node_pool_config[var.environment].disk_size_gb
+  os_disk_type          = local.standard_node_pool_config[var.environment].disk_type == local.cloud_config.disk_types.ssd ? "Managed" : "Ephemeral"
+  enable_auto_scaling   = true
+  min_count             = local.standard_node_pool_config[var.environment].min_count
+  max_count             = local.standard_node_pool_config[var.environment].max_count
+  node_labels           = merge(
+    local.default_node_labels,
+    { "node-pool" = "standard" },
+    lookup(var.node_pools_labels, "standard", {})
+  )
+  
+  dynamic "node_taints" {
+    for_each = concat(
+      local.default_node_taints,
+      lookup(var.node_pools_taints, "standard", [])
+    )
+    content {
+      key    = node_taints.value.key
+      value  = node_taints.value.value
+      effect = node_taints.value.effect
+    }
+  }
+  
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+# AWS EKS node group for standard workloads
+resource "aws_eks_node_group" "standard" {
+  count           = var.cloud_provider == "aws" ? 1 : 0
+  cluster_name    = var.cluster_name
+  node_group_name = "standard-pool"
+  node_role_arn   = "arn:aws:iam::${data.aws_caller_identity.current[0].account_id}:role/eks-node-group-role"
+  subnet_ids      = data.aws_subnets.private[0].ids
+  version         = var.kubernetes_version
+  
+  scaling_config {
+    desired_size = local.standard_node_pool_config[var.environment].min_count
+    min_size     = local.standard_node_pool_config[var.environment].min_count
+    max_size     = local.standard_node_pool_config[var.environment].max_count
+  }
+  
+  instance_types = [local.standard_node_pool_config[var.environment].machine_type]
+  
+  disk_size = local.standard_node_pool_config[var.environment].disk_size_gb
+  
+  labels = merge(
+    local.default_node_labels,
+    { "node-pool" = "standard" },
+    lookup(var.node_pools_labels, "standard", {})
+  )
+  
+  # AWS doesn't support taints directly in the node group resource
+  # They need to be applied separately using kubectl or the Kubernetes provider
+  
+  update_config {
+    max_unavailable = 1
+  }
+  
+  lifecycle {
+    create_before_destroy = true
+    ignore_changes        = [scaling_config[0].desired_size]
+  }
+}
+
+# Data sources for AWS (only created when using AWS)
+data "aws_caller_identity" "current" {
+  count = var.cloud_provider == "aws" ? 1 : 0
+}
+
+data "aws_subnets" "private" {
+  count = var.cloud_provider == "aws" ? 1 : 0
+  filter {
+    name   = "tag:Name"
+    values = ["*private*"]
+  }
+}
+
+# OCR service node pool with GPU for document processing (GCP)
+resource "google_container_node_pool" "ocr" {
+  count      = var.cloud_provider == "gcp" ? 1 : 0
+  name       = "ocr-gpu-pool"
+  cluster    = var.cluster_name
+  version    = var.kubernetes_version
+  node_count = null
+  location   = var.region
+
+  autoscaling {
+    min_node_count = local.ocr_node_pool_config[var.environment].min_count
+    max_node_count = local.ocr_node_pool_config[var.environment].max_count
+  }
+
+  management {
+    auto_repair  = true
+    auto_upgrade = false  # Disable auto-upgrade for GPU nodes to prevent driver compatibility issues
+  }
+
+  upgrade_settings {
+    max_surge       = 1
+    max_unavailable = 0
+  }
+
+  node_config {
+    machine_type = local.ocr_node_pool_config[var.environment].machine_type
+    disk_size_gb = local.ocr_node_pool_config[var.environment].disk_size_gb
+    disk_type    = local.ocr_node_pool_config[var.environment].disk_type
+    
+    oauth_scopes = [
+      "https://www.googleapis.com/auth/logging.write",
+      "https://www.googleapis.com/auth/monitoring",
+      "https://www.googleapis.com/auth/devstorage.read_only"
+    ]
+
+    # GPU configuration
+    guest_accelerator {
+      type  = local.ocr_node_pool_config[var.environment].accelerator_type
+      count = local.ocr_node_pool_config[var.environment].accelerator_count
+    }
+
+    labels = merge(
+      local.default_node_labels,
+      { 
+        "node-pool" = "ocr-gpu",
+        "nvidia.com/gpu" = "present",
+        "workload" = "ocr-service"
+      },
+      lookup(var.node_pools_labels, "ocr", {})
+    )
+
+    dynamic "taint" {
+      for_each = concat(
+        local.default_node_taints,
+        local.ocr_node_taints,
+        lookup(var.node_pools_taints, "ocr", [])
+      )
+      content {
+        key    = taint.value.key
+        value  = taint.value.value
+        effect = taint.value.effect
+      }
+    }
+  }
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+# OCR service node pool with GPU for document processing (Azure)
+resource "azurerm_kubernetes_cluster_node_pool" "ocr" {
+  count                 = var.cloud_provider == "azure" ? 1 : 0
+  name                  = "ocrgpu"
+  kubernetes_cluster_id = var.cluster_name
+  vm_size               = local.ocr_node_pool_config[var.environment].machine_type  # This should be a GPU-enabled VM size like Standard_NC6s_v3
+  os_disk_size_gb       = local.ocr_node_pool_config[var.environment].disk_size_gb
+  os_disk_type          = "Managed"
+  enable_auto_scaling   = true
+  min_count             = local.ocr_node_pool_config[var.environment].min_count
+  max_count             = local.ocr_node_pool_config[var.environment].max_count
+  node_labels           = merge(
+    local.default_node_labels,
+    { 
+      "node-pool" = "ocr-gpu",
+      "nvidia.com/gpu" = "present",
+      "workload" = "ocr-service"
+    },
+    lookup(var.node_pools_labels, "ocr", {})
+  )
+  
+  # Add taints to ensure only GPU workloads are scheduled on these nodes
+  node_taints = [
+    "nvidia.com/gpu=present:NoSchedule"
+  ]
+  
+  # Disable automatic upgrades for GPU nodes to prevent driver compatibility issues
+  upgrade_settings {
+    max_surge = "33%"
+  }
+  
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+# OCR service node group with GPU for document processing (AWS)
+resource "aws_eks_node_group" "ocr" {
+  count           = var.cloud_provider == "aws" ? 1 : 0
+  cluster_name    = var.cluster_name
+  node_group_name = "ocr-gpu-pool"
+  node_role_arn   = "arn:aws:iam::${data.aws_caller_identity.current[0].account_id}:role/eks-node-group-role"
+  subnet_ids      = data.aws_subnets.private[0].ids
+  version         = var.kubernetes_version
+  
+  scaling_config {
+    desired_size = local.ocr_node_pool_config[var.environment].min_count
+    min_size     = local.ocr_node_pool_config[var.environment].min_count
+    max_size     = local.ocr_node_pool_config[var.environment].max_count
+  }
+  
+  # Use GPU-enabled instance types (g4dn.xlarge, p3.2xlarge, etc.)
+  instance_types = [local.ocr_node_pool_config[var.environment].machine_type]
+  
+  disk_size = local.ocr_node_pool_config[var.environment].disk_size_gb
+  
+  labels = merge(
+    local.default_node_labels,
+    { 
+      "node-pool" = "ocr-gpu",
+      "nvidia.com/gpu" = "present",
+      "workload" = "ocr-service"
+    },
+    lookup(var.node_pools_labels, "ocr", {})
+  )
+  
+  # AWS doesn't support taints directly in the node group resource
+  # They need to be applied separately using kubectl or the Kubernetes provider
+  
+  update_config {
+    max_unavailable = 1
+  }
+  
+  # Add a custom AMI with pre-installed NVIDIA drivers if needed
+  # ami_type = "AL2_x86_64_GPU"
+  
+  lifecycle {
+    create_before_destroy = true
+    ignore_changes        = [scaling_config[0].desired_size]
+  }
+}
+
+# Data service node pool for database operations (GCP)
+resource "google_container_node_pool" "data" {
+  count      = var.cloud_provider == "gcp" ? 1 : 0
+  name       = "data-pool"
+  cluster    = var.cluster_name
+  version    = var.kubernetes_version
+  node_count = null
+  location   = var.region
+
+  autoscaling {
+    min_node_count = local.data_node_pool_config[var.environment].min_count
+    max_node_count = local.data_node_pool_config[var.environment].max_count
+  }
+
+  management {
+    auto_repair  = true
+    auto_upgrade = true
+  }
+
+  upgrade_settings {
+    max_surge       = 1
+    max_unavailable = 0
+  }
+
+  node_config {
+    machine_type = local.data_node_pool_config[var.environment].machine_type
+    disk_size_gb = local.data_node_pool_config[var.environment].disk_size_gb
+    disk_type    = local.data_node_pool_config[var.environment].disk_type
+    
+    oauth_scopes = [
+      "https://www.googleapis.com/auth/logging.write",
+      "https://www.googleapis.com/auth/monitoring",
+      "https://www.googleapis.com/auth/devstorage.read_only"
+    ]
+
+    labels = merge(
+      local.default_node_labels,
+      { 
+        "node-pool" = "data",
+        "workload" = "data-service"
+      },
+      lookup(var.node_pools_labels, "data", {})
+    )
+
+    dynamic "taint" {
+      for_each = concat(
+        local.default_node_taints,
+        lookup(var.node_pools_taints, "data", [])
+      )
+      content {
+        key    = taint.value.key
+        value  = taint.value.value
+        effect = taint.value.effect
+      }
+    }
+  }
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+# Data service node pool for database operations (Azure)
+resource "azurerm_kubernetes_cluster_node_pool" "data" {
+  count                 = var.cloud_provider == "azure" ? 1 : 0
+  name                  = "data"
+  kubernetes_cluster_id = var.cluster_name
+  vm_size               = local.data_node_pool_config[var.environment].machine_type
+  os_disk_size_gb       = local.data_node_pool_config[var.environment].disk_size_gb
+  os_disk_type          = local.data_node_pool_config[var.environment].disk_type == local.cloud_config.disk_types.ssd ? "Managed" : "Ephemeral"
+  enable_auto_scaling   = true
+  min_count             = local.data_node_pool_config[var.environment].min_count
+  max_count             = local.data_node_pool_config[var.environment].max_count
+  node_labels           = merge(
+    local.default_node_labels,
+    { 
+      "node-pool" = "data",
+      "workload" = "data-service"
+    },
+    lookup(var.node_pools_labels, "data", {})
+  )
+  
+  dynamic "node_taints" {
+    for_each = concat(
+      local.default_node_taints,
+      lookup(var.node_pools_taints, "data", [])
+    )
+    content {
+      key    = node_taints.value.key
+      value  = node_taints.value.value
+      effect = node_taints.value.effect
+    }
+  }
+  
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+# Data service node group for database operations (AWS)
+resource "aws_eks_node_group" "data" {
+  count           = var.cloud_provider == "aws" ? 1 : 0
+  cluster_name    = var.cluster_name
+  node_group_name = "data-pool"
+  node_role_arn   = "arn:aws:iam::${data.aws_caller_identity.current[0].account_id}:role/eks-node-group-role"
+  subnet_ids      = data.aws_subnets.private[0].ids
+  version         = var.kubernetes_version
+  
+  scaling_config {
+    desired_size = local.data_node_pool_config[var.environment].min_count
+    min_size     = local.data_node_pool_config[var.environment].min_count
+    max_size     = local.data_node_pool_config[var.environment].max_count
+  }
+  
+  instance_types = [local.data_node_pool_config[var.environment].machine_type]
+  
+  disk_size = local.data_node_pool_config[var.environment].disk_size_gb
+  
+  labels = merge(
+    local.default_node_labels,
+    { 
+      "node-pool" = "data",
+      "workload" = "data-service"
+    },
+    lookup(var.node_pools_labels, "data", {})
+  )
+  
+  # AWS doesn't support taints directly in the node group resource
+  # They need to be applied separately using kubectl or the Kubernetes provider
+  
+  update_config {
+    max_unavailable = 1
+  }
+  
+  lifecycle {
+    create_before_destroy = true
+    ignore_changes        = [scaling_config[0].desired_size]
+  }
+}
+
+# Outputs for node pool IDs
+output "standard_node_pool_id" {
+  description = "ID of the standard node pool"
+  value       = var.cloud_provider == "gcp" ? google_container_node_pool.standard[0].id : (
+                var.cloud_provider == "azure" ? azurerm_kubernetes_cluster_node_pool.standard[0].id : (
+                var.cloud_provider == "aws" ? aws_eks_node_group.standard[0].id : null
+                ))
+}
+
+output "ocr_node_pool_id" {
+  description = "ID of the OCR GPU node pool"
+  value       = var.cloud_provider == "gcp" ? google_container_node_pool.ocr[0].id : (
+                var.cloud_provider == "azure" ? azurerm_kubernetes_cluster_node_pool.ocr[0].id : (
+                var.cloud_provider == "aws" ? aws_eks_node_group.ocr[0].id : null
+                ))
+}
+
+output "data_node_pool_id" {
+  description = "ID of the data service node pool"
+  value       = var.cloud_provider == "gcp" ? google_container_node_pool.data[0].id : (
+                var.cloud_provider == "azure" ? azurerm_kubernetes_cluster_node_pool.data[0].id : (
+                var.cloud_provider == "aws" ? aws_eks_node_group.data[0].id : null
+                ))
 }
