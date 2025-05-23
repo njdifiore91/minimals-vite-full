@@ -1,371 +1,369 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+"""RabbitMQ configuration for the OCR Service.
 
-"""
-RabbitMQ Configuration for OCR Service
-
-This module configures the RabbitMQ connection and messaging settings for the OCR Service.
-It defines connection parameters, exchange and queue configurations, message consumption options,
-and security settings. The configuration enables the service to consume classification results
-from the Document Service and publish extraction results to the Data Service.
+This module provides configuration for RabbitMQ connection, exchanges, queues,
+and message handling for the OCR Service. It enables the service to consume
+messages from the Document Service and publish extraction results to the Data Service.
 
 Key features:
-1. TLS/SSL configuration with client certificate authentication
-2. Exchange and queue setup for document processing
-3. Connection error handling and recovery strategies
-4. Message serialization for consistent JSON format
-5. Environment-specific configuration options
+- TLS/SSL connection with client certificate authentication
+- Fanout exchange 'mca.documents' for document processing
+- Durable queues with dead-letter exchanges for error handling
+- Connection recovery with exponential backoff
+- JSON message serialization for consistent data format
+- Prefetch count configuration for optimal throughput
+
+As specified in the technical specification, this configuration implements:
+- Asynchronous messaging between services with guaranteed delivery
+- Dead letter exchanges for failed message handling
+- Consumer configuration with prefetch counts
+- Connection error handling and recovery strategies
 """
 
 import os
-import logging
 import ssl
-from typing import Dict, Optional, Any, List
+import json
+import time
+from pathlib import Path
+from typing import Dict, Optional, Any, cast, Callable, List
 
-from ..types.messages import (
-    ExchangeType, ExchangeConfig, QueueConfig, ConnectionConfig,
-    RetryConfig, MessagePayload, MessageHeaders, MessageSerializer
-)
-from ..types.config import RabbitMQConfig
+from ..types.config import RabbitMQConfig, validate_config
 
-# Configure logging
-logger = logging.getLogger(__name__)
-
-# Environment variable names
-ENV_VAR_ENVIRONMENT = 'OCR_ENVIRONMENT'
-ENV_VAR_RABBITMQ_HOST = 'RABBITMQ_HOST'
-ENV_VAR_RABBITMQ_PORT = 'RABBITMQ_PORT'
-ENV_VAR_RABBITMQ_VHOST = 'RABBITMQ_VIRTUAL_HOST'
-ENV_VAR_RABBITMQ_USER = 'RABBITMQ_USERNAME'
-ENV_VAR_RABBITMQ_PASS = 'RABBITMQ_PASSWORD'
-ENV_VAR_RABBITMQ_USE_SSL = 'RABBITMQ_USE_SSL'
-ENV_VAR_RABBITMQ_SSL_VERIFY = 'RABBITMQ_SSL_VERIFY'
-ENV_VAR_RABBITMQ_SSL_CERT = 'RABBITMQ_SSL_CERT_PATH'
-ENV_VAR_RABBITMQ_SSL_KEY = 'RABBITMQ_SSL_KEY_PATH'
-ENV_VAR_RABBITMQ_SSL_CA = 'RABBITMQ_SSL_CA_CERTS'
-ENV_VAR_RABBITMQ_EXCHANGE = 'RABBITMQ_EXCHANGE_NAME'
-ENV_VAR_RABBITMQ_QUEUE = 'RABBITMQ_QUEUE_NAME'
-
-# Default values
-DEFAULT_ENVIRONMENT = 'development'
-DEFAULT_HOST = 'rabbitmq'
-DEFAULT_PORT = 5672
-DEFAULT_VHOST = '/'
-DEFAULT_USER = 'guest'
-DEFAULT_PASS = 'guest'
-DEFAULT_EXCHANGE = 'mca.documents'
-DEFAULT_QUEUE = 'data-extraction'
-DEFAULT_CONSUMER_TAG = 'ocr-service'
-
-# Get current environment
-ENVIRONMENT = os.environ.get(ENV_VAR_ENVIRONMENT, DEFAULT_ENVIRONMENT)
-
-# RabbitMQ connection configuration
-RABBITMQ_HOST = os.environ.get(ENV_VAR_RABBITMQ_HOST, DEFAULT_HOST)
-RABBITMQ_PORT = int(os.environ.get(ENV_VAR_RABBITMQ_PORT, str(DEFAULT_PORT)))
-RABBITMQ_VHOST = os.environ.get(ENV_VAR_RABBITMQ_VHOST, DEFAULT_VHOST)
-RABBITMQ_USER = os.environ.get(ENV_VAR_RABBITMQ_USER, DEFAULT_USER)
-RABBITMQ_PASS = os.environ.get(ENV_VAR_RABBITMQ_PASS, DEFAULT_PASS)
-
-# SSL/TLS configuration (required as per section 3.2.3)
-RABBITMQ_USE_SSL = os.environ.get(ENV_VAR_RABBITMQ_USE_SSL, 'true').lower() == 'true'
-RABBITMQ_SSL_VERIFY = os.environ.get(ENV_VAR_RABBITMQ_SSL_VERIFY, 'true').lower() == 'true'
-RABBITMQ_SSL_CERT = os.environ.get(ENV_VAR_RABBITMQ_SSL_CERT)
-RABBITMQ_SSL_KEY = os.environ.get(ENV_VAR_RABBITMQ_SSL_KEY)
-RABBITMQ_SSL_CA = os.environ.get(ENV_VAR_RABBITMQ_SSL_CA)
-
-# Exchange and queue configuration
-RABBITMQ_EXCHANGE = os.environ.get(ENV_VAR_RABBITMQ_EXCHANGE, DEFAULT_EXCHANGE)
-RABBITMQ_QUEUE = os.environ.get(ENV_VAR_RABBITMQ_QUEUE, DEFAULT_QUEUE)
-
-# Connection configuration
-CONNECTION_CONFIG: ConnectionConfig = {
-    'host': RABBITMQ_HOST,
-    'port': RABBITMQ_PORT,
-    'virtual_host': RABBITMQ_VHOST,
-    'username': RABBITMQ_USER,
-    'password': RABBITMQ_PASS,
-    'heartbeat': 60,  # Heartbeat interval in seconds
-    'blocked_connection_timeout': 300,  # Timeout for blocked connections
-    'connection_attempts': 5,  # Number of connection attempts
-    'retry_delay': 1.0,  # Delay between connection attempts
-    'ssl': RABBITMQ_USE_SSL,  # Use SSL/TLS
-}
-
-# SSL/TLS options if enabled
-if RABBITMQ_USE_SSL:
-    ssl_options: Dict[str, Any] = {
-        'cert_reqs': ssl.CERT_REQUIRED if RABBITMQ_SSL_VERIFY else ssl.CERT_NONE,
-        'ssl_version': ssl.PROTOCOL_TLSv1_2,  # TLS 1.2+ as required in section 3.2.3
-    }
+# Default RabbitMQ configuration based on technical specification requirements
+# See section 0.2.3 for exchange and queue names
+# See section 3.2.3 for security requirements (TLS with client certificate auth)
+DEFAULT_RABBITMQ_CONFIG: RabbitMQConfig = {
+    # Connection parameters
+    "host": os.environ.get("RABBITMQ_HOST", "localhost"),
+    "port": int(os.environ.get("RABBITMQ_PORT", "5671")),  # Default to TLS port
+    "username": os.environ.get("RABBITMQ_USERNAME", "guest"),
+    "password": os.environ.get("RABBITMQ_PASSWORD", "guest"),
+    "vhost": os.environ.get("RABBITMQ_VHOST", "/"),
     
-    # Add client certificate if provided
-    if RABBITMQ_SSL_CERT and RABBITMQ_SSL_KEY:
-        ssl_options['certfile'] = RABBITMQ_SSL_CERT
-        ssl_options['keyfile'] = RABBITMQ_SSL_KEY
+    # Exchange and queue configuration as specified in section 0.2.3
+    "exchange": os.environ.get("RABBITMQ_EXCHANGE", "mca.documents"),  # Fanout exchange
+    "queue_data_extraction": os.environ.get("RABBITMQ_QUEUE_DATA_EXTRACTION", "data-extraction"),
+    "queue_data_processing": os.environ.get("RABBITMQ_QUEUE_DATA_PROCESSING", "data-processing"),
+    "routing_key": os.environ.get("RABBITMQ_ROUTING_KEY", "ocr.result"),
     
-    # Add CA certificate if provided
-    if RABBITMQ_SSL_CA:
-        ssl_options['ca_certs'] = RABBITMQ_SSL_CA
+    # TLS/SSL configuration as required by section 3.2.3
+    "ssl": os.environ.get("RABBITMQ_SSL", "True").lower() in ("true", "1", "t"),  # Default to enabled
+    "ssl_cert_path": os.environ.get("RABBITMQ_SSL_CERT_PATH"),  # Client certificate
+    "ssl_key_path": os.environ.get("RABBITMQ_SSL_KEY_PATH"),    # Client key
+    "ssl_ca_certs": os.environ.get("RABBITMQ_SSL_CA_CERTS"),    # CA certificate
     
-    CONNECTION_CONFIG['ssl_options'] = ssl_options
-
-# Exchange configuration (fanout as specified in section 0.2.1.2)
-EXCHANGE_CONFIG: ExchangeConfig = {
-    'name': RABBITMQ_EXCHANGE,
-    'type': ExchangeType.FANOUT.value,
-    'durable': True,  # Survive broker restart
-    'auto_delete': False,  # Don't delete when no queues bound
-}
-
-# Queue configuration
-QUEUE_CONFIG: QueueConfig = {
-    'name': RABBITMQ_QUEUE,
-    'durable': True,  # Survive broker restart
-    'exclusive': False,  # Not exclusive to this connection
-    'auto_delete': False,  # Don't delete when consumer disconnects
-    'arguments': {
-        'x-message-ttl': 86400000,  # 24 hours in milliseconds
-        'x-dead-letter-exchange': f"{RABBITMQ_EXCHANGE}-dlx",  # Dead letter exchange
-        'x-dead-letter-routing-key': f"{RABBITMQ_QUEUE}-dlq",  # Dead letter routing key
-    },
-    'prefetch_count': 10,  # Maximum unacknowledged messages
-    'consumer_tag': DEFAULT_CONSUMER_TAG,  # Consumer identifier
-}
-
-# Dead letter exchange and queue configuration for error handling
-DEAD_LETTER_EXCHANGE_CONFIG: ExchangeConfig = {
-    'name': f"{RABBITMQ_EXCHANGE}-dlx",
-    'type': ExchangeType.DIRECT.value,
-    'durable': True,
-    'auto_delete': False,
-}
-
-DEAD_LETTER_QUEUE_CONFIG: QueueConfig = {
-    'name': f"{RABBITMQ_QUEUE}-dlq",
-    'durable': True,
-    'exclusive': False,
-    'auto_delete': False,
-    'arguments': {
-        'x-message-ttl': 604800000,  # 7 days in milliseconds
-    },
-}
-
-# Retry configuration for connection and channel errors
-RETRY_CONFIG: RetryConfig = {
-    'max_retries': 5,  # Maximum number of retries
-    'initial_delay': 1.0,  # Initial delay in seconds
-    'max_delay': 30.0,  # Maximum delay in seconds
-    'backoff_factor': 2.0,  # Backoff factor for exponential backoff
-    'retry_on_exceptions': [
-        'ConnectionError',
-        'ChannelError',
-        'AMQPError',
-        'TimeoutError',
-    ],
-}
-
-# Default message properties
-DEFAULT_MESSAGE_PROPERTIES: MessageHeaders = {
-    'content_type': 'application/json',
-    'content_encoding': 'utf-8',
-    'delivery_mode': 2,  # 2 = persistent
-    'app_id': 'ocr-service',
+    # Connection tuning parameters
+    "heartbeat": int(os.environ.get("RABBITMQ_HEARTBEAT", "60")),  # Heartbeat interval in seconds
+    "connection_timeout": int(os.environ.get("RABBITMQ_CONNECTION_TIMEOUT", "30")),  # Connection timeout in seconds
+    "prefetch_count": int(os.environ.get("RABBITMQ_PREFETCH_COUNT", "10")),  # Number of unacknowledged messages
 }
 
 
 def get_rabbitmq_config() -> RabbitMQConfig:
-    """
-    Get the RabbitMQ configuration from environment variables.
+    """Get the RabbitMQ configuration with environment variable overrides.
+    
+    Loads the RabbitMQ configuration from environment variables with defaults,
+    and validates the configuration to ensure it meets the requirements
+    specified in the technical specification (section 3.2.3).
     
     Returns:
-        RabbitMQConfig: Configuration object for RabbitMQ
+        RabbitMQ configuration dictionary with validated settings.
+    
+    Raises:
+        ValueError: If the configuration is invalid, particularly if SSL is
+                   enabled but certificate paths are not properly configured.
     """
-    return RabbitMQConfig.from_env()
+    config = DEFAULT_RABBITMQ_CONFIG.copy()
+    
+    # Validate the configuration
+    # This is a partial validation since we're only validating the RabbitMQ config
+    # The full validation happens in app_config.py
+    if config["ssl"] and not all([config["ssl_cert_path"], config["ssl_key_path"], config["ssl_ca_certs"]]):
+        raise ValueError("SSL is enabled but certificate paths are not properly configured")
+    
+    return config
 
 
-def get_ssl_context() -> Optional[ssl.SSLContext]:
-    """
-    Create an SSL context for RabbitMQ connection if SSL is enabled.
+def get_rabbitmq_connection_parameters(config: RabbitMQConfig) -> Dict[str, Any]:
+    """Get connection parameters for RabbitMQ.
     
-    This function creates an SSL context with the appropriate certificate
-    verification and client certificate settings based on the configuration.
+    Configures the RabbitMQ connection with TLS/SSL and client certificate
+    authentication as required by the technical specification (section 3.2.3).
     
-    Returns:
-        Optional[ssl.SSLContext]: SSL context for RabbitMQ connection, or None if SSL is disabled
-    """
-    if not RABBITMQ_USE_SSL:
-        return None
+    The SSL context is configured with:
+    - Client certificate authentication
+    - Certificate verification
+    - Hostname verification
     
-    # Create SSL context with TLS 1.2 or higher
-    context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
-    context.minimum_version = ssl.TLSVersion.TLSv1_2
-    
-    # Set certificate verification mode
-    if RABBITMQ_SSL_VERIFY:
-        context.verify_mode = ssl.CERT_REQUIRED
-    else:
-        context.verify_mode = ssl.CERT_NONE
-        context.check_hostname = False
-    
-    # Load CA certificate if provided
-    if RABBITMQ_SSL_CA:
-        context.load_verify_locations(cafile=RABBITMQ_SSL_CA)
-    
-    # Load client certificate if provided
-    if RABBITMQ_SSL_CERT and RABBITMQ_SSL_KEY:
-        context.load_cert_chain(RABBITMQ_SSL_CERT, RABBITMQ_SSL_KEY)
-    
-    return context
-
-
-def validate_rabbitmq_configuration() -> bool:
-    """
-    Validate the RabbitMQ configuration.
-    
-    This function checks that the required configuration is available and valid.
-    It logs warnings for any issues found.
-    
-    Returns:
-        bool: True if configuration is valid, False otherwise
-    """
-    valid = True
-    
-    # Check if host is configured
-    if not RABBITMQ_HOST:
-        logger.error("RabbitMQ host not configured")
-        valid = False
-    
-    # Check if exchange is configured
-    if not RABBITMQ_EXCHANGE:
-        logger.error("RabbitMQ exchange not configured")
-        valid = False
-    
-    # Check if queue is configured
-    if not RABBITMQ_QUEUE:
-        logger.error("RabbitMQ queue not configured")
-        valid = False
-    
-    # Check SSL configuration if enabled
-    if RABBITMQ_USE_SSL:
-        # Check if client certificate authentication is properly configured
-        if RABBITMQ_SSL_VERIFY and not RABBITMQ_SSL_CA:
-            logger.warning("SSL verification enabled but CA certificate not provided")
+    Args:
+        config: RabbitMQ configuration.
         
-        # Check if client certificate is properly configured
-        if RABBITMQ_SSL_CERT and not RABBITMQ_SSL_KEY:
-            logger.error("SSL certificate provided but key is missing")
-            valid = False
-        elif RABBITMQ_SSL_KEY and not RABBITMQ_SSL_CERT:
-            logger.error("SSL key provided but certificate is missing")
-            valid = False
-    
-    return valid
-
-
-def get_connection_parameters() -> Dict[str, Any]:
-    """
-    Get connection parameters for RabbitMQ client.
-    
-    This function returns a dictionary of connection parameters suitable for
-    use with the pika library to connect to RabbitMQ.
-    
     Returns:
-        Dict[str, Any]: Connection parameters for RabbitMQ client
+        Dictionary of connection parameters for pika, including SSL context
+        if SSL is enabled.
     """
     params = {
-        'host': RABBITMQ_HOST,
-        'port': RABBITMQ_PORT,
-        'virtual_host': RABBITMQ_VHOST,
-        'credentials': {
-            'username': RABBITMQ_USER,
-            'password': RABBITMQ_PASS,
+        "host": config["host"],
+        "port": config["port"],
+        "virtual_host": config["vhost"],
+        "credentials": {
+            "username": config["username"],
+            "password": config["password"],
         },
-        'heartbeat': CONNECTION_CONFIG['heartbeat'],
-        'blocked_connection_timeout': CONNECTION_CONFIG['blocked_connection_timeout'],
-        'connection_attempts': CONNECTION_CONFIG['connection_attempts'],
-        'retry_delay': CONNECTION_CONFIG['retry_delay'],
+        "heartbeat": config["heartbeat"],
+        "connection_timeout": config["connection_timeout"],
+        "client_properties": {
+            "connection_name": "ocr-service",
+            "product": "MCA OCR Service",
+        },
     }
     
     # Add SSL context if SSL is enabled
-    if RABBITMQ_USE_SSL:
-        params['ssl_options'] = get_ssl_context()
+    if config["ssl"]:
+        ssl_context = ssl.create_default_context(cafile=config["ssl_ca_certs"])
+        ssl_context.load_cert_chain(
+            certfile=cast(str, config["ssl_cert_path"]),
+            keyfile=cast(str, config["ssl_key_path"]),
+        )
+        ssl_context.check_hostname = True
+        ssl_context.verify_mode = ssl.CERT_REQUIRED
+        
+        params["ssl_options"] = {
+            "context": ssl_context,
+        }
     
     return params
 
 
-def get_consumer_options() -> Dict[str, Any]:
-    """
-    Get consumer options for RabbitMQ client.
+def get_rabbitmq_exchange_config(config: RabbitMQConfig) -> Dict[str, Any]:
+    """Get exchange configuration for RabbitMQ.
     
-    This function returns a dictionary of consumer options suitable for
-    use with the pika library to consume messages from RabbitMQ.
+    Configures the 'mca.documents' fanout exchange as specified in the technical
+    specification (section 0.2.3). This exchange is used for document processing
+    messages between services.
     
+    Args:
+        config: RabbitMQ configuration.
+        
     Returns:
-        Dict[str, Any]: Consumer options for RabbitMQ client
+        Dictionary of exchange configuration with the following keys:
+        - exchange: Exchange name ('mca.documents')
+        - exchange_type: Exchange type ('fanout')
+        - durable: Whether the exchange survives broker restarts
+        - auto_delete: Whether the exchange is deleted when no queues are bound
     """
     return {
-        'queue': QUEUE_CONFIG['name'],
-        'consumer_tag': QUEUE_CONFIG['consumer_tag'],
-        'exclusive': QUEUE_CONFIG['exclusive'],
-        'arguments': QUEUE_CONFIG.get('arguments', {}),
+        "exchange": config["exchange"],
+        "exchange_type": "fanout",  # Using fanout as specified in the technical spec
+        "durable": True,  # Survive broker restarts
+        "auto_delete": False,  # Don't delete when no queues are bound
     }
 
 
-def get_publisher_options() -> Dict[str, Any]:
-    """
-    Get publisher options for RabbitMQ client.
+def get_rabbitmq_queue_config(config: RabbitMQConfig) -> Dict[str, Any]:
+    """Get queue configuration for RabbitMQ.
     
-    This function returns a dictionary of publisher options suitable for
-    use with the pika library to publish messages to RabbitMQ.
+    Configures the OCR processing queues as specified in the technical
+    specification (section 0.2.3). The OCR Service consumes from the
+    'data-extraction' queue and publishes to the 'data-processing' queue.
     
+    Both queues are configured with:
+    - Durability to survive broker restarts
+    - Dead-letter exchanges for failed message handling
+    - Message TTL to prevent queue overflow
+    
+    Args:
+        config: RabbitMQ configuration.
+        
     Returns:
-        Dict[str, Any]: Publisher options for RabbitMQ client
+        Dictionary of queue configurations for 'data-extraction' and
+        'data-processing' queues.
     """
     return {
-        'exchange': EXCHANGE_CONFIG['name'],
-        'routing_key': '',  # Empty for fanout exchange
-        'mandatory': True,  # Return message if it can't be routed
-        'properties': DEFAULT_MESSAGE_PROPERTIES,
+        "data_extraction": {
+            "queue": config["queue_data_extraction"],
+            "durable": True,  # Survive broker restarts
+            "exclusive": False,  # Allow multiple consumers
+            "auto_delete": False,  # Don't delete when no consumers
+            "arguments": {
+                "x-dead-letter-exchange": f"{config['exchange']}.dlx",  # Dead letter exchange
+                "x-message-ttl": 1000 * 60 * 60 * 24,  # 24 hours in milliseconds
+            },
+        },
+        "data_processing": {
+            "queue": config["queue_data_processing"],
+            "durable": True,
+            "exclusive": False,
+            "auto_delete": False,
+            "arguments": {
+                "x-dead-letter-exchange": f"{config['exchange']}.dlx",
+                "x-message-ttl": 1000 * 60 * 60 * 24,  # 24 hours in milliseconds
+            },
+        },
     }
 
 
-def serialize_message(payload: MessagePayload) -> bytes:
-    """
-    Serialize a message payload to JSON bytes.
+def get_rabbitmq_consumer_config(config: RabbitMQConfig) -> Dict[str, Any]:
+    """Get consumer configuration for RabbitMQ.
+    
+    Configures the RabbitMQ consumer with:
+    - Prefetch count to limit the number of unacknowledged messages
+    - Explicit acknowledgement requirement for reliable processing
+    
+    This ensures that the OCR Service processes messages from the
+    'data-extraction' queue reliably and efficiently, as specified in
+    the technical specification (section 4.1.8).
     
     Args:
-        payload: Message payload to serialize
+        config: RabbitMQ configuration.
         
     Returns:
-        bytes: Serialized message payload
+        Dictionary of consumer configuration for reliable message processing.
     """
-    return MessageSerializer.serialize(payload)
+    return {
+        "prefetch_count": config["prefetch_count"],
+        "no_ack": False,  # Require explicit acknowledgement
+    }
 
 
-def deserialize_message(body: bytes) -> MessagePayload:
-    """
-    Deserialize JSON bytes to a message payload.
+def get_rabbitmq_publisher_config(config: RabbitMQConfig) -> Dict[str, Any]:
+    """Get publisher configuration for RabbitMQ.
+    
+    Configures the RabbitMQ publisher with:
+    - Mandatory flag to ensure messages are routed
+    - Persistent delivery mode for message durability
+    - JSON content type for consistent message serialization
+    
+    This ensures that messages from the OCR Service to the Data Service
+    are delivered reliably and in a consistent format, as specified in the
+    technical specification (section 4.1.8).
     
     Args:
-        body: Serialized message payload
+        config: RabbitMQ configuration.
         
     Returns:
-        MessagePayload: Deserialized message payload
+        Dictionary of publisher configuration for reliable message delivery.
     """
-    return MessageSerializer.deserialize(body)
+    return {
+        "mandatory": True,  # Raise exception if message cannot be routed
+        "properties": {
+            "delivery_mode": 2,  # Persistent
+            "content_type": "application/json",  # JSON serialization
+        },
+    }
 
 
-# Validate configuration on module import
-if not validate_rabbitmq_configuration():
-    logger.warning("RabbitMQ configuration validation failed")
+def get_rabbitmq_retry_config() -> Dict[str, Any]:
+    """Get retry configuration for RabbitMQ connection.
+    
+    This implements an exponential backoff strategy for connection retries,
+    as specified in the technical specification. The retry mechanism helps
+    ensure resilience against temporary RabbitMQ unavailability.
+    
+    Returns:
+        Dictionary of retry configuration with the following keys:
+        - max_retries: Maximum number of retry attempts
+        - initial_delay: Initial delay between retries in seconds
+        - max_delay: Maximum delay between retries in seconds
+        - backoff_factor: Multiplicative factor for exponential backoff
+    """
+    return {
+        "max_retries": int(os.environ.get("RABBITMQ_MAX_RETRIES", "5")),
+        "initial_delay": float(os.environ.get("RABBITMQ_INITIAL_DELAY", "1.0")),  # seconds
+        "max_delay": float(os.environ.get("RABBITMQ_MAX_DELAY", "30.0")),  # seconds
+        "backoff_factor": float(os.environ.get("RABBITMQ_BACKOFF_FACTOR", "2.0")),
+    }
 
 
-# Log configuration summary
-logger.info(f"RabbitMQ Configuration: Environment={ENVIRONMENT}, Host={RABBITMQ_HOST}, Port={RABBITMQ_PORT}")
-logger.info(f"Exchange: {RABBITMQ_EXCHANGE} (type: {EXCHANGE_CONFIG['type']})")
-logger.info(f"Queue: {RABBITMQ_QUEUE}")
-logger.info(f"SSL/TLS: {'Enabled' if RABBITMQ_USE_SSL else 'Disabled'}")
-if RABBITMQ_USE_SSL:
-    logger.info(f"SSL Verification: {'Enabled' if RABBITMQ_SSL_VERIFY else 'Disabled'}")
-    logger.info(f"Client Certificate: {'Configured' if RABBITMQ_SSL_CERT and RABBITMQ_SSL_KEY else 'Not configured'}")
+def get_message_serializer() -> Callable[[Any], bytes]:
+    """Get a message serializer function for RabbitMQ messages.
+    
+    Returns a function that serializes Python objects to JSON bytes for
+    publishing to RabbitMQ. This ensures consistent message format across
+    all services, as specified in the technical specification (section 4.1.8).
+    
+    Returns:
+        A function that takes a Python object and returns JSON bytes.
+    """
+    def serialize_message(message: Any) -> bytes:
+        """Serialize a message to JSON bytes.
+        
+        Args:
+            message: The message to serialize.
+            
+        Returns:
+            JSON bytes representation of the message.
+        """
+        return json.dumps(message, ensure_ascii=False, default=str).encode('utf-8')
+    
+    return serialize_message
+
+
+def get_message_deserializer() -> Callable[[bytes], Any]:
+    """Get a message deserializer function for RabbitMQ messages.
+    
+    Returns a function that deserializes JSON bytes from RabbitMQ to Python
+    objects. This ensures consistent message parsing across all services,
+    as specified in the technical specification (section 4.1.8).
+    
+    Returns:
+        A function that takes JSON bytes and returns a Python object.
+    """
+    def deserialize_message(message_bytes: bytes) -> Any:
+        """Deserialize JSON bytes to a Python object.
+        
+        Args:
+            message_bytes: The JSON bytes to deserialize.
+            
+        Returns:
+            Python object representation of the JSON bytes.
+            
+        Raises:
+            json.JSONDecodeError: If the message is not valid JSON.
+        """
+        return json.loads(message_bytes.decode('utf-8'))
+    
+    return deserialize_message
+
+
+def create_ocr_result_message(document_id: str, extracted_data: Dict[str, Any], 
+                             confidence_scores: Dict[str, float], 
+                             low_confidence_fields: Optional[List[str]] = None) -> Dict[str, Any]:
+    """Create a standardized OCR result message for publishing to RabbitMQ.
+    
+    This function creates a standardized message format for OCR results,
+    including extracted data, confidence scores, and flags for low-confidence
+    fields that may require human verification, as specified in the technical
+    specification (section 4.1.8).
+    
+    Args:
+        document_id: The ID of the processed document.
+        extracted_data: The extracted data from the document.
+        confidence_scores: Confidence scores for each extracted field.
+        low_confidence_fields: List of fields with low confidence scores.
+        
+    Returns:
+        A standardized message dictionary ready for serialization and publishing.
+    """
+    return {
+        "document_id": document_id,
+        "extracted_data": extracted_data,
+        "confidence_scores": confidence_scores,
+        "low_confidence_fields": low_confidence_fields or [],
+        "requires_review": bool(low_confidence_fields),
+        "processing_timestamp": int(time.time() * 1000),  # Milliseconds since epoch
+    }
+
+
+# Export the configuration functions
+__all__ = [
+    "get_rabbitmq_config",
+    "get_rabbitmq_connection_parameters",
+    "get_rabbitmq_exchange_config",
+    "get_rabbitmq_queue_config",
+    "get_rabbitmq_consumer_config",
+    "get_rabbitmq_publisher_config",
+    "get_rabbitmq_retry_config",
+    "get_message_serializer",
+    "get_message_deserializer",
+    "create_ocr_result_message",
+]
