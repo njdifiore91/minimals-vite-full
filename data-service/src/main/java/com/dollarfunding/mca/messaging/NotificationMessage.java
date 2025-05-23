@@ -7,15 +7,21 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import javax.validation.constraints.NotBlank;
 import javax.validation.constraints.NotEmpty;
 import javax.validation.constraints.NotNull;
+import javax.validation.constraints.Min;
+import javax.validation.constraints.Max;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
 /**
  * Model class for notification messages published to RabbitMQ.
+ * <p>
  * This class defines the structure of messages sent to the Notification Service
- * for delivery to external systems via webhooks or other channels.
+ * for delivery to external systems via webhooks or other channels. It includes fields
+ * for notification type, recipient information, payload data, and delivery options.
+ * </p>
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class NotificationMessage {
@@ -24,32 +30,88 @@ public class NotificationMessage {
      * Enum defining the types of notifications that can be sent.
      */
     public enum NotificationType {
+        /**
+         * Status update notification for an application
+         */
         STATUS_UPDATE,
+        
+        /**
+         * Error notification for an application
+         */
         ERROR,
-        COMPLETION
+        
+        /**
+         * Completion notification for an application
+         */
+        COMPLETION,
+        
+        /**
+         * Document received notification
+         */
+        DOCUMENT_RECEIVED,
+        
+        /**
+         * Document processed notification
+         */
+        DOCUMENT_PROCESSED,
+        
+        /**
+         * System notification
+         */
+        SYSTEM
     }
 
     /**
      * Enum defining the priority levels for notifications.
      */
     public enum NotificationPriority {
+        /**
+         * Low priority notification
+         */
         LOW,
+        
+        /**
+         * Medium priority notification
+         */
         MEDIUM,
+        
+        /**
+         * High priority notification
+         */
         HIGH,
+        
+        /**
+         * Critical priority notification
+         */
         CRITICAL
     }
 
     /**
-     * Enum defining the channels through which notifications can be delivered.
+     * Enum defining the types of recipients for notifications.
      */
-    public enum NotificationChannel {
+    public enum RecipientType {
+        /**
+         * Webhook endpoint recipient
+         */
         WEBHOOK,
+        
+        /**
+         * Email recipient
+         */
         EMAIL,
+        
+        /**
+         * SMS recipient
+         */
         SMS,
+        
+        /**
+         * Push notification recipient
+         */
         PUSH
     }
 
-    @NotNull
+    @NotBlank
     @JsonProperty("id")
     private String id;
 
@@ -58,13 +120,13 @@ public class NotificationMessage {
     private NotificationType type;
 
     @NotNull
+    @JsonProperty("priority")
+    private NotificationPriority priority;
+
+    @NotNull
     @JsonProperty("timestamp")
     @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
     private LocalDateTime timestamp;
-
-    @NotNull
-    @JsonProperty("priority")
-    private NotificationPriority priority;
 
     @NotEmpty
     @JsonProperty("recipients")
@@ -74,17 +136,18 @@ public class NotificationMessage {
     @JsonProperty("payload")
     private Map<String, Object> payload;
 
-    @JsonProperty("metadata")
-    private Map<String, Object> metadata;
-
     @JsonProperty("delivery_options")
     private DeliveryOptions deliveryOptions;
+
+    @JsonProperty("metadata")
+    private Map<String, Object> metadata;
 
     /**
      * Default constructor for serialization frameworks.
      */
     public NotificationMessage() {
         this.timestamp = LocalDateTime.now();
+        this.recipients = new ArrayList<>();
         this.payload = new HashMap<>();
         this.metadata = new HashMap<>();
     }
@@ -96,86 +159,86 @@ public class NotificationMessage {
      * @param type       Type of notification
      * @param priority   Priority level of the notification
      * @param recipients List of recipients for the notification
-     * @param payload    Data payload of the notification
+     * @param payload    Payload data for the notification
      */
     public NotificationMessage(String id, NotificationType type, NotificationPriority priority,
                               List<Recipient> recipients, Map<String, Object> payload) {
         this.id = id;
         this.type = type;
-        this.timestamp = LocalDateTime.now();
         this.priority = priority;
+        this.timestamp = LocalDateTime.now();
         this.recipients = recipients;
         this.payload = payload;
         this.metadata = new HashMap<>();
     }
 
     /**
-     * Inner class representing a notification recipient.
+     * Inner class representing a recipient for a notification.
      */
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public static class Recipient {
         @NotNull
-        @JsonProperty("channel")
-        private NotificationChannel channel;
+        @JsonProperty("type")
+        private RecipientType type;
 
         @NotBlank
-        @JsonProperty("destination")
-        private String destination;
+        @JsonProperty("address")
+        private String address;
 
         @JsonProperty("name")
         private String name;
 
-        @JsonProperty("properties")
-        private Map<String, Object> properties;
+        @JsonProperty("config")
+        private Map<String, Object> config;
 
         /**
          * Default constructor for serialization frameworks.
          */
         public Recipient() {
-            this.properties = new HashMap<>();
+            this.config = new HashMap<>();
         }
 
         /**
          * Constructor with essential fields.
          *
-         * @param channel     Channel for notification delivery
-         * @param destination Destination address (webhook URL, email, phone number, etc.)
+         * @param type    Type of recipient
+         * @param address Address of the recipient (e.g., webhook URL, email address)
          */
-        public Recipient(NotificationChannel channel, String destination) {
-            this.channel = channel;
-            this.destination = destination;
-            this.properties = new HashMap<>();
+        public Recipient(RecipientType type, String address) {
+            this.type = type;
+            this.address = address;
+            this.config = new HashMap<>();
         }
 
         /**
          * Constructor with all fields.
          *
-         * @param channel     Channel for notification delivery
-         * @param destination Destination address (webhook URL, email, phone number, etc.)
-         * @param name        Name of the recipient
-         * @param properties  Additional properties for the recipient
+         * @param type    Type of recipient
+         * @param address Address of the recipient (e.g., webhook URL, email address)
+         * @param name    Name of the recipient
+         * @param config  Configuration options for the recipient
          */
-        public Recipient(NotificationChannel channel, String destination, String name, Map<String, Object> properties) {
-            this.channel = channel;
-            this.destination = destination;
+        public Recipient(RecipientType type, String address, String name, Map<String, Object> config) {
+            this.type = type;
+            this.address = address;
             this.name = name;
-            this.properties = properties;
+            this.config = config != null ? config : new HashMap<>();
         }
 
-        public NotificationChannel getChannel() {
-            return channel;
+        public RecipientType getType() {
+            return type;
         }
 
-        public void setChannel(NotificationChannel channel) {
-            this.channel = channel;
+        public void setType(RecipientType type) {
+            this.type = type;
         }
 
-        public String getDestination() {
-            return destination;
+        public String getAddress() {
+            return address;
         }
 
-        public void setDestination(String destination) {
-            this.destination = destination;
+        public void setAddress(String address) {
+            this.address = address;
         }
 
         public String getName() {
@@ -186,17 +249,29 @@ public class NotificationMessage {
             this.name = name;
         }
 
-        public Map<String, Object> getProperties() {
-            return properties;
+        public Map<String, Object> getConfig() {
+            return config;
         }
 
-        public void setProperties(Map<String, Object> properties) {
-            this.properties = properties;
+        public void setConfig(Map<String, Object> config) {
+            this.config = config;
+        }
+
+        /**
+         * Adds a configuration option for the recipient.
+         *
+         * @param key   The key for the configuration option
+         * @param value The value for the configuration option
+         * @return This Recipient instance for method chaining
+         */
+        public Recipient addConfig(String key, Object value) {
+            this.config.put(key, value);
+            return this;
         }
     }
 
     /**
-     * Inner class representing delivery options for notifications.
+     * Inner class representing delivery options for a notification.
      */
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public static class DeliveryOptions {
@@ -226,25 +301,14 @@ public class NotificationMessage {
         }
 
         /**
-         * Constructor with retry options.
-         *
-         * @param retryCount   Number of retry attempts
-         * @param retryDelayMs Delay between retry attempts in milliseconds
-         */
-        public DeliveryOptions(Integer retryCount, Long retryDelayMs) {
-            this.retryCount = retryCount;
-            this.retryDelayMs = retryDelayMs;
-        }
-
-        /**
          * Constructor with all fields.
          *
-         * @param retryCount      Number of retry attempts
-         * @param retryDelayMs    Delay between retry attempts in milliseconds
-         * @param expirationMs    Expiration time for the notification in milliseconds
-         * @param requireHmac     Whether HMAC signature is required
-         * @param hmacAlgorithm   Algorithm to use for HMAC signature
-         * @param deliveryDeadline Deadline for delivery of the notification
+         * @param retryCount       Number of retry attempts for failed deliveries
+         * @param retryDelayMs     Delay between retry attempts in milliseconds
+         * @param expirationMs     Expiration time for the notification in milliseconds
+         * @param requireHmac      Whether HMAC signature is required for webhook payloads
+         * @param hmacAlgorithm    HMAC algorithm to use for signatures
+         * @param deliveryDeadline Deadline for delivery attempts
          */
         public DeliveryOptions(Integer retryCount, Long retryDelayMs, Long expirationMs,
                               Boolean requireHmac, String hmacAlgorithm, LocalDateTime deliveryDeadline) {
@@ -323,20 +387,20 @@ public class NotificationMessage {
         this.type = type;
     }
 
-    public LocalDateTime getTimestamp() {
-        return timestamp;
-    }
-
-    public void setTimestamp(LocalDateTime timestamp) {
-        this.timestamp = timestamp;
-    }
-
     public NotificationPriority getPriority() {
         return priority;
     }
 
     public void setPriority(NotificationPriority priority) {
         this.priority = priority;
+    }
+
+    public LocalDateTime getTimestamp() {
+        return timestamp;
+    }
+
+    public void setTimestamp(LocalDateTime timestamp) {
+        this.timestamp = timestamp;
     }
 
     public List<Recipient> getRecipients() {
@@ -355,6 +419,14 @@ public class NotificationMessage {
         this.payload = payload;
     }
 
+    public DeliveryOptions getDeliveryOptions() {
+        return deliveryOptions;
+    }
+
+    public void setDeliveryOptions(DeliveryOptions deliveryOptions) {
+        this.deliveryOptions = deliveryOptions;
+    }
+
     public Map<String, Object> getMetadata() {
         return metadata;
     }
@@ -363,12 +435,15 @@ public class NotificationMessage {
         this.metadata = metadata;
     }
 
-    public DeliveryOptions getDeliveryOptions() {
-        return deliveryOptions;
-    }
-
-    public void setDeliveryOptions(DeliveryOptions deliveryOptions) {
-        this.deliveryOptions = deliveryOptions;
+    /**
+     * Adds a recipient to the notification.
+     *
+     * @param recipient The recipient to add
+     * @return This NotificationMessage instance for method chaining
+     */
+    public NotificationMessage addRecipient(Recipient recipient) {
+        this.recipients.add(recipient);
+        return this;
     }
 
     /**
@@ -413,10 +488,11 @@ public class NotificationMessage {
         private NotificationPriority priority;
         private List<Recipient> recipients;
         private Map<String, Object> payload;
-        private Map<String, Object> metadata;
         private DeliveryOptions deliveryOptions;
+        private Map<String, Object> metadata;
 
         private Builder() {
+            this.recipients = new ArrayList<>();
             this.payload = new HashMap<>();
             this.metadata = new HashMap<>();
         }
@@ -441,6 +517,21 @@ public class NotificationMessage {
             return this;
         }
 
+        public Builder addRecipient(Recipient recipient) {
+            this.recipients.add(recipient);
+            return this;
+        }
+
+        public Builder addRecipient(RecipientType type, String address) {
+            this.recipients.add(new Recipient(type, address));
+            return this;
+        }
+
+        public Builder addRecipient(RecipientType type, String address, String name, Map<String, Object> config) {
+            this.recipients.add(new Recipient(type, address, name, config));
+            return this;
+        }
+
         public Builder payload(Map<String, Object> payload) {
             this.payload = payload;
             return this;
@@ -448,6 +539,11 @@ public class NotificationMessage {
 
         public Builder addPayload(String key, Object value) {
             this.payload.put(key, value);
+            return this;
+        }
+
+        public Builder deliveryOptions(DeliveryOptions deliveryOptions) {
+            this.deliveryOptions = deliveryOptions;
             return this;
         }
 
@@ -461,21 +557,16 @@ public class NotificationMessage {
             return this;
         }
 
-        public Builder deliveryOptions(DeliveryOptions deliveryOptions) {
-            this.deliveryOptions = deliveryOptions;
-            return this;
-        }
-
         public NotificationMessage build() {
             NotificationMessage message = new NotificationMessage();
             message.id = this.id;
             message.type = this.type;
-            message.timestamp = LocalDateTime.now();
             message.priority = this.priority;
+            message.timestamp = LocalDateTime.now();
             message.recipients = this.recipients;
             message.payload = this.payload;
-            message.metadata = this.metadata;
             message.deliveryOptions = this.deliveryOptions;
+            message.metadata = this.metadata;
             return message;
         }
     }
