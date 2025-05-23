@@ -1,181 +1,208 @@
 package com.dollarfunding.mca.config;
 
-import org.springframework.amqp.core.AmqpAdmin;
-import org.springframework.amqp.core.Binding;
-import org.springframework.amqp.core.BindingBuilder;
-import org.springframework.amqp.core.FanoutExchange;
-import org.springframework.amqp.core.Queue;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.amqp.core.*;
 import org.springframework.amqp.rabbit.connection.CachingConnectionFactory;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
-import org.springframework.amqp.rabbit.connection.ConnectionNameStrategy;
 import org.springframework.amqp.rabbit.core.RabbitAdmin;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
-import org.springframework.amqp.rabbit.listener.SimpleRabbitListenerContainerFactory;
-import org.springframework.amqp.rabbit.retry.MessageRecoverer;
-import org.springframework.amqp.rabbit.retry.RepublishMessageRecoverer;
 import org.springframework.amqp.support.converter.Jackson2JsonMessageConverter;
 import org.springframework.amqp.support.converter.MessageConverter;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.autoconfigure.amqp.RabbitProperties;
-import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.retry.backoff.ExponentialBackOffPolicy;
-import org.springframework.retry.policy.SimpleRetryPolicy;
 import org.springframework.retry.support.RetryTemplate;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
-
-import java.util.HashMap;
-import java.util.Map;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import javax.net.ssl.KeyManagerFactory;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.TrustManagerFactory;
+import java.io.FileInputStream;
+import java.security.KeyStore;
 
 /**
  * Configuration class for RabbitMQ messaging in the MCA application.
  * 
  * This class configures the RabbitMQ connection factory, message converter,
  * exchanges, queues, and bindings required for asynchronous communication
- * between microservices. It enables TLS with client certificate authentication
- * and configures retry mechanisms for reliable message delivery.
+ * between microservices. It enables secure messaging with TLS and client
+ * certificate authentication.
  */
 @Configuration
-@EnableConfigurationProperties(RabbitProperties.class)
 public class RabbitMQConfig {
 
-    private static final Logger log = LoggerFactory.getLogger(RabbitMQConfig.class);
+    private static final Logger logger = LoggerFactory.getLogger(RabbitMQConfig.class);
 
-    @Value("${application.messaging.exchanges.documents.name:mca.documents}")
+    // RabbitMQ connection properties
+    @Value("${spring.rabbitmq.host}")
+    private String host;
+
+    @Value("${spring.rabbitmq.port}")
+    private int port;
+
+    @Value("${spring.rabbitmq.username}")
+    private String username;
+
+    @Value("${spring.rabbitmq.password}")
+    private String password;
+
+    @Value("${spring.rabbitmq.virtual-host}")
+    private String virtualHost;
+
+    // SSL/TLS properties
+    @Value("${spring.rabbitmq.ssl.enabled}")
+    private boolean sslEnabled;
+
+    @Value("${spring.rabbitmq.ssl.algorithm:TLSv1.3}")
+    private String sslAlgorithm;
+
+    @Value("${spring.rabbitmq.ssl.key-store:#{null}}")
+    private String keyStorePath;
+
+    @Value("${spring.rabbitmq.ssl.key-store-password:#{null}}")
+    private String keyStorePassword;
+
+    @Value("${spring.rabbitmq.ssl.trust-store:#{null}}")
+    private String trustStorePath;
+
+    @Value("${spring.rabbitmq.ssl.trust-store-password:#{null}}")
+    private String trustStorePassword;
+
+    // Exchange and queue properties
+    @Value("${application.messaging.exchanges.documents.name}")
     private String documentsExchangeName;
-    
-    @Value("${application.messaging.queues.document-processing.name:document-processing}")
+
+    @Value("${application.messaging.exchanges.documents.type}")
+    private String documentsExchangeType;
+
+    @Value("${application.messaging.exchanges.documents.durable}")
+    private boolean documentsExchangeDurable;
+
+    @Value("${application.messaging.queues.document-processing.name}")
     private String documentProcessingQueueName;
-    
-    @Value("${application.messaging.queues.data-extraction.name:data-extraction}")
+
+    @Value("${application.messaging.queues.document-processing.durable}")
+    private boolean documentProcessingQueueDurable;
+
+    @Value("${application.messaging.queues.data-extraction.name}")
     private String dataExtractionQueueName;
-    
-    @Value("${application.messaging.queues.notification.name:notification}")
+
+    @Value("${application.messaging.queues.data-extraction.durable}")
+    private boolean dataExtractionQueueDurable;
+
+    @Value("${application.messaging.queues.notification.name}")
     private String notificationQueueName;
-    
-    @Value("${spring.application.name:mca-data-service}")
-    private String applicationName;
+
+    @Value("${application.messaging.queues.notification.durable}")
+    private boolean notificationQueueDurable;
+
+    // Retry properties
+    @Value("${spring.rabbitmq.template.retry.initial-interval}")
+    private long retryInitialInterval;
+
+    @Value("${spring.rabbitmq.template.retry.max-interval}")
+    private long retryMaxInterval;
+
+    @Value("${spring.rabbitmq.template.retry.multiplier}")
+    private double retryMultiplier;
+
+    @Value("${spring.rabbitmq.template.retry.max-attempts}")
+    private int retryMaxAttempts;
 
     /**
-     * Creates a connection factory for RabbitMQ with TLS support.
+     * Creates a connection factory for RabbitMQ with TLS and client certificate authentication if enabled.
      * 
-     * @param rabbitProperties The RabbitMQ properties from application.yml
-     * @return A configured connection factory
+     * @return the configured connection factory
      */
     @Bean
-    public ConnectionFactory connectionFactory(RabbitProperties rabbitProperties) {
-        log.info("Configuring RabbitMQ connection factory with host={}, port={}, virtualHost={}", 
-                rabbitProperties.getHost(), rabbitProperties.getPort(), rabbitProperties.getVirtualHost());
-        
+    public ConnectionFactory connectionFactory() {
         CachingConnectionFactory connectionFactory = new CachingConnectionFactory();
-        connectionFactory.setHost(rabbitProperties.getHost());
-        connectionFactory.setPort(rabbitProperties.getPort());
-        connectionFactory.setUsername(rabbitProperties.getUsername());
-        connectionFactory.setPassword(rabbitProperties.getPassword());
-        connectionFactory.setVirtualHost(rabbitProperties.getVirtualHost());
-        
-        // Configure connection caching
-        connectionFactory.setCacheMode(CachingConnectionFactory.CacheMode.CHANNEL);
-        connectionFactory.setChannelCacheSize(rabbitProperties.getCache().getChannel().getSize());
-        
-        // Set connection name for better identification in RabbitMQ management UI
-        connectionFactory.setConnectionNameStrategy(connectionNameStrategy());
-        
-        // Configure TLS if enabled
-        if (rabbitProperties.getSsl().isEnabled()) {
-            log.info("Enabling TLS for RabbitMQ connection with algorithm={}", 
-                    rabbitProperties.getSsl().getAlgorithm());
-            connectionFactory.setUseSSL(true);
-            connectionFactory.getRabbitConnectionFactory().useSslProtocol();
-            
-            // Configure SSL properties if provided
-            if (rabbitProperties.getSsl().getKeyStore() != null && 
-                !rabbitProperties.getSsl().getKeyStore().isEmpty()) {
-                connectionFactory.getRabbitConnectionFactory().setKeyStore(
-                    rabbitProperties.getSsl().getKeyStore());
-                connectionFactory.getRabbitConnectionFactory().setKeyStorePassphrase(
-                    rabbitProperties.getSsl().getKeyStorePassword());
-                connectionFactory.getRabbitConnectionFactory().setKeyStoreType(
-                    rabbitProperties.getSsl().getKeyStoreType());
+        connectionFactory.setHost(host);
+        connectionFactory.setPort(port);
+        connectionFactory.setUsername(username);
+        connectionFactory.setPassword(password);
+        connectionFactory.setVirtualHost(virtualHost);
+
+        // Configure SSL/TLS if enabled
+        if (sslEnabled) {
+            try {
+                // Set up SSL context with client certificate authentication
+                SSLContext sslContext = SSLContext.getInstance(sslAlgorithm);
+                
+                // Set up key store for client certificate
+                KeyStore keyStore = KeyStore.getInstance("PKCS12");
+                try (FileInputStream keyStoreInputStream = new FileInputStream(keyStorePath)) {
+                    keyStore.load(keyStoreInputStream, keyStorePassword.toCharArray());
+                }
+                KeyManagerFactory keyManagerFactory = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
+                keyManagerFactory.init(keyStore, keyStorePassword.toCharArray());
+                
+                // Set up trust store for server certificate validation
+                KeyStore trustStore = KeyStore.getInstance("JKS");
+                try (FileInputStream trustStoreInputStream = new FileInputStream(trustStorePath)) {
+                    trustStore.load(trustStoreInputStream, trustStorePassword.toCharArray());
+                }
+                TrustManagerFactory trustManagerFactory = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+                trustManagerFactory.init(trustStore);
+                
+                // Initialize SSL context with key and trust managers
+                sslContext.init(
+                    keyManagerFactory.getKeyManagers(),
+                    trustManagerFactory.getTrustManagers(),
+                    null
+                );
+                
+                // Apply SSL context to connection factory
+                connectionFactory.getRabbitConnectionFactory().useSslProtocol(sslContext);
+                
+                logger.info("SSL/TLS configuration for RabbitMQ completed successfully");
+            } catch (Exception e) {
+                logger.error("Failed to configure SSL for RabbitMQ", e);
+                throw new RuntimeException("Failed to configure SSL for RabbitMQ", e);
             }
-            
-            if (rabbitProperties.getSsl().getTrustStore() != null && 
-                !rabbitProperties.getSsl().getTrustStore().isEmpty()) {
-                connectionFactory.getRabbitConnectionFactory().setTrustStore(
-                    rabbitProperties.getSsl().getTrustStore());
-                connectionFactory.getRabbitConnectionFactory().setTrustStorePassphrase(
-                    rabbitProperties.getSsl().getTrustStorePassword());
-                connectionFactory.getRabbitConnectionFactory().setTrustStoreType(
-                    rabbitProperties.getSsl().getTrustStoreType());
-            }
-            
-            // Set TLS protocol version if specified
-            if (rabbitProperties.getSsl().getAlgorithm() != null) {
-                connectionFactory.getRabbitConnectionFactory().setSslAlgorithm(
-                    rabbitProperties.getSsl().getAlgorithm());
-            }
-            
-            // Configure server certificate validation
-            connectionFactory.getRabbitConnectionFactory().setVerifyHostname(
-                rabbitProperties.getSsl().isVerifyHostname());
         }
-        
-        // Configure connection timeout
-        connectionFactory.setConnectionTimeout(rabbitProperties.getConnectionTimeout().toMillis());
-        
+
         return connectionFactory;
     }
-    
+
     /**
-     * Creates a connection name strategy to identify connections in RabbitMQ management UI.
+     * Creates a RabbitMQ admin for managing exchanges and queues.
      * 
-     * @return A connection name strategy
+     * @param connectionFactory the RabbitMQ connection factory
+     * @return the RabbitMQ admin
      */
     @Bean
-    public ConnectionNameStrategy connectionNameStrategy() {
-        return connectionFactory -> applicationName + "-" + System.currentTimeMillis();
+    public RabbitAdmin rabbitAdmin(ConnectionFactory connectionFactory) {
+        return new RabbitAdmin(connectionFactory);
     }
 
     /**
-     * Creates a message converter for serializing/deserializing messages to/from JSON.
+     * Creates a message converter for serializing and deserializing messages to/from JSON.
      * 
-     * @return A Jackson2JsonMessageConverter
+     * @return the JSON message converter
      */
     @Bean
     public MessageConverter jsonMessageConverter() {
-        ObjectMapper objectMapper = new ObjectMapper();
-        objectMapper.registerModule(new JavaTimeModule());
-        return new Jackson2JsonMessageConverter(objectMapper);
+        return new Jackson2JsonMessageConverter();
     }
 
     /**
-     * Creates a retry template for message publishing retries.
+     * Creates a retry template for handling failed message delivery.
      * 
-     * @param rabbitProperties The RabbitMQ properties from application.yml
-     * @return A configured retry template
+     * @return the retry template
      */
     @Bean
-    public RetryTemplate retryTemplate(RabbitProperties rabbitProperties) {
+    public RetryTemplate retryTemplate() {
         RetryTemplate retryTemplate = new RetryTemplate();
         
-        // Configure exponential backoff policy
         ExponentialBackOffPolicy backOffPolicy = new ExponentialBackOffPolicy();
-        backOffPolicy.setInitialInterval(rabbitProperties.getTemplate().getRetry().getInitialInterval().toMillis());
-        backOffPolicy.setMultiplier(rabbitProperties.getTemplate().getRetry().getMultiplier());
-        backOffPolicy.setMaxInterval(rabbitProperties.getTemplate().getRetry().getMaxInterval().toMillis());
-        retryTemplate.setBackOffPolicy(backOffPolicy);
+        backOffPolicy.setInitialInterval(retryInitialInterval);
+        backOffPolicy.setMaxInterval(retryMaxInterval);
+        backOffPolicy.setMultiplier(retryMultiplier);
         
-        // Configure retry policy
-        SimpleRetryPolicy retryPolicy = new SimpleRetryPolicy();
-        retryPolicy.setMaxAttempts((int) rabbitProperties.getTemplate().getRetry().getMaxAttempts());
-        retryTemplate.setRetryPolicy(retryPolicy);
+        retryTemplate.setBackOffPolicy(backOffPolicy);
+        retryTemplate.setRetryPolicy(new org.springframework.retry.policy.SimpleRetryPolicy(retryMaxAttempts));
         
         return retryTemplate;
     }
@@ -183,259 +210,123 @@ public class RabbitMQConfig {
     /**
      * Creates a RabbitTemplate for sending messages to RabbitMQ.
      * 
-     * @param connectionFactory The RabbitMQ connection factory
-     * @param messageConverter The message converter for serialization/deserialization
-     * @param retryTemplate The retry template for message publishing retries
-     * @return A configured RabbitTemplate
+     * @param connectionFactory the RabbitMQ connection factory
+     * @param messageConverter the message converter
+     * @param retryTemplate the retry template
+     * @return the configured RabbitTemplate
      */
     @Bean
-    public RabbitTemplate rabbitTemplate(
-            ConnectionFactory connectionFactory,
-            MessageConverter messageConverter,
-            RetryTemplate retryTemplate) {
+    public RabbitTemplate rabbitTemplate(ConnectionFactory connectionFactory, 
+                                         MessageConverter messageConverter,
+                                         RetryTemplate retryTemplate) {
         RabbitTemplate rabbitTemplate = new RabbitTemplate(connectionFactory);
         rabbitTemplate.setMessageConverter(messageConverter);
-        
-        // Enable publisher confirms and returns
-        connectionFactory.setPublisherConfirmType(CachingConnectionFactory.ConfirmType.CORRELATED);
-        connectionFactory.setPublisherReturns(true);
-        rabbitTemplate.setMandatory(true);
-        
-        // Enable publisher confirms and returns for reliable messaging
+        rabbitTemplate.setRetryTemplate(retryTemplate);
         rabbitTemplate.setConfirmCallback((correlationData, ack, cause) -> {
             if (!ack) {
-                // Log failed message publishing
-                if (correlationData != null) {
-                    // Use SLF4J logger instead of System.err
-                    log.error("Message publishing failed for correlation id {}: {}", 
-                            correlationData.getId(), cause);
-                } else {
-                    log.error("Message publishing failed: {}", cause);
-                }
-                // This could be enhanced to store failed messages for later retry
-                // or to trigger alerts
+                // Log failed message delivery
+                // In a production environment, you might want to store failed messages for later retry
+                // or trigger an alert
+                logger.error("Message delivery failed: {}", cause);
             }
         });
-        
-        rabbitTemplate.setReturnCallback((message, replyCode, replyText, exchange, routingKey) -> {
-            // Log returned messages (messages that couldn't be routed)
-            log.warn("Message returned: exchange={}, routingKey={}, replyCode={}, replyText={}", 
-                    exchange, routingKey, replyCode, replyText);
-        });
-        
-        // Set retry template if retry is enabled
-        rabbitTemplate.setRetryTemplate(retryTemplate);
-        
         return rabbitTemplate;
     }
 
     /**
-     * Creates an AmqpAdmin for managing RabbitMQ objects (exchanges, queues, bindings).
+     * Creates the 'mca.documents' fanout exchange.
      * 
-     * @param connectionFactory The RabbitMQ connection factory
-     * @return A configured RabbitAdmin
+     * @return the exchange
      */
     @Bean
-    public AmqpAdmin amqpAdmin(ConnectionFactory connectionFactory) {
-        return new RabbitAdmin(connectionFactory);
+    public Exchange documentsExchange() {
+        return ExchangeBuilder
+                .fanoutExchange(documentsExchangeName)
+                .durable(documentsExchangeDurable)
+                .build();
     }
 
     /**
-     * Creates the documents fanout exchange.
+     * Creates the 'document-processing' queue.
      * 
-     * @return A configured FanoutExchange
-     */
-    @Bean
-    public FanoutExchange documentsExchange() {
-        log.info("Creating fanout exchange: {}", documentsExchangeName);
-        return new FanoutExchange(documentsExchangeName, true, false);
-    }
-
-    /**
-     * Creates the document processing queue.
-     * 
-     * @return A configured Queue
+     * @return the queue
      */
     @Bean
     public Queue documentProcessingQueue() {
-        log.info("Creating durable queue with dead letter configuration: {}", documentProcessingQueueName);
-        Map<String, Object> args = new HashMap<>();
-        args.put("x-dead-letter-exchange", "mca.dead-letter");
-        return new Queue(documentProcessingQueueName, true, false, false, args);
+        return QueueBuilder
+                .durable(documentProcessingQueueName)
+                .build();
     }
 
     /**
-     * Creates the data extraction queue.
+     * Creates the 'data-extraction' queue.
      * 
-     * @return A configured Queue
+     * @return the queue
      */
     @Bean
     public Queue dataExtractionQueue() {
-        log.info("Creating durable queue with dead letter configuration: {}", dataExtractionQueueName);
-        Map<String, Object> args = new HashMap<>();
-        args.put("x-dead-letter-exchange", "mca.dead-letter");
-        return new Queue(dataExtractionQueueName, true, false, false, args);
+        return QueueBuilder
+                .durable(dataExtractionQueueName)
+                .build();
     }
 
     /**
-     * Creates the notification queue.
+     * Creates the 'notification' queue.
      * 
-     * @return A configured Queue
+     * @return the queue
      */
     @Bean
     public Queue notificationQueue() {
-        log.info("Creating durable queue with dead letter configuration: {}", notificationQueueName);
-        Map<String, Object> args = new HashMap<>();
-        args.put("x-dead-letter-exchange", "mca.dead-letter");
-        return new Queue(notificationQueueName, true, false, false, args);
+        return QueueBuilder
+                .durable(notificationQueueName)
+                .build();
     }
 
     /**
-     * Creates a binding between the documents exchange and the document processing queue.
+     * Creates a binding between the 'mca.documents' exchange and the 'document-processing' queue.
      * 
-     * @param documentsExchange The documents exchange
-     * @param documentProcessingQueue The document processing queue
-     * @return A configured Binding
+     * @param documentsExchange the documents exchange
+     * @param documentProcessingQueue the document processing queue
+     * @return the binding
      */
     @Bean
-    public Binding documentProcessingBinding(
-            @Qualifier("documentsExchange") FanoutExchange documentsExchange,
-            @Qualifier("documentProcessingQueue") Queue documentProcessingQueue) {
-        log.info("Creating binding between exchange {} and queue {}", 
-                documentsExchange.getName(), documentProcessingQueue.getName());
-        return BindingBuilder.bind(documentProcessingQueue).to(documentsExchange);
+    public Binding documentProcessingBinding(Exchange documentsExchange, Queue documentProcessingQueue) {
+        return BindingBuilder
+                .bind(documentProcessingQueue)
+                .to(documentsExchange)
+                .with("") // Empty routing key for fanout exchange
+                .noargs();
     }
 
     /**
-     * Creates a binding between the documents exchange and the data extraction queue.
+     * Creates a binding between the 'mca.documents' exchange and the 'data-extraction' queue.
      * 
-     * @param documentsExchange The documents exchange
-     * @param dataExtractionQueue The data extraction queue
-     * @return A configured Binding
+     * @param documentsExchange the documents exchange
+     * @param dataExtractionQueue the data extraction queue
+     * @return the binding
      */
     @Bean
-    public Binding dataExtractionBinding(
-            @Qualifier("documentsExchange") FanoutExchange documentsExchange,
-            @Qualifier("dataExtractionQueue") Queue dataExtractionQueue) {
-        log.info("Creating binding between exchange {} and queue {}", 
-                documentsExchange.getName(), dataExtractionQueue.getName());
-        return BindingBuilder.bind(dataExtractionQueue).to(documentsExchange);
+    public Binding dataExtractionBinding(Exchange documentsExchange, Queue dataExtractionQueue) {
+        return BindingBuilder
+                .bind(dataExtractionQueue)
+                .to(documentsExchange)
+                .with("") // Empty routing key for fanout exchange
+                .noargs();
     }
 
     /**
-     * Creates a binding between the documents exchange and the notification queue.
+     * Creates a binding between the 'mca.documents' exchange and the 'notification' queue.
      * 
-     * @param documentsExchange The documents exchange
-     * @param notificationQueue The notification queue
-     * @return A configured Binding
+     * @param documentsExchange the documents exchange
+     * @param notificationQueue the notification queue
+     * @return the binding
      */
     @Bean
-    public Binding notificationBinding(
-            @Qualifier("documentsExchange") FanoutExchange documentsExchange,
-            @Qualifier("notificationQueue") Queue notificationQueue) {
-        log.info("Creating binding between exchange {} and queue {}", 
-                documentsExchange.getName(), notificationQueue.getName());
-        return BindingBuilder.bind(notificationQueue).to(documentsExchange);
-    }
-    
-    /**
-     * Creates a dead letter exchange for handling failed messages.
-     * 
-     * @return A configured FanoutExchange for dead letters
-     */
-    @Bean
-    public FanoutExchange deadLetterExchange() {
-        String exchangeName = "mca.dead-letter";
-        log.info("Creating dead letter exchange: {}", exchangeName);
-        return new FanoutExchange(exchangeName, true, false);
-    }
-    
-    /**
-     * Creates a dead letter queue for handling failed messages.
-     * 
-     * @return A configured Queue for dead letters
-     */
-    @Bean
-    public Queue deadLetterQueue() {
-        String queueName = "dead-letter-queue";
-        log.info("Creating dead letter queue: {}", queueName);
-        return new Queue(queueName, true);
-    }
-    
-    /**
-     * Creates a binding between the dead letter exchange and the dead letter queue.
-     * 
-     * @param deadLetterExchange The dead letter exchange
-     * @param deadLetterQueue The dead letter queue
-     * @return A configured Binding
-     */
-    @Bean
-    public Binding deadLetterBinding(
-            @Qualifier("deadLetterExchange") FanoutExchange deadLetterExchange,
-            @Qualifier("deadLetterQueue") Queue deadLetterQueue) {
-        log.info("Creating binding between exchange {} and queue {}", 
-                deadLetterExchange.getName(), deadLetterQueue.getName());
-        return BindingBuilder.bind(deadLetterQueue).to(deadLetterExchange);
-    }
-    
-    /**
-     * Creates a message recoverer that republishes failed messages to the dead letter exchange.
-     * 
-     * @param rabbitTemplate The RabbitTemplate for publishing messages
-     * @return A configured MessageRecoverer
-     */
-    @Bean
-    public MessageRecoverer messageRecoverer(RabbitTemplate rabbitTemplate) {
-        return new RepublishMessageRecoverer(rabbitTemplate, "mca.dead-letter", "");
-    }
-    
-    /**
-     * Creates a SimpleRabbitListenerContainerFactory with retry capabilities.
-     * 
-     * @param connectionFactory The RabbitMQ connection factory
-     * @param messageConverter The message converter for serialization/deserialization
-     * @param messageRecoverer The message recoverer for handling failed messages
-     * @param rabbitProperties The RabbitMQ properties from application.yml
-     * @return A configured SimpleRabbitListenerContainerFactory
-     */
-    @Bean
-    public SimpleRabbitListenerContainerFactory rabbitListenerContainerFactory(
-            ConnectionFactory connectionFactory,
-            MessageConverter messageConverter,
-            MessageRecoverer messageRecoverer,
-            RabbitProperties rabbitProperties) {
-        
-        SimpleRabbitListenerContainerFactory factory = new SimpleRabbitListenerContainerFactory();
-        factory.setConnectionFactory(connectionFactory);
-        factory.setMessageConverter(messageConverter);
-        
-        // Configure concurrency
-        factory.setConcurrentConsumers(rabbitProperties.getListener().getSimple().getConcurrency());
-        factory.setMaxConcurrentConsumers(rabbitProperties.getListener().getSimple().getMaxConcurrency());
-        
-        // Configure prefetch count
-        factory.setPrefetchCount(rabbitProperties.getListener().getSimple().getPrefetch());
-        
-        // Configure acknowledgment mode
-        factory.setAcknowledgeMode(rabbitProperties.getListener().getSimple().getAcknowledgeMode());
-        
-        // Configure retry
-        if (rabbitProperties.getListener().getSimple().getRetry().isEnabled()) {
-            factory.setRetryTemplate(retryTemplate(rabbitProperties));
-            factory.setRecoveryCallback(context -> {
-                Throwable throwable = context.getLastThrowable();
-                log.error("Failed to process message after multiple attempts", throwable);
-                return null;
-            });
-            factory.setMessageRecoverer(messageRecoverer);
-        }
-        
-        log.info("Configured RabbitMQ listener container factory with concurrency={}/{}, prefetch={}, retry={}",
-                rabbitProperties.getListener().getSimple().getConcurrency(),
-                rabbitProperties.getListener().getSimple().getMaxConcurrency(),
-                rabbitProperties.getListener().getSimple().getPrefetch(),
-                rabbitProperties.getListener().getSimple().getRetry().isEnabled());
-        
-        return factory;
+    public Binding notificationBinding(Exchange documentsExchange, Queue notificationQueue) {
+        return BindingBuilder
+                .bind(notificationQueue)
+                .to(documentsExchange)
+                .with("") // Empty routing key for fanout exchange
+                .noargs();
     }
 }
