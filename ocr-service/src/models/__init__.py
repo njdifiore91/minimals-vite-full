@@ -1,110 +1,99 @@
-# -*- coding: utf-8 -*-
-"""
-OCR Service Models Package
+"""OCR Models Package for Dollar Funding MCA Application Processing System.
 
-This package contains the TensorFlow models used for Optical Character Recognition (OCR)
-in the Merchant Cash Advance (MCA) Application Processing System. It provides a clean,
-well-organized API for model access throughout the OCR service.
+This package provides TensorFlow-based OCR models for extracting data from various
+document types with high accuracy. The models are designed to handle both typed and
+handwritten text, as well as document structure recognition.
 
-The models in this package are designed to extract data from various document types
-with 99% accuracy using machine learning techniques. They support both typed and
-handwritten text recognition, as well as document structure analysis.
+Usage:
+    from ocr_service.models import TypedTextModel, HandwrittenTextModel
+    from ocr_service.models import get_model
+
+    # Using specific model directly
+    model = TypedTextModel()
+    results = model.extract_text(image)
+
+    # Using factory to get appropriate model based on document type
+    model = get_model(document_type='invoice')
+    results = model.extract_text(image)
 
 Models:
-    - TypedTextModel: For recognizing and extracting typed/printed text
-    - HandwrittenTextModel: For recognizing and extracting handwritten text
-    - HybridRecognitionModel: Combined model for documents with mixed content
-    - StructureRecognitionModel: For analyzing document structure and layout
+    - BaseModel: Abstract base class for all OCR models
+    - TypedTextModel: Model for typed/printed text recognition
+    - HandwrittenTextModel: Model for handwritten text recognition
+    - HybridRecognitionModel: Model for documents with both typed and handwritten text
+    - StructureRecognitionModel: Model for document structure recognition
 
 Utilities:
-    - ModelFactory: Factory class for creating appropriate models based on document type
-    - confidence_scoring: Utilities for calculating confidence scores for extracted text
-
-All models require GPU acceleration with CUDA-compatible hardware (min 8GB VRAM).
+    - calculate_confidence: Calculate confidence score for extracted text
+    - normalize_confidence: Normalize confidence scores across different models
+    - get_model: Factory function to get appropriate model based on document type
 """
 
+# Version information
 __version__ = '1.0.0'
-__author__ = 'Dollar Funding MCA Team'
+__author__ = 'Dollar Funding'
+__description__ = 'TensorFlow OCR models for document processing'
 
-# Import base model
+# Import main classes from model files
 from .base_model import BaseModel
-
-# Import concrete model implementations
 from .typed_text_model import TypedTextModel
 from .handwritten_text_model import HandwrittenTextModel
 from .hybrid_recognition_model import HybridRecognitionModel
 from .structure_recognition_model import StructureRecognitionModel
-
-# Import model factory
 from .model_factory import ModelFactory
 
 # Import confidence scoring utilities
 from .confidence_scoring import (
-    calculate_confidence_score,
-    get_field_confidence,
-    is_confidence_above_threshold,
-    enrich_with_confidence_metadata
+    calculate_confidence,
+    normalize_confidence,
+    get_confidence_threshold,
+    is_confidence_sufficient
 )
+
+# Convenient factory function
+def get_model(document_type=None, document_metadata=None):
+    """Get appropriate OCR model based on document type and metadata.
+    
+    This is a convenience function that uses ModelFactory to create and return
+    the appropriate OCR model for the given document type and metadata.
+    
+    Args:
+        document_type (str, optional): Type of document (e.g., 'invoice', 'application_form').
+            If None, will be determined from document_metadata if possible.
+        document_metadata (dict, optional): Additional metadata about the document
+            that can help determine the appropriate model.
+            
+    Returns:
+        BaseModel: An instance of the appropriate OCR model for the document.
+        
+    Examples:
+        >>> model = get_model('invoice')
+        >>> results = model.extract_text(image)
+        
+        >>> model = get_model(document_metadata={'has_handwriting': True})
+        >>> results = model.extract_text(image)
+    """
+    factory = ModelFactory()
+    return factory.create_model(document_type, document_metadata)
+
 
 # Define public API
 __all__ = [
-    # Version info
-    '__version__',
-    '__author__',
-    
     # Models
     'BaseModel',
     'TypedTextModel',
     'HandwrittenTextModel',
     'HybridRecognitionModel',
     'StructureRecognitionModel',
-    
-    # Factory
     'ModelFactory',
     
-    # Confidence scoring utilities
-    'calculate_confidence_score',
-    'get_field_confidence',
-    'is_confidence_above_threshold',
-    'enrich_with_confidence_metadata',
+    # Factory function
+    'get_model',
     
-    # Convenience functions
-    'create_model_for_document',
-    'get_model_by_type'
+    # Confidence utilities
+    'calculate_confidence',
+    'normalize_confidence',
+    'get_confidence_threshold',
+    'is_confidence_sufficient',
 ]
-
-# Convenience functions
-def create_model_for_document(document, config=None):
-    """
-    Create an appropriate OCR model for the given document.
     
-    This is a convenience function that uses the ModelFactory to create
-    the most appropriate model based on document classification metadata.
-    
-    Args:
-        document: Document object containing metadata and content
-        config: Optional configuration dictionary for model parameters
-        
-    Returns:
-        An instance of a concrete OCR model (TypedTextModel, HandwrittenTextModel, etc.)
-    """
-    factory = ModelFactory(config)
-    return factory.create_for_document(document)
-
-def get_model_by_type(model_type, config=None):
-    """
-    Get a specific OCR model by its type.
-    
-    This is a convenience function that uses the ModelFactory to create
-    a model of the specified type with the given configuration.
-    
-    Args:
-        model_type: String or enum value specifying the model type
-                   (e.g., 'TYPED', 'HANDWRITTEN', 'HYBRID', 'STRUCTURE')
-        config: Optional configuration dictionary for model parameters
-        
-    Returns:
-        An instance of the requested OCR model
-    """
-    factory = ModelFactory(config)
-    return factory.create_by_type(model_type)
