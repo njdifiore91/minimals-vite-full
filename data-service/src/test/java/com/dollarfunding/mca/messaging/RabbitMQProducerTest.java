@@ -1,20 +1,31 @@
 package com.dollarfunding.mca.messaging;
 
+import com.dollarfunding.mca.dto.NotificationMessage;
+import com.dollarfunding.mca.exception.MessagingException;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.amqp.AmqpException;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.core.MessageProperties;
-import org.springframework.amqp.rabbit.connection.CorrelationData;
+import org.springframework.amqp.rabbit.connection.Connection;
+import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.amqp.support.converter.Jackson2JsonMessageConverter;
+import org.springframework.amqp.support.converter.MessageConverter;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.retry.support.RetryTemplate;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -26,12 +37,24 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 /**
- * Unit tests for RabbitMQ message producers in the Data Service.
+ * Unit tests for the RabbitMQProducer class.
  * 
  * These tests verify that messages are correctly formatted, serialized, and published
  * to the appropriate RabbitMQ exchanges and queues as defined in the technical specification.
+ * It covers scenarios like successful message publishing and handling of potential errors
+ * during publishing.
  */
 @ExtendWith(MockitoExtension.class)
+@SpringBootTest
+@TestPropertySource(properties = {
+    "application.messaging.exchanges.documents.name=mca.documents",
+    "application.messaging.exchanges.documents.type=fanout",
+    "application.messaging.exchanges.documents.durable=true",
+    "application.messaging.queues.notification.name=notification",
+    "application.messaging.queues.notification.durable=true",
+    "application.messaging.producer.retry-attempts=3",
+    "application.messaging.producer.retry-delay=100"
+})
 public class RabbitMQProducerTest {
 
     @Mock
@@ -40,8 +63,8 @@ public class RabbitMQProducerTest {
     @Mock
     private ObjectMapper objectMapper;
     
-    @Captor
-    private ArgumentCaptor<Message> messageCaptor;
+    @Mock
+    private RetryTemplate retryTemplate;
     
     @Captor
     private ArgumentCaptor<String> exchangeCaptor;
@@ -50,315 +73,308 @@ public class RabbitMQProducerTest {
     private ArgumentCaptor<String> routingKeyCaptor;
     
     @Captor
-    private ArgumentCaptor<CorrelationData> correlationDataCaptor;
+    private ArgumentCaptor<Object> messageCaptor;
     
-    private NotificationProducer notificationProducer;
+    private RabbitMQProducer rabbitMQProducer;
     
-    private static final String EXCHANGE_NAME = "mca.documents";
-    private static final String NOTIFICATION_QUEUE_NAME = "notification";
+    // Test data
+    private static final String DOCUMENTS_EXCHANGE = "mca.documents";
+    private static final String NOTIFICATION_QUEUE = "notification";
+    private static final UUID APPLICATION_ID = UUID.randomUUID();
+    private static final UUID DOCUMENT_ID = UUID.randomUUID();
     
     @BeforeEach
     void setUp() {
-        notificationProducer = new NotificationProducer(rabbitTemplate, objectMapper);
-        ReflectionTestUtils.setField(notificationProducer, "exchangeName", EXCHANGE_NAME);
-        ReflectionTestUtils.setField(notificationProducer, "notificationQueueName", NOTIFICATION_QUEUE_NAME);
-        ReflectionTestUtils.setField(notificationProducer, "initialRetryInterval", 1000L);
-        ReflectionTestUtils.setField(notificationProducer, "maxRetryAttempts", 3);
-        ReflectionTestUtils.setField(notificationProducer, "retryMultiplier", 2.0);
+        rabbitMQProducer = new RabbitMQProducer(rabbitTemplate, objectMapper);
         
-        // Initialize the producer (normally done by @PostConstruct)
-        notificationProducer.init();
-    }
-    
-    @Test
-    @DisplayName("Should publish message to the correct exchange and queue")
-    void shouldPublishMessageToCorrectExchangeAndQueue() throws Exception {
-        // Arrange
-        NotificationMessage notificationMessage = createSampleNotificationMessage();
-        byte[] serializedMessage = "{\"id\":\"test-id\",\"type\":\"STATUS_UPDATE\"}".getBytes();
-        when(objectMapper.writeValueAsBytes(any(NotificationMessage.class))).thenReturn(serializedMessage);
+        // Set exchange name using reflection
+        ReflectionTestUtils.setField(rabbitMQProducer, "documentsExchangeName", DOCUMENTS_EXCHANGE);
+        ReflectionTestUtils.setField(rabbitMQProducer, "notificationQueueName", NOTIFICATION_QUEUE);
+        ReflectionTestUtils.setField(rabbitMQProducer, "retryAttempts", 3);
+        ReflectionTestUtils.setField(rabbitMQProducer, "retryDelayMs", 100L);
         
-        // Act
-        notificationProducer.publishNotification(notificationMessage);
+        // Configure retry template to execute the callback directly
+        when(retryTemplate.execute(any(), any(), any()))
+                .thenAnswer(invocation -> {
+                    return invocation.getArgument(0, RetryTemplate.RetryCallback.class)
+                            .doWithRetry(null);
+                });
         
-        // Assert
-        verify(rabbitTemplate).send(
-            eq(EXCHANGE_NAME),
-            eq(NOTIFICATION_QUEUE_NAME),
-            messageCaptor.capture(),
-            correlationDataCaptor.capture()
-        );
-        
-        Message capturedMessage = messageCaptor.getValue();
-        CorrelationData correlationData = correlationDataCaptor.getValue();
-        
-        assertNotNull(capturedMessage, "Message should not be null");
-        assertNotNull(correlationData, "CorrelationData should not be null");
-        assertEquals(notificationMessage.getId(), correlationData.getId(), "Correlation ID should match notification ID");
-        assertEquals(MessageProperties.CONTENT_TYPE_JSON, capturedMessage.getMessageProperties().getContentType(), 
-                "Content type should be JSON");
-        assertEquals(serializedMessage, capturedMessage.getBody(), "Message body should match serialized content");
-    }
-    
-    @Test
-    @DisplayName("Should set correct message properties")
-    void shouldSetCorrectMessageProperties() throws Exception {
-        // Arrange
-        NotificationMessage notificationMessage = createSampleNotificationMessage();
-        notificationMessage.setPriority(NotificationMessage.NotificationType.CRITICAL);
-        byte[] serializedMessage = "{\"id\":\"test-id\",\"type\":\"CRITICAL\"}".getBytes();
-        when(objectMapper.writeValueAsBytes(any(NotificationMessage.class))).thenReturn(serializedMessage);
-        
-        // Act
-        notificationProducer.publishNotification(notificationMessage);
-        
-        // Assert
-        verify(rabbitTemplate).send(
-            anyString(),
-            anyString(),
-            messageCaptor.capture(),
-            any(CorrelationData.class)
-        );
-        
-        MessageProperties properties = messageCaptor.getValue().getMessageProperties();
-        
-        assertNotNull(properties, "Message properties should not be null");
-        assertEquals(MessageProperties.CONTENT_TYPE_JSON, properties.getContentType(), "Content type should be JSON");
-        assertEquals("UTF-8", properties.getContentEncoding(), "Content encoding should be UTF-8");
-        assertEquals(notificationMessage.getId(), properties.getCorrelationId(), "Correlation ID should match notification ID");
-        assertNotNull(properties.getTimestamp(), "Timestamp should be set");
-        assertEquals(notificationMessage.getType().name(), properties.getHeader("notification_type"), 
-                "Notification type header should be set");
-    }
-    
-    @Test
-    @DisplayName("Should handle serialization exceptions")
-    void shouldHandleSerializationExceptions() throws Exception {
-        // Arrange
-        NotificationMessage notificationMessage = createSampleNotificationMessage();
-        when(objectMapper.writeValueAsBytes(any(NotificationMessage.class)))
-            .thenThrow(new RuntimeException("Serialization error"));
-        
-        // Act & Assert
-        MessagingException exception = assertThrows(MessagingException.class, () -> {
-            notificationProducer.publishNotification(notificationMessage);
-        });
-        
-        assertTrue(exception.getMessage().contains("Failed to publish notification message"), 
-                "Exception message should indicate publishing failure");
-        verify(rabbitTemplate, never()).send(
-            anyString(),
-            anyString(),
-            any(Message.class),
-            any(CorrelationData.class)
-        );
-    }
-    
-    @Test
-    @DisplayName("Should handle RabbitMQ connection exceptions")
-    void shouldHandleRabbitMQConnectionExceptions() throws Exception {
-        // Arrange
-        NotificationMessage notificationMessage = createSampleNotificationMessage();
-        byte[] serializedMessage = "{\"id\":\"test-id\",\"type\":\"STATUS_UPDATE\"}".getBytes();
-        when(objectMapper.writeValueAsBytes(any(NotificationMessage.class))).thenReturn(serializedMessage);
-        doThrow(new RuntimeException("Connection error"))
-            .when(rabbitTemplate).send(
-                anyString(),
-                anyString(),
-                any(Message.class),
-                any(CorrelationData.class)
-            );
-        
-        // Act & Assert
-        MessagingException exception = assertThrows(MessagingException.class, () -> {
-            notificationProducer.publishNotification(notificationMessage);
-        });
-        
-        assertTrue(exception.getMessage().contains("Failed to publish notification message"), 
-                "Exception message should indicate publishing failure");
-    }
-    
-    @Test
-    @DisplayName("Should handle publisher confirms for successful delivery")
-    void shouldHandlePublisherConfirmsForSuccessfulDelivery() throws Exception {
-        // Arrange
-        NotificationMessage notificationMessage = createSampleNotificationMessage();
-        byte[] serializedMessage = "{\"id\":\"test-id\",\"type\":\"STATUS_UPDATE\"}".getBytes();
-        when(objectMapper.writeValueAsBytes(any(NotificationMessage.class))).thenReturn(serializedMessage);
-        
-        // Act
-        notificationProducer.publishNotification(notificationMessage);
-        
-        // Capture the correlation data
-        verify(rabbitTemplate).send(
-            anyString(),
-            anyString(),
-            any(Message.class),
-            correlationDataCaptor.capture()
-        );
-        
-        CorrelationData correlationData = correlationDataCaptor.getValue();
-        
-        // Simulate a successful publisher confirm
-        rabbitTemplate.getConfirmCallback().confirm(correlationData, true, null);
-        
-        // Assert - No exceptions should be thrown
-        // The pending confirmations map should be cleared (can't directly test this as it's private)
-        assertTrue(notificationProducer.waitForConfirms(100), "Should return true when all confirmations are received");
-    }
-    
-    @Test
-    @DisplayName("Should handle publisher confirms for failed delivery")
-    void shouldHandlePublisherConfirmsForFailedDelivery() throws Exception {
-        // Arrange
-        NotificationMessage notificationMessage = createSampleNotificationMessage();
-        byte[] serializedMessage = "{\"id\":\"test-id\",\"type\":\"STATUS_UPDATE\"}".getBytes();
-        when(objectMapper.writeValueAsBytes(any(NotificationMessage.class))).thenReturn(serializedMessage);
-        
-        // Act
-        notificationProducer.publishNotification(notificationMessage);
-        
-        // Capture the correlation data
-        verify(rabbitTemplate).send(
-            anyString(),
-            anyString(),
-            any(Message.class),
-            correlationDataCaptor.capture()
-        );
-        
-        CorrelationData correlationData = correlationDataCaptor.getValue();
-        
-        // Simulate a failed publisher confirm
-        rabbitTemplate.getConfirmCallback().confirm(correlationData, false, "Channel closed");
-        
-        // We can't directly test the retry logic as it involves Thread.sleep
-        // But we can verify that the message is not immediately removed from pending confirmations
-        assertFalse(notificationProducer.waitForConfirms(100), "Should return false when confirmations are pending");
-    }
-    
-    @Test
-    @DisplayName("Should handle returned messages")
-    void shouldHandleReturnedMessages() throws Exception {
-        // Arrange
-        NotificationMessage notificationMessage = createSampleNotificationMessage();
-        byte[] serializedMessage = "{\"id\":\"test-id\",\"type\":\"STATUS_UPDATE\"}".getBytes();
-        when(objectMapper.writeValueAsBytes(any(NotificationMessage.class))).thenReturn(serializedMessage);
-        
-        // Act
-        notificationProducer.publishNotification(notificationMessage);
-        
-        // Capture the message
-        verify(rabbitTemplate).send(
-            anyString(),
-            anyString(),
-            messageCaptor.capture(),
-            any(CorrelationData.class)
-        );
-        
-        Message capturedMessage = messageCaptor.getValue();
-        
-        // Simulate a returned message
-        rabbitTemplate.getReturnsCallback().returnedMessage(
-            org.springframework.amqp.core.ReturnedMessage.builder()
-                .message(capturedMessage)
-                .replyCode(312)
-                .replyText("No route")
-                .exchange(EXCHANGE_NAME)
-                .routingKey(NOTIFICATION_QUEUE_NAME)
-                .build()
-        );
-        
-        // We can't directly test the retry logic as it involves Thread.sleep
-        // But we can verify that the message is not immediately removed from pending confirmations
-        assertFalse(notificationProducer.waitForConfirms(100), "Should return false when confirmations are pending");
-    }
-    
-    @Test
-    @DisplayName("Should publish notification with custom headers")
-    void shouldPublishNotificationWithCustomHeaders() throws Exception {
-        // Arrange
-        NotificationMessage notificationMessage = createSampleNotificationMessage();
-        byte[] serializedMessage = "{\"id\":\"test-id\",\"type\":\"STATUS_UPDATE\"}".getBytes();
-        when(objectMapper.writeValueAsBytes(any(NotificationMessage.class))).thenReturn(serializedMessage);
-        
-        Map<String, Object> customHeaders = new HashMap<>();
-        customHeaders.put("custom_header1", "value1");
-        customHeaders.put("custom_header2", 123);
-        
-        // Act
-        notificationProducer.publishNotification(notificationMessage, customHeaders);
-        
-        // Assert
-        verify(rabbitTemplate).send(
-            anyString(),
-            anyString(),
-            messageCaptor.capture(),
-            any(CorrelationData.class)
-        );
-        
-        MessageProperties properties = messageCaptor.getValue().getMessageProperties();
-        
-        assertEquals("value1", properties.getHeader("custom_header1"), "Custom header 1 should be set");
-        assertEquals(123, properties.getHeader("custom_header2"), "Custom header 2 should be set");
-    }
-    
-    @Test
-    @DisplayName("Should publish notification with convenience methods")
-    void shouldPublishNotificationWithConvenienceMethods() throws Exception {
-        // Arrange
-        byte[] serializedMessage = "{\"id\":\"test-id\",\"type\":\"STATUS_UPDATE\"}".getBytes();
-        when(objectMapper.writeValueAsBytes(any(NotificationMessage.class))).thenReturn(serializedMessage);
-        
-        NotificationMessage.NotificationType type = NotificationMessage.NotificationType.STATUS_UPDATE;
-        NotificationMessage.NotificationPriority priority = NotificationMessage.NotificationPriority.HIGH;
-        NotificationMessage.Recipient recipient = new NotificationMessage.Recipient(
-                NotificationMessage.NotificationChannel.WEBHOOK, "https://example.com/webhook");
-        Map<String, Object> payload = new HashMap<>();
-        payload.put("applicationId", "app-123");
-        payload.put("status", "APPROVED");
-        
-        // Act
-        notificationProducer.publishNotification(type, priority, recipient, payload);
-        
-        // Assert
-        verify(rabbitTemplate).send(
-            eq(EXCHANGE_NAME),
-            eq(NOTIFICATION_QUEUE_NAME),
-            any(Message.class),
-            any(CorrelationData.class)
-        );
-        
-        // Verify the message was created with the correct parameters
-        ArgumentCaptor<NotificationMessage> notificationCaptor = ArgumentCaptor.forClass(NotificationMessage.class);
-        verify(objectMapper).writeValueAsBytes(notificationCaptor.capture());
-        
-        NotificationMessage capturedNotification = notificationCaptor.getValue();
-        assertEquals(type, capturedNotification.getType(), "Notification type should match");
-        assertEquals(priority, capturedNotification.getPriority(), "Notification priority should match");
-        assertEquals(payload, capturedNotification.getPayload(), "Notification payload should match");
+        ReflectionTestUtils.setField(rabbitMQProducer, "retryTemplate", retryTemplate);
     }
     
     /**
-     * Creates a sample notification message for testing.
+     * Creates a valid notification message for testing.
      * 
-     * @return A sample notification message
+     * @return A valid NotificationMessage object
      */
-    private NotificationMessage createSampleNotificationMessage() {
-        String notificationId = UUID.randomUUID().toString();
+    private NotificationMessage createNotificationMessage() {
         NotificationMessage message = new NotificationMessage();
-        message.setId(notificationId);
-        message.setType(NotificationMessage.NotificationType.STATUS_UPDATE);
-        message.setPriority(NotificationMessage.NotificationPriority.MEDIUM);
+        message.setMessageId(UUID.randomUUID().toString());
+        message.setApplicationId(APPLICATION_ID.toString());
+        message.setDocumentId(DOCUMENT_ID.toString());
+        message.setType("STATUS_UPDATE");
+        message.setTimestamp(LocalDateTime.now());
+        message.setSourceService("data-service");
         
-        NotificationMessage.Recipient recipient = new NotificationMessage.Recipient(
-                NotificationMessage.NotificationChannel.WEBHOOK, "https://example.com/webhook");
-        message.setRecipients(java.util.Collections.singletonList(recipient));
-        
+        // Add payload data
         Map<String, Object> payload = new HashMap<>();
-        payload.put("applicationId", "app-123");
         payload.put("status", "APPROVED");
+        payload.put("updated_by", "system");
+        payload.put("notes", "Automatically approved based on credit score");
         message.setPayload(payload);
         
         return message;
     }
-}
+    
+    /**
+     * Test successful publishing of a notification message to the documents exchange.
+     */
+    @Test
+    void testPublishNotificationMessage() throws Exception {
+        // Arrange
+        NotificationMessage message = createNotificationMessage();
+        String serializedMessage = "{\"message_id\":\"123\",\"type\":\"STATUS_UPDATE\"}";
+        
+        when(objectMapper.writeValueAsString(any(NotificationMessage.class)))
+                .thenReturn(serializedMessage);
+        
+        // Act
+        rabbitMQProducer.publishNotification(message);
+        
+        // Assert
+        verify(objectMapper).writeValueAsString(eq(message));
+        verify(rabbitTemplate).convertAndSend(
+                exchangeCaptor.capture(),
+                routingKeyCaptor.capture(),
+                messageCaptor.capture());
+        
+        assertEquals(DOCUMENTS_EXCHANGE, exchangeCaptor.getValue());
+        assertEquals(NOTIFICATION_QUEUE, routingKeyCaptor.getValue());
+        assertEquals(serializedMessage, messageCaptor.getValue());
+    }
+    
+    /**
+     * Test successful publishing of a document processing message to the documents exchange.
+     */
+    @Test
+    void testPublishDocumentProcessingMessage() throws Exception {
+        // Arrange
+        Map<String, Object> documentData = new HashMap<>();
+        documentData.put("document_id", DOCUMENT_ID.toString());
+        documentData.put("application_id", APPLICATION_ID.toString());
+        documentData.put("status", "PROCESSED");
+        documentData.put("timestamp", LocalDateTime.now().toString());
+        
+        String serializedMessage = "{\"document_id\":\"" + DOCUMENT_ID.toString() + "\",\"status\":\"PROCESSED\"}";
+        
+        when(objectMapper.writeValueAsString(any(Map.class)))
+                .thenReturn(serializedMessage);
+        
+        // Act
+        rabbitMQProducer.publishDocumentProcessing(documentData);
+        
+        // Assert
+        verify(objectMapper).writeValueAsString(eq(documentData));
+        verify(rabbitTemplate).convertAndSend(
+                exchangeCaptor.capture(),
+                routingKeyCaptor.capture(),
+                messageCaptor.capture());
+        
+        assertEquals(DOCUMENTS_EXCHANGE, exchangeCaptor.getValue());
+        // Empty routing key for fanout exchange
+        assertEquals("", routingKeyCaptor.getValue());
+        assertEquals(serializedMessage, messageCaptor.getValue());
+    }
+    
+    /**
+     * Test successful publishing of a notification message with publisher confirms.
+     */
+    @Test
+    void testPublishNotificationWithConfirm() throws Exception {
+        // Arrange
+        NotificationMessage message = createNotificationMessage();
+        String serializedMessage = "{\"message_id\":\"123\",\"type\":\"STATUS_UPDATE\"}";
+        
+        when(objectMapper.writeValueAsString(any(NotificationMessage.class)))
+                .thenReturn(serializedMessage);
+        
+        // Mock RabbitTemplate to use publisher confirms
+        when(rabbitTemplate.isConfirmListener()).thenReturn(true);
+        
+        // Act
+        rabbitMQProducer.publishNotificationWithConfirm(message);
+        
+        // Assert
+        verify(objectMapper).writeValueAsString(eq(message));
+        verify(rabbitTemplate).convertAndSend(
+                eq(DOCUMENTS_EXCHANGE),
+                eq(NOTIFICATION_QUEUE),
+                eq(serializedMessage),
+                any());
+    }
+    
+    /**
+     * Test serialization error handling when publishing a message.
+     */
+    @Test
+    void testSerializationError() throws Exception {
+        // Arrange
+        NotificationMessage message = createNotificationMessage();
+        
+        // Mock serialization error
+        when(objectMapper.writeValueAsString(any(NotificationMessage.class)))
+                .thenThrow(new JsonProcessingException("Failed to serialize message") {});
+        
+        // Act & Assert
+        MessagingException exception = assertThrows(MessagingException.class, () -> {
+            rabbitMQProducer.publishNotification(message);
+        });
+        
+        assertTrue(exception.getMessage().contains("Failed to serialize message"));
+        assertEquals(MessagingException.ErrorType.SERIALIZATION, exception.getErrorType());
+        
+        // Verify RabbitTemplate was never called
+        verify(rabbitTemplate, never()).convertAndSend(anyString(), anyString(), any());
+    }
+    
+    /**
+     * Test connection error handling when publishing a message.
+     */
+    @Test
+    void testConnectionError() throws Exception {
+        // Arrange
+        NotificationMessage message = createNotificationMessage();
+        String serializedMessage = "{\"message_id\":\"123\",\"type\":\"STATUS_UPDATE\"}";
+        
+        when(objectMapper.writeValueAsString(any(NotificationMessage.class)))
+                .thenReturn(serializedMessage);
+        
+        // Mock connection error
+        doThrow(new AmqpException("Connection refused"))
+                .when(rabbitTemplate)
+                .convertAndSend(anyString(), anyString(), any());
+        
+        // Configure retry template to throw exception after retries
+        when(retryTemplate.execute(any(), any(), any()))
+                .thenThrow(new AmqpException("Connection refused after retries"));
+        
+        // Act & Assert
+        MessagingException exception = assertThrows(MessagingException.class, () -> {
+            rabbitMQProducer.publishNotification(message);
+        });
+        
+        assertTrue(exception.getMessage().contains("Failed to publish message"));
+        assertEquals(MessagingException.ErrorType.CONNECTION, exception.getErrorType());
+    }
+    
+    /**
+     * Test retry logic when publishing a message with temporary connection issues.
+     */
+    @Test
+    void testRetryLogic() throws Exception {
+        // Arrange
+        NotificationMessage message = createNotificationMessage();
+        String serializedMessage = "{\"message_id\":\"123\",\"type\":\"STATUS_UPDATE\"}";
+        
+        when(objectMapper.writeValueAsString(any(NotificationMessage.class)))
+                .thenReturn(serializedMessage);
+        
+        // First call throws exception, second call succeeds
+        doThrow(new AmqpException("Temporary connection issue"))
+                .doNothing()
+                .when(rabbitTemplate)
+                .convertAndSend(anyString(), anyString(), any());
+        
+        // Configure retry template to execute the callback and retry on exception
+        when(retryTemplate.execute(any(), any(), any()))
+                .thenAnswer(invocation -> {
+                    try {
+                        return invocation.getArgument(0, RetryTemplate.RetryCallback.class)
+                                .doWithRetry(null);
+                    } catch (Exception e) {
+                        // Simulate retry by calling the callback again
+                        return invocation.getArgument(0, RetryTemplate.RetryCallback.class)
+                                .doWithRetry(null);
+                    }
+                });
+        
+        // Act
+        rabbitMQProducer.publishNotification(message);
+        
+        // Assert
+        verify(objectMapper).writeValueAsString(eq(message));
+        // Verify convertAndSend was called twice (once for the failure, once for the retry)
+        verify(rabbitTemplate, times(2)).convertAndSend(
+                eq(DOCUMENTS_EXCHANGE),
+                eq(NOTIFICATION_QUEUE),
+                eq(serializedMessage));
+    }
+    
+    /**
+     * Test publishing a batch of messages.
+     */
+    @Test
+    void testPublishBatch() throws Exception {
+        // Arrange
+        NotificationMessage message1 = createNotificationMessage();
+        NotificationMessage message2 = createNotificationMessage();
+        NotificationMessage message3 = createNotificationMessage();
+        
+        String serializedMessage1 = "{\"message_id\":\"1\",\"type\":\"STATUS_UPDATE\"}";
+        String serializedMessage2 = "{\"message_id\":\"2\",\"type\":\"STATUS_UPDATE\"}";
+        String serializedMessage3 = "{\"message_id\":\"3\",\"type\":\"STATUS_UPDATE\"}";
+        
+        when(objectMapper.writeValueAsString(eq(message1)))
+                .thenReturn(serializedMessage1);
+        when(objectMapper.writeValueAsString(eq(message2)))
+                .thenReturn(serializedMessage2);
+        when(objectMapper.writeValueAsString(eq(message3)))
+                .thenReturn(serializedMessage3);
+        
+        // Act
+        rabbitMQProducer.publishNotificationBatch(java.util.Arrays.asList(message1, message2, message3));
+        
+        // Assert
+        verify(objectMapper, times(3)).writeValueAsString(any(NotificationMessage.class));
+        verify(rabbitTemplate, times(3)).convertAndSend(
+                eq(DOCUMENTS_EXCHANGE),
+                eq(NOTIFICATION_QUEUE),
+                any(String.class));
+    }
+    
+    /**
+     * Test partial success when publishing a batch of messages.
+     */
+    @Test
+    void testPartialBatchSuccess() throws Exception {
+        // Arrange
+        NotificationMessage message1 = createNotificationMessage();
+        NotificationMessage message2 = createNotificationMessage();
+        NotificationMessage message3 = createNotificationMessage();
+        
+        String serializedMessage1 = "{\"message_id\":\"1\",\"type\":\"STATUS_UPDATE\"}";
+        String serializedMessage2 = "{\"message_id\":\"2\",\"type\":\"STATUS_UPDATE\"}";
+        
+        when(objectMapper.writeValueAsString(eq(message1)))
+                .thenReturn(serializedMessage1);
+        when(objectMapper.writeValueAsString(eq(message2)))
+                .thenReturn(serializedMessage2);
+        when(objectMapper.writeValueAsString(eq(message3)))
+                .thenThrow(new JsonProcessingException("Serialization failed for message 3") {});
+        
+        // Act
+        MessagingException exception = assertThrows(MessagingException.class, () -> {
+            rabbitMQProducer.publishNotificationBatch(java.util.Arrays.asList(message1, message2, message3));
+        });
+        
+        // Assert
+        assertTrue(exception.getMessage().contains("Failed to serialize message"));
+        assertEquals(MessagingException.ErrorType.SERIALIZATION, exception.getErrorType());
+        
+        // Verify first two messages were published
+        verify(rabbitTemplate, times(2)).convertAndSend(
+                eq(DOCUMENTS_EXCHANGE),
+                eq(NOTIFICATION_QUEUE),
+                any(String.class));
+    }
