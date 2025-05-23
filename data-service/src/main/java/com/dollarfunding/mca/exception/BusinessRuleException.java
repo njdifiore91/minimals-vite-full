@@ -2,166 +2,212 @@ package com.dollarfunding.mca.exception;
 
 import org.springframework.http.HttpStatus;
 
-import java.util.HashMap;
-import java.util.Map;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 
 /**
  * Exception thrown when a business rule violation occurs during application processing.
- * It extends BaseException with a default HTTP status code of 422 (Unprocessable Entity)
- * and provides support for rule identifiers and violation details.
+ * <p>
+ * This exception extends BaseException with a default HTTP status code of 422 (Unprocessable Entity)
+ * and provides support for rule identifiers and violation details. It is used by services to indicate
+ * business logic failures, such as insufficient revenue for approval or missing required documents.
+ * </p>
  */
 public class BusinessRuleException extends BaseException {
 
-    private final String ruleId;
-    private final Map<String, Object> violationDetails;
+    private final List<BusinessRuleViolation> ruleViolations;
 
     /**
-     * Constructs a new BusinessRuleException with the specified rule ID and message.
+     * Constructs a new BusinessRuleException with the specified message.
      *
-     * @param ruleId  the identifier of the business rule that was violated
      * @param message the detail message
      */
-    public BusinessRuleException(String ruleId, String message) {
-        super("BUSINESS_RULE_VIOLATION", message, HttpStatus.UNPROCESSABLE_ENTITY);
-        this.ruleId = ruleId;
-        this.violationDetails = new HashMap<>();
+    public BusinessRuleException(String message) {
+        super(message, HttpStatus.UNPROCESSABLE_ENTITY);
+        this.ruleViolations = new ArrayList<>();
     }
 
     /**
-     * Constructs a new BusinessRuleException with the specified rule ID, message, and violation details.
+     * Constructs a new BusinessRuleException with the specified message and cause.
      *
-     * @param ruleId           the identifier of the business rule that was violated
-     * @param message          the detail message
-     * @param violationDetails a map containing details about the violation
-     */
-    public BusinessRuleException(String ruleId, String message, Map<String, Object> violationDetails) {
-        super("BUSINESS_RULE_VIOLATION", message, HttpStatus.UNPROCESSABLE_ENTITY);
-        this.ruleId = ruleId;
-        this.violationDetails = violationDetails != null ? new HashMap<>(violationDetails) : new HashMap<>();
-    }
-
-    /**
-     * Constructs a new BusinessRuleException with the specified rule ID, message, and cause.
-     *
-     * @param ruleId  the identifier of the business rule that was violated
      * @param message the detail message
      * @param cause   the cause of this exception
      */
-    public BusinessRuleException(String ruleId, String message, Throwable cause) {
-        super("BUSINESS_RULE_VIOLATION", message, cause, HttpStatus.UNPROCESSABLE_ENTITY);
-        this.ruleId = ruleId;
-        this.violationDetails = new HashMap<>();
+    public BusinessRuleException(String message, Throwable cause) {
+        super(message, cause, HttpStatus.UNPROCESSABLE_ENTITY);
+        this.ruleViolations = new ArrayList<>();
     }
 
     /**
-     * Constructs a new BusinessRuleException with the specified rule ID, message, cause, and violation details.
+     * Constructs a new BusinessRuleException with the specified message and a single rule violation.
      *
-     * @param ruleId           the identifier of the business rule that was violated
-     * @param message          the detail message
-     * @param cause            the cause of this exception
-     * @param violationDetails a map containing details about the violation
+     * @param message      the detail message
+     * @param ruleId       the identifier of the violated business rule
+     * @param violationMsg the message describing the rule violation
      */
-    public BusinessRuleException(String ruleId, String message, Throwable cause, Map<String, Object> violationDetails) {
-        super("BUSINESS_RULE_VIOLATION", message, cause, HttpStatus.UNPROCESSABLE_ENTITY);
-        this.ruleId = ruleId;
-        this.violationDetails = violationDetails != null ? new HashMap<>(violationDetails) : new HashMap<>();
+    public BusinessRuleException(String message, String ruleId, String violationMsg) {
+        super(message, HttpStatus.UNPROCESSABLE_ENTITY);
+        this.ruleViolations = new ArrayList<>();
+        this.ruleViolations.add(new BusinessRuleViolation(ruleId, violationMsg));
     }
 
     /**
-     * Returns the identifier of the business rule that was violated.
+     * Constructs a new BusinessRuleException with the specified message and a single rule violation with a rejected value.
      *
-     * @return the rule identifier
+     * @param message      the detail message
+     * @param ruleId       the identifier of the violated business rule
+     * @param violationMsg the message describing the rule violation
+     * @param rejectedValue the value that violated the business rule
      */
-    public String getRuleId() {
-        return ruleId;
+    public BusinessRuleException(String message, String ruleId, String violationMsg, Object rejectedValue) {
+        super(message, HttpStatus.UNPROCESSABLE_ENTITY);
+        this.ruleViolations = new ArrayList<>();
+        this.ruleViolations.add(new BusinessRuleViolation(ruleId, violationMsg, rejectedValue));
     }
 
     /**
-     * Returns the details about the violation.
+     * Constructs a new BusinessRuleException with the specified message and a list of rule violations.
      *
-     * @return a map containing violation details
+     * @param message        the detail message
+     * @param ruleViolations the list of business rule violations
      */
-    public Map<String, Object> getViolationDetails() {
-        return new HashMap<>(violationDetails);
+    public BusinessRuleException(String message, List<BusinessRuleViolation> ruleViolations) {
+        super(message, HttpStatus.UNPROCESSABLE_ENTITY);
+        this.ruleViolations = new ArrayList<>(ruleViolations);
     }
 
     /**
-     * Adds a detail about the violation.
+     * Constructs a new BusinessRuleException with the specified error code, message, and a list of rule violations.
      *
-     * @param key   the key for the detail
-     * @param value the value of the detail
-     * @return this exception instance for method chaining
+     * @param errorCode      the error code associated with this exception
+     * @param message        the detail message
+     * @param ruleViolations the list of business rule violations
      */
-    public BusinessRuleException addViolationDetail(String key, Object value) {
-        this.violationDetails.put(key, value);
+    public BusinessRuleException(String errorCode, String message, List<BusinessRuleViolation> ruleViolations) {
+        super(message, HttpStatus.UNPROCESSABLE_ENTITY, errorCode);
+        this.ruleViolations = new ArrayList<>(ruleViolations);
+    }
+
+    /**
+     * Returns the list of business rule violations associated with this exception.
+     *
+     * @return an unmodifiable list of business rule violations
+     */
+    public List<BusinessRuleViolation> getRuleViolations() {
+        return Collections.unmodifiableList(ruleViolations);
+    }
+
+    /**
+     * Adds a business rule violation to the list of violations.
+     *
+     * @param ruleId       the identifier of the violated business rule
+     * @param violationMsg the message describing the rule violation
+     * @return this BusinessRuleException instance for method chaining
+     */
+    public BusinessRuleException addRuleViolation(String ruleId, String violationMsg) {
+        this.ruleViolations.add(new BusinessRuleViolation(ruleId, violationMsg));
         return this;
     }
 
     /**
-     * Creates a new BusinessRuleException for insufficient revenue scenario.
+     * Adds a business rule violation with a rejected value to the list of violations.
      *
-     * @param requiredRevenue the minimum required revenue
-     * @param actualRevenue   the actual revenue
-     * @return a new BusinessRuleException instance
+     * @param ruleId        the identifier of the violated business rule
+     * @param violationMsg  the message describing the rule violation
+     * @param rejectedValue the value that violated the business rule
+     * @return this BusinessRuleException instance for method chaining
      */
-    public static BusinessRuleException insufficientRevenue(double requiredRevenue, double actualRevenue) {
-        Map<String, Object> details = new HashMap<>();
-        details.put("requiredRevenue", requiredRevenue);
-        details.put("actualRevenue", actualRevenue);
-        return new BusinessRuleException(
-                "INSUFFICIENT_REVENUE",
-                "Merchant revenue does not meet the minimum requirement for approval",
-                details
-        );
+    public BusinessRuleException addRuleViolation(String ruleId, String violationMsg, Object rejectedValue) {
+        this.ruleViolations.add(new BusinessRuleViolation(ruleId, violationMsg, rejectedValue));
+        return this;
     }
 
     /**
-     * Creates a new BusinessRuleException for missing required document scenario.
+     * Adds multiple business rule violations to the list of violations.
      *
-     * @param documentType the type of document that is missing
-     * @return a new BusinessRuleException instance
+     * @param violations the list of business rule violations to add
+     * @return this BusinessRuleException instance for method chaining
      */
-    public static BusinessRuleException missingRequiredDocument(String documentType) {
-        Map<String, Object> details = new HashMap<>();
-        details.put("documentType", documentType);
-        return new BusinessRuleException(
-                "MISSING_REQUIRED_DOCUMENT",
-                "Required document is missing: " + documentType,
-                details
-        );
+    public BusinessRuleException addRuleViolations(List<BusinessRuleViolation> violations) {
+        this.ruleViolations.addAll(violations);
+        return this;
     }
 
     /**
-     * Creates a new BusinessRuleException for business age requirement not met scenario.
+     * Returns whether this exception has any business rule violations.
      *
-     * @param requiredMonths the minimum required business age in months
-     * @param actualMonths   the actual business age in months
-     * @return a new BusinessRuleException instance
+     * @return true if this exception has business rule violations, false otherwise
      */
-    public static BusinessRuleException businessAgeTooNew(int requiredMonths, int actualMonths) {
-        Map<String, Object> details = new HashMap<>();
-        details.put("requiredMonths", requiredMonths);
-        details.put("actualMonths", actualMonths);
-        return new BusinessRuleException(
-                "BUSINESS_AGE_REQUIREMENT_NOT_MET",
-                "Business does not meet the minimum age requirement for approval",
-                details
-        );
+    public boolean hasRuleViolations() {
+        return !ruleViolations.isEmpty();
     }
 
     /**
-     * Creates a new BusinessRuleException for invalid industry scenario.
+     * Returns the number of business rule violations associated with this exception.
      *
-     * @param industry the invalid industry
-     * @return a new BusinessRuleException instance
+     * @return the number of business rule violations
      */
-    public static BusinessRuleException invalidIndustry(String industry) {
-        Map<String, Object> details = new HashMap<>();
-        details.put("industry", industry);
-        return new BusinessRuleException(
-                "INVALID_INDUSTRY",
-                "The industry is not eligible for funding: " + industry,
-                details
-        );
+    public int getRuleViolationCount() {
+        return ruleViolations.size();
+    }
+
+    /**
+     * Nested class for business rule violation details.
+     */
+    public static class BusinessRuleViolation {
+        private final String ruleId;
+        private final String message;
+        private final Object rejectedValue;
+
+        /**
+         * Constructs a new BusinessRuleViolation with the specified rule ID and message.
+         *
+         * @param ruleId  the identifier of the violated business rule
+         * @param message the message describing the rule violation
+         */
+        public BusinessRuleViolation(String ruleId, String message) {
+            this(ruleId, message, null);
+        }
+
+        /**
+         * Constructs a new BusinessRuleViolation with the specified rule ID, message, and rejected value.
+         *
+         * @param ruleId        the identifier of the violated business rule
+         * @param message       the message describing the rule violation
+         * @param rejectedValue the value that violated the business rule
+         */
+        public BusinessRuleViolation(String ruleId, String message, Object rejectedValue) {
+            this.ruleId = ruleId;
+            this.message = message;
+            this.rejectedValue = rejectedValue;
+        }
+
+        /**
+         * Returns the identifier of the violated business rule.
+         *
+         * @return the rule identifier
+         */
+        public String getRuleId() {
+            return ruleId;
+        }
+
+        /**
+         * Returns the message describing the rule violation.
+         *
+         * @return the violation message
+         */
+        public String getMessage() {
+            return message;
+        }
+
+        /**
+         * Returns the value that violated the business rule, if available.
+         *
+         * @return the rejected value, or null if not available
+         */
+        public Object getRejectedValue() {
+            return rejectedValue;
+        }
     }
 }
