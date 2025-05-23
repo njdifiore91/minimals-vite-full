@@ -9,142 +9,152 @@ import com.dollarfunding.mca.exception.ProcessingException;
 
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
 
 /**
  * Service interface that defines the contract for application processing workflows in the MCA application.
- * This service orchestrates the processing of new applications, updates to existing applications with new documents,
- * and manages the application lifecycle from submission to completion.
+ * It provides methods for processing new applications, updating existing applications with new documents,
+ * and managing the application lifecycle from submission to completion.
  */
 public interface ProcessingService {
 
     /**
-     * Process a new application with the provided document data.
-     * This method creates a new application record, associates the document data,
-     * applies business rules, and initiates the application workflow.
+     * Processes a new application with the provided document data.
+     * This method orchestrates the complete workflow for a new application:
+     * - Validates document data
+     * - Creates a new application record
+     * - Associates documents with the application
+     * - Applies business rules to determine application status
+     * - Sends appropriate notifications
      *
-     * @param documentId The ID of the document that triggered the new application
+     * @param documentId The ID of the initial document that triggered the application creation
      * @param extractedData Map containing the extracted data from the document
-     * @return The created application response DTO
+     * @return The created application with processing results
      * @throws ProcessingException if an error occurs during processing
      */
-    ApplicationResponseDTO processNewApplication(UUID documentId, Map<String, Object> extractedData) throws ProcessingException;
+    ApplicationResponseDTO processNewApplication(Long documentId, Map<String, Object> extractedData) throws ProcessingException;
 
     /**
-     * Update an existing application with new document data.
-     * This method associates the new document with the application,
-     * updates the application data based on the document content,
-     * and advances the application workflow as appropriate.
+     * Updates an existing application with new document data.
+     * This method handles the workflow for adding new documents to an existing application:
+     * - Validates the new document data
+     * - Associates the document with the existing application
+     * - Updates application data based on the new document
+     * - Re-evaluates application status based on business rules
+     * - Sends appropriate notifications
      *
-     * @param applicationId The ID of the application to update
+     * @param applicationId The ID of the existing application
      * @param documentId The ID of the new document
      * @param extractedData Map containing the extracted data from the document
-     * @return The updated application response DTO
+     * @return The updated application with processing results
      * @throws ProcessingException if an error occurs during processing
      */
-    ApplicationResponseDTO updateApplicationWithDocument(UUID applicationId, UUID documentId, Map<String, Object> extractedData) throws ProcessingException;
+    ApplicationResponseDTO updateApplicationWithDocument(Long applicationId, Long documentId, Map<String, Object> extractedData) throws ProcessingException;
 
     /**
-     * Process a document and determine if it belongs to an existing application or requires a new application.
-     * This method analyzes the document content, attempts to match it with existing applications,
-     * and either creates a new application or updates an existing one.
+     * Processes a document that has been classified and had data extracted.
+     * This method determines if the document belongs to a new or existing application
+     * and routes it to the appropriate processing method.
      *
      * @param documentId The ID of the document to process
      * @param extractedData Map containing the extracted data from the document
-     * @return The application response DTO (either new or updated)
+     * @return The application associated with the document after processing
      * @throws ProcessingException if an error occurs during processing
      */
-    ApplicationResponseDTO processDocument(UUID documentId, Map<String, Object> extractedData) throws ProcessingException;
+    ApplicationResponseDTO processDocument(Long documentId, Map<String, Object> extractedData) throws ProcessingException;
 
     /**
-     * Update the status of an application and perform any required actions for the new status.
-     * This method validates the status transition, updates the application record,
-     * and triggers any necessary notifications or follow-up actions.
+     * Updates the status of an application and performs any necessary actions based on the new status.
+     * This method handles the application lifecycle transitions:
+     * - Validates the status transition is allowed
+     * - Updates the application status
+     * - Performs any status-specific processing
+     * - Sends appropriate notifications
      *
      * @param applicationId The ID of the application to update
      * @param newStatus The new status to set
-     * @param metadata Optional metadata related to the status change
-     * @return The updated application response DTO
-     * @throws ProcessingException if the status transition is invalid or an error occurs
+     * @param statusMetadata Additional metadata related to the status change
+     * @return The updated application
+     * @throws ProcessingException if the status transition is invalid or processing fails
      */
-    ApplicationResponseDTO updateApplicationStatus(UUID applicationId, ApplicationStatus newStatus, Map<String, Object> metadata) throws ProcessingException;
+    ApplicationResponseDTO updateApplicationStatus(Long applicationId, ApplicationStatus newStatus, Map<String, Object> statusMetadata) throws ProcessingException;
 
     /**
-     * Check if an application is complete based on required documents and data.
-     * This method evaluates the application against business rules to determine
-     * if all required information has been provided.
-     *
-     * @param applicationId The ID of the application to check
-     * @return true if the application is complete, false otherwise
-     * @throws ProcessingException if an error occurs during the check
-     */
-    boolean isApplicationComplete(UUID applicationId) throws ProcessingException;
-
-    /**
-     * Get the processing status of an application, including any pending requirements.
-     * This method provides detailed information about the current processing state,
-     * including validation results and missing information.
-     *
-     * @param applicationId The ID of the application to check
-     * @return Map containing the processing status details
-     * @throws ProcessingException if an error occurs during the check
-     */
-    Map<String, Object> getProcessingStatus(UUID applicationId) throws ProcessingException;
-
-    /**
-     * Get a list of documents required for an application to be considered complete.
-     * This method evaluates the application's current state and returns a list of
-     * document types that are still needed.
-     *
-     * @param applicationId The ID of the application to check
-     * @return List of required document types that are still needed
-     * @throws ProcessingException if an error occurs during the check
-     */
-    List<String> getRequiredDocuments(UUID applicationId) throws ProcessingException;
-
-    /**
-     * Reprocess an application to apply updated business rules or fix processing errors.
-     * This method reevaluates all documents and data associated with the application
-     * and updates the application state accordingly.
-     *
-     * @param applicationId The ID of the application to reprocess
-     * @return The updated application response DTO
-     * @throws ProcessingException if an error occurs during reprocessing
-     */
-    ApplicationResponseDTO reprocessApplication(UUID applicationId) throws ProcessingException;
-
-    /**
-     * Handle an exception that occurred during document processing.
-     * This method logs the error, updates the application status if applicable,
-     * and triggers any necessary notifications or recovery actions.
-     *
-     * @param documentId The ID of the document being processed when the error occurred
-     * @param applicationId The ID of the associated application, if any
-     * @param exception The exception that occurred
-     * @param metadata Additional metadata about the processing context
-     * @throws ProcessingException if an error occurs while handling the exception
-     */
-    void handleProcessingException(UUID documentId, UUID applicationId, Exception exception, Map<String, Object> metadata) throws ProcessingException;
-
-    /**
-     * Get all documents associated with an application.
-     * This method retrieves the complete list of documents linked to the application,
-     * including their metadata and processing status.
+     * Retrieves the current processing status of an application.
+     * This method provides detailed information about the application's processing state,
+     * including any pending tasks, validation results, and processing history.
      *
      * @param applicationId The ID of the application
-     * @return List of document response DTOs
-     * @throws ProcessingException if an error occurs during retrieval
+     * @return Map containing the processing status details
+     * @throws ProcessingException if the application is not found or status retrieval fails
      */
-    List<DocumentResponseDTO> getApplicationDocuments(UUID applicationId) throws ProcessingException;
+    Map<String, Object> getApplicationProcessingStatus(Long applicationId) throws ProcessingException;
 
     /**
-     * Apply business rules to an application and update its status accordingly.
-     * This method evaluates the application against configured business rules
-     * and updates the application status based on the evaluation results.
+     * Handles an exception that occurred during application processing.
+     * This method provides a standardized way to handle and recover from processing errors:
+     * - Logs the exception details
+     * - Updates the application status to reflect the error
+     * - Attempts recovery if possible
+     * - Notifies administrators of critical errors
      *
-     * @param applicationId The ID of the application to evaluate
-     * @return The updated application response DTO
-     * @throws ProcessingException if an error occurs during rule application
+     * @param applicationId The ID of the application where the exception occurred
+     * @param exception The exception that occurred
+     * @param processingContext Additional context about the processing stage where the exception occurred
+     * @return The updated application with error handling results
      */
-    ApplicationResponseDTO applyBusinessRules(UUID applicationId) throws ProcessingException;
+    ApplicationResponseDTO handleProcessingException(Long applicationId, Exception exception, Map<String, Object> processingContext);
+
+    /**
+     * Reprocesses an application that previously encountered errors or requires manual intervention.
+     * This method allows for recovery from processing failures:
+     * - Identifies the failed processing step
+     * - Restarts processing from that step
+     * - Applies any manual corrections or overrides
+     * - Updates the application status based on reprocessing results
+     *
+     * @param applicationId The ID of the application to reprocess
+     * @param overrideData Optional data to override extracted values during reprocessing
+     * @return The reprocessed application
+     * @throws ProcessingException if reprocessing fails
+     */
+    ApplicationResponseDTO reprocessApplication(Long applicationId, Map<String, Object> overrideData) throws ProcessingException;
+
+    /**
+     * Validates an application against business rules and data requirements.
+     * This method performs comprehensive validation:
+     * - Schema validation of all application data
+     * - Business rule application
+     * - Document completeness checks
+     * - Required field validation
+     *
+     * @param applicationId The ID of the application to validate
+     * @return Validation results with any errors or warnings
+     * @throws ProcessingException if validation processing fails
+     */
+    Map<String, Object> validateApplication(Long applicationId) throws ProcessingException;
+
+    /**
+     * Checks if an application is complete and ready for final processing.
+     * This method evaluates application completeness based on:
+     * - Required documents presence
+     * - Required data fields completion
+     * - Business rule satisfaction
+     * - Validation status
+     *
+     * @param applicationId The ID of the application to check
+     * @return true if the application is complete, false otherwise with reasons in the metadata
+     * @throws ProcessingException if completeness check fails
+     */
+    boolean isApplicationComplete(Long applicationId, Map<String, Object> metadata) throws ProcessingException;
+
+    /**
+     * Retrieves all documents associated with an application.
+     * This method provides a comprehensive view of all documents related to an application,
+     * including their processing status and extracted data.
+     *
+     * @param applicationId The ID of the application
+     * @return List of documents associated with the application
+     * @throws ProcessingException if document retrieval fails
+     */
+    List<DocumentResponseDTO> getApplicationDocuments(Long applicationId) throws ProcessingException;
 }
