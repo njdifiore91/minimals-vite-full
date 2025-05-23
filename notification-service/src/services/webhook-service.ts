@@ -1,470 +1,643 @@
 /**
- * Webhook Service
- * 
- * This service is responsible for formatting, signing, and delivering webhook payloads to configured endpoints.
+ * @file webhook-service.ts
+ * @description Service responsible for formatting, signing, and delivering webhook payloads to configured endpoints.
  * It implements HMAC-SHA256 signatures for payload verification, handles HTTP delivery with proper error handling,
  * and supports delivery confirmation with acknowledgment responses.
  */
 
-import axios, { AxiosRequestConfig, AxiosResponse, AxiosError } from 'axios';
-import crypto from 'crypto';
+import axios, { AxiosError, AxiosRequestConfig, AxiosResponse } from 'axios';
 import { v4 as uuidv4 } from 'uuid';
-import { Logger } from 'winston';
+import { createHash, createHmac, timingSafeEqual } from 'crypto';
 
-import { config } from '../config';
+// Import types
 import {
   IWebhookConfig,
   IWebhookPayload,
-  IWebhookHeaders,
-  IWebhookSignature,
   IWebhookResponse,
+  IWebhookSignature,
   IWebhookDeliveryResult,
+  IWebhookDeliveryRequest,
+  IWebhookVerificationRequest,
+  IWebhookVerificationResult,
+  IWebhookHeaders,
   WebhookMethod,
-  WebhookStatus,
 } from '../types/webhook';
 
+// Import configuration
+import {
+  webhookConfig,
+  signatureConfig,
+  httpConfig,
+  acknowledgmentConfig,
+  schemaValidationConfig,
+  generateWebhookSignature,
+  verifyWebhookSignature,
+} from '../config/webhook';
+
+// Import logger
+import logger from '../config/logger';
+
 /**
- * WebhookService class responsible for webhook payload formatting, signing, and delivery
+ * WebhookService class responsible for webhook payload delivery and management
  */
 export class WebhookService {
-  private logger: Logger;
-  private readonly signatureHeaderName: string = 'X-Webhook-Signature';
-  private readonly timestampHeaderName: string = 'X-Webhook-Timestamp';
-  private readonly idHeaderName: string = 'X-Webhook-ID';
-  private readonly eventHeaderName: string = 'X-Webhook-Event';
-  private readonly userAgent: string = 'DollarFunding-Webhook-Service/1.0';
-  
   /**
-   * Creates a new instance of WebhookService
-   * @param logger Winston logger instance for logging
+   * Creates a new instance of the WebhookService
    */
-  constructor(logger: Logger) {
-    this.logger = logger;
+  constructor() {
+    logger.info('WebhookService initialized');
   }
 
   /**
    * Generates an HMAC-SHA256 signature for a webhook payload
    * @param payload The webhook payload to sign
-   * @param secret The customer-specific secret key
-   * @param timestamp The timestamp to include in the signature
-   * @returns The signature object containing the generated signature
+   * @param secretKey The secret key to use for signing
+   * @returns The signature object containing the signature and timestamp
    */
-  public generateSignature(payload: IWebhookPayload, secret: string, timestamp: string): IWebhookSignature {
-    try {
-      // Convert payload to string if it's not already
-      const payloadString = typeof payload === 'string' ? payload : JSON.stringify(payload);
-      
-      // Create HMAC using SHA256 algorithm and the customer's secret key
-      const hmac = crypto.createHmac('sha256', secret);
-      
-      // Update HMAC with timestamp and payload
+  public generateSignature(payload: IWebhookPayload, secretKey: string): IWebhookSignature {
+    const timestamp = Date.now().toString();
+    const payloadString = JSON.stringify(payload);
+    
+    // Create HMAC using the secret key
+    const hmac = createHmac('sha256', secretKey);
+    
+    // Update HMAC with timestamp and payload
+    if (signatureConfig.includeTimestamp) {
       hmac.update(`${timestamp}.${payloadString}`);
+    } else {
+      hmac.update(payloadString);
+    }
+    
+    // Generate the signature
+    const signature = hmac.digest('hex');
+    
+    logger.debug('Generated webhook signature', { signature, timestamp });
+    
+    return {
+      signature,
+      timestamp,
+      algorithm: 'HMAC-SHA256',
+      encoding: 'hex',
+    };
+  }
+
+  /**
+   * Verifies an HMAC-SHA256 signature for a webhook payload
+   * @param payload The webhook payload
+   * @param signature The signature to verify
+   * @param secretKey The secret key used for signing
+   * @param timestamp The timestamp included in the signature
+   * @returns Whether the signature is valid
+   */
+  public verifySignature(
+    payload: IWebhookPayload,
+    signature: string,
+    secretKey: string,
+    timestamp?: string
+  ): boolean {
+    try {
+      const payloadString = JSON.stringify(payload);
       
-      // Generate the signature in hex format
-      const signature = hmac.digest('hex');
+      // Create HMAC using the secret key
+      const hmac = createHmac('sha256', secretKey);
       
-      return {
-        algorithm: 'sha256',
-        secret,
-        signature,
-        timestamp,
-        payload: payloadString,
-        headerName: this.signatureHeaderName,
-        signatureFormat: 't={timestamp},v1={signature}'
-      };
+      // Update HMAC with timestamp and payload if timestamp is provided
+      if (timestamp && signatureConfig.includeTimestamp) {
+        hmac.update(`${timestamp}.${payloadString}`);
+      } else {
+        hmac.update(payloadString);
+      }
+      
+      // Generate the expected signature
+      const expectedSignature = hmac.digest('hex');
+      
+      // Use constant-time comparison to prevent timing attacks
+      const signatureBuffer = Buffer.from(signature, 'hex');
+      const expectedBuffer = Buffer.from(expectedSignature, 'hex');
+      
+      const isValid = signatureBuffer.length === expectedBuffer.length && 
+                      timingSafeEqual(signatureBuffer, expectedBuffer);
+      
+      logger.debug('Verified webhook signature', { isValid, timestamp });
+      
+      return isValid;
     } catch (error) {
-      this.logger.error('Error generating webhook signature', {
-        error: (error as Error).message,
-        payload: typeof payload === 'object' ? JSON.stringify(payload) : payload,
-        timestamp
-      });
-      throw new Error(`Failed to generate webhook signature: ${(error as Error).message}`);
+      logger.error('Error verifying webhook signature', { error });
+      return false;
     }
   }
 
   /**
    * Validates a webhook payload against its schema
    * @param payload The webhook payload to validate
-   * @param eventType The type of event for schema selection
-   * @returns True if the payload is valid, false otherwise
+   * @param eventType The event type for schema selection
+   * @returns Whether the payload is valid
    */
   public validatePayload(payload: IWebhookPayload, eventType: string): boolean {
+    // Skip validation if disabled
+    if (!schemaValidationConfig.enabled) {
+      return true;
+    }
+    
     try {
-      // Basic validation checks
-      if (!payload) {
-        this.logger.warn('Empty webhook payload', { eventType });
+      // In a real implementation, this would use a schema validation library like Joi, Zod, or Ajv
+      // For this example, we'll do a simple structure validation
+      
+      // Check required fields
+      if (!payload.id || !payload.timestamp || !payload.eventType || !payload.version || !payload.data) {
+        logger.warn('Invalid webhook payload: missing required fields', { eventType });
         return false;
       }
-
-      if (!payload.id || !payload.event || !payload.timestamp || !payload.version) {
-        this.logger.warn('Webhook payload missing required fields', { 
-          eventType,
-          payload: JSON.stringify(payload)
+      
+      // Check event type matches
+      if (payload.eventType !== eventType) {
+        logger.warn('Invalid webhook payload: event type mismatch', { 
+          expected: eventType, 
+          actual: payload.eventType 
         });
         return false;
       }
-
-      // TODO: Implement schema validation using a library like Joi or Zod
-      // This would validate the payload structure against a predefined schema for the event type
       
+      // Additional validation could be performed here based on the event type
+      
+      logger.debug('Webhook payload validated successfully', { eventType });
       return true;
     } catch (error) {
-      this.logger.error('Error validating webhook payload', {
-        error: (error as Error).message,
-        eventType,
-        payload: JSON.stringify(payload)
-      });
+      logger.error('Error validating webhook payload', { error, eventType });
       return false;
     }
   }
 
   /**
-   * Prepares HTTP headers for a webhook request
-   * @param webhookConfig The webhook configuration
-   * @param signature The signature object
-   * @param payload The webhook payload
-   * @returns The prepared HTTP headers
+   * Creates a webhook payload with the required structure
+   * @param eventType The type of event that triggered the webhook
+   * @param data The data to include in the payload
+   * @param metadata Additional metadata about the event
+   * @returns The formatted webhook payload
    */
-  private prepareHeaders(webhookConfig: IWebhookConfig, signature: IWebhookSignature, payload: IWebhookPayload): IWebhookHeaders {
-    const headers: IWebhookHeaders = {
-      'Content-Type': webhookConfig.contentType || 'application/json',
-      'User-Agent': this.userAgent,
+  public createPayload<T>(
+    eventType: string,
+    data: T,
+    metadata?: Record<string, unknown>
+  ): IWebhookPayload<T> {
+    const payload: IWebhookPayload<T> = {
+      id: uuidv4(),
+      timestamp: new Date().toISOString(),
+      eventType,
+      version: '1.0',
+      data,
+      metadata,
     };
-
-    // Add signature header
-    const formattedSignature = signature.signatureFormat
-      .replace('{timestamp}', signature.timestamp)
-      .replace('{signature}', signature.signature);
     
-    headers[this.signatureHeaderName] = formattedSignature;
-    headers[this.timestampHeaderName] = signature.timestamp;
-    headers[this.idHeaderName] = payload.id;
-    headers[this.eventHeaderName] = payload.event;
+    logger.debug('Created webhook payload', { eventType, id: payload.id });
+    return payload;
+  }
 
-    // Add authentication headers if configured
-    if (webhookConfig.authType === 'basic' && webhookConfig.basicAuth) {
-      const auth = Buffer.from(
-        `${webhookConfig.basicAuth.username}:${webhookConfig.basicAuth.password}`
-      ).toString('base64');
-      headers['Authorization'] = `Basic ${auth}`;
-    } else if (webhookConfig.authType === 'bearer' && webhookConfig.bearerToken) {
-      headers['Authorization'] = `Bearer ${webhookConfig.bearerToken}`;
-    } else if (webhookConfig.authType === 'custom' && webhookConfig.customAuth) {
-      headers[webhookConfig.customAuth.headerName] = webhookConfig.customAuth.headerValue;
+  /**
+   * Prepares headers for a webhook request, including signature headers
+   * @param webhook The webhook configuration
+   * @param signature The signature information
+   * @param additionalHeaders Any additional headers to include
+   * @returns The complete set of headers for the request
+   */
+  private prepareHeaders(
+    webhook: IWebhookConfig,
+    signature: IWebhookSignature,
+    additionalHeaders?: Record<string, string>
+  ): IWebhookHeaders {
+    // Start with default headers
+    const headers: IWebhookHeaders = {
+      'Content-Type': 'application/json',
+      'User-Agent': `DollarFunding-Webhook-Service/${process.env.npm_package_version || '1.0.0'}`,
+      'X-Webhook-ID': webhook.id,
+    };
+    
+    // Add signature headers if enabled
+    if (signatureConfig.enabled) {
+      headers[signatureConfig.headerName] = signature.signature;
+      
+      if (signatureConfig.includeTimestamp) {
+        headers[signatureConfig.timestampHeaderName] = signature.timestamp;
+      }
     }
-
+    
+    // Add event type header
+    headers['X-Webhook-Event'] = webhook.eventTypes.join(',');
+    
+    // Add any additional headers
+    if (additionalHeaders) {
+      Object.entries(additionalHeaders).forEach(([key, value]) => {
+        headers[key] = value;
+      });
+    }
+    
+    // Add authentication headers if configured
+    if (webhook.auth) {
+      switch (webhook.auth.type) {
+        case 'BASIC':
+          if (webhook.auth.username && webhook.auth.password) {
+            const auth = Buffer.from(`${webhook.auth.username}:${webhook.auth.password}`).toString('base64');
+            headers['Authorization'] = `Basic ${auth}`;
+          }
+          break;
+        case 'BEARER':
+          if (webhook.auth.token) {
+            headers['Authorization'] = `Bearer ${webhook.auth.token}`;
+          }
+          break;
+        case 'API_KEY':
+          if (webhook.auth.apiKeyName && webhook.auth.apiKeyValue) {
+            headers[webhook.auth.apiKeyName] = webhook.auth.apiKeyValue;
+          }
+          break;
+        case 'CUSTOM':
+          if (webhook.auth.headerName && webhook.auth.headerValue) {
+            headers[webhook.auth.headerName] = webhook.auth.headerValue;
+          }
+          break;
+      }
+    }
+    
     return headers;
   }
 
   /**
    * Delivers a webhook payload to the configured endpoint
-   * @param webhookConfig The webhook configuration
-   * @param payload The webhook payload to deliver
+   * @param request The webhook delivery request
    * @returns The delivery result
    */
-  public async deliverWebhook(webhookConfig: IWebhookConfig, payload: IWebhookPayload): Promise<IWebhookDeliveryResult> {
-    const deliveryId = uuidv4();
+  public async deliverWebhook(request: IWebhookDeliveryRequest): Promise<IWebhookDeliveryResult> {
+    const { webhook, payload, signature, additionalHeaders, timeoutMs, retryAttempt = 0 } = request;
     const startTime = Date.now();
-    const timestamp = new Date().toISOString();
-
-    // Initialize delivery result
+    
+    // Create a unique ID for this delivery attempt
+    const deliveryId = uuidv4();
+    
+    // Prepare the delivery result with initial values
     const deliveryResult: IWebhookDeliveryResult = {
       id: deliveryId,
-      webhookId: webhookConfig.id,
+      webhookId: webhook.id,
       eventId: payload.id,
-      url: webhookConfig.url,
-      method: webhookConfig.method,
-      requestHeaders: {} as IWebhookHeaders,
-      requestPayload: payload,
+      timestamp: new Date().toISOString(),
       success: false,
-      timestamp: timestamp,
-      durationMs: 0,
-      retryCount: 0,
-      maxRetries: webhookConfig.retryPolicy.maxRetries,
-      willRetry: false
+      deliveryTimeMs: 0,
+      retryCount: retryAttempt,
     };
-
+    
     try {
-      // Skip delivery if webhook is not active
-      if (webhookConfig.status !== WebhookStatus.ACTIVE) {
-        this.logger.info('Skipping webhook delivery - webhook not active', {
-          webhookId: webhookConfig.id,
-          status: webhookConfig.status,
-          deliveryId
-        });
-        deliveryResult.error = 'Webhook not active';
-        deliveryResult.errorCode = 'WEBHOOK_INACTIVE';
-        return deliveryResult;
-      }
-
-      // Validate payload against schema
-      if (!this.validatePayload(payload, payload.event)) {
-        this.logger.error('Webhook payload validation failed', {
-          webhookId: webhookConfig.id,
-          event: payload.event,
-          deliveryId
-        });
-        deliveryResult.error = 'Payload validation failed';
-        deliveryResult.errorCode = 'PAYLOAD_VALIDATION_FAILED';
-        return deliveryResult;
-      }
-
-      // Generate signature
-      const signature = this.generateSignature(payload, webhookConfig.secret, timestamp);
-      deliveryResult.signature = {
-        value: signature.signature,
-        timestamp: signature.timestamp,
-        algorithm: signature.algorithm
-      };
-
-      // Prepare headers
-      const headers = this.prepareHeaders(webhookConfig, signature, payload);
-      deliveryResult.requestHeaders = headers;
-
-      // Prepare request config
-      const requestConfig: AxiosRequestConfig = {
-        method: webhookConfig.method,
-        url: webhookConfig.url,
-        headers,
-        timeout: webhookConfig.timeoutMs,
-        validateStatus: () => true, // Don't throw on any status code
-        httpsAgent: webhookConfig.verifySSL ? undefined : new (require('https').Agent)({ rejectUnauthorized: false })
-      };
-
-      // Add payload to request based on method
-      if (webhookConfig.method !== WebhookMethod.GET) {
-        requestConfig.data = payload;
-      }
-
-      this.logger.info('Delivering webhook', {
-        webhookId: webhookConfig.id,
-        url: webhookConfig.url,
-        method: webhookConfig.method,
-        event: payload.event,
-        deliveryId
-      });
-
-      // Send the webhook request
-      const response: AxiosResponse = await axios(requestConfig);
-      const endTime = Date.now();
-      deliveryResult.durationMs = endTime - startTime;
-
-      // Process response
-      const webhookResponse: IWebhookResponse = {
-        statusCode: response.status,
-        headers: response.headers as Record<string, string>,
-        body: typeof response.data === 'string' ? response.data : JSON.stringify(response.data),
-        success: response.status >= 200 && response.status < 300,
-        responseTimeMs: deliveryResult.durationMs,
-        timestamp: new Date().toISOString(),
-        shouldRetry: this.shouldRetryResponse(response.status, webhookConfig.retryPolicy.retryableStatusCodes)
-      };
-      deliveryResult.response = webhookResponse;
-
-      // Check if delivery was successful
-      if (webhookResponse.success) {
-        this.logger.info('Webhook delivered successfully', {
-          webhookId: webhookConfig.id,
-          deliveryId,
-          statusCode: response.status,
-          responseTime: deliveryResult.durationMs
-        });
-        deliveryResult.success = true;
-      } else {
-        this.logger.warn('Webhook delivery failed', {
-          webhookId: webhookConfig.id,
-          deliveryId,
-          statusCode: response.status,
-          responseTime: deliveryResult.durationMs,
-          responseBody: webhookResponse.body.substring(0, 200) // Log first 200 chars of response
-        });
-        deliveryResult.error = `HTTP ${response.status}: ${webhookResponse.body.substring(0, 100)}`;
-        deliveryResult.errorCode = `HTTP_${response.status}`;
-        deliveryResult.willRetry = webhookResponse.shouldRetry;
-
-        if (webhookResponse.shouldRetry) {
-          const nextRetryTime = new Date(Date.now() + this.calculateRetryDelay(0, webhookConfig.retryPolicy));
-          deliveryResult.nextRetryAt = nextRetryTime.toISOString();
+      // Validate the payload if schema validation is enabled
+      if (schemaValidationConfig.enabled && schemaValidationConfig.rejectInvalid) {
+        const isValid = this.validatePayload(payload, payload.eventType);
+        if (!isValid) {
+          throw new Error('Webhook payload validation failed');
         }
       }
-
-      return deliveryResult;
-    } catch (error) {
-      const endTime = Date.now();
-      deliveryResult.durationMs = endTime - startTime;
-
-      // Handle network errors and timeouts
-      const axiosError = error as AxiosError;
-      const errorMessage = axiosError.message || 'Unknown error';
-      const isTimeout = errorMessage.includes('timeout');
-      const isConnectionError = axiosError.code === 'ECONNREFUSED' || 
-                               axiosError.code === 'ECONNABORTED' ||
-                               axiosError.code === 'ENOTFOUND';
-
-      this.logger.error('Webhook delivery error', {
-        webhookId: webhookConfig.id,
-        deliveryId,
-        error: errorMessage,
-        code: axiosError.code,
-        isTimeout,
-        isConnectionError
-      });
-
-      deliveryResult.error = errorMessage;
-      deliveryResult.errorCode = axiosError.code || 'DELIVERY_ERROR';
       
-      // Determine if we should retry
-      const shouldRetryTimeout = isTimeout && webhookConfig.retryPolicy.retryOnTimeout;
-      const shouldRetryConnection = isConnectionError && webhookConfig.retryPolicy.retryOnConnectionError;
-      deliveryResult.willRetry = shouldRetryTimeout || shouldRetryConnection;
-
-      if (deliveryResult.willRetry) {
-        const nextRetryTime = new Date(Date.now() + this.calculateRetryDelay(0, webhookConfig.retryPolicy));
-        deliveryResult.nextRetryAt = nextRetryTime.toISOString();
+      // Prepare headers for the request
+      const headers = this.prepareHeaders(webhook, signature, additionalHeaders);
+      
+      // Configure the request
+      const requestConfig: AxiosRequestConfig = {
+        method: webhook.method,
+        url: webhook.url,
+        headers,
+        data: payload,
+        timeout: timeoutMs || httpConfig.timeoutMs,
+        maxRedirects: httpConfig.maxRedirects,
+        validateStatus: null, // Allow any status code to be handled in our code
+      };
+      
+      // Log the delivery attempt
+      logger.info('Delivering webhook', {
+        deliveryId,
+        webhookId: webhook.id,
+        url: webhook.url,
+        method: webhook.method,
+        eventType: payload.eventType,
+        retryAttempt,
+      });
+      
+      // Send the request
+      const response = await axios(requestConfig);
+      
+      // Calculate delivery time
+      const endTime = Date.now();
+      deliveryResult.deliveryTimeMs = endTime - startTime;
+      
+      // Record the response details
+      deliveryResult.statusCode = response.status;
+      deliveryResult.responseBody = JSON.stringify(response.data).substring(0, 1000); // Limit response size
+      
+      // Determine if the delivery was successful based on status code
+      const isSuccessfulStatus = acknowledgmentConfig.successCodes.includes(response.status);
+      deliveryResult.success = isSuccessfulStatus;
+      
+      if (isSuccessfulStatus) {
+        logger.info('Webhook delivered successfully', {
+          deliveryId,
+          webhookId: webhook.id,
+          statusCode: response.status,
+          deliveryTimeMs: deliveryResult.deliveryTimeMs,
+        });
+      } else {
+        // Delivery failed due to non-success status code
+        deliveryResult.errorMessage = `Webhook delivery failed with status code: ${response.status}`;
+        
+        logger.warn('Webhook delivery failed', {
+          deliveryId,
+          webhookId: webhook.id,
+          statusCode: response.status,
+          deliveryTimeMs: deliveryResult.deliveryTimeMs,
+          errorMessage: deliveryResult.errorMessage,
+        });
       }
-
+      
+      return deliveryResult;
+    } catch (error) {
+      // Calculate delivery time even for errors
+      const endTime = Date.now();
+      deliveryResult.deliveryTimeMs = endTime - startTime;
+      
+      // Handle Axios errors
+      if (axios.isAxiosError(error)) {
+        const axiosError = error as AxiosError;
+        
+        if (axiosError.response) {
+          // The request was made and the server responded with a status code outside of 2xx
+          deliveryResult.statusCode = axiosError.response.status;
+          deliveryResult.errorMessage = `Webhook delivery failed with status code: ${axiosError.response.status}`;
+          deliveryResult.responseBody = JSON.stringify(axiosError.response.data).substring(0, 1000);
+        } else if (axiosError.request) {
+          // The request was made but no response was received
+          deliveryResult.errorMessage = 'Webhook delivery failed: no response received';
+        } else {
+          // Something happened in setting up the request
+          deliveryResult.errorMessage = `Webhook delivery failed: ${axiosError.message}`;
+        }
+      } else {
+        // Handle non-Axios errors
+        const err = error as Error;
+        deliveryResult.errorMessage = `Webhook delivery failed: ${err.message}`;
+      }
+      
+      logger.error('Error delivering webhook', {
+        deliveryId,
+        webhookId: webhook.id,
+        url: webhook.url,
+        method: webhook.method,
+        eventType: payload.eventType,
+        retryAttempt,
+        error: deliveryResult.errorMessage,
+        deliveryTimeMs: deliveryResult.deliveryTimeMs,
+      });
+      
       return deliveryResult;
     }
   }
 
   /**
-   * Determines if a response should trigger a retry based on status code
-   * @param statusCode The HTTP status code
-   * @param retryableStatusCodes Array of status codes that should trigger a retry
-   * @returns True if the response should be retried, false otherwise
+   * Verifies that a webhook endpoint is valid and accessible
+   * @param request The webhook verification request
+   * @returns The verification result
    */
-  private shouldRetryResponse(statusCode: number, retryableStatusCodes: number[]): boolean {
-    // Common retryable status codes if not explicitly configured
-    const defaultRetryableCodes = [408, 429, 500, 502, 503, 504];
-    const codesToCheck = retryableStatusCodes?.length ? retryableStatusCodes : defaultRetryableCodes;
+  public async verifyWebhookEndpoint(request: IWebhookVerificationRequest): Promise<IWebhookVerificationResult> {
+    const { url, method, headers, auth, timeoutMs } = request;
+    const startTime = Date.now();
     
-    return codesToCheck.includes(statusCode);
-  }
-
-  /**
-   * Calculates the delay before the next retry attempt using exponential backoff
-   * @param currentRetry The current retry attempt number (0-based)
-   * @param retryPolicy The retry policy configuration
-   * @returns The delay in milliseconds before the next retry
-   */
-  private calculateRetryDelay(currentRetry: number, retryPolicy: IWebhookConfig['retryPolicy']): number {
-    if (!retryPolicy.enabled) {
-      return 0;
-    }
-
-    let delay = retryPolicy.initialDelayMs;
-
-    // Apply exponential backoff if configured
-    if (retryPolicy.useExponentialBackoff && currentRetry > 0) {
-      delay = Math.min(
-        retryPolicy.initialDelayMs * Math.pow(retryPolicy.backoffFactor, currentRetry),
-        retryPolicy.maxDelayMs
-      );
-    }
-
-    // Add jitter to prevent thundering herd problem
-    if (retryPolicy.useJitter) {
-      const jitterFactor = 0.25; // 25% jitter
-      const jitterRange = delay * jitterFactor;
-      delay = delay - jitterRange + (Math.random() * jitterRange * 2);
-    }
-
-    return Math.floor(delay);
-  }
-
-  /**
-   * Verifies a webhook signature to ensure it was sent by an authorized sender
-   * @param payload The webhook payload
-   * @param signature The signature from the request headers
-   * @param secret The customer-specific secret key
-   * @param timestamp The timestamp from the request headers
-   * @returns True if the signature is valid, false otherwise
-   */
-  public verifySignature(payload: string, signature: string, secret: string, timestamp: string): boolean {
+    // Prepare the verification result with initial values
+    const verificationResult: IWebhookVerificationResult = {
+      success: false,
+    };
+    
     try {
-      // Generate the expected signature
-      const hmac = crypto.createHmac('sha256', secret);
-      hmac.update(`${timestamp}.${payload}`);
-      const expectedSignature = hmac.digest('hex');
-
-      // Use timing-safe comparison to prevent timing attacks
-      const signatureBuffer = Buffer.from(signature, 'hex');
-      const expectedBuffer = Buffer.from(expectedSignature, 'hex');
-
-      // Ensure buffers are the same length for comparison
-      if (signatureBuffer.length !== expectedBuffer.length) {
-        return false;
+      // Prepare a test payload
+      const testPayload = {
+        id: uuidv4(),
+        timestamp: new Date().toISOString(),
+        eventType: 'webhook.verification',
+        version: '1.0',
+        data: {
+          message: 'This is a test webhook to verify endpoint configuration.',
+        },
+      };
+      
+      // Configure the request
+      const requestConfig: AxiosRequestConfig = {
+        method: method || WebhookMethod.POST,
+        url,
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': `DollarFunding-Webhook-Service/${process.env.npm_package_version || '1.0.0'}`,
+          'X-Webhook-Verification': 'true',
+          ...headers,
+        },
+        data: testPayload,
+        timeout: timeoutMs || httpConfig.timeoutMs,
+        validateStatus: null, // Allow any status code to be handled in our code
+      };
+      
+      // Add authentication if provided
+      if (auth) {
+        switch (auth.type) {
+          case 'BASIC':
+            if (auth.username && auth.password) {
+              requestConfig.auth = {
+                username: auth.username,
+                password: auth.password,
+              };
+            }
+            break;
+          case 'BEARER':
+            if (auth.token) {
+              requestConfig.headers = {
+                ...requestConfig.headers,
+                'Authorization': `Bearer ${auth.token}`,
+              };
+            }
+            break;
+          case 'API_KEY':
+            if (auth.apiKeyName && auth.apiKeyValue) {
+              requestConfig.headers = {
+                ...requestConfig.headers,
+                [auth.apiKeyName]: auth.apiKeyValue,
+              };
+            }
+            break;
+          case 'CUSTOM':
+            if (auth.headerName && auth.headerValue) {
+              requestConfig.headers = {
+                ...requestConfig.headers,
+                [auth.headerName]: auth.headerValue,
+              };
+            }
+            break;
+        }
       }
-
-      return crypto.timingSafeEqual(signatureBuffer, expectedBuffer);
+      
+      // Log the verification attempt
+      logger.info('Verifying webhook endpoint', { url, method });
+      
+      // Send the request
+      const response = await axios(requestConfig);
+      
+      // Calculate response time
+      const endTime = Date.now();
+      verificationResult.responseTimeMs = endTime - startTime;
+      
+      // Record the response details
+      verificationResult.statusCode = response.status;
+      
+      // Determine if the verification was successful based on status code
+      // For verification, we consider any 2xx or 3xx status code as successful
+      const isSuccessfulStatus = response.status >= 200 && response.status < 400;
+      verificationResult.success = isSuccessfulStatus;
+      
+      if (isSuccessfulStatus) {
+        logger.info('Webhook endpoint verified successfully', {
+          url,
+          statusCode: response.status,
+          responseTimeMs: verificationResult.responseTimeMs,
+        });
+      } else {
+        // Verification failed due to non-success status code
+        verificationResult.errorMessage = `Webhook verification failed with status code: ${response.status}`;
+        
+        logger.warn('Webhook endpoint verification failed', {
+          url,
+          statusCode: response.status,
+          responseTimeMs: verificationResult.responseTimeMs,
+          errorMessage: verificationResult.errorMessage,
+        });
+      }
+      
+      return verificationResult;
     } catch (error) {
-      this.logger.error('Error verifying webhook signature', {
-        error: (error as Error).message,
-        timestamp
+      // Calculate response time even for errors
+      const endTime = Date.now();
+      verificationResult.responseTimeMs = endTime - startTime;
+      
+      // Handle Axios errors
+      if (axios.isAxiosError(error)) {
+        const axiosError = error as AxiosError;
+        
+        if (axiosError.response) {
+          // The request was made and the server responded with a status code outside of 2xx
+          verificationResult.statusCode = axiosError.response.status;
+          verificationResult.errorMessage = `Webhook verification failed with status code: ${axiosError.response.status}`;
+          verificationResult.errorDetails = { data: axiosError.response.data };
+        } else if (axiosError.request) {
+          // The request was made but no response was received
+          verificationResult.errorMessage = 'Webhook verification failed: no response received';
+          verificationResult.errorDetails = { request: 'Request sent but no response received' };
+        } else {
+          // Something happened in setting up the request
+          verificationResult.errorMessage = `Webhook verification failed: ${axiosError.message}`;
+          verificationResult.errorDetails = { message: axiosError.message };
+        }
+      } else {
+        // Handle non-Axios errors
+        const err = error as Error;
+        verificationResult.errorMessage = `Webhook verification failed: ${err.message}`;
+        verificationResult.errorDetails = { message: err.message };
+      }
+      
+      logger.error('Error verifying webhook endpoint', {
+        url,
+        method,
+        error: verificationResult.errorMessage,
+        responseTimeMs: verificationResult.responseTimeMs,
+      });
+      
+      return verificationResult;
+    }
+  }
+
+  /**
+   * Processes a webhook delivery result and determines if a retry is needed
+   * @param deliveryResult The result of a webhook delivery attempt
+   * @param webhook The webhook configuration
+   * @returns Whether a retry should be attempted
+   */
+  public shouldRetryDelivery(deliveryResult: IWebhookDeliveryResult, webhook: IWebhookConfig): boolean {
+    // Don't retry if already successful
+    if (deliveryResult.success) {
+      return false;
+    }
+    
+    // Don't retry if max retries reached
+    if (deliveryResult.retryCount >= webhook.retryPolicy.maxRetries) {
+      logger.info('Max retry attempts reached for webhook', {
+        deliveryId: deliveryResult.id,
+        webhookId: webhook.id,
+        maxRetries: webhook.retryPolicy.maxRetries,
+        retryCount: deliveryResult.retryCount,
       });
       return false;
     }
+    
+    // Check if status code is retryable
+    if (deliveryResult.statusCode) {
+      const isRetryableStatusCode = webhook.retryPolicy.retryableStatusCodes.includes(deliveryResult.statusCode);
+      
+      if (!isRetryableStatusCode) {
+        // Check if it's a 5xx error, which is typically retryable
+        const isServerError = deliveryResult.statusCode >= 500 && deliveryResult.statusCode < 600;
+        
+        if (!isServerError) {
+          logger.info('Non-retryable status code for webhook', {
+            deliveryId: deliveryResult.id,
+            webhookId: webhook.id,
+            statusCode: deliveryResult.statusCode,
+          });
+          return false;
+        }
+      }
+    }
+    
+    // If we got here, we should retry
+    logger.info('Scheduling webhook delivery for retry', {
+      deliveryId: deliveryResult.id,
+      webhookId: webhook.id,
+      retryCount: deliveryResult.retryCount,
+      nextRetryAttempt: deliveryResult.retryCount + 1,
+    });
+    
+    return true;
   }
 
   /**
-   * Parses a signature header value to extract the signature and timestamp
-   * @param signatureHeader The signature header value
-   * @returns An object containing the signature and timestamp, or null if parsing fails
+   * Calculates the next retry time for a failed webhook delivery
+   * @param retryAttempt The current retry attempt (0-based)
+   * @param retryPolicy The retry policy to use
+   * @returns The timestamp for the next retry attempt
    */
-  public parseSignatureHeader(signatureHeader: string): { signature: string; timestamp: string } | null {
-    try {
-      // Format: t={timestamp},v1={signature}
-      const timestampMatch = signatureHeader.match(/t=([^,]+)/);
-      const signatureMatch = signatureHeader.match(/v1=([^,]+)/);
-
-      if (!timestampMatch || !signatureMatch) {
-        return null;
-      }
-
-      return {
-        timestamp: timestampMatch[1],
-        signature: signatureMatch[1]
-      };
-    } catch (error) {
-      this.logger.error('Error parsing signature header', {
-        error: (error as Error).message,
-        signatureHeader
-      });
-      return null;
+  public calculateNextRetryTime(retryAttempt: number, retryPolicy: IWebhookRetryPolicy): Date {
+    // Calculate the base delay using exponential backoff
+    const baseDelayMs = Math.min(
+      retryPolicy.initialDelayMs * Math.pow(retryPolicy.backoffFactor, retryAttempt),
+      retryPolicy.maxDelayMs
+    );
+    
+    // Add jitter if enabled to prevent thundering herd problem
+    let delayMs = baseDelayMs;
+    if (retryPolicy.useJitter) {
+      const jitterAmount = baseDelayMs * 0.1; // 10% jitter
+      delayMs = baseDelayMs + (Math.random() * jitterAmount * 2) - jitterAmount;
     }
-  }
-
-  /**
-   * Updates a webhook configuration status based on delivery results
-   * @param webhookConfig The webhook configuration to update
-   * @param deliveryResult The result of the latest delivery attempt
-   * @returns The updated webhook configuration
-   */
-  public updateWebhookStatus(webhookConfig: IWebhookConfig, deliveryResult: IWebhookDeliveryResult): IWebhookConfig {
-    const updatedConfig = { ...webhookConfig };
-    const now = new Date().toISOString();
-
-    if (deliveryResult.success) {
-      // Reset failure count on success
-      updatedConfig.consecutiveFailures = 0;
-      updatedConfig.lastSuccessAt = now;
-      updatedConfig.status = WebhookStatus.ACTIVE;
-    } else {
-      // Increment failure count
-      updatedConfig.consecutiveFailures += 1;
-      updatedConfig.lastFailureAt = now;
-
-      // Check if max failures exceeded
-      if (updatedConfig.consecutiveFailures >= updatedConfig.maxConsecutiveFailures) {
-        updatedConfig.status = WebhookStatus.FAILED;
-        this.logger.warn('Webhook marked as failed due to consecutive failures', {
-          webhookId: webhookConfig.id,
-          consecutiveFailures: updatedConfig.consecutiveFailures,
-          maxConsecutiveFailures: updatedConfig.maxConsecutiveFailures
-        });
-      }
-    }
-
-    return updatedConfig;
+    
+    // Calculate the next retry time
+    const nextRetryTime = new Date(Date.now() + delayMs);
+    
+    logger.debug('Calculated next retry time', {
+      retryAttempt,
+      baseDelayMs,
+      actualDelayMs: delayMs,
+      nextRetryTime: nextRetryTime.toISOString(),
+    });
+    
+    return nextRetryTime;
   }
 }
+
+// Export a singleton instance of the WebhookService
+export default new WebhookService();
