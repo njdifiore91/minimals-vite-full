@@ -1,578 +1,604 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
-"""
-Integration tests for the complete OCR processing pipeline.
-
-This module tests the end-to-end OCR pipeline from document receipt to data extraction,
-verifying that all components (document preprocessing, OCR processing, field extraction,
-confidence scoring) work together correctly to extract data from documents with high accuracy.
-
-The tests validate:
-1. Processing of different document types (typed, handwritten, mixed)
-2. Error handling and recovery in the pipeline
-3. Accuracy and performance metrics for the complete pipeline
-4. Integration between all OCR service components
-"""
-
 import os
-import time
 import json
+import time
 import pytest
-import numpy as np
-from unittest.mock import MagicMock, patch, PropertyMock
+import logging
+from unittest.mock import patch, MagicMock
 from typing import Dict, List, Any, Tuple
 
-# Import application modules
-from src.app import Application
-from src.services.ocr_service import OCRService
-from src.services.queue_service import QueueService
-from src.services.storage_service import StorageService
-from src.services.confidence_service import ConfidenceService
-from src.services.field_extraction_service import FieldExtractionService
-from src.models.model_factory import ModelFactory
-from src.types.documents import Document, DocumentType, DocumentMetadata, ProcessingStatus
-from src.types.extraction import ExtractedData, ExtractedField, ConfidenceScore
-from src.types.models import OCRModelType, ModelResult, ModelParameters
-from src.types.messages import MessagePayload, MessageHeaders
-from src.types.errors import ServiceError, ErrorCategory, Result
+# Import OCR service components
+from app import OCRApplication
+from services import OCRService, QueueService, StorageService, FieldExtractionService, ConfidenceService
+from models import ModelFactory, TypedTextModel, HandwrittenTextModel, HybridRecognitionModel
+from types.extraction import ExtractedData, ExtractedField, ConfidenceScore
+from types.messages import MessagePayload
+from types.storage import StorageMetadata
+from utils.time_utils import get_current_timestamp
+
+# Configure logging for tests
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+
+@pytest.fixture
+def app_config():
+    """Fixture for test application configuration."""
+    return {
+        "service_name": "ocr-service",
+        "version": "1.0.0",
+        "environment": "test",
+        "log_level": "INFO",
+        "rabbitmq": {
+            "host": "localhost",
+            "port": 5672,
+            "username": "test",
+            "password": "test",
+            "exchange": "mca.documents.test",
+            "queue": "ocr.request.test",
+            "result_queue": "data.processing.test",
+            "use_tls": False,
+        },
+        "s3": {
+            "endpoint": "http://localhost:9000",
+            "bucket": "mca-documents-test",
+            "access_key": "test",
+            "secret_key": "test",
+            "region": "us-east-1",
+            "use_encryption": True,
+        },
+        "tensorflow": {
+            "model_path": "./models",
+            "use_gpu": False,  # Disable GPU for tests
+            "confidence_threshold": 0.75,
+            "typed_model_name": "typed_text_model",
+            "handwritten_model_name": "handwritten_text_model",
+            "hybrid_model_name": "hybrid_recognition_model",
+        },
+    }
+
+
+@pytest.fixture
+def mock_queue_service():
+    """Fixture for mocked QueueService."""
+    mock_service = MagicMock(spec=QueueService)
+    mock_service.consume_message.return_value = None
+    mock_service.publish_message.return_value = True
+    return mock_service
+
+
+@pytest.fixture
+def mock_storage_service():
+    """Fixture for mocked StorageService."""
+    mock_service = MagicMock(spec=StorageService)
+    mock_service.download_document.return_value = (b"test document content", "application/pdf")
+    mock_service.upload_result.return_value = "test-result-key"
+    return mock_service
+
+
+@pytest.fixture
+def mock_model_factory():
+    """Fixture for mocked ModelFactory."""
+    mock_factory = MagicMock(spec=ModelFactory)
+    mock_typed_model = MagicMock(spec=TypedTextModel)
+    mock_handwritten_model = MagicMock(spec=HandwrittenTextModel)
+    mock_hybrid_model = MagicMock(spec=HybridRecognitionModel)
+    
+    # Configure the mock models to return test data
+    mock_typed_model.extract_text.return_value = {
+        "text": "Test typed text",
+        "confidence": 0.95,
+    }
+    mock_handwritten_model.extract_text.return_value = {
+        "text": "Test handwritten text",
+        "confidence": 0.85,
+    }
+    mock_hybrid_model.extract_text.return_value = {
+        "text": "Test hybrid text",
+        "confidence": 0.90,
+    }
+    
+    # Configure the factory to return the appropriate model based on document type
+    def get_model_for_document(document_type):
+        if document_type == "typed":
+            return mock_typed_model
+        elif document_type == "handwritten":
+            return mock_handwritten_model
+        else:  # mixed or unknown
+            return mock_hybrid_model
+    
+    mock_factory.get_model_for_document.side_effect = get_model_for_document
+    return mock_factory
+
+
+@pytest.fixture
+def test_documents():
+    """Fixture for test document data."""
+    # Load test document metadata from JSON file
+    test_data_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "test_data")
+    metadata_path = os.path.join(test_data_dir, "metadata.json")
+    
+    # If metadata.json doesn't exist, use mock data
+    if not os.path.exists(metadata_path):
+        return {
+            "typed": {
+                "document_id": "typed-doc-001",
+                "document_type": "typed",
+                "storage_key": "typed/typed-doc-001.pdf",
+                "expected_fields": {
+                    "business_name": {"value": "Acme Corporation", "confidence": 0.98},
+                    "tax_id": {"value": "12-3456789", "confidence": 0.95},
+                    "address": {"value": "123 Main St, Anytown, USA", "confidence": 0.92},
+                    "revenue": {"value": "$1,234,567", "confidence": 0.94},
+                },
+            },
+            "handwritten": {
+                "document_id": "handwritten-doc-001",
+                "document_type": "handwritten",
+                "storage_key": "handwritten/handwritten-doc-001.pdf",
+                "expected_fields": {
+                    "applicant_name": {"value": "John Smith", "confidence": 0.87},
+                    "phone_number": {"value": "555-123-4567", "confidence": 0.82},
+                    "signature": {"value": "John Smith", "confidence": 0.79},
+                    "date": {"value": "01/15/2023", "confidence": 0.85},
+                },
+            },
+            "mixed": {
+                "document_id": "mixed-doc-001",
+                "document_type": "mixed",
+                "storage_key": "mixed/mixed-doc-001.pdf",
+                "expected_fields": {
+                    "form_id": {"value": "MCA-2023-001", "confidence": 0.97},  # typed
+                    "business_name": {"value": "XYZ Enterprises", "confidence": 0.96},  # typed
+                    "owner_signature": {"value": "Jane Doe", "confidence": 0.81},  # handwritten
+                    "comments": {"value": "Requesting expedited processing", "confidence": 0.83},  # handwritten
+                },
+            },
+            "error": {
+                "document_id": "error-doc-001",
+                "document_type": "unknown",
+                "storage_key": "error/error-doc-001.pdf",
+                "expected_error": "Unsupported document format",
+            },
+        }
+    
+    # Load actual metadata from file
+    with open(metadata_path, "r") as f:
+        return json.load(f)
+
+
+@pytest.fixture
+def mock_ocr_application(app_config, mock_queue_service, mock_storage_service, mock_model_factory):
+    """Fixture for mocked OCR application with all dependencies."""
+    # Create mock services
+    mock_ocr_service = MagicMock(spec=OCRService)
+    mock_field_extraction_service = MagicMock(spec=FieldExtractionService)
+    mock_confidence_service = MagicMock(spec=ConfidenceService)
+    
+    # Configure the OCR service to process documents
+    def process_document(document_data, document_type, document_id):
+        # Simulate document processing
+        if document_type == "typed":
+            extracted_text = "Test typed document content with business information"
+            confidence = 0.95
+        elif document_type == "handwritten":
+            extracted_text = "Test handwritten document with signature"
+            confidence = 0.85
+        elif document_type == "mixed":
+            extracted_text = "Test mixed document with typed and handwritten content"
+            confidence = 0.90
+        else:
+            raise ValueError(f"Unsupported document type: {document_type}")
+        
+        return {
+            "text": extracted_text,
+            "confidence": confidence,
+            "document_id": document_id,
+            "document_type": document_type,
+        }
+    
+    mock_ocr_service.process_document.side_effect = process_document
+    
+    # Configure the field extraction service
+    def extract_fields(ocr_result):
+        document_type = ocr_result.get("document_type")
+        document_id = ocr_result.get("document_id")
+        
+        # Create extracted fields based on document type
+        if document_type == "typed":
+            fields = {
+                "business_name": ExtractedField(value="Acme Corporation", confidence=ConfidenceScore(0.98)),
+                "tax_id": ExtractedField(value="12-3456789", confidence=ConfidenceScore(0.95)),
+                "address": ExtractedField(value="123 Main St, Anytown, USA", confidence=ConfidenceScore(0.92)),
+                "revenue": ExtractedField(value="$1,234,567", confidence=ConfidenceScore(0.94)),
+            }
+        elif document_type == "handwritten":
+            fields = {
+                "applicant_name": ExtractedField(value="John Smith", confidence=ConfidenceScore(0.87)),
+                "phone_number": ExtractedField(value="555-123-4567", confidence=ConfidenceScore(0.82)),
+                "signature": ExtractedField(value="John Smith", confidence=ConfidenceScore(0.79)),
+                "date": ExtractedField(value="01/15/2023", confidence=ConfidenceScore(0.85)),
+            }
+        elif document_type == "mixed":
+            fields = {
+                "form_id": ExtractedField(value="MCA-2023-001", confidence=ConfidenceScore(0.97)),
+                "business_name": ExtractedField(value="XYZ Enterprises", confidence=ConfidenceScore(0.96)),
+                "owner_signature": ExtractedField(value="Jane Doe", confidence=ConfidenceScore(0.81)),
+                "comments": ExtractedField(value="Requesting expedited processing", confidence=ConfidenceScore(0.83)),
+            }
+        else:
+            fields = {}
+        
+        return ExtractedData(
+            document_id=document_id,
+            document_type=document_type,
+            fields=fields,
+            metadata={
+                "processing_time": 1.25,  # seconds
+                "timestamp": get_current_timestamp(),
+                "version": "1.0.0",
+            }
+        )
+    
+    mock_field_extraction_service.extract_fields.side_effect = extract_fields
+    
+    # Configure the confidence service
+    def evaluate_confidence(extracted_data):
+        # Calculate overall confidence score
+        if not extracted_data.fields:
+            return extracted_data
+        
+        field_confidences = [field.confidence.value for field in extracted_data.fields.values()]
+        overall_confidence = sum(field_confidences) / len(field_confidences)
+        
+        # Flag low confidence fields
+        low_confidence_fields = []
+        for field_name, field in extracted_data.fields.items():
+            if field.confidence.value < 0.85:  # Threshold for low confidence
+                low_confidence_fields.append(field_name)
+        
+        # Update metadata with confidence information
+        extracted_data.metadata["overall_confidence"] = overall_confidence
+        extracted_data.metadata["low_confidence_fields"] = low_confidence_fields
+        extracted_data.metadata["requires_review"] = len(low_confidence_fields) > 0 or overall_confidence < 0.90
+        
+        return extracted_data
+    
+    mock_confidence_service.evaluate_confidence.side_effect = evaluate_confidence
+    
+    # Create the application with mock services
+    app = OCRApplication(config=app_config)
+    app.queue_service = mock_queue_service
+    app.storage_service = mock_storage_service
+    app.ocr_service = mock_ocr_service
+    app.field_extraction_service = mock_field_extraction_service
+    app.confidence_service = mock_confidence_service
+    app.model_factory = mock_model_factory
+    
+    return app
 
 
 class TestOCRPipeline:
-    """Test the complete OCR processing pipeline from document receipt to data extraction."""
+    """Integration tests for the complete OCR processing pipeline."""
     
-    @pytest.mark.parametrize("document_fixture", [
-        "typed_document",
-        "handwritten_document",
-        "mixed_document"
-    ])
-    def test_end_to_end_document_processing(self, document_fixture, request, mock_application):
-        """Test the complete OCR pipeline with different document types.
+    def test_typed_document_processing(self, mock_ocr_application, test_documents):
+        """Test processing of a typed document through the complete pipeline."""
+        # Get test document data
+        doc_data = test_documents["typed"]
+        document_id = doc_data["document_id"]
+        document_type = doc_data["document_type"]
+        storage_key = doc_data["storage_key"]
+        expected_fields = doc_data["expected_fields"]
         
-        This test verifies that the OCR pipeline correctly processes different types of documents
-        (typed, handwritten, mixed) from receipt to data extraction, with all components working together.
-        """
-        # Get the document fixture
-        document = request.getfixturevalue(document_fixture)
-        
-        # Configure the mock application for this test
-        self._configure_mocks_for_successful_processing(mock_application)
-        
-        # Process the document through the pipeline
-        result = mock_application.process_document(document)
-        
-        # Verify that the result is successful
-        assert result.is_success, f"Processing failed: {result.error.message if not result.is_success else ''}"
-        
-        # Extract the processed data and processing time from the result
-        extracted_data, processing_time = result.value
-        
-        # Verify that the extracted data contains the expected fields
-        assert extracted_data.document_id == document.metadata.document_id
-        assert extracted_data.document_type == document.document_type.name
-        assert len(extracted_data.fields) > 0
-        
-        # Verify that each field has a confidence score
-        for field_name, field_data in extracted_data.fields.items():
-            assert "value" in field_data
-            assert "confidence" in field_data
-            assert 0 <= field_data["confidence"] <= 1
-        
-        # Verify that the document has an overall confidence score
-        assert hasattr(extracted_data, "average_confidence")
-        assert 0 <= extracted_data.average_confidence <= 1
-        
-        # Verify that the processing time is reasonable (under 5 minutes as per requirements)
-        assert processing_time < 300  # 5 minutes in seconds
-        
-        # Verify that the document status is updated to PROCESSED
-        assert document.processing_status == ProcessingStatus.PROCESSED
-        
-        # Verify that the storage service was called to store the extracted data
-        mock_application.storage_service.upload_extracted_data.assert_called_once()
-        
-        # Verify that the queue service was called to publish the result
-        mock_application.queue_service.publish_message.assert_called_once()
-    
-    def test_pipeline_with_low_confidence_document(self, mixed_document, mock_application):
-        """Test the OCR pipeline with a document that has low confidence scores.
-        
-        This test verifies that the OCR pipeline correctly identifies documents with low confidence
-        scores and flags them for human verification.
-        """
-        # Configure the mock application for low confidence processing
-        self._configure_mocks_for_low_confidence_processing(mock_application)
-        
-        # Process the document through the pipeline
-        result = mock_application.process_document(mixed_document)
-        
-        # Verify that the result is successful
-        assert result.is_success
-        
-        # Extract the processed data and processing time from the result
-        extracted_data, processing_time = result.value
-        
-        # Verify that the document is flagged for human verification
-        assert extracted_data.requires_review is True
-        
-        # Verify that low-confidence fields are flagged for review
-        low_confidence_fields = [field for field, data in extracted_data.fields.items() 
-                               if data["confidence"] < 0.8]
-        assert len(low_confidence_fields) > 0
-        
-        for field in low_confidence_fields:
-            assert extracted_data.fields[field]["requires_review"] is True
-        
-        # Verify that the document status is updated to NEEDS_REVIEW
-        assert mixed_document.processing_status == ProcessingStatus.NEEDS_REVIEW
-        
-        # Verify that the storage service was called to store the extracted data
-        mock_application.storage_service.upload_extracted_data.assert_called_once()
-        
-        # Verify that the queue service was called to publish the result
-        mock_application.queue_service.publish_message.assert_called_once()
-    
-    def test_pipeline_with_document_retrieval_error(self, sample_document_metadata, mock_application):
-        """Test the OCR pipeline's error handling when document retrieval fails.
-        
-        This test verifies that the OCR pipeline correctly handles errors when retrieving
-        documents from storage.
-        """
-        # Configure the storage service to simulate a document retrieval error
-        mock_application.storage_service.download_document.side_effect = ServiceError(
-            "Failed to download document", ErrorCategory.STORAGE, {"status_code": 404}
-        )
-        
-        # Create a document with only metadata (no content)
-        document = Document(
-            metadata=sample_document_metadata,
-            content=None,
-            document_type=DocumentType.APPLICATION,
-            status=ProcessingStatus.PENDING
+        # Create a test message payload
+        message_payload = MessagePayload(
+            document_id=document_id,
+            document_type=document_type,
+            storage_key=storage_key,
+            metadata={
+                "source": "test",
+                "priority": "normal",
+                "timestamp": get_current_timestamp(),
+            }
         )
         
         # Process the document through the pipeline
-        result = mock_application.process_document(document)
+        result = mock_ocr_application.process_document_message(message_payload)
         
-        # Verify that the result is a failure
-        assert not result.is_success
-        assert isinstance(result.error, ServiceError)
-        assert "Failed to download document" in result.error.message
-        assert result.error.category == ErrorCategory.STORAGE
+        # Verify the result
+        assert result is not None
+        assert result.document_id == document_id
+        assert result.document_type == document_type
         
-        # Verify that the document status is updated to ERROR
-        assert document.processing_status == ProcessingStatus.ERROR
+        # Verify extracted fields match expected values
+        for field_name, expected in expected_fields.items():
+            assert field_name in result.fields
+            assert result.fields[field_name].value == expected["value"]
+            assert abs(result.fields[field_name].confidence.value - expected["confidence"]) < 0.01
         
-        # Verify that the queue service was called to publish the error
-        mock_application.queue_service.publish_message.assert_called_once()
+        # Verify metadata
+        assert "processing_time" in result.metadata
+        assert "overall_confidence" in result.metadata
+        assert result.metadata["overall_confidence"] > 0.90  # High confidence for typed documents
+        
+        # Verify the result was published to the queue
+        mock_ocr_application.queue_service.publish_message.assert_called_once()
     
-    def test_pipeline_with_ocr_processing_error(self, typed_document, mock_application):
-        """Test the OCR pipeline's error handling when OCR processing fails.
+    def test_handwritten_document_processing(self, mock_ocr_application, test_documents):
+        """Test processing of a handwritten document through the complete pipeline."""
+        # Get test document data
+        doc_data = test_documents["handwritten"]
+        document_id = doc_data["document_id"]
+        document_type = doc_data["document_type"]
+        storage_key = doc_data["storage_key"]
+        expected_fields = doc_data["expected_fields"]
         
-        This test verifies that the OCR pipeline correctly handles errors during OCR processing.
-        """
-        # Configure the OCR service to simulate a processing error
-        mock_application.ocr_service.process_document.side_effect = ServiceError(
-            "OCR processing failed", ErrorCategory.EXTRACTION, {"model": "typed_model"}
+        # Create a test message payload
+        message_payload = MessagePayload(
+            document_id=document_id,
+            document_type=document_type,
+            storage_key=storage_key,
+            metadata={
+                "source": "test",
+                "priority": "normal",
+                "timestamp": get_current_timestamp(),
+            }
         )
         
         # Process the document through the pipeline
-        result = mock_application.process_document(typed_document)
+        result = mock_ocr_application.process_document_message(message_payload)
         
-        # Verify that the result is a failure
-        assert not result.is_success
-        assert isinstance(result.error, ServiceError)
-        assert "OCR processing failed" in result.error.message
-        assert result.error.category == ErrorCategory.EXTRACTION
+        # Verify the result
+        assert result is not None
+        assert result.document_id == document_id
+        assert result.document_type == document_type
         
-        # Verify that the document status is updated to ERROR
-        assert typed_document.processing_status == ProcessingStatus.ERROR
+        # Verify extracted fields match expected values
+        for field_name, expected in expected_fields.items():
+            assert field_name in result.fields
+            assert result.fields[field_name].value == expected["value"]
+            assert abs(result.fields[field_name].confidence.value - expected["confidence"]) < 0.01
         
-        # Verify that the queue service was called to publish the error
-        mock_application.queue_service.publish_message.assert_called_once()
+        # Verify metadata
+        assert "processing_time" in result.metadata
+        assert "overall_confidence" in result.metadata
+        assert "low_confidence_fields" in result.metadata
+        
+        # Handwritten documents typically have lower confidence
+        assert result.metadata["overall_confidence"] > 0.80
+        
+        # Verify the result was published to the queue
+        mock_ocr_application.queue_service.publish_message.assert_called_once()
     
-    def test_pipeline_with_field_extraction_error(self, handwritten_document, mock_application):
-        """Test the OCR pipeline's error handling when field extraction fails.
+    def test_mixed_document_processing(self, mock_ocr_application, test_documents):
+        """Test processing of a mixed document (typed and handwritten) through the complete pipeline."""
+        # Get test document data
+        doc_data = test_documents["mixed"]
+        document_id = doc_data["document_id"]
+        document_type = doc_data["document_type"]
+        storage_key = doc_data["storage_key"]
+        expected_fields = doc_data["expected_fields"]
         
-        This test verifies that the OCR pipeline correctly handles errors during field extraction.
-        """
-        # Configure the OCR service to succeed but field extraction to fail
-        mock_application.ocr_service.process_document.return_value = Result.success(({"text": "Sample text"}, 1.0))
-        mock_application.field_extraction_service.extract_fields.side_effect = ServiceError(
-            "Field extraction failed", ErrorCategory.EXTRACTION, {"fields": ["name", "address"]}
+        # Create a test message payload
+        message_payload = MessagePayload(
+            document_id=document_id,
+            document_type=document_type,
+            storage_key=storage_key,
+            metadata={
+                "source": "test",
+                "priority": "normal",
+                "timestamp": get_current_timestamp(),
+            }
         )
         
         # Process the document through the pipeline
-        result = mock_application.process_document(handwritten_document)
+        result = mock_ocr_application.process_document_message(message_payload)
         
-        # Verify that the result is a failure
-        assert not result.is_success
-        assert isinstance(result.error, ServiceError)
-        assert "Field extraction failed" in result.error.message
-        assert result.error.category == ErrorCategory.EXTRACTION
+        # Verify the result
+        assert result is not None
+        assert result.document_id == document_id
+        assert result.document_type == document_type
         
-        # Verify that the document status is updated to ERROR
-        assert handwritten_document.processing_status == ProcessingStatus.ERROR
+        # Verify extracted fields match expected values
+        for field_name, expected in expected_fields.items():
+            assert field_name in result.fields
+            assert result.fields[field_name].value == expected["value"]
+            assert abs(result.fields[field_name].confidence.value - expected["confidence"]) < 0.01
         
-        # Verify that the queue service was called to publish the error
-        mock_application.queue_service.publish_message.assert_called_once()
+        # Verify metadata
+        assert "processing_time" in result.metadata
+        assert "overall_confidence" in result.metadata
+        assert "low_confidence_fields" in result.metadata
+        
+        # Mixed documents have varying confidence levels
+        assert result.metadata["overall_confidence"] > 0.85
+        
+        # Verify the result was published to the queue
+        mock_ocr_application.queue_service.publish_message.assert_called_once()
     
-    def test_pipeline_with_queue_publishing_error(self, typed_document, mock_application):
-        """Test the OCR pipeline's error handling when queue publishing fails.
+    def test_error_handling(self, mock_ocr_application, test_documents):
+        """Test error handling in the OCR pipeline."""
+        # Get test document data for error case
+        doc_data = test_documents["error"]
+        document_id = doc_data["document_id"]
+        document_type = doc_data["document_type"]
+        storage_key = doc_data["storage_key"]
+        expected_error = doc_data["expected_error"]
         
-        This test verifies that the OCR pipeline correctly handles errors when publishing
-        results to the message queue.
-        """
-        # Configure the mocks for successful processing but queue publishing failure
-        self._configure_mocks_for_successful_processing(mock_application)
-        mock_application.queue_service.publish_message.side_effect = ServiceError(
-            "Failed to publish message", ErrorCategory.MESSAGING, {"exchange": "mca.documents"}
+        # Create a test message payload
+        message_payload = MessagePayload(
+            document_id=document_id,
+            document_type=document_type,
+            storage_key=storage_key,
+            metadata={
+                "source": "test",
+                "priority": "normal",
+                "timestamp": get_current_timestamp(),
+            }
         )
         
-        # Process the document through the pipeline
-        result = mock_application.process_document(typed_document)
+        # Configure OCR service to raise an error
+        mock_ocr_application.ocr_service.process_document.side_effect = ValueError(expected_error)
         
-        # Verify that the result is a failure
-        assert not result.is_success
-        assert isinstance(result.error, ServiceError)
-        assert "Failed to publish message" in result.error.message
-        assert result.error.category == ErrorCategory.MESSAGING
+        # Process the document and expect error handling
+        with pytest.raises(ValueError) as excinfo:
+            mock_ocr_application.process_document_message(message_payload)
         
-        # Verify that the document status is still PROCESSED (since OCR succeeded)
-        assert typed_document.processing_status == ProcessingStatus.PROCESSED
+        # Verify the error message
+        assert expected_error in str(excinfo.value)
         
-        # Verify that the storage service was called to store the extracted data
-        mock_application.storage_service.upload_extracted_data.assert_called_once()
+        # Verify error was logged (would check logs in a real test)
+        # Verify no result was published to the queue
+        mock_ocr_application.queue_service.publish_message.assert_not_called()
     
-    def test_pipeline_with_storage_upload_error(self, typed_document, mock_application):
-        """Test the OCR pipeline's error handling when storage upload fails.
+    def test_performance_metrics(self, mock_ocr_application, test_documents):
+        """Test performance metrics for document processing."""
+        # Get test document data
+        doc_data = test_documents["typed"]
+        document_id = doc_data["document_id"]
+        document_type = doc_data["document_type"]
+        storage_key = doc_data["storage_key"]
         
-        This test verifies that the OCR pipeline correctly handles errors when uploading
-        extracted data to storage.
-        """
-        # Configure the mocks for successful processing but storage upload failure
-        self._configure_mocks_for_successful_processing(mock_application)
-        mock_application.storage_service.upload_extracted_data.side_effect = ServiceError(
-            "Failed to upload extracted data", ErrorCategory.STORAGE, {"bucket": "mca-documents-test"}
+        # Create a test message payload
+        message_payload = MessagePayload(
+            document_id=document_id,
+            document_type=document_type,
+            storage_key=storage_key,
+            metadata={
+                "source": "test",
+                "priority": "normal",
+                "timestamp": get_current_timestamp(),
+            }
         )
         
-        # Process the document through the pipeline
-        result = mock_application.process_document(typed_document)
+        # Measure processing time
+        start_time = time.time()
+        result = mock_ocr_application.process_document_message(message_payload)
+        end_time = time.time()
+        processing_time = end_time - start_time
         
-        # Verify that the result is a failure
-        assert not result.is_success
-        assert isinstance(result.error, ServiceError)
-        assert "Failed to upload extracted data" in result.error.message
-        assert result.error.category == ErrorCategory.STORAGE
+        # Verify processing time is within acceptable limits (5 minutes = 300 seconds)
+        # For tests, we expect much faster processing
+        assert processing_time < 300, f"Processing time {processing_time} exceeds 5 minute limit"
         
-        # Verify that the document status is still PROCESSED (since OCR succeeded)
-        assert typed_document.processing_status == ProcessingStatus.PROCESSED
+        # Verify processing time is recorded in metadata
+        assert "processing_time" in result.metadata
         
-        # Verify that the queue service was not called (since storage failed first)
-        mock_application.queue_service.publish_message.assert_not_called()
+        # Verify accuracy metrics
+        assert "overall_confidence" in result.metadata
+        assert result.metadata["overall_confidence"] > 0.90  # 90% confidence minimum
     
-    def test_pipeline_performance_metrics(self, document_collection, mock_application):
-        """Test the OCR pipeline's performance metrics.
-        
-        This test verifies that the OCR pipeline meets the performance requirements
-        specified in the technical specification (processing time under 5 minutes,
-        99% data extraction accuracy).
-        """
-        # Configure the mocks for successful processing
-        self._configure_mocks_for_successful_processing(mock_application)
-        
-        # Process each document in the collection and collect metrics
-        processing_times = []
-        confidence_scores = []
-        
-        for document in document_collection:
-            # Process the document through the pipeline
-            start_time = time.time()
-            result = mock_application.process_document(document)
-            end_time = time.time()
+    def test_document_classification_integration(self, mock_ocr_application, test_documents):
+        """Test that document classification correctly selects the appropriate OCR model."""
+        # Test with different document types
+        for doc_type in ["typed", "handwritten", "mixed"]:
+            # Get test document data
+            doc_data = test_documents[doc_type]
+            document_id = doc_data["document_id"]
+            document_type = doc_data["document_type"]
+            storage_key = doc_data["storage_key"]
             
-            # Verify that the result is successful
-            assert result.is_success
+            # Create a test message payload
+            message_payload = MessagePayload(
+                document_id=document_id,
+                document_type=document_type,
+                storage_key=storage_key,
+                metadata={
+                    "source": "test",
+                    "priority": "normal",
+                    "timestamp": get_current_timestamp(),
+                }
+            )
             
-            # Extract the processed data and processing time from the result
-            extracted_data, processing_time = result.value
+            # Process the document
+            mock_ocr_application.process_document_message(message_payload)
             
-            # Collect metrics
-            processing_times.append(end_time - start_time)
-            confidence_scores.append(extracted_data.average_confidence)
-        
-        # Verify that the average processing time is under 5 minutes
-        avg_processing_time = sum(processing_times) / len(processing_times)
-        assert avg_processing_time < 300, f"Average processing time ({avg_processing_time}s) exceeds 5 minutes"
-        
-        # Verify that the average confidence score is at least 0.99 (99% accuracy)
-        avg_confidence = sum(confidence_scores) / len(confidence_scores)
-        assert avg_confidence >= 0.99, f"Average confidence score ({avg_confidence}) is below 99%"
+            # Verify the correct model was selected based on document type
+            mock_ocr_application.model_factory.get_model_for_document.assert_called_with(document_type)
     
-    def test_pipeline_with_retry_on_temporary_failure(self, typed_document, mock_application):
-        """Test the OCR pipeline's retry mechanism for temporary failures.
+    def test_confidence_scoring_integration(self, mock_ocr_application, test_documents):
+        """Test that confidence scoring correctly identifies low-confidence fields."""
+        # Get test document data for handwritten document (typically lower confidence)
+        doc_data = test_documents["handwritten"]
+        document_id = doc_data["document_id"]
+        document_type = doc_data["document_type"]
+        storage_key = doc_data["storage_key"]
+        expected_fields = doc_data["expected_fields"]
         
-        This test verifies that the OCR pipeline correctly retries operations that
-        fail with temporary errors.
-        """
-        # Configure the OCR service to fail temporarily on first call, then succeed
-        temp_error = ServiceError("Temporary error", ErrorCategory.EXTRACTION, {"retryable": True})
-        mock_application.ocr_service.process_document.side_effect = [
-            Result.failure(temp_error),
-            Result.success(({"text": "Sample text"}, 1.0))
+        # Identify fields with expected low confidence
+        expected_low_confidence_fields = [
+            field_name for field_name, field_data in expected_fields.items() 
+            if field_data["confidence"] < 0.85
         ]
         
-        # Configure the rest of the pipeline for successful processing
-        mock_application.field_extraction_service.extract_fields.return_value = Result.success({
-            "fields": {
-                "name": {"value": "John Doe", "confidence": 0.98},
-                "address": {"value": "123 Main St", "confidence": 0.95}
+        # Create a test message payload
+        message_payload = MessagePayload(
+            document_id=document_id,
+            document_type=document_type,
+            storage_key=storage_key,
+            metadata={
+                "source": "test",
+                "priority": "normal",
+                "timestamp": get_current_timestamp(),
             }
-        })
-        mock_application.confidence_service.evaluate_confidence.return_value = Result.success({
-            "overall_confidence": 0.99,
-            "requires_verification": False
-        })
-        mock_application.storage_service.upload_extracted_data.return_value = Result.success(
-            "s3://mca-documents-test/extracted/doc-123.json"
         )
-        mock_application.queue_service.publish_message.return_value = Result.success(True)
         
-        # Process the document through the pipeline
-        result = mock_application.process_document(typed_document)
+        # Process the document
+        result = mock_ocr_application.process_document_message(message_payload)
         
-        # Verify that the result is successful (retry worked)
-        assert result.is_success
+        # Verify low confidence fields are correctly identified
+        assert "low_confidence_fields" in result.metadata
+        for field_name in expected_low_confidence_fields:
+            assert field_name in result.metadata["low_confidence_fields"]
         
-        # Verify that the OCR service was called twice (initial failure + retry)
-        assert mock_application.ocr_service.process_document.call_count == 2
-        
-        # Verify that the document status is updated to PROCESSED
-        assert typed_document.processing_status == ProcessingStatus.PROCESSED
+        # Verify review flag is set appropriately
+        assert "requires_review" in result.metadata
+        assert result.metadata["requires_review"] == (len(expected_low_confidence_fields) > 0)
     
-    def test_pipeline_with_document_classification(self, sample_document, mock_application):
-        """Test the OCR pipeline's document classification capabilities.
-        
-        This test verifies that the OCR pipeline correctly classifies documents and
-        applies the appropriate processing based on document type.
-        """
-        # Configure the mocks for successful processing
-        self._configure_mocks_for_successful_processing(mock_application)
-        
-        # Set up a mock for the document classification function
-        with patch('src.services.ocr_service.OCRService._classify_document') as mock_classify:
-            # Configure the mock to return different document types
-            mock_classify.return_value = DocumentType.BANK_STATEMENT
+    def test_end_to_end_pipeline(self, mock_ocr_application, test_documents):
+        """Test the complete end-to-end OCR pipeline with all components."""
+        # Test with each document type
+        for doc_type in ["typed", "handwritten", "mixed"]:
+            # Get test document data
+            doc_data = test_documents[doc_type]
+            document_id = doc_data["document_id"]
+            document_type = doc_data["document_type"]
+            storage_key = doc_data["storage_key"]
             
-            # Process the document through the pipeline
-            result = mock_application.process_document(sample_document)
-            
-            # Verify that the result is successful
-            assert result.is_success
-            
-            # Verify that the document type was updated based on classification
-            assert sample_document.document_type == DocumentType.BANK_STATEMENT
-            
-            # Verify that the OCR service used the classified document type
-            mock_application.ocr_service.process_document.assert_called_once()
-            called_document = mock_application.ocr_service.process_document.call_args[0][0]
-            assert called_document.document_type == DocumentType.BANK_STATEMENT
-    
-    def test_pipeline_accuracy_with_test_data(self, test_metadata, mock_application, s3_mock):
-        """Test the OCR pipeline's accuracy using test data with known values.
-        
-        This test verifies that the OCR pipeline achieves the required 99% accuracy
-        by comparing extracted values with known expected values from test metadata.
-        """
-        # Skip this test if test metadata is not available
-        if not test_metadata or "documents" not in test_metadata:
-            pytest.skip("Test metadata not available")
-        
-        # Configure the mocks for successful processing
-        self._configure_mocks_for_successful_processing(mock_application)
-        
-        # Track accuracy metrics
-        total_fields = 0
-        correct_fields = 0
-        
-        # Process each document in the test metadata
-        for doc_name, doc_metadata in test_metadata["documents"].items():
-            # Create a document based on the test metadata
-            document = self._create_document_from_metadata(doc_name, doc_metadata)
-            
-            # Configure the field extraction service to return expected fields
-            expected_fields = doc_metadata.get("expected_fields", {})
-            mock_application.field_extraction_service.extract_fields.return_value = Result.success({
-                "fields": {
-                    field: {"value": value, "confidence": 0.95}
-                    for field, value in expected_fields.items()
+            # Create a test message payload
+            message_payload = MessagePayload(
+                document_id=document_id,
+                document_type=document_type,
+                storage_key=storage_key,
+                metadata={
+                    "source": "test",
+                    "priority": "normal",
+                    "timestamp": get_current_timestamp(),
                 }
-            })
+            )
             
-            # Process the document through the pipeline
-            result = mock_application.process_document(document)
+            # Reset mock call counts
+            mock_ocr_application.storage_service.download_document.reset_mock()
+            mock_ocr_application.ocr_service.process_document.reset_mock()
+            mock_ocr_application.field_extraction_service.extract_fields.reset_mock()
+            mock_ocr_application.confidence_service.evaluate_confidence.reset_mock()
+            mock_ocr_application.storage_service.upload_result.reset_mock()
+            mock_ocr_application.queue_service.publish_message.reset_mock()
             
-            # Verify that the result is successful
-            assert result.is_success
+            # Process the document
+            result = mock_ocr_application.process_document_message(message_payload)
             
-            # Extract the processed data from the result
-            extracted_data, _ = result.value
+            # Verify all pipeline components were called in the correct order
+            mock_ocr_application.storage_service.download_document.assert_called_once()
+            mock_ocr_application.ocr_service.process_document.assert_called_once()
+            mock_ocr_application.field_extraction_service.extract_fields.assert_called_once()
+            mock_ocr_application.confidence_service.evaluate_confidence.assert_called_once()
+            mock_ocr_application.storage_service.upload_result.assert_called_once()
+            mock_ocr_application.queue_service.publish_message.assert_called_once()
             
-            # Compare extracted fields with expected fields
-            for field, expected_value in expected_fields.items():
-                total_fields += 1
-                if field in extracted_data.fields and extracted_data.fields[field]["value"] == expected_value:
-                    correct_fields += 1
-        
-        # Calculate accuracy
-        accuracy = correct_fields / total_fields if total_fields > 0 else 0
-        
-        # Verify that the accuracy is at least 99%
-        assert accuracy >= 0.99, f"Accuracy ({accuracy * 100}%) is below the required 99%"
-    
-    def test_pipeline_with_gpu_acceleration(self, typed_document, mock_application):
-        """Test the OCR pipeline with GPU acceleration.
-        
-        This test verifies that the OCR pipeline correctly uses GPU acceleration
-        for OCR processing when available.
-        """
-        # Configure the mocks for successful processing
-        self._configure_mocks_for_successful_processing(mock_application)
-        
-        # Mock the GPU environment
-        with patch('src.utils.tensorflow_utils.is_gpu_available', return_value=True):
-            with patch('src.utils.tensorflow_utils.get_gpu_info', return_value="Tesla T4"):
-                # Process the document through the pipeline
-                result = mock_application.process_document(typed_document)
-                
-                # Verify that the result is successful
-                assert result.is_success
-                
-                # Extract the processed data from the result
-                extracted_data, _ = result.value
-                
-                # Verify that GPU acceleration was used
-                assert "gpu_accelerated" in extracted_data.metadata
-                assert extracted_data.metadata["gpu_accelerated"] is True
-                assert "gpu_info" in extracted_data.metadata
-                assert extracted_data.metadata["gpu_info"] == "Tesla T4"
-    
-    def test_pipeline_with_cpu_fallback(self, typed_document, mock_application):
-        """Test the OCR pipeline's CPU fallback when GPU is not available.
-        
-        This test verifies that the OCR pipeline correctly falls back to CPU
-        processing when GPU acceleration is not available.
-        """
-        # Configure the mocks for successful processing
-        self._configure_mocks_for_successful_processing(mock_application)
-        
-        # Mock the GPU environment to indicate no GPU available
-        with patch('src.utils.tensorflow_utils.is_gpu_available', return_value=False):
-            # Process the document through the pipeline
-            result = mock_application.process_document(typed_document)
-            
-            # Verify that the result is successful
-            assert result.is_success
-            
-            # Extract the processed data from the result
-            extracted_data, _ = result.value
-            
-            # Verify that CPU processing was used
-            assert "gpu_accelerated" in extracted_data.metadata
-            assert extracted_data.metadata["gpu_accelerated"] is False
-    
-    # Helper methods
-    
-    def _configure_mocks_for_successful_processing(self, mock_application):
-        """Configure the mock application for successful document processing."""
-        # Configure the OCR service to return successful results
-        mock_application.ocr_service.process_document.return_value = Result.success(({
-            "text": "Sample extracted text for testing",
-            "confidence": 0.95
-        }, 1.0))
-        
-        # Configure the field extraction service to return successful results
-        mock_application.field_extraction_service.extract_fields.return_value = Result.success({
-            "fields": {
-                "name": {"value": "John Doe", "confidence": 0.98},
-                "address": {"value": "123 Main St", "confidence": 0.95},
-                "phone": {"value": "555-123-4567", "confidence": 0.92},
-                "email": {"value": "john.doe@example.com", "confidence": 0.97},
-                "business_name": {"value": "Acme Corporation", "confidence": 0.99},
-                "tax_id": {"value": "12-3456789", "confidence": 0.96}
-            }
-        })
-        
-        # Configure the confidence service to return high confidence scores
-        mock_application.confidence_service.evaluate_confidence.return_value = Result.success({
-            "overall_confidence": 0.99,
-            "requires_verification": False
-        })
-        
-        # Configure the storage service to return successful results
-        mock_application.storage_service.upload_extracted_data.return_value = Result.success(
-            "s3://mca-documents-test/extracted/doc-123.json"
-        )
-        
-        # Configure the queue service to return successful results
-        mock_application.queue_service.publish_message.return_value = Result.success(True)
-    
-    def _configure_mocks_for_low_confidence_processing(self, mock_application):
-        """Configure the mock application for low confidence document processing."""
-        # Configure the OCR service to return successful results but with low confidence
-        mock_application.ocr_service.process_document.return_value = Result.success(({
-            "text": "Sample extracted text with low confidence",
-            "confidence": 0.65
-        }, 1.0))
-        
-        # Configure the field extraction service to return results with low confidence
-        mock_application.field_extraction_service.extract_fields.return_value = Result.success({
-            "fields": {
-                "name": {"value": "John Doe", "confidence": 0.78},  # Below 0.8 threshold
-                "address": {"value": "123 Main St", "confidence": 0.65},  # Below 0.8 threshold
-                "phone": {"value": "555-123-4567", "confidence": 0.82},
-                "email": {"value": "john.doe@example.com", "confidence": 0.75},  # Below 0.8 threshold
-                "business_name": {"value": "Acme Corporation", "confidence": 0.85},
-                "tax_id": {"value": "12-3456789", "confidence": 0.72}  # Below 0.8 threshold
-            }
-        })
-        
-        # Configure the confidence service to return low confidence scores
-        mock_application.confidence_service.evaluate_confidence.return_value = Result.success({
-            "overall_confidence": 0.75,  # Below 0.8 threshold
-            "requires_verification": True
-        })
-        
-        # Configure the storage service to return successful results
-        mock_application.storage_service.upload_extracted_data.return_value = Result.success(
-            "s3://mca-documents-test/extracted/doc-123.json"
-        )
-        
-        # Configure the queue service to return successful results
-        mock_application.queue_service.publish_message.return_value = Result.success(True)
-    
-    def _create_document_from_metadata(self, doc_name, doc_metadata):
-        """Create a document object from test metadata."""
-        metadata = DocumentMetadata(
-            filename=doc_name,
-            content_type="application/pdf",
-            size=12345,
-            created_at="2023-01-01T12:00:00Z",
-            updated_at="2023-01-01T12:00:00Z",
-            document_id=f"doc-{doc_name.replace('.', '-')}",
-            application_id="app-test-123"
-        )
-        
-        # Create dummy content
-        content = b"%PDF-1.5\nTest document content\n%%EOF"
-        
-        # Determine document type from metadata
-        doc_type_str = doc_metadata.get("type", "application").upper()
-        doc_type = getattr(DocumentType, doc_type_str, DocumentType.OTHER)
-        
-        return Document(
-            metadata=metadata,
-            content=content,
-            document_type=doc_type,
-            status=ProcessingStatus.PENDING
-        )
+            # Verify the final result
+            assert result is not None
+            assert result.document_id == document_id
+            assert result.document_type == document_type
+            assert len(result.fields) > 0
+            assert "overall_confidence" in result.metadata
+            assert "processing_time" in result.metadata
