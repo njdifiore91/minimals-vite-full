@@ -12,165 +12,124 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * Unit tests for the {@link ValidationException} class.
- * <p>
- * These tests verify that the ValidationException properly handles validation errors
- * with appropriate HTTP status codes, error messages, and field-level validation details.
- * </p>
+ * 
+ * These tests verify that ValidationException properly handles field-level validation errors,
+ * correctly formats error messages, and maintains the appropriate HTTP status code (400 Bad Request).
  */
-public class ValidationExceptionTest {
+@DisplayName("ValidationException Tests")
+class ValidationExceptionTest {
 
     @Test
-    @DisplayName("Should create ValidationException with message only")
-    public void testCreateWithMessageOnly() {
+    @DisplayName("Should initialize with message and set status code to 400")
+    void shouldInitializeWithMessageAndSetStatusCodeTo400() {
         // Arrange & Act
-        String message = "Validation failed";
-        ValidationException exception = new ValidationException(message);
+        ValidationException exception = new ValidationException("Validation failed");
         
         // Assert
-        assertEquals(message, exception.getMessage());
+        assertEquals("Validation failed", exception.getMessage());
         assertEquals(HttpStatus.BAD_REQUEST, exception.getHttpStatus());
-        assertEquals(HttpStatus.BAD_REQUEST.value(), exception.getStatusCode());
+        assertEquals(400, exception.getStatusCode());
+        assertEquals("ERR_400", exception.getErrorCode());
         assertFalse(exception.hasValidationErrors());
         assertEquals(0, exception.getValidationErrorCount());
-        assertTrue(exception.getValidationErrors().isEmpty());
     }
     
     @Test
-    @DisplayName("Should create ValidationException with message and cause")
-    public void testCreateWithMessageAndCause() {
-        // Arrange & Act
-        String message = "Validation failed";
-        IllegalArgumentException cause = new IllegalArgumentException("Invalid argument");
-        ValidationException exception = new ValidationException(message, cause);
+    @DisplayName("Should initialize with message and cause")
+    void shouldInitializeWithMessageAndCause() {
+        // Arrange
+        Throwable cause = new IllegalArgumentException("Original error");
+        
+        // Act
+        ValidationException exception = new ValidationException("Validation failed", cause);
         
         // Assert
-        assertEquals(message, exception.getMessage());
-        assertEquals(HttpStatus.BAD_REQUEST, exception.getHttpStatus());
+        assertEquals("Validation failed", exception.getMessage());
         assertEquals(cause, exception.getCause());
+        assertEquals(HttpStatus.BAD_REQUEST, exception.getHttpStatus());
+        assertEquals(400, exception.getStatusCode());
         assertFalse(exception.hasValidationErrors());
-        assertEquals(0, exception.getValidationErrorCount());
-        assertTrue(exception.getValidationErrors().isEmpty());
     }
     
     @Test
-    @DisplayName("Should create ValidationException with message, field, and error message")
-    public void testCreateWithMessageFieldAndErrorMessage() {
+    @DisplayName("Should initialize with field and error message")
+    void shouldInitializeWithFieldAndErrorMessage() {
         // Arrange & Act
-        String message = "Validation failed";
-        String field = "email";
-        String errorMessage = "Email is invalid";
-        ValidationException exception = new ValidationException(message, field, errorMessage);
+        ValidationException exception = new ValidationException(
+                "Validation failed", "email", "Invalid email format");
         
         // Assert
-        assertEquals(message, exception.getMessage());
+        assertEquals("Validation failed", exception.getMessage());
         assertEquals(HttpStatus.BAD_REQUEST, exception.getHttpStatus());
         assertTrue(exception.hasValidationErrors());
         assertEquals(1, exception.getValidationErrorCount());
         
         List<ValidationError> errors = exception.getValidationErrors();
         assertEquals(1, errors.size());
-        assertEquals(field, errors.get(0).getField());
-        assertEquals(errorMessage, errors.get(0).getMessage());
-    }
-    
-    @Test
-    @DisplayName("Should create ValidationException with message and validation errors list")
-    public void testCreateWithMessageAndValidationErrorsList() {
-        // Arrange
-        String message = "Validation failed";
-        List<ValidationError> validationErrors = new ArrayList<>();
-        validationErrors.add(new ValidationError("email", "Email is invalid"));
-        validationErrors.add(new ValidationError("password", "Password is too short"));
-        
-        // Act
-        ValidationException exception = new ValidationException(message, validationErrors);
-        
-        // Assert
-        assertEquals(message, exception.getMessage());
-        assertEquals(HttpStatus.BAD_REQUEST, exception.getHttpStatus());
-        assertTrue(exception.hasValidationErrors());
-        assertEquals(2, exception.getValidationErrorCount());
-        
-        List<ValidationError> errors = exception.getValidationErrors();
-        assertEquals(2, errors.size());
         assertEquals("email", errors.get(0).getField());
-        assertEquals("Email is invalid", errors.get(0).getMessage());
-        assertEquals("password", errors.get(1).getField());
-        assertEquals("Password is too short", errors.get(1).getMessage());
+        assertEquals("Invalid email format", errors.get(0).getMessage());
+        assertNull(errors.get(0).getRejectedValue());
     }
     
     @Test
-    @DisplayName("Should create ValidationException with error code, message, and validation errors list")
-    public void testCreateWithErrorCodeMessageAndValidationErrorsList() {
-        // Arrange
-        String errorCode = "VAL-001";
-        String message = "Validation failed";
-        List<ValidationError> validationErrors = new ArrayList<>();
-        validationErrors.add(new ValidationError("email", "Email is invalid"));
-        validationErrors.add(new ValidationError("password", "Password is too short"));
-        
-        // Act
-        ValidationException exception = new ValidationException(errorCode, message, validationErrors);
+    @DisplayName("Should initialize with field, error message, and rejected value")
+    void shouldInitializeWithFieldErrorMessageAndRejectedValue() {
+        // Arrange & Act
+        String rejectedValue = "not-an-email";
+        ValidationException exception = new ValidationException(
+                "Validation failed", "email", "Invalid email format", rejectedValue);
         
         // Assert
-        assertEquals(message, exception.getMessage());
-        assertEquals(errorCode, exception.getErrorCode());
+        assertEquals("Validation failed", exception.getMessage());
         assertEquals(HttpStatus.BAD_REQUEST, exception.getHttpStatus());
-        assertTrue(exception.hasValidationErrors());
-        assertEquals(2, exception.getValidationErrorCount());
-        
-        List<ValidationError> errors = exception.getValidationErrors();
-        assertEquals(2, errors.size());
-        assertEquals("email", errors.get(0).getField());
-        assertEquals("Email is invalid", errors.get(0).getMessage());
-        assertEquals("password", errors.get(1).getField());
-        assertEquals("Password is too short", errors.get(1).getMessage());
-    }
-    
-    @Test
-    @DisplayName("Should add validation error to existing exception")
-    public void testAddValidationError() {
-        // Arrange
-        ValidationException exception = new ValidationException("Validation failed");
-        
-        // Act
-        exception.addValidationError("email", "Email is invalid");
-        
-        // Assert
         assertTrue(exception.hasValidationErrors());
         assertEquals(1, exception.getValidationErrorCount());
         
         List<ValidationError> errors = exception.getValidationErrors();
         assertEquals(1, errors.size());
         assertEquals("email", errors.get(0).getField());
-        assertEquals("Email is invalid", errors.get(0).getMessage());
-        
-        // Add another validation error
-        exception.addValidationError("password", "Password is too short");
-        
-        // Assert again
-        assertTrue(exception.hasValidationErrors());
-        assertEquals(2, exception.getValidationErrorCount());
-        
-        errors = exception.getValidationErrors();
-        assertEquals(2, errors.size());
-        assertEquals("email", errors.get(0).getField());
-        assertEquals("Email is invalid", errors.get(0).getMessage());
-        assertEquals("password", errors.get(1).getField());
-        assertEquals("Password is too short", errors.get(1).getMessage());
+        assertEquals("Invalid email format", errors.get(0).getMessage());
+        assertEquals(rejectedValue, errors.get(0).getRejectedValue());
     }
     
     @Test
-    @DisplayName("Should add multiple validation errors to existing exception")
-    public void testAddValidationErrors() {
+    @DisplayName("Should initialize with a list of validation errors")
+    void shouldInitializeWithListOfValidationErrors() {
         // Arrange
-        ValidationException exception = new ValidationException("Validation failed");
         List<ValidationError> validationErrors = new ArrayList<>();
-        validationErrors.add(new ValidationError("email", "Email is invalid"));
-        validationErrors.add(new ValidationError("password", "Password is too short"));
+        validationErrors.add(new ValidationError("email", "Invalid email format", "not-an-email"));
+        validationErrors.add(new ValidationError("phone", "Invalid phone number", "123"));
         
         // Act
-        exception.addValidationErrors(validationErrors);
+        ValidationException exception = new ValidationException("Multiple validation errors", validationErrors);
+        
+        // Assert
+        assertEquals("Multiple validation errors", exception.getMessage());
+        assertEquals(HttpStatus.BAD_REQUEST, exception.getHttpStatus());
+        assertTrue(exception.hasValidationErrors());
+        assertEquals(2, exception.getValidationErrorCount());
+        
+        List<ValidationError> errors = exception.getValidationErrors();
+        assertEquals(2, errors.size());
+        
+        assertEquals("email", errors.get(0).getField());
+        assertEquals("Invalid email format", errors.get(0).getMessage());
+        assertEquals("not-an-email", errors.get(0).getRejectedValue());
+        
+        assertEquals("phone", errors.get(1).getField());
+        assertEquals("Invalid phone number", errors.get(1).getMessage());
+        assertEquals("123", errors.get(1).getRejectedValue());
+    }
+    
+    @Test
+    @DisplayName("Should add validation errors after initialization")
+    void shouldAddValidationErrorsAfterInitialization() {
+        // Arrange
+        ValidationException exception = new ValidationException("Validation failed");
+        
+        // Act
+        exception.addValidationError("email", "Invalid email format")
+                .addValidationError("phone", "Invalid phone number", "123");
         
         // Assert
         assertTrue(exception.hasValidationErrors());
@@ -178,152 +137,142 @@ public class ValidationExceptionTest {
         
         List<ValidationError> errors = exception.getValidationErrors();
         assertEquals(2, errors.size());
+        
         assertEquals("email", errors.get(0).getField());
-        assertEquals("Email is invalid", errors.get(0).getMessage());
-        assertEquals("password", errors.get(1).getField());
-        assertEquals("Password is too short", errors.get(1).getMessage());
+        assertEquals("Invalid email format", errors.get(0).getMessage());
+        assertNull(errors.get(0).getRejectedValue());
         
-        // Add more validation errors
-        List<ValidationError> moreErrors = new ArrayList<>();
-        moreErrors.add(new ValidationError("name", "Name is required"));
-        moreErrors.add(new ValidationError("age", "Age must be positive"));
-        exception.addValidationErrors(moreErrors);
-        
-        // Assert again
-        assertTrue(exception.hasValidationErrors());
-        assertEquals(4, exception.getValidationErrorCount());
-        
-        errors = exception.getValidationErrors();
-        assertEquals(4, errors.size());
-        assertEquals("email", errors.get(0).getField());
-        assertEquals("Email is invalid", errors.get(0).getMessage());
-        assertEquals("password", errors.get(1).getField());
-        assertEquals("Password is too short", errors.get(1).getMessage());
-        assertEquals("name", errors.get(2).getField());
-        assertEquals("Name is required", errors.get(2).getMessage());
-        assertEquals("age", errors.get(3).getField());
-        assertEquals("Age must be positive", errors.get(3).getMessage());
+        assertEquals("phone", errors.get(1).getField());
+        assertEquals("Invalid phone number", errors.get(1).getMessage());
+        assertEquals("123", errors.get(1).getRejectedValue());
     }
     
     @Test
-    @DisplayName("Should verify validation errors are unmodifiable")
-    public void testValidationErrorsAreUnmodifiable() {
+    @DisplayName("Should create exception for required field")
+    void shouldCreateExceptionForRequiredField() {
+        // Arrange & Act
+        ValidationException exception = ValidationException.requiredField("email");
+        
+        // Assert
+        assertEquals("Required field is missing", exception.getMessage());
+        assertEquals(HttpStatus.BAD_REQUEST, exception.getHttpStatus());
+        assertTrue(exception.hasValidationErrors());
+        assertEquals(1, exception.getValidationErrorCount());
+        
+        List<ValidationError> errors = exception.getValidationErrors();
+        assertEquals("email", errors.get(0).getField());
+        assertEquals("Field is required and cannot be empty", errors.get(0).getMessage());
+    }
+    
+    @Test
+    @DisplayName("Should create exception for invalid format")
+    void shouldCreateExceptionForInvalidFormat() {
+        // Arrange & Act
+        String rejectedValue = "not-an-email";
+        ValidationException exception = ValidationException.invalidFormat(
+                "email", "user@example.com", rejectedValue);
+        
+        // Assert
+        assertEquals("Invalid field format", exception.getMessage());
+        assertEquals(HttpStatus.BAD_REQUEST, exception.getHttpStatus());
+        assertTrue(exception.hasValidationErrors());
+        assertEquals(1, exception.getValidationErrorCount());
+        
+        List<ValidationError> errors = exception.getValidationErrors();
+        assertEquals("email", errors.get(0).getField());
+        assertEquals("Field must match format: user@example.com", errors.get(0).getMessage());
+        assertEquals(rejectedValue, errors.get(0).getRejectedValue());
+    }
+    
+    @Test
+    @DisplayName("Should create exception for maximum length exceeded")
+    void shouldCreateExceptionForMaxLengthExceeded() {
+        // Arrange & Act
+        String rejectedValue = "This string is too long";
+        ValidationException exception = ValidationException.maxLengthExceeded(
+                "name", 10, rejectedValue);
+        
+        // Assert
+        assertEquals("Maximum length exceeded", exception.getMessage());
+        assertEquals(HttpStatus.BAD_REQUEST, exception.getHttpStatus());
+        assertTrue(exception.hasValidationErrors());
+        assertEquals(1, exception.getValidationErrorCount());
+        
+        List<ValidationError> errors = exception.getValidationErrors();
+        assertEquals("name", errors.get(0).getField());
+        assertEquals("Field must not exceed 10 characters", errors.get(0).getMessage());
+        assertEquals(rejectedValue, errors.get(0).getRejectedValue());
+    }
+    
+    @Test
+    @DisplayName("Should create exception for minimum length not met")
+    void shouldCreateExceptionForMinLengthNotMet() {
+        // Arrange & Act
+        String rejectedValue = "short";
+        ValidationException exception = ValidationException.minLengthNotMet(
+                "password", 8, rejectedValue);
+        
+        // Assert
+        assertEquals("Minimum length not met", exception.getMessage());
+        assertEquals(HttpStatus.BAD_REQUEST, exception.getHttpStatus());
+        assertTrue(exception.hasValidationErrors());
+        assertEquals(1, exception.getValidationErrorCount());
+        
+        List<ValidationError> errors = exception.getValidationErrors();
+        assertEquals("password", errors.get(0).getField());
+        assertEquals("Field must be at least 8 characters", errors.get(0).getMessage());
+        assertEquals(rejectedValue, errors.get(0).getRejectedValue());
+    }
+    
+    @Test
+    @DisplayName("Should create exception for maximum value exceeded")
+    void shouldCreateExceptionForMaxValueExceeded() {
+        // Arrange & Act
+        Integer rejectedValue = 150;
+        ValidationException exception = ValidationException.maxValueExceeded(
+                "age", 100, rejectedValue);
+        
+        // Assert
+        assertEquals("Maximum value exceeded", exception.getMessage());
+        assertEquals(HttpStatus.BAD_REQUEST, exception.getHttpStatus());
+        assertTrue(exception.hasValidationErrors());
+        assertEquals(1, exception.getValidationErrorCount());
+        
+        List<ValidationError> errors = exception.getValidationErrors();
+        assertEquals("age", errors.get(0).getField());
+        assertEquals("Field must not exceed 100", errors.get(0).getMessage());
+        assertEquals(rejectedValue, errors.get(0).getRejectedValue());
+    }
+    
+    @Test
+    @DisplayName("Should create exception for minimum value not met")
+    void shouldCreateExceptionForMinValueNotMet() {
+        // Arrange & Act
+        Integer rejectedValue = 15;
+        ValidationException exception = ValidationException.minValueNotMet(
+                "age", 18, rejectedValue);
+        
+        // Assert
+        assertEquals("Minimum value not met", exception.getMessage());
+        assertEquals(HttpStatus.BAD_REQUEST, exception.getHttpStatus());
+        assertTrue(exception.hasValidationErrors());
+        assertEquals(1, exception.getValidationErrorCount());
+        
+        List<ValidationError> errors = exception.getValidationErrors();
+        assertEquals("age", errors.get(0).getField());
+        assertEquals("Field must be at least 18", errors.get(0).getMessage());
+        assertEquals(rejectedValue, errors.get(0).getRejectedValue());
+    }
+    
+    @Test
+    @DisplayName("Should return unmodifiable list of validation errors")
+    void shouldReturnUnmodifiableListOfValidationErrors() {
         // Arrange
-        ValidationException exception = new ValidationException("Validation failed", "email", "Email is invalid");
+        ValidationException exception = new ValidationException("Validation failed");
+        exception.addValidationError("email", "Invalid email format");
         
         // Act & Assert
-        assertThrows(UnsupportedOperationException.class, () -> {
-            exception.getValidationErrors().add(new ValidationError("password", "Password is too short"));
-        });
-    }
-    
-    @Test
-    @DisplayName("Should verify hasValidationErrors and getValidationErrorCount methods")
-    public void testHasValidationErrorsAndGetValidationErrorCount() {
-        // Arrange & Act
-        ValidationException emptyException = new ValidationException("Validation failed");
-        
-        // Assert
-        assertFalse(emptyException.hasValidationErrors());
-        assertEquals(0, emptyException.getValidationErrorCount());
-        
-        // Arrange & Act
-        ValidationException exceptionWithErrors = new ValidationException("Validation failed", "email", "Email is invalid");
-        
-        // Assert
-        assertTrue(exceptionWithErrors.hasValidationErrors());
-        assertEquals(1, exceptionWithErrors.getValidationErrorCount());
-        
-        // Add more errors
-        exceptionWithErrors.addValidationError("password", "Password is too short");
-        
-        // Assert again
-        assertTrue(exceptionWithErrors.hasValidationErrors());
-        assertEquals(2, exceptionWithErrors.getValidationErrorCount());
-    }
-    
-    @Test
-    @DisplayName("Should verify method chaining for addValidationError")
-    public void testMethodChainingForAddValidationError() {
-        // Arrange
-        ValidationException exception = new ValidationException("Validation failed");
-        
-        // Act
-        exception
-            .addValidationError("email", "Email is invalid")
-            .addValidationError("password", "Password is too short")
-            .addValidationError("name", "Name is required");
-        
-        // Assert
-        assertTrue(exception.hasValidationErrors());
-        assertEquals(3, exception.getValidationErrorCount());
-        
         List<ValidationError> errors = exception.getValidationErrors();
-        assertEquals(3, errors.size());
-        assertEquals("email", errors.get(0).getField());
-        assertEquals("Email is invalid", errors.get(0).getMessage());
-        assertEquals("password", errors.get(1).getField());
-        assertEquals("Password is too short", errors.get(1).getMessage());
-        assertEquals("name", errors.get(2).getField());
-        assertEquals("Name is required", errors.get(2).getMessage());
-    }
-    
-    @Test
-    @DisplayName("Should verify method chaining for addValidationErrors")
-    public void testMethodChainingForAddValidationErrors() {
-        // Arrange
-        ValidationException exception = new ValidationException("Validation failed");
-        List<ValidationError> firstBatch = new ArrayList<>();
-        firstBatch.add(new ValidationError("email", "Email is invalid"));
-        firstBatch.add(new ValidationError("password", "Password is too short"));
-        
-        List<ValidationError> secondBatch = new ArrayList<>();
-        secondBatch.add(new ValidationError("name", "Name is required"));
-        secondBatch.add(new ValidationError("age", "Age must be positive"));
-        
-        // Act
-        exception
-            .addValidationErrors(firstBatch)
-            .addValidationErrors(secondBatch);
-        
-        // Assert
-        assertTrue(exception.hasValidationErrors());
-        assertEquals(4, exception.getValidationErrorCount());
-        
-        List<ValidationError> errors = exception.getValidationErrors();
-        assertEquals(4, errors.size());
-        assertEquals("email", errors.get(0).getField());
-        assertEquals("Email is invalid", errors.get(0).getMessage());
-        assertEquals("password", errors.get(1).getField());
-        assertEquals("Password is too short", errors.get(1).getMessage());
-        assertEquals("name", errors.get(2).getField());
-        assertEquals("Name is required", errors.get(2).getMessage());
-        assertEquals("age", errors.get(3).getField());
-        assertEquals("Age must be positive", errors.get(3).getMessage());
-    }
-    
-    @Test
-    @DisplayName("Should verify ValidationException with rejected value")
-    public void testValidationExceptionWithRejectedValue() {
-        // Arrange
-        List<ValidationError> validationErrors = new ArrayList<>();
-        validationErrors.add(new ValidationError("email", "Email is invalid", "invalid-email"));
-        validationErrors.add(new ValidationError("age", "Age must be positive", -5));
-        
-        // Act
-        ValidationException exception = new ValidationException("Validation failed", validationErrors);
-        
-        // Assert
-        assertTrue(exception.hasValidationErrors());
-        assertEquals(2, exception.getValidationErrorCount());
-        
-        List<ValidationError> errors = exception.getValidationErrors();
-        assertEquals(2, errors.size());
-        assertEquals("email", errors.get(0).getField());
-        assertEquals("Email is invalid", errors.get(0).getMessage());
-        assertEquals("invalid-email", errors.get(0).getRejectedValue());
-        assertEquals("age", errors.get(1).getField());
-        assertEquals("Age must be positive", errors.get(1).getMessage());
-        assertEquals(-5, errors.get(1).getRejectedValue());
+        assertThrows(UnsupportedOperationException.class, () -> errors.add(new ValidationError("test", "test")));
     }
 }
