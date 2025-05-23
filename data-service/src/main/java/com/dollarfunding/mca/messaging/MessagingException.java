@@ -1,226 +1,336 @@
 package com.dollarfunding.mca.messaging;
 
+import com.dollarfunding.mca.exception.BaseException;
+import com.dollarfunding.mca.util.Constants;
+import org.springframework.http.HttpStatus;
+
 /**
- * Custom exception class for messaging-related errors in the MCA application.
- * It extends RuntimeException and provides specialized handling for RabbitMQ connection issues,
- * message serialization/deserialization errors, and delivery failures.
+ * Custom exception for messaging-related errors in the MCA application.
+ * <p>
+ * This exception is thrown when errors occur during RabbitMQ operations such as
+ * connection issues, message serialization/deserialization errors, and delivery failures.
+ * It includes fields for error type, retry information, and root cause details to facilitate
+ * troubleshooting and recovery strategies.
+ * </p>
  */
-public class MessagingException extends RuntimeException {
+public class MessagingException extends BaseException {
 
     /**
-     * Enum defining the possible error types for messaging exceptions.
+     * Enum defining the types of messaging errors that can occur.
      */
     public enum ErrorType {
-        CONNECTION_ERROR,
-        SERIALIZATION_ERROR,
-        DESERIALIZATION_ERROR,
-        DELIVERY_ERROR,
-        VALIDATION_ERROR,
-        PROCESSING_ERROR
+        /**
+         * Connection-related errors (e.g., connection refused, authentication failure)
+         */
+        CONNECTION,
+        
+        /**
+         * Message serialization or deserialization errors
+         */
+        SERIALIZATION,
+        
+        /**
+         * Message delivery failures
+         */
+        DELIVERY,
+        
+        /**
+         * Channel-related errors
+         */
+        CHANNEL,
+        
+        /**
+         * Queue-related errors
+         */
+        QUEUE,
+        
+        /**
+         * Exchange-related errors
+         */
+        EXCHANGE,
+        
+        /**
+         * Other messaging errors
+         */
+        OTHER
     }
 
     private final ErrorType errorType;
-    private final boolean retryable;
-    private final Integer retryCount;
-    private final Integer maxRetries;
+    private final Integer retryAttempt;
+    private final Long backoffPeriod;
+    private final String queueOrExchange;
 
     /**
-     * Constructor with error message and type.
+     * Constructs a new MessagingException with the specified message, error type, and HTTP status.
      *
-     * @param message   The error message
-     * @param errorType The type of error
+     * @param message    the detail message
+     * @param errorType  the type of messaging error
+     * @param httpStatus the HTTP status code to be returned to the client
      */
-    public MessagingException(String message, ErrorType errorType) {
-        super(message);
-        this.errorType = errorType;
-        this.retryable = isRetryableErrorType(errorType);
-        this.retryCount = null;
-        this.maxRetries = null;
+    public MessagingException(String message, ErrorType errorType, HttpStatus httpStatus) {
+        this(message, errorType, httpStatus, null, null, null, null);
     }
 
     /**
-     * Constructor with error message, cause, and type.
+     * Constructs a new MessagingException with the specified message, error type, cause, and HTTP status.
      *
-     * @param message   The error message
-     * @param cause     The cause of the error
-     * @param errorType The type of error
+     * @param message    the detail message
+     * @param errorType  the type of messaging error
+     * @param cause      the cause of this exception
+     * @param httpStatus the HTTP status code to be returned to the client
      */
-    public MessagingException(String message, Throwable cause, ErrorType errorType) {
-        super(message, cause);
-        this.errorType = errorType;
-        this.retryable = isRetryableErrorType(errorType);
-        this.retryCount = null;
-        this.maxRetries = null;
+    public MessagingException(String message, ErrorType errorType, Throwable cause, HttpStatus httpStatus) {
+        this(message, errorType, httpStatus, cause, null, null, null);
     }
 
     /**
-     * Constructor with error message, type, and retry information.
+     * Constructs a new MessagingException with the specified message, error type, HTTP status,
+     * retry attempt, and backoff period.
      *
-     * @param message    The error message
-     * @param errorType  The type of error
-     * @param retryable  Whether the error is retryable
-     * @param retryCount The current retry count
-     * @param maxRetries The maximum number of retries
+     * @param message       the detail message
+     * @param errorType     the type of messaging error
+     * @param httpStatus    the HTTP status code to be returned to the client
+     * @param retryAttempt  the current retry attempt number (null if not applicable)
+     * @param backoffPeriod the backoff period in milliseconds before the next retry (null if not applicable)
      */
-    public MessagingException(String message, ErrorType errorType, boolean retryable, Integer retryCount, Integer maxRetries) {
-        super(message);
-        this.errorType = errorType;
-        this.retryable = retryable;
-        this.retryCount = retryCount;
-        this.maxRetries = maxRetries;
+    public MessagingException(String message, ErrorType errorType, HttpStatus httpStatus,
+                             Integer retryAttempt, Long backoffPeriod) {
+        this(message, errorType, httpStatus, null, retryAttempt, backoffPeriod, null);
     }
 
     /**
-     * Constructor with error message, cause, type, and retry information.
+     * Constructs a new MessagingException with all parameters.
      *
-     * @param message    The error message
-     * @param cause      The cause of the error
-     * @param errorType  The type of error
-     * @param retryable  Whether the error is retryable
-     * @param retryCount The current retry count
-     * @param maxRetries The maximum number of retries
+     * @param message        the detail message
+     * @param errorType      the type of messaging error
+     * @param httpStatus     the HTTP status code to be returned to the client
+     * @param cause          the cause of this exception
+     * @param retryAttempt   the current retry attempt number (null if not applicable)
+     * @param backoffPeriod  the backoff period in milliseconds before the next retry (null if not applicable)
+     * @param queueOrExchange the name of the queue or exchange involved (null if not applicable)
      */
-    public MessagingException(String message, Throwable cause, ErrorType errorType, boolean retryable, Integer retryCount, Integer maxRetries) {
-        super(message, cause);
+    public MessagingException(String message, ErrorType errorType, HttpStatus httpStatus,
+                             Throwable cause, Integer retryAttempt, Long backoffPeriod,
+                             String queueOrExchange) {
+        super(message, cause, httpStatus, determineErrorCode(errorType));
         this.errorType = errorType;
-        this.retryable = retryable;
-        this.retryCount = retryCount;
-        this.maxRetries = maxRetries;
+        this.retryAttempt = retryAttempt;
+        this.backoffPeriod = backoffPeriod;
+        this.queueOrExchange = queueOrExchange;
     }
 
     /**
-     * Gets the error type.
+     * Returns the type of messaging error.
      *
-     * @return The error type
+     * @return the error type
      */
     public ErrorType getErrorType() {
         return errorType;
     }
 
     /**
-     * Checks if the error is retryable.
+     * Returns the current retry attempt number.
      *
-     * @return true if the error is retryable, false otherwise
+     * @return the retry attempt number, or null if not applicable
      */
-    public boolean isRetryable() {
-        return retryable;
+    public Integer getRetryAttempt() {
+        return retryAttempt;
     }
 
     /**
-     * Gets the current retry count.
+     * Returns the backoff period in milliseconds before the next retry.
      *
-     * @return The retry count, or null if not applicable
+     * @return the backoff period in milliseconds, or null if not applicable
      */
-    public Integer getRetryCount() {
-        return retryCount;
+    public Long getBackoffPeriod() {
+        return backoffPeriod;
     }
 
     /**
-     * Gets the maximum number of retries.
+     * Returns the name of the queue or exchange involved in the error.
      *
-     * @return The maximum retries, or null if not applicable
+     * @return the queue or exchange name, or null if not applicable
      */
-    public Integer getMaxRetries() {
-        return maxRetries;
+    public String getQueueOrExchange() {
+        return queueOrExchange;
     }
 
     /**
-     * Checks if the error has exceeded the maximum number of retries.
+     * Determines the appropriate error code based on the error type.
      *
-     * @return true if retries are exhausted, false otherwise or if not applicable
+     * @param errorType the type of messaging error
+     * @return the appropriate error code
      */
-    public boolean isRetriesExhausted() {
-        return retryCount != null && maxRetries != null && retryCount >= maxRetries;
-    }
+    private static String determineErrorCode(ErrorType errorType) {
+        if (errorType == null) {
+            return Constants.ErrorCode.MESSAGING_PUBLISH_ERROR;
+        }
 
-    /**
-     * Determines if an error type is retryable by default.
-     *
-     * @param errorType The error type to check
-     * @return true if the error type is retryable by default, false otherwise
-     */
-    private boolean isRetryableErrorType(ErrorType errorType) {
         switch (errorType) {
-            case CONNECTION_ERROR:
-            case DELIVERY_ERROR:
-                return true;
-            case SERIALIZATION_ERROR:
-            case DESERIALIZATION_ERROR:
-            case VALIDATION_ERROR:
-                return false;
-            case PROCESSING_ERROR:
-                return true;
+            case CONNECTION:
+            case CHANNEL:
+            case QUEUE:
+            case EXCHANGE:
+                return Constants.ErrorCode.MESSAGING_PUBLISH_ERROR;
+            case SERIALIZATION:
+            case DELIVERY:
+            case OTHER:
             default:
-                return false;
+                return Constants.ErrorCode.MESSAGING_CONSUME_ERROR;
         }
     }
 
     /**
-     * Creates a connection error exception.
+     * Creates a new MessagingException for connection errors.
      *
-     * @param message The error message
-     * @param cause   The cause of the error
-     * @return A new MessagingException for connection errors
+     * @param message the detail message
+     * @param cause   the cause of this exception
+     * @return a new MessagingException for connection errors
      */
     public static MessagingException connectionError(String message, Throwable cause) {
-        return new MessagingException(message, cause, ErrorType.CONNECTION_ERROR);
+        return new MessagingException(
+            message,
+            ErrorType.CONNECTION,
+            cause,
+            HttpStatus.INTERNAL_SERVER_ERROR
+        );
     }
 
     /**
-     * Creates a serialization error exception.
+     * Creates a new MessagingException for connection errors with retry information.
      *
-     * @param message The error message
-     * @param cause   The cause of the error
-     * @return A new MessagingException for serialization errors
+     * @param message       the detail message
+     * @param cause         the cause of this exception
+     * @param retryAttempt  the current retry attempt number
+     * @param backoffPeriod the backoff period in milliseconds before the next retry
+     * @return a new MessagingException for connection errors with retry information
+     */
+    public static MessagingException connectionError(String message, Throwable cause,
+                                                   Integer retryAttempt, Long backoffPeriod) {
+        return new MessagingException(
+            message,
+            ErrorType.CONNECTION,
+            HttpStatus.INTERNAL_SERVER_ERROR,
+            cause,
+            retryAttempt,
+            backoffPeriod,
+            null
+        );
+    }
+
+    /**
+     * Creates a new MessagingException for serialization errors.
+     *
+     * @param message the detail message
+     * @param cause   the cause of this exception
+     * @return a new MessagingException for serialization errors
      */
     public static MessagingException serializationError(String message, Throwable cause) {
-        return new MessagingException(message, cause, ErrorType.SERIALIZATION_ERROR);
+        return new MessagingException(
+            message,
+            ErrorType.SERIALIZATION,
+            cause,
+            HttpStatus.INTERNAL_SERVER_ERROR
+        );
     }
 
     /**
-     * Creates a deserialization error exception.
+     * Creates a new MessagingException for delivery errors.
      *
-     * @param message The error message
-     * @param cause   The cause of the error
-     * @return A new MessagingException for deserialization errors
+     * @param message        the detail message
+     * @param cause          the cause of this exception
+     * @param queueOrExchange the name of the queue or exchange involved
+     * @return a new MessagingException for delivery errors
      */
-    public static MessagingException deserializationError(String message, Throwable cause) {
-        return new MessagingException(message, cause, ErrorType.DESERIALIZATION_ERROR);
+    public static MessagingException deliveryError(String message, Throwable cause, String queueOrExchange) {
+        return new MessagingException(
+            message,
+            ErrorType.DELIVERY,
+            HttpStatus.INTERNAL_SERVER_ERROR,
+            cause,
+            null,
+            null,
+            queueOrExchange
+        );
     }
 
     /**
-     * Creates a delivery error exception.
+     * Creates a new MessagingException for delivery errors with retry information.
      *
-     * @param message    The error message
-     * @param cause      The cause of the error
-     * @param retryCount The current retry count
-     * @param maxRetries The maximum number of retries
-     * @return A new MessagingException for delivery errors
+     * @param message        the detail message
+     * @param cause          the cause of this exception
+     * @param retryAttempt   the current retry attempt number
+     * @param backoffPeriod  the backoff period in milliseconds before the next retry
+     * @param queueOrExchange the name of the queue or exchange involved
+     * @return a new MessagingException for delivery errors with retry information
      */
-    public static MessagingException deliveryError(String message, Throwable cause, Integer retryCount, Integer maxRetries) {
-        return new MessagingException(message, cause, ErrorType.DELIVERY_ERROR, true, retryCount, maxRetries);
+    public static MessagingException deliveryError(String message, Throwable cause,
+                                                 Integer retryAttempt, Long backoffPeriod,
+                                                 String queueOrExchange) {
+        return new MessagingException(
+            message,
+            ErrorType.DELIVERY,
+            HttpStatus.INTERNAL_SERVER_ERROR,
+            cause,
+            retryAttempt,
+            backoffPeriod,
+            queueOrExchange
+        );
     }
 
     /**
-     * Creates a validation error exception.
+     * Creates a new MessagingException for channel errors.
      *
-     * @param message The error message
-     * @return A new MessagingException for validation errors
+     * @param message the detail message
+     * @param cause   the cause of this exception
+     * @return a new MessagingException for channel errors
      */
-    public static MessagingException validationError(String message) {
-        return new MessagingException(message, ErrorType.VALIDATION_ERROR);
+    public static MessagingException channelError(String message, Throwable cause) {
+        return new MessagingException(
+            message,
+            ErrorType.CHANNEL,
+            cause,
+            HttpStatus.INTERNAL_SERVER_ERROR
+        );
     }
 
     /**
-     * Creates a processing error exception.
+     * Creates a new MessagingException for queue errors.
      *
-     * @param message    The error message
-     * @param cause      The cause of the error
-     * @param retryCount The current retry count
-     * @param maxRetries The maximum number of retries
-     * @return A new MessagingException for processing errors
+     * @param message the detail message
+     * @param cause   the cause of this exception
+     * @param queue   the name of the queue involved
+     * @return a new MessagingException for queue errors
      */
-    public static MessagingException processingError(String message, Throwable cause, Integer retryCount, Integer maxRetries) {
-        return new MessagingException(message, cause, ErrorType.PROCESSING_ERROR, true, retryCount, maxRetries);
+    public static MessagingException queueError(String message, Throwable cause, String queue) {
+        return new MessagingException(
+            message,
+            ErrorType.QUEUE,
+            HttpStatus.INTERNAL_SERVER_ERROR,
+            cause,
+            null,
+            null,
+            queue
+        );
+    }
+
+    /**
+     * Creates a new MessagingException for exchange errors.
+     *
+     * @param message  the detail message
+     * @param cause    the cause of this exception
+     * @param exchange the name of the exchange involved
+     * @return a new MessagingException for exchange errors
+     */
+    public static MessagingException exchangeError(String message, Throwable cause, String exchange) {
+        return new MessagingException(
+            message,
+            ErrorType.EXCHANGE,
+            HttpStatus.INTERNAL_SERVER_ERROR,
+            cause,
+            null,
+            null,
+            exchange
+        );
     }
 }
