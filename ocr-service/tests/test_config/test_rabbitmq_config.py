@@ -4,9 +4,10 @@
 """
 Unit tests for the OCR Service's rabbitmq_config.py module.
 
-This module contains tests that verify the RabbitMQ configuration correctly sets up
-connection parameters, exchange and queue configurations, message consumption options,
-and security settings. It ensures that messaging works correctly for OCR processing.
+These tests verify that RabbitMQ configuration correctly sets up connection parameters,
+exchange and queue configurations, message consumption options, and security settings.
+The tests ensure that messaging works correctly for OCR processing with proper security
+and reliability features.
 """
 
 import os
@@ -14,537 +15,449 @@ import ssl
 import json
 import pytest
 from unittest.mock import patch, MagicMock
-from typing import Dict, Any
+from typing import Dict, Any, List, Optional
+
+# Import Environment enum from conftest
+from conftest import Environment
 
 # Import the module under test
-from src.config import rabbitmq_config
-from src.types.messages import (
-    ExchangeType, ExchangeConfig, QueueConfig, ConnectionConfig,
-    RetryConfig, MessagePayload, MessageHeaders, MessageSerializer
+from src.config.rabbitmq_config import (
+    get_rabbitmq_config,
+    get_rabbitmq_connection_parameters,
+    get_rabbitmq_exchange_config,
+    get_rabbitmq_queue_config,
+    get_rabbitmq_consumer_config,
+    get_rabbitmq_publisher_config,
+    get_rabbitmq_retry_config,
+    get_message_serializer,
+    get_message_deserializer,
+    create_ocr_result_message,
+    DEFAULT_RABBITMQ_CONFIG
 )
-from src.types.config import RabbitMQConfig
 
 
-# ===== Test Environment Variable Loading =====
+class TestRabbitMQConfig:
+    """Test suite for the RabbitMQ configuration module."""
 
-def test_environment_variables_loading(env_vars):
-    """
-    Test that environment variables are correctly loaded into configuration.
-    """
-    # Set environment variables
-    env_vars['RABBITMQ_HOST'] = 'test-host'
-    env_vars['RABBITMQ_PORT'] = '5673'
-    env_vars['RABBITMQ_VIRTUAL_HOST'] = '/test'
-    env_vars['RABBITMQ_USERNAME'] = 'test-user'
-    env_vars['RABBITMQ_PASSWORD'] = 'test-password'
-    env_vars['RABBITMQ_EXCHANGE_NAME'] = 'test-exchange'
-    env_vars['RABBITMQ_QUEUE_NAME'] = 'test-queue'
-    
-    # Reload the module to apply environment variables
-    with patch.object(rabbitmq_config, 'RABBITMQ_HOST', 'test-host'), \
-         patch.object(rabbitmq_config, 'RABBITMQ_PORT', 5673), \
-         patch.object(rabbitmq_config, 'RABBITMQ_VHOST', '/test'), \
-         patch.object(rabbitmq_config, 'RABBITMQ_USER', 'test-user'), \
-         patch.object(rabbitmq_config, 'RABBITMQ_PASS', 'test-password'), \
-         patch.object(rabbitmq_config, 'RABBITMQ_EXCHANGE', 'test-exchange'), \
-         patch.object(rabbitmq_config, 'RABBITMQ_QUEUE', 'test-queue'):
+    def test_default_config_values(self):
+        """Test that default configuration values are set correctly when no environment variables are provided."""
+        # Clear all relevant environment variables
+        with patch.dict(os.environ, {}, clear=True):
+            # Get the default configuration
+            config = get_rabbitmq_config()
+            
+            # Check default values
+            assert config["host"] == "localhost"
+            assert config["port"] == 5671  # Default to TLS port
+            assert config["username"] == "guest"
+            assert config["password"] == "guest"
+            assert config["vhost"] == "/"
+            assert config["exchange"] == "mca.documents"
+            assert config["queue_data_extraction"] == "data-extraction"
+            assert config["queue_data_processing"] == "data-processing"
+            assert config["routing_key"] == "ocr.result"
+            assert config["ssl"] is True  # Default to enabled
+            assert config["heartbeat"] == 60
+            assert config["connection_timeout"] == 30
+            assert config["prefetch_count"] == 10
+
+    def test_config_from_environment_variables(self, mock_env_vars):
+        """Test that configuration values are correctly loaded from environment variables."""
+        # Set environment variables
+        env_vars = {
+            "RABBITMQ_HOST": "rabbitmq.test",
+            "RABBITMQ_PORT": "5672",
+            "RABBITMQ_USERNAME": "test-user",
+            "RABBITMQ_PASSWORD": "test-password",
+            "RABBITMQ_VHOST": "/test",
+            "RABBITMQ_EXCHANGE": "test-exchange",
+            "RABBITMQ_QUEUE_DATA_EXTRACTION": "test-extraction",
+            "RABBITMQ_QUEUE_DATA_PROCESSING": "test-processing",
+            "RABBITMQ_ROUTING_KEY": "test.result",
+            "RABBITMQ_SSL": "false",
+            "RABBITMQ_HEARTBEAT": "30",
+            "RABBITMQ_CONNECTION_TIMEOUT": "15",
+            "RABBITMQ_PREFETCH_COUNT": "5"
+        }
+        mock_env_vars(env_vars)
+        
+        # Get the configuration
+        config = get_rabbitmq_config()
+        
+        # Check that values match environment variables
+        assert config["host"] == "rabbitmq.test"
+        assert config["port"] == 5672
+        assert config["username"] == "test-user"
+        assert config["password"] == "test-password"
+        assert config["vhost"] == "/test"
+        assert config["exchange"] == "test-exchange"
+        assert config["queue_data_extraction"] == "test-extraction"
+        assert config["queue_data_processing"] == "test-processing"
+        assert config["routing_key"] == "test.result"
+        assert config["ssl"] is False
+        assert config["heartbeat"] == 30
+        assert config["connection_timeout"] == 15
+        assert config["prefetch_count"] == 5
+
+    def test_ssl_validation(self):
+        """Test that SSL validation works correctly when SSL is enabled but certificate paths are not configured."""
+        # Create a configuration with SSL enabled but no certificate paths
+        config = DEFAULT_RABBITMQ_CONFIG.copy()
+        config["ssl"] = True
+        config["ssl_cert_path"] = None
+        config["ssl_key_path"] = None
+        config["ssl_ca_certs"] = None
+        
+        # Validation should fail
+        with pytest.raises(ValueError, match="SSL is enabled but certificate paths are not properly configured"):
+            # Use a lambda to call the function with our custom config
+            with patch("src.config.rabbitmq_config.DEFAULT_RABBITMQ_CONFIG", config):
+                get_rabbitmq_config()
+
+    def test_connection_parameters_without_ssl(self):
+        """Test that connection parameters are correctly configured without SSL."""
+        # Create a configuration with SSL disabled
+        config = {
+            "host": "rabbitmq.test",
+            "port": 5672,
+            "vhost": "/test",
+            "username": "test-user",
+            "password": "test-password",
+            "heartbeat": 30,
+            "connection_timeout": 15,
+            "ssl": False
+        }
         
         # Get connection parameters
-        params = rabbitmq_config.get_connection_parameters()
+        params = get_rabbitmq_connection_parameters(config)
         
-        # Verify parameters
-        assert params['host'] == 'test-host'
-        assert params['port'] == 5673
-        assert params['virtual_host'] == '/test'
-        assert params['credentials']['username'] == 'test-user'
-        assert params['credentials']['password'] == 'test-password'
+        # Check connection parameters
+        assert params["host"] == "rabbitmq.test"
+        assert params["port"] == 5672
+        assert params["virtual_host"] == "/test"
+        assert params["credentials"]["username"] == "test-user"
+        assert params["credentials"]["password"] == "test-password"
+        assert params["heartbeat"] == 30
+        assert params["connection_timeout"] == 15
+        assert "ssl_options" not in params
+        assert params["client_properties"]["connection_name"] == "ocr-service"
 
-
-def test_default_values(clear_env_vars):
-    """
-    Test that default values are used when environment variables are not set.
-    """
-    # Clear relevant environment variables
-    clear_env_vars([
-        'RABBITMQ_HOST',
-        'RABBITMQ_PORT',
-        'RABBITMQ_VIRTUAL_HOST',
-        'RABBITMQ_USERNAME',
-        'RABBITMQ_PASSWORD',
-        'RABBITMQ_EXCHANGE_NAME',
-        'RABBITMQ_QUEUE_NAME'
-    ])
-    
-    # Reload the module to apply default values
-    with patch.object(rabbitmq_config, 'RABBITMQ_HOST', rabbitmq_config.DEFAULT_HOST), \
-         patch.object(rabbitmq_config, 'RABBITMQ_PORT', rabbitmq_config.DEFAULT_PORT), \
-         patch.object(rabbitmq_config, 'RABBITMQ_VHOST', rabbitmq_config.DEFAULT_VHOST), \
-         patch.object(rabbitmq_config, 'RABBITMQ_USER', rabbitmq_config.DEFAULT_USER), \
-         patch.object(rabbitmq_config, 'RABBITMQ_PASS', rabbitmq_config.DEFAULT_PASS), \
-         patch.object(rabbitmq_config, 'RABBITMQ_EXCHANGE', rabbitmq_config.DEFAULT_EXCHANGE), \
-         patch.object(rabbitmq_config, 'RABBITMQ_QUEUE', rabbitmq_config.DEFAULT_QUEUE):
+    def test_connection_parameters_with_ssl(self):
+        """Test that connection parameters are correctly configured with SSL."""
+        # Create a configuration with SSL enabled
+        config = {
+            "host": "rabbitmq.test",
+            "port": 5671,
+            "vhost": "/test",
+            "username": "test-user",
+            "password": "test-password",
+            "heartbeat": 30,
+            "connection_timeout": 15,
+            "ssl": True,
+            "ssl_cert_path": "/path/to/cert.pem",
+            "ssl_key_path": "/path/to/key.pem",
+            "ssl_ca_certs": "/path/to/ca.pem"
+        }
         
-        # Get connection parameters
-        params = rabbitmq_config.get_connection_parameters()
+        # Mock ssl.create_default_context and ssl.SSLContext
+        mock_ssl_context = MagicMock()
+        with patch("ssl.create_default_context", return_value=mock_ssl_context) as mock_create_context:
+            # Get connection parameters
+            params = get_rabbitmq_connection_parameters(config)
+            
+            # Check that SSL context was created correctly
+            mock_create_context.assert_called_once_with(cafile=config["ssl_ca_certs"])
+            mock_ssl_context.load_cert_chain.assert_called_once_with(
+                certfile=config["ssl_cert_path"],
+                keyfile=config["ssl_key_path"]
+            )
+            assert mock_ssl_context.check_hostname is True
+            assert mock_ssl_context.verify_mode == ssl.CERT_REQUIRED
+            
+            # Check connection parameters
+            assert params["host"] == "rabbitmq.test"
+            assert params["port"] == 5671
+            assert params["virtual_host"] == "/test"
+            assert params["credentials"]["username"] == "test-user"
+            assert params["credentials"]["password"] == "test-password"
+            assert params["heartbeat"] == 30
+            assert params["connection_timeout"] == 15
+            assert params["ssl_options"]["context"] == mock_ssl_context
+
+    def test_exchange_config(self):
+        """Test that exchange configuration is correctly set up."""
+        # Create a configuration
+        config = {
+            "exchange": "test-exchange"
+        }
         
-        # Verify default parameters
-        assert params['host'] == rabbitmq_config.DEFAULT_HOST
-        assert params['port'] == rabbitmq_config.DEFAULT_PORT
-        assert params['virtual_host'] == rabbitmq_config.DEFAULT_VHOST
-        assert params['credentials']['username'] == rabbitmq_config.DEFAULT_USER
-        assert params['credentials']['password'] == rabbitmq_config.DEFAULT_PASS
-
-
-# ===== Test SSL/TLS Configuration =====
-
-def test_ssl_context_creation_with_ssl_enabled(env_vars):
-    """
-    Test that SSL context is correctly created when SSL is enabled.
-    """
-    # Set SSL environment variables
-    env_vars['RABBITMQ_USE_SSL'] = 'true'
-    env_vars['RABBITMQ_SSL_VERIFY'] = 'true'
-    env_vars['RABBITMQ_SSL_CERT_PATH'] = '/path/to/cert.pem'
-    env_vars['RABBITMQ_SSL_KEY_PATH'] = '/path/to/key.pem'
-    env_vars['RABBITMQ_SSL_CA_CERTS'] = '/path/to/ca.pem'
-    
-    # Mock SSL context creation
-    mock_context = MagicMock(spec=ssl.SSLContext)
-    
-    with patch('ssl.create_default_context', return_value=mock_context), \
-         patch.object(rabbitmq_config, 'RABBITMQ_USE_SSL', True), \
-         patch.object(rabbitmq_config, 'RABBITMQ_SSL_VERIFY', True), \
-         patch.object(rabbitmq_config, 'RABBITMQ_SSL_CERT', '/path/to/cert.pem'), \
-         patch.object(rabbitmq_config, 'RABBITMQ_SSL_KEY', '/path/to/key.pem'), \
-         patch.object(rabbitmq_config, 'RABBITMQ_SSL_CA', '/path/to/ca.pem'):
+        # Get exchange configuration
+        exchange_config = get_rabbitmq_exchange_config(config)
         
-        # Get SSL context
-        context = rabbitmq_config.get_ssl_context()
+        # Check exchange configuration
+        assert exchange_config["exchange"] == "test-exchange"
+        assert exchange_config["exchange_type"] == "fanout"  # As specified in the technical spec
+        assert exchange_config["durable"] is True
+        assert exchange_config["auto_delete"] is False
+
+    def test_queue_config(self):
+        """Test that queue configuration is correctly set up."""
+        # Create a configuration
+        config = {
+            "exchange": "test-exchange",
+            "queue_data_extraction": "test-extraction",
+            "queue_data_processing": "test-processing"
+        }
         
-        # Verify context configuration
-        assert context is not None
-        mock_context.load_verify_locations.assert_called_once_with(cafile='/path/to/ca.pem')
-        mock_context.load_cert_chain.assert_called_once_with('/path/to/cert.pem', '/path/to/key.pem')
-        assert mock_context.verify_mode == ssl.CERT_REQUIRED
-        assert mock_context.minimum_version == ssl.TLSVersion.TLSv1_2
-
-
-def test_ssl_context_creation_with_ssl_disabled(env_vars):
-    """
-    Test that SSL context is not created when SSL is disabled.
-    """
-    # Set SSL environment variables
-    env_vars['RABBITMQ_USE_SSL'] = 'false'
-    
-    with patch.object(rabbitmq_config, 'RABBITMQ_USE_SSL', False):
-        # Get SSL context
-        context = rabbitmq_config.get_ssl_context()
+        # Get queue configuration
+        queue_config = get_rabbitmq_queue_config(config)
         
-        # Verify context is None
-        assert context is None
-
-
-def test_ssl_context_with_verification_disabled(env_vars):
-    """
-    Test SSL context creation with certificate verification disabled.
-    """
-    # Set SSL environment variables
-    env_vars['RABBITMQ_USE_SSL'] = 'true'
-    env_vars['RABBITMQ_SSL_VERIFY'] = 'false'
-    
-    # Mock SSL context creation
-    mock_context = MagicMock(spec=ssl.SSLContext)
-    
-    with patch('ssl.create_default_context', return_value=mock_context), \
-         patch.object(rabbitmq_config, 'RABBITMQ_USE_SSL', True), \
-         patch.object(rabbitmq_config, 'RABBITMQ_SSL_VERIFY', False):
+        # Check data extraction queue configuration
+        data_extraction = queue_config["data_extraction"]
+        assert data_extraction["queue"] == "test-extraction"
+        assert data_extraction["durable"] is True
+        assert data_extraction["exclusive"] is False
+        assert data_extraction["auto_delete"] is False
+        assert "x-dead-letter-exchange" in data_extraction["arguments"]
+        assert data_extraction["arguments"]["x-dead-letter-exchange"] == "test-exchange.dlx"
+        assert "x-message-ttl" in data_extraction["arguments"]
+        assert data_extraction["arguments"]["x-message-ttl"] == 1000 * 60 * 60 * 24  # 24 hours
         
-        # Get SSL context
-        context = rabbitmq_config.get_ssl_context()
+        # Check data processing queue configuration
+        data_processing = queue_config["data_processing"]
+        assert data_processing["queue"] == "test-processing"
+        assert data_processing["durable"] is True
+        assert data_processing["exclusive"] is False
+        assert data_processing["auto_delete"] is False
+        assert "x-dead-letter-exchange" in data_processing["arguments"]
+        assert data_processing["arguments"]["x-dead-letter-exchange"] == "test-exchange.dlx"
+        assert "x-message-ttl" in data_processing["arguments"]
+        assert data_processing["arguments"]["x-message-ttl"] == 1000 * 60 * 60 * 24  # 24 hours
+
+    def test_consumer_config(self):
+        """Test that consumer configuration is correctly set up."""
+        # Create a configuration
+        config = {
+            "prefetch_count": 5
+        }
         
-        # Verify context configuration
-        assert context is not None
-        assert mock_context.verify_mode == ssl.CERT_NONE
-        assert mock_context.check_hostname is False
-
-
-# ===== Test Exchange and Queue Configuration =====
-
-def test_exchange_configuration():
-    """
-    Test that exchange configuration is correctly set up.
-    """
-    # Verify exchange configuration
-    assert rabbitmq_config.EXCHANGE_CONFIG['name'] == rabbitmq_config.RABBITMQ_EXCHANGE
-    assert rabbitmq_config.EXCHANGE_CONFIG['type'] == ExchangeType.FANOUT.value
-    assert rabbitmq_config.EXCHANGE_CONFIG['durable'] is True
-    assert rabbitmq_config.EXCHANGE_CONFIG['auto_delete'] is False
-
-
-def test_queue_configuration():
-    """
-    Test that queue configuration is correctly set up.
-    """
-    # Verify queue configuration
-    assert rabbitmq_config.QUEUE_CONFIG['name'] == rabbitmq_config.RABBITMQ_QUEUE
-    assert rabbitmq_config.QUEUE_CONFIG['durable'] is True
-    assert rabbitmq_config.QUEUE_CONFIG['exclusive'] is False
-    assert rabbitmq_config.QUEUE_CONFIG['auto_delete'] is False
-    assert 'x-message-ttl' in rabbitmq_config.QUEUE_CONFIG['arguments']
-    assert 'x-dead-letter-exchange' in rabbitmq_config.QUEUE_CONFIG['arguments']
-    assert 'x-dead-letter-routing-key' in rabbitmq_config.QUEUE_CONFIG['arguments']
-    assert rabbitmq_config.QUEUE_CONFIG['prefetch_count'] == 10
-    assert rabbitmq_config.QUEUE_CONFIG['consumer_tag'] == rabbitmq_config.DEFAULT_CONSUMER_TAG
-
-
-def test_dead_letter_configuration():
-    """
-    Test that dead letter exchange and queue configuration is correctly set up.
-    """
-    # Verify dead letter exchange configuration
-    assert rabbitmq_config.DEAD_LETTER_EXCHANGE_CONFIG['name'] == f"{rabbitmq_config.RABBITMQ_EXCHANGE}-dlx"
-    assert rabbitmq_config.DEAD_LETTER_EXCHANGE_CONFIG['type'] == ExchangeType.DIRECT.value
-    assert rabbitmq_config.DEAD_LETTER_EXCHANGE_CONFIG['durable'] is True
-    assert rabbitmq_config.DEAD_LETTER_EXCHANGE_CONFIG['auto_delete'] is False
-    
-    # Verify dead letter queue configuration
-    assert rabbitmq_config.DEAD_LETTER_QUEUE_CONFIG['name'] == f"{rabbitmq_config.RABBITMQ_QUEUE}-dlq"
-    assert rabbitmq_config.DEAD_LETTER_QUEUE_CONFIG['durable'] is True
-    assert rabbitmq_config.DEAD_LETTER_QUEUE_CONFIG['exclusive'] is False
-    assert rabbitmq_config.DEAD_LETTER_QUEUE_CONFIG['auto_delete'] is False
-    assert 'x-message-ttl' in rabbitmq_config.DEAD_LETTER_QUEUE_CONFIG['arguments']
-    assert rabbitmq_config.DEAD_LETTER_QUEUE_CONFIG['arguments']['x-message-ttl'] == 604800000  # 7 days
-
-
-# ===== Test Connection Parameters =====
-
-def test_connection_parameters():
-    """
-    Test that connection parameters are correctly configured.
-    """
-    # Verify connection configuration
-    assert rabbitmq_config.CONNECTION_CONFIG['host'] == rabbitmq_config.RABBITMQ_HOST
-    assert rabbitmq_config.CONNECTION_CONFIG['port'] == rabbitmq_config.RABBITMQ_PORT
-    assert rabbitmq_config.CONNECTION_CONFIG['virtual_host'] == rabbitmq_config.RABBITMQ_VHOST
-    assert rabbitmq_config.CONNECTION_CONFIG['username'] == rabbitmq_config.RABBITMQ_USER
-    assert rabbitmq_config.CONNECTION_CONFIG['password'] == rabbitmq_config.RABBITMQ_PASS
-    assert rabbitmq_config.CONNECTION_CONFIG['heartbeat'] == 60
-    assert rabbitmq_config.CONNECTION_CONFIG['blocked_connection_timeout'] == 300
-    assert rabbitmq_config.CONNECTION_CONFIG['connection_attempts'] == 5
-    assert rabbitmq_config.CONNECTION_CONFIG['retry_delay'] == 1.0
-    assert rabbitmq_config.CONNECTION_CONFIG['ssl'] == rabbitmq_config.RABBITMQ_USE_SSL
-
-
-def test_get_connection_parameters():
-    """
-    Test that get_connection_parameters returns the correct parameters.
-    """
-    # Get connection parameters
-    params = rabbitmq_config.get_connection_parameters()
-    
-    # Verify parameters
-    assert params['host'] == rabbitmq_config.RABBITMQ_HOST
-    assert params['port'] == rabbitmq_config.RABBITMQ_PORT
-    assert params['virtual_host'] == rabbitmq_config.RABBITMQ_VHOST
-    assert params['credentials']['username'] == rabbitmq_config.RABBITMQ_USER
-    assert params['credentials']['password'] == rabbitmq_config.RABBITMQ_PASS
-    assert params['heartbeat'] == rabbitmq_config.CONNECTION_CONFIG['heartbeat']
-    assert params['blocked_connection_timeout'] == rabbitmq_config.CONNECTION_CONFIG['blocked_connection_timeout']
-    assert params['connection_attempts'] == rabbitmq_config.CONNECTION_CONFIG['connection_attempts']
-    assert params['retry_delay'] == rabbitmq_config.CONNECTION_CONFIG['retry_delay']
-    
-    # Check SSL options if SSL is enabled
-    if rabbitmq_config.RABBITMQ_USE_SSL:
-        assert 'ssl_options' in params
-
-
-# ===== Test Consumer and Publisher Options =====
-
-def test_get_consumer_options():
-    """
-    Test that get_consumer_options returns the correct options.
-    """
-    # Get consumer options
-    options = rabbitmq_config.get_consumer_options()
-    
-    # Verify options
-    assert options['queue'] == rabbitmq_config.QUEUE_CONFIG['name']
-    assert options['consumer_tag'] == rabbitmq_config.QUEUE_CONFIG['consumer_tag']
-    assert options['exclusive'] == rabbitmq_config.QUEUE_CONFIG['exclusive']
-    assert options['arguments'] == rabbitmq_config.QUEUE_CONFIG.get('arguments', {})
-
-
-def test_get_publisher_options():
-    """
-    Test that get_publisher_options returns the correct options.
-    """
-    # Get publisher options
-    options = rabbitmq_config.get_publisher_options()
-    
-    # Verify options
-    assert options['exchange'] == rabbitmq_config.EXCHANGE_CONFIG['name']
-    assert options['routing_key'] == ''  # Empty for fanout exchange
-    assert options['mandatory'] is True
-    assert options['properties'] == rabbitmq_config.DEFAULT_MESSAGE_PROPERTIES
-
-
-# ===== Test Message Serialization =====
-
-def test_serialize_message():
-    """
-    Test that serialize_message correctly serializes a message payload to JSON bytes.
-    """
-    # Create a test payload
-    payload = {
-        'document_id': 'test-doc-123',
-        'application_id': 'test-app-456',
-        'document_type': 'application_form',
-        'storage_path': 's3://mca-documents-test/test-doc-123.pdf',
-        'mime_type': 'application/pdf',
-        'file_name': 'test-doc-123.pdf',
-        'file_size': 1024,
-        'created_at': '2023-01-01T12:00:00Z',
-        'metadata': {'source': 'test'},
-        'classification': {'type': 'application_form', 'confidence': 0.95}
-    }
-    
-    # Serialize the payload
-    serialized = rabbitmq_config.serialize_message(payload)
-    
-    # Verify serialization
-    assert isinstance(serialized, bytes)
-    deserialized = json.loads(serialized.decode('utf-8'))
-    assert deserialized == payload
-
-
-def test_deserialize_message():
-    """
-    Test that deserialize_message correctly deserializes JSON bytes to a message payload.
-    """
-    # Create a test payload
-    payload = {
-        'document_id': 'test-doc-123',
-        'application_id': 'test-app-456',
-        'document_type': 'application_form',
-        'storage_path': 's3://mca-documents-test/test-doc-123.pdf',
-        'mime_type': 'application/pdf',
-        'file_name': 'test-doc-123.pdf',
-        'file_size': 1024,
-        'created_at': '2023-01-01T12:00:00Z',
-        'metadata': {'source': 'test'},
-        'classification': {'type': 'application_form', 'confidence': 0.95}
-    }
-    
-    # Serialize and then deserialize the payload
-    serialized = json.dumps(payload, ensure_ascii=False).encode('utf-8')
-    deserialized = rabbitmq_config.deserialize_message(serialized)
-    
-    # Verify deserialization
-    assert deserialized == payload
-
-
-# ===== Test Configuration Validation =====
-
-def test_validate_rabbitmq_configuration_valid():
-    """
-    Test that validate_rabbitmq_configuration returns True for valid configuration.
-    """
-    with patch.object(rabbitmq_config, 'RABBITMQ_HOST', 'test-host'), \
-         patch.object(rabbitmq_config, 'RABBITMQ_EXCHANGE', 'test-exchange'), \
-         patch.object(rabbitmq_config, 'RABBITMQ_QUEUE', 'test-queue'), \
-         patch.object(rabbitmq_config, 'RABBITMQ_USE_SSL', False):
+        # Get consumer configuration
+        consumer_config = get_rabbitmq_consumer_config(config)
         
-        # Validate configuration
-        valid = rabbitmq_config.validate_rabbitmq_configuration()
+        # Check consumer configuration
+        assert consumer_config["prefetch_count"] == 5
+        assert consumer_config["no_ack"] is False  # Require explicit acknowledgement
+
+    def test_publisher_config(self):
+        """Test that publisher configuration is correctly set up."""
+        # Create a configuration
+        config = {}
         
-        # Verify validation result
-        assert valid is True
-
-
-def test_validate_rabbitmq_configuration_missing_host():
-    """
-    Test that validate_rabbitmq_configuration returns False when host is missing.
-    """
-    with patch.object(rabbitmq_config, 'RABBITMQ_HOST', ''), \
-         patch.object(rabbitmq_config, 'RABBITMQ_EXCHANGE', 'test-exchange'), \
-         patch.object(rabbitmq_config, 'RABBITMQ_QUEUE', 'test-queue'), \
-         patch.object(rabbitmq_config, 'logger') as mock_logger:
+        # Get publisher configuration
+        publisher_config = get_rabbitmq_publisher_config(config)
         
-        # Validate configuration
-        valid = rabbitmq_config.validate_rabbitmq_configuration()
+        # Check publisher configuration
+        assert publisher_config["mandatory"] is True
+        assert publisher_config["properties"]["delivery_mode"] == 2  # Persistent
+        assert publisher_config["properties"]["content_type"] == "application/json"
+
+    def test_retry_config(self):
+        """Test that retry configuration is correctly set up."""
+        # Set environment variables
+        with patch.dict(os.environ, {
+            "RABBITMQ_MAX_RETRIES": "10",
+            "RABBITMQ_INITIAL_DELAY": "2.0",
+            "RABBITMQ_MAX_DELAY": "60.0",
+            "RABBITMQ_BACKOFF_FACTOR": "3.0"
+        }):
+            # Get retry configuration
+            retry_config = get_rabbitmq_retry_config()
+            
+            # Check retry configuration
+            assert retry_config["max_retries"] == 10
+            assert retry_config["initial_delay"] == 2.0
+            assert retry_config["max_delay"] == 60.0
+            assert retry_config["backoff_factor"] == 3.0
+
+    def test_message_serializer(self):
+        """Test that message serializer correctly serializes Python objects to JSON bytes."""
+        # Get message serializer
+        serializer = get_message_serializer()
         
-        # Verify validation result
-        assert valid is False
-        mock_logger.error.assert_called_with("RabbitMQ host not configured")
-
-
-def test_validate_rabbitmq_configuration_missing_exchange():
-    """
-    Test that validate_rabbitmq_configuration returns False when exchange is missing.
-    """
-    with patch.object(rabbitmq_config, 'RABBITMQ_HOST', 'test-host'), \
-         patch.object(rabbitmq_config, 'RABBITMQ_EXCHANGE', ''), \
-         patch.object(rabbitmq_config, 'RABBITMQ_QUEUE', 'test-queue'), \
-         patch.object(rabbitmq_config, 'logger') as mock_logger:
+        # Create a test message
+        message = {
+            "document_id": "doc-123",
+            "extracted_data": {"field1": "value1", "field2": "value2"},
+            "confidence_scores": {"field1": 0.95, "field2": 0.85},
+            "low_confidence_fields": ["field2"],
+            "requires_review": True
+        }
         
-        # Validate configuration
-        valid = rabbitmq_config.validate_rabbitmq_configuration()
+        # Serialize the message
+        serialized = serializer(message)
         
-        # Verify validation result
-        assert valid is False
-        mock_logger.error.assert_called_with("RabbitMQ exchange not configured")
-
-
-def test_validate_rabbitmq_configuration_missing_queue():
-    """
-    Test that validate_rabbitmq_configuration returns False when queue is missing.
-    """
-    with patch.object(rabbitmq_config, 'RABBITMQ_HOST', 'test-host'), \
-         patch.object(rabbitmq_config, 'RABBITMQ_EXCHANGE', 'test-exchange'), \
-         patch.object(rabbitmq_config, 'RABBITMQ_QUEUE', ''), \
-         patch.object(rabbitmq_config, 'logger') as mock_logger:
+        # Check that the result is bytes
+        assert isinstance(serialized, bytes)
         
-        # Validate configuration
-        valid = rabbitmq_config.validate_rabbitmq_configuration()
+        # Check that the serialized message can be deserialized back to the original message
+        deserialized = json.loads(serialized.decode('utf-8'))
+        assert deserialized == message
+
+    def test_message_deserializer(self):
+        """Test that message deserializer correctly deserializes JSON bytes to Python objects."""
+        # Get message deserializer
+        deserializer = get_message_deserializer()
         
-        # Verify validation result
-        assert valid is False
-        mock_logger.error.assert_called_with("RabbitMQ queue not configured")
-
-
-def test_validate_rabbitmq_configuration_ssl_cert_without_key():
-    """
-    Test that validate_rabbitmq_configuration returns False when SSL certificate is provided without key.
-    """
-    with patch.object(rabbitmq_config, 'RABBITMQ_HOST', 'test-host'), \
-         patch.object(rabbitmq_config, 'RABBITMQ_EXCHANGE', 'test-exchange'), \
-         patch.object(rabbitmq_config, 'RABBITMQ_QUEUE', 'test-queue'), \
-         patch.object(rabbitmq_config, 'RABBITMQ_USE_SSL', True), \
-         patch.object(rabbitmq_config, 'RABBITMQ_SSL_CERT', '/path/to/cert.pem'), \
-         patch.object(rabbitmq_config, 'RABBITMQ_SSL_KEY', None), \
-         patch.object(rabbitmq_config, 'logger') as mock_logger:
+        # Create a test message
+        message = {
+            "document_id": "doc-123",
+            "extracted_data": {"field1": "value1", "field2": "value2"},
+            "confidence_scores": {"field1": 0.95, "field2": 0.85},
+            "low_confidence_fields": ["field2"],
+            "requires_review": True
+        }
         
-        # Validate configuration
-        valid = rabbitmq_config.validate_rabbitmq_configuration()
+        # Serialize the message to JSON bytes
+        serialized = json.dumps(message).encode('utf-8')
         
-        # Verify validation result
-        assert valid is False
-        mock_logger.error.assert_called_with("SSL certificate provided but key is missing")
-
-
-def test_validate_rabbitmq_configuration_ssl_key_without_cert():
-    """
-    Test that validate_rabbitmq_configuration returns False when SSL key is provided without certificate.
-    """
-    with patch.object(rabbitmq_config, 'RABBITMQ_HOST', 'test-host'), \
-         patch.object(rabbitmq_config, 'RABBITMQ_EXCHANGE', 'test-exchange'), \
-         patch.object(rabbitmq_config, 'RABBITMQ_QUEUE', 'test-queue'), \
-         patch.object(rabbitmq_config, 'RABBITMQ_USE_SSL', True), \
-         patch.object(rabbitmq_config, 'RABBITMQ_SSL_CERT', None), \
-         patch.object(rabbitmq_config, 'RABBITMQ_SSL_KEY', '/path/to/key.pem'), \
-         patch.object(rabbitmq_config, 'logger') as mock_logger:
+        # Deserialize the message
+        deserialized = deserializer(serialized)
         
-        # Validate configuration
-        valid = rabbitmq_config.validate_rabbitmq_configuration()
+        # Check that the deserialized message matches the original message
+        assert deserialized == message
         
-        # Verify validation result
-        assert valid is False
-        mock_logger.error.assert_called_with("SSL key provided but certificate is missing")
+        # Test with invalid JSON
+        with pytest.raises(json.JSONDecodeError):
+            deserializer(b'invalid json')
 
-
-def test_validate_rabbitmq_configuration_ssl_verify_without_ca():
-    """
-    Test that validate_rabbitmq_configuration logs a warning when SSL verification is enabled but CA certificate is not provided.
-    """
-    with patch.object(rabbitmq_config, 'RABBITMQ_HOST', 'test-host'), \
-         patch.object(rabbitmq_config, 'RABBITMQ_EXCHANGE', 'test-exchange'), \
-         patch.object(rabbitmq_config, 'RABBITMQ_QUEUE', 'test-queue'), \
-         patch.object(rabbitmq_config, 'RABBITMQ_USE_SSL', True), \
-         patch.object(rabbitmq_config, 'RABBITMQ_SSL_VERIFY', True), \
-         patch.object(rabbitmq_config, 'RABBITMQ_SSL_CA', None), \
-         patch.object(rabbitmq_config, 'logger') as mock_logger:
+    def test_create_ocr_result_message(self):
+        """Test that create_ocr_result_message creates a standardized OCR result message."""
+        # Create test data
+        document_id = "doc-123"
+        extracted_data = {"field1": "value1", "field2": "value2"}
+        confidence_scores = {"field1": 0.95, "field2": 0.85}
+        low_confidence_fields = ["field2"]
         
-        # Validate configuration
-        valid = rabbitmq_config.validate_rabbitmq_configuration()
+        # Create OCR result message
+        message = create_ocr_result_message(
+            document_id=document_id,
+            extracted_data=extracted_data,
+            confidence_scores=confidence_scores,
+            low_confidence_fields=low_confidence_fields
+        )
         
-        # Verify validation result
-        assert valid is True  # Still valid, but with a warning
-        mock_logger.warning.assert_called_with("SSL verification enabled but CA certificate not provided")
-
-
-# ===== Test Connection Error Handling and Recovery =====
-
-def test_retry_configuration():
-    """
-    Test that retry configuration is correctly set up.
-    """
-    # Verify retry configuration
-    assert rabbitmq_config.RETRY_CONFIG['max_retries'] == 5
-    assert rabbitmq_config.RETRY_CONFIG['initial_delay'] == 1.0
-    assert rabbitmq_config.RETRY_CONFIG['max_delay'] == 30.0
-    assert rabbitmq_config.RETRY_CONFIG['backoff_factor'] == 2.0
-    assert 'ConnectionError' in rabbitmq_config.RETRY_CONFIG['retry_on_exceptions']
-    assert 'ChannelError' in rabbitmq_config.RETRY_CONFIG['retry_on_exceptions']
-    assert 'AMQPError' in rabbitmq_config.RETRY_CONFIG['retry_on_exceptions']
-    assert 'TimeoutError' in rabbitmq_config.RETRY_CONFIG['retry_on_exceptions']
-
-
-# ===== Test RabbitMQConfig Class =====
-
-def test_rabbitmq_config_from_env(env_vars):
-    """
-    Test that RabbitMQConfig.from_env correctly loads configuration from environment variables.
-    """
-    # Set environment variables
-    env_vars['RABBITMQ_HOST'] = 'test-host'
-    env_vars['RABBITMQ_PORT'] = '5673'
-    env_vars['RABBITMQ_VIRTUAL_HOST'] = '/test'
-    env_vars['RABBITMQ_USERNAME'] = 'test-user'
-    env_vars['RABBITMQ_PASSWORD'] = 'test-password'
-    env_vars['RABBITMQ_USE_SSL'] = 'true'
-    env_vars['RABBITMQ_SSL_VERIFY'] = 'true'
-    env_vars['RABBITMQ_SSL_CERT_PATH'] = '/path/to/cert.pem'
-    env_vars['RABBITMQ_SSL_KEY_PATH'] = '/path/to/key.pem'
-    env_vars['RABBITMQ_SSL_CA_CERTS'] = '/path/to/ca.pem'
-    env_vars['RABBITMQ_EXCHANGE_NAME'] = 'test-exchange'
-    env_vars['RABBITMQ_QUEUE_NAME'] = 'test-queue'
-    env_vars['RABBITMQ_PREFETCH_COUNT'] = '20'
-    
-    # Mock the from_env method
-    with patch('src.types.config.RabbitMQConfig.from_env') as mock_from_env:
-        # Create a mock config object
-        mock_config = MagicMock(spec=RabbitMQConfig)
-        mock_config.host = 'test-host'
-        mock_config.port = 5673
-        mock_config.virtual_host = '/test'
-        mock_config.username = 'test-user'
-        mock_config.password = 'test-password'
-        mock_config.use_ssl = True
-        mock_config.ssl_verify = True
-        mock_config.ssl_cert_path = '/path/to/cert.pem'
-        mock_config.ssl_key_path = '/path/to/key.pem'
-        mock_config.ssl_ca_certs = '/path/to/ca.pem'
-        mock_config.exchange_name = 'test-exchange'
-        mock_config.queue_name = 'test-queue'
-        mock_config.prefetch_count = 20
+        # Check message structure
+        assert message["document_id"] == document_id
+        assert message["extracted_data"] == extracted_data
+        assert message["confidence_scores"] == confidence_scores
+        assert message["low_confidence_fields"] == low_confidence_fields
+        assert message["requires_review"] is True
+        assert "processing_timestamp" in message
         
-        # Set the return value of from_env
-        mock_from_env.return_value = mock_config
+        # Test with no low confidence fields
+        message = create_ocr_result_message(
+            document_id=document_id,
+            extracted_data=extracted_data,
+            confidence_scores=confidence_scores
+        )
         
-        # Get RabbitMQ config
-        config = rabbitmq_config.get_rabbitmq_config()
+        assert message["low_confidence_fields"] == []
+        assert message["requires_review"] is False
+
+
+class TestRabbitMQConfigWithFixtures:
+    """Test suite for RabbitMQ configuration using pytest fixtures."""
+
+    def test_development_environment(self, env_vars):
+        """Test RabbitMQ configuration in development environment."""
+        # Get the configuration
+        config = get_rabbitmq_config()
         
-        # Verify config
-        assert config.host == 'test-host'
-        assert config.port == 5673
-        assert config.virtual_host == '/test'
-        assert config.username == 'test-user'
-        assert config.password == 'test-password'
-        assert config.use_ssl is True
-        assert config.ssl_verify is True
-        assert config.ssl_cert_path == '/path/to/cert.pem'
-        assert config.ssl_key_path == '/path/to/key.pem'
-        assert config.ssl_ca_certs == '/path/to/ca.pem'
-        assert config.exchange_name == 'test-exchange'
-        assert config.queue_name == 'test-queue'
-        assert config.prefetch_count == 20
+        # Check environment-specific values
+        assert config["host"] == "localhost"
+        assert config["port"] == 5672  # Non-TLS port in development
+        assert config["ssl"] is False  # SSL disabled in development
+
+    @pytest.mark.parametrize("env_vars", [Environment.STAGING], indirect=True)
+    def test_staging_environment(self, env_vars):
+        """Test RabbitMQ configuration in staging environment."""
+        # Get the configuration
+        config = get_rabbitmq_config()
+        
+        # Check environment-specific values
+        assert config["host"] == "rabbitmq.staging"
+        assert config["port"] == 5671  # TLS port in staging
+        assert config["ssl"] is True  # SSL enabled in staging
+        assert config["ssl_cert_path"] == "/app/certs/client.pem"
+        assert config["ssl_key_path"] == "/app/certs/client.key"
+        assert config["ssl_ca_certs"] == "/app/certs/ca.pem"
+
+    @pytest.mark.parametrize("env_vars", [Environment.PRODUCTION], indirect=True)
+    def test_production_environment(self, env_vars):
+        """Test RabbitMQ configuration in production environment."""
+        # Get the configuration
+        config = get_rabbitmq_config()
+        
+        # Check environment-specific values
+        assert config["host"] == "rabbitmq.production"
+        assert config["port"] == 5671  # TLS port in production
+        assert config["ssl"] is True  # SSL enabled in production
+        assert config["ssl_cert_path"] == "/app/certs/client.pem"
+        assert config["ssl_key_path"] == "/app/certs/client.key"
+        assert config["ssl_ca_certs"] == "/app/certs/ca.pem"
+        assert config["prefetch_count"] == 20  # Higher prefetch in production
+
+    def test_connection_error_handling(self):
+        """Test that connection error handling is correctly configured."""
+        # Get retry configuration
+        retry_config = get_rabbitmq_retry_config()
+        
+        # Check retry configuration
+        assert "max_retries" in retry_config
+        assert "initial_delay" in retry_config
+        assert "max_delay" in retry_config
+        assert "backoff_factor" in retry_config
+        
+        # Check that retry values are reasonable
+        assert retry_config["max_retries"] > 0
+        assert retry_config["initial_delay"] > 0
+        assert retry_config["max_delay"] > retry_config["initial_delay"]
+        assert retry_config["backoff_factor"] > 1.0
+
+    def test_message_serialization_with_complex_types(self):
+        """Test that message serializer correctly handles complex Python types."""
+        # Get message serializer
+        serializer = get_message_serializer()
+        
+        # Create a test message with complex types
+        from datetime import datetime, date
+        from decimal import Decimal
+        
+        message = {
+            "document_id": "doc-123",
+            "timestamp": datetime.now(),
+            "date": date.today(),
+            "amount": Decimal("123.45"),
+            "nested": {
+                "timestamp": datetime.now(),
+                "date": date.today(),
+                "amount": Decimal("678.90")
+            }
+        }
+        
+        # Serialize the message
+        serialized = serializer(message)
+        
+        # Check that the result is bytes
+        assert isinstance(serialized, bytes)
+        
+        # Check that the serialized message can be deserialized
+        deserialized = json.loads(serialized.decode('utf-8'))
+        
+        # Check that complex types were converted to strings
+        assert isinstance(deserialized["timestamp"], str)
+        assert isinstance(deserialized["date"], str)
+        assert isinstance(deserialized["amount"], str)
+        assert isinstance(deserialized["nested"]["timestamp"], str)
+        assert isinstance(deserialized["nested"]["date"], str)
+        assert isinstance(deserialized["nested"]["amount"], str)
