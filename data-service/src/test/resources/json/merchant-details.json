@@ -1,242 +1,482 @@
 [
   {
-    "id": 1,
-    "application_id": 1,
-    "legalName": "Acme Retail Solutions, Inc.",
-    "dbaName": "Acme Retail",
-    "ein": "47-1234567",
+    "id": "MD-2023-001",
+    "application_id": "APP-2023-001",
+    "legal_name": "Riverside Retail Solutions, Inc.",
+    "dba_name": "Riverside Retail",
+    "ein": "83-4521987",
     "address": {
-      "street": "123 Commerce Blvd, Suite 400",
-      "city": "Phoenix",
-      "state": "AZ",
-      "zip": "85007",
-      "country": "United States"
+      "street": "1234 Commerce Ave",
+      "city": "Portland",
+      "state": "OR",
+      "zip": "97205",
+      "country": "USA"
     },
-    "industry": "445110 - Supermarkets and Grocery Stores",
-    "revenue": 2750000.00
+    "industry": "Retail - Apparel",
+    "revenue": 540000.00
   },
   {
-    "id": 2,
-    "application_id": 2,
-    "legalName": "Bright Future Solar Technologies, LLC",
-    "dbaName": "Bright Solar",
-    "ein": "83-4567890",
+    "id": "MD-2023-002",
+    "application_id": "APP-2023-002",
+    "legal_name": "Precision Manufacturing Group, LLC",
+    "dba_name": "PMG Solutions",
+    "ein": "45-7812365",
     "address": {
-      "street": "789 Sunshine Way",
-      "city": "San Diego",
-      "state": "CA",
-      "zip": "92101",
-      "country": "United States"
-    },
-    "industry": "221114 - Solar Electric Power Generation",
-    "revenue": 1850000.00
-  },
-  {
-    "id": 3,
-    "application_id": 3,
-    "legalName": "Metropolitan Medical Services, P.C.",
-    "dbaName": "Metro Med",
-    "ein": "56-7890123",
-    "address": {
-      "street": "456 Health Avenue, Floor 3",
-      "city": "Chicago",
-      "state": "IL",
-      "zip": "60611",
-      "country": "United States"
-    },
-    "industry": "621111 - Offices of Physicians (except Mental Health Specialists)",
-    "revenue": 3200000.00
-  },
-  {
-    "id": 4,
-    "application_id": 4,
-    "legalName": "Gourmet Delights Catering, Inc.",
-    "dbaName": "Gourmet Delights",
-    "ein": "32-5678901",
-    "address": {
-      "street": "234 Culinary Lane",
-      "city": "Atlanta",
-      "state": "GA",
-      "zip": "30308",
-      "country": "United States"
-    },
-    "industry": "722320 - Caterers",
-    "revenue": 950000.00
-  },
-  {
-    "id": 5,
-    "application_id": 5,
-    "legalName": "Precision Manufacturing Solutions, Inc.",
-    "dbaName": "Precision Manufacturing",
-    "ein": "91-2345678",
-    "address": {
-      "street": "567 Industrial Parkway",
+      "street": "8765 Industrial Pkwy",
       "city": "Detroit",
       "state": "MI",
       "zip": "48201",
-      "country": "United States"
+      "country": "USA"
     },
-    "industry": "332710 - Machine Shops",
-    "revenue": 4500000.00
+    "industry": "Manufacturing - Industrial Equipment",
+    "revenue": 300000.00
   },
   {
-    "id": 6,
-    "application_id": 6,
-    "legalName": "Digital Marketing Experts, LLC",
-    "dbaName": "DigiMarketing",
-    "ein": "45-6789012",
+    "id": "MD-2023-003",
+    "application_id": "APP-2023-003",
+    "legal_name": "Elite Professional Services, LLC",
+    "dba_name": "Elite Pro Services",
+    "ein": "56-9823471",
     "address": {
-      "street": "890 Tech Boulevard, Suite 200",
+      "street": "555 Business Center Dr, Suite 200",
+      "city": "San Diego",
+      "state": "CA",
+      "zip": "92101",
+      "country": "USA"
+    },
+    "industry": "Professional Services - Consulting",
+    "revenue": 360000.00
+  },
+  {
+    "id": "MD-2023-004",
+    "application_id": "APP-2023-004",
+    "legal_name": "Cornerstone Construction & Development, Inc.",
+    "dba_name": "Cornerstone Construction",
+    "ein": "91-3456782",
+    "address": {
+      "street": "4321 Builder's Way",
       "city": "Austin",
       "state": "TX",
       "zip": "78701",
-      "country": "United States"
+      "country": "USA"
     },
-    "industry": "541810 - Advertising Agencies",
-    "revenue": 1250000.00
+    "industry": "Construction - Commercial",
+    "revenue": 1440000.00
   },
   {
-    "id": 7,
-    "application_id": 7,
-    "legalName": "Fresh Harvest Organic Farms, LLC",
-    "dbaName": "Fresh Harvest",
-    "ein": "78-9012345",
+    "id": "MD-2023-005",
+    "application_id": "APP-2023-005",
+    "legal_name": "Digital Marketplace Solutions, Inc.",
+    "dba_name": "DigitalMarket",
+    "ein": "62-5814973",
     "address": {
-      "street": "1234 Rural Route 5",
-      "city": "Portland",
-      "state": "OR",
-      "zip": "97201",
-      "country": "United States"
-    },
-    "industry": "111998 - All Other Miscellaneous Crop Farming",
-    "revenue": 875000.00
-  },
-  {
-    "id": 8,
-    "application_id": 8,
-    "legalName": "Urban Construction & Development, Inc.",
-    "dbaName": "Urban Construction",
-    "ein": "23-4567890",
-    "address": {
-      "street": "678 Builder's Way",
-      "city": "New York",
-      "state": "NY",
-      "zip": "10001",
-      "country": "United States"
-    },
-    "industry": "236220 - Commercial and Institutional Building Construction",
-    "revenue": 7500000.00
-  },
-  {
-    "id": 9,
-    "application_id": 9,
-    "legalName": "Coastal Seafood Distributors, Inc.",
-    "dbaName": "Coastal Seafood",
-    "ein": "67-8901234",
-    "address": {
-      "street": "345 Harbor Drive",
-      "city": "Boston",
-      "state": "MA",
-      "zip": "02210",
-      "country": "United States"
-    },
-    "industry": "424460 - Fish and Seafood Merchant Wholesalers",
-    "revenue": 3100000.00
-  },
-  {
-    "id": 10,
-    "application_id": 10,
-    "legalName": "Premier Auto Repair & Service, LLC",
-    "dbaName": "Premier Auto",
-    "ein": "89-0123456",
-    "address": {
-      "street": "901 Mechanic Street",
-      "city": "Denver",
-      "state": "CO",
-      "zip": "80202",
-      "country": "United States"
-    },
-    "industry": "811111 - General Automotive Repair",
-    "revenue": 1100000.00
-  },
-  {
-    "id": 11,
-    "application_id": 11,
-    "legalName": "Innovative Software Solutions, Inc.",
-    "dbaName": "InnoSoft",
-    "ein": "34-5678901",
-    "address": {
-      "street": "123 Tech Park Drive, Building C",
+      "street": "789 Tech Blvd",
       "city": "Seattle",
       "state": "WA",
       "zip": "98101",
-      "country": "United States"
+      "country": "USA"
     },
-    "industry": "541511 - Custom Computer Programming Services",
-    "revenue": 5200000.00
+    "industry": "E-commerce - General Merchandise",
+    "revenue": 336000.00
   },
   {
-    "id": 12,
-    "application_id": 12,
-    "legalName": "Luxury Boutique Hotels, Inc.",
-    "dbaName": "LBH Collection",
-    "ein": "56-7890123",
+    "id": "MD-2023-006",
+    "application_id": "APP-2023-006",
+    "legal_name": "Wellness Medical Group, P.C.",
+    "dba_name": "Wellness Medical Center",
+    "ein": "38-7456921",
     "address": {
-      "street": "789 Hospitality Avenue",
+      "street": "1000 Health Plaza, Suite 300",
+      "city": "Chicago",
+      "state": "IL",
+      "zip": "60601",
+      "country": "USA"
+    },
+    "industry": "Healthcare - Medical Practice",
+    "revenue": 1020000.00
+  },
+  {
+    "id": "MD-2023-007",
+    "application_id": "APP-2023-007",
+    "legal_name": "Global Distribution Partners, LLC",
+    "dba_name": "GDP Supply",
+    "ein": "74-2918365",
+    "address": {
+      "street": "2500 Distribution Center Rd",
+      "city": "Atlanta",
+      "state": "GA",
+      "zip": "30301",
+      "country": "USA"
+    },
+    "industry": "Wholesale - Consumer Goods",
+    "revenue": 780000.00
+  },
+  {
+    "id": "MD-2023-008",
+    "application_id": "APP-2023-008",
+    "legal_name": "Gourmet Dining Experiences, Inc.",
+    "dba_name": "The Gourmet Table",
+    "ein": "27-8391456",
+    "address": {
+      "street": "350 Culinary Ave",
+      "city": "New Orleans",
+      "state": "LA",
+      "zip": "70112",
+      "country": "USA"
+    },
+    "industry": "Food Service - Full-Service Restaurant",
+    "revenue": 480000.00
+  },
+  {
+    "id": "MD-2023-009",
+    "application_id": "APP-2023-009",
+    "legal_name": "Innovative Tech Solutions, Inc.",
+    "dba_name": "InnoTech",
+    "ein": "53-6729184",
+    "address": {
+      "street": "888 Innovation Way",
+      "city": "San Francisco",
+      "state": "CA",
+      "zip": "94105",
+      "country": "USA"
+    },
+    "industry": "Technology - Software Development",
+    "revenue": 900000.00
+  },
+  {
+    "id": "MD-2023-010",
+    "application_id": "APP-2023-010",
+    "legal_name": "Premier Business Consultants, LLC",
+    "dba_name": "Premier Consulting",
+    "ein": "81-3945672",
+    "address": {
+      "street": "123 Advisory Lane, Suite 400",
+      "city": "Denver",
+      "state": "CO",
+      "zip": "80202",
+      "country": "USA"
+    },
+    "industry": "Professional Services - Business Consulting",
+    "revenue": 420000.00
+  },
+  {
+    "id": "MD-2023-011",
+    "application_id": "APP-2023-011",
+    "legal_name": "Seasonal Styles Boutique, LLC",
+    "dba_name": "Seasonal Styles",
+    "ein": "46-8273915",
+    "address": {
+      "street": "567 Fashion Blvd",
       "city": "Miami",
       "state": "FL",
-      "zip": "33139",
-      "country": "United States"
+      "zip": "33101",
+      "country": "USA"
     },
-    "industry": "721110 - Hotels (except Casino Hotels) and Motels",
-    "revenue": 6800000.00
+    "industry": "Retail - Specialty Clothing",
+    "revenue": 504000.00
   },
   {
-    "id": 13,
-    "application_id": 13,
-    "legalName": "Evergreen Landscaping Services, LLC",
-    "dbaName": "Evergreen Landscapes",
-    "ein": "78-9012345",
+    "id": "MD-2023-012",
+    "application_id": "APP-2023-012",
+    "legal_name": "Quick Bites Franchise, Inc.",
+    "dba_name": "Quick Bites",
+    "ein": "29-7361845",
     "address": {
-      "street": "456 Garden Way",
+      "street": "750 Fast Food Lane",
+      "city": "Phoenix",
+      "state": "AZ",
+      "zip": "85001",
+      "country": "USA"
+    },
+    "industry": "Food Service - Quick Service Restaurant",
+    "revenue": 0.00
+  },
+  {
+    "id": "MD-2023-013",
+    "application_id": "APP-2023-013",
+    "legal_name": "Reliable Construction Equipment, LLC",
+    "dba_name": "Reliable Equipment",
+    "ein": "63-9182734",
+    "address": {
+      "street": "4200 Contractor's Rd",
       "city": "Nashville",
       "state": "TN",
-      "zip": "37203",
-      "country": "United States"
+      "zip": "37201",
+      "country": "USA"
     },
-    "industry": "561730 - Landscaping Services",
-    "revenue": 925000.00
+    "industry": "Construction - Equipment Rental",
+    "revenue": 720000.00
   },
   {
-    "id": 14,
-    "application_id": 14,
-    "legalName": "Advanced Educational Resources, Inc.",
-    "dbaName": "AER Learning",
-    "ein": "90-1234567",
+    "id": "MD-2023-014",
+    "application_id": "APP-2023-014",
+    "legal_name": "Urban Retail Collective, Inc.",
+    "dba_name": "Urban Collective",
+    "ein": "37-4619283",
     "address": {
-      "street": "234 Scholar Lane",
+      "street": "900 Shopping Center Blvd",
       "city": "Philadelphia",
       "state": "PA",
-      "zip": "19103",
-      "country": "United States"
+      "zip": "19101",
+      "country": "USA"
     },
-    "industry": "611710 - Educational Support Services",
-    "revenue": 1750000.00
+    "industry": "Retail - Mixed Merchandise",
+    "revenue": 360000.00
   },
   {
-    "id": 15,
-    "application_id": 15,
-    "legalName": "Wellness Fitness Centers, LLC",
-    "dbaName": "Wellness Fitness",
-    "ein": "12-3456789",
+    "id": "MD-2023-015",
+    "application_id": "APP-2023-015",
+    "legal_name": "Advanced Manufacturing Systems, Inc.",
+    "dba_name": "AMS Manufacturing",
+    "ein": "92-5637184",
     "address": {
-      "street": "567 Health Boulevard",
-      "city": "Los Angeles",
-      "state": "CA",
-      "zip": "90001",
-      "country": "United States"
+      "street": "5500 Production Way",
+      "city": "Cleveland",
+      "state": "OH",
+      "zip": "44101",
+      "country": "USA"
     },
-    "industry": "713940 - Fitness and Recreational Sports Centers",
-    "revenue": 2100000.00
+    "industry": "Manufacturing - Precision Components",
+    "revenue": 1140000.00
+  },
+  {
+    "id": "MD-2023-016",
+    "application_id": "APP-2023-016",
+    "legal_name": "Digital Marketing Specialists, LLC",
+    "dba_name": "DigiMarket",
+    "ein": "48-3719265",
+    "address": {
+      "street": "333 Online Plaza",
+      "city": "Boston",
+      "state": "MA",
+      "zip": "02201",
+      "country": "USA"
+    },
+    "industry": "E-commerce - Digital Products",
+    "revenue": 384000.00
+  },
+  {
+    "id": "MD-2023-017",
+    "application_id": "APP-2023-017",
+    "legal_name": "Comprehensive Healthcare Solutions, LLC",
+    "dba_name": "CompHealth",
+    "ein": "71-8293645",
+    "address": {
+      "street": "2100 Medical Center Dr",
+      "city": "Minneapolis",
+      "state": "MN",
+      "zip": "55401",
+      "country": "USA"
+    },
+    "industry": "Healthcare - Outpatient Services",
+    "revenue": 660000.00
+  },
+  {
+    "id": "MD-2023-018",
+    "application_id": "APP-2023-018",
+    "legal_name": "Prime Property Investments, LLC",
+    "dba_name": "Prime Properties",
+    "ein": "54-2837916",
+    "address": {
+      "street": "1800 Real Estate Row",
+      "city": "Las Vegas",
+      "state": "NV",
+      "zip": "89101",
+      "country": "USA"
+    },
+    "industry": "Real Estate - Commercial Property",
+    "revenue": 900000.00
+  },
+  {
+    "id": "MD-2023-019",
+    "application_id": "APP-2023-019",
+    "legal_name": "Quality Wholesale Distributors, Inc.",
+    "dba_name": "Quality Wholesale",
+    "ein": "39-6471825",
+    "address": {
+      "street": "3300 Distribution Dr",
+      "city": "Dallas",
+      "state": "TX",
+      "zip": "75201",
+      "country": "USA"
+    },
+    "industry": "Wholesale - General Merchandise",
+    "revenue": 576000.00
+  },
+  {
+    "id": "MD-2023-020",
+    "application_id": "APP-2023-020",
+    "legal_name": "Express Logistics & Transport, LLC",
+    "dba_name": "Express Transport",
+    "ein": "82-1937465",
+    "address": {
+      "street": "950 Shipping Lane",
+      "city": "Indianapolis",
+      "state": "IN",
+      "zip": "46201",
+      "country": "USA"
+    },
+    "industry": "Transportation - Freight",
+    "revenue": 300000.00
+  },
+  {
+    "id": "MD-2023-021",
+    "application_id": "APP-2023-021",
+    "legal_name": "Next-Gen Technology Solutions, Inc.",
+    "dba_name": "NextGen Tech",
+    "ein": "65-8219374",
+    "address": {
+      "street": "777 Innovation Park",
+      "city": "Raleigh",
+      "state": "NC",
+      "zip": "27601",
+      "country": "USA"
+    },
+    "industry": "Technology - IT Services",
+    "revenue": 1020000.00
+  },
+  {
+    "id": "MD-2023-022",
+    "application_id": "APP-2023-022",
+    "legal_name": "Strategic Business Advisors, LLC",
+    "dba_name": "SB Advisors",
+    "ein": "47-3618295",
+    "address": {
+      "street": "400 Consulting Way, Suite 500",
+      "city": "Charlotte",
+      "state": "NC",
+      "zip": "28202",
+      "country": "USA"
+    },
+    "industry": "Professional Services - Financial Advisory",
+    "revenue": 480000.00
+  },
+  {
+    "id": "MD-2023-023",
+    "application_id": "APP-2023-023",
+    "legal_name": "Holiday Merchandise Emporium, Inc.",
+    "dba_name": "Holiday Emporium",
+    "ein": "28-7391645",
+    "address": {
+      "street": "1250 Seasonal Blvd",
+      "city": "Orlando",
+      "state": "FL",
+      "zip": "32801",
+      "country": "USA"
+    },
+    "industry": "Retail - Seasonal Merchandise",
+    "revenue": 600000.00
+  },
+  {
+    "id": "MD-2023-024",
+    "application_id": "APP-2023-024",
+    "legal_name": "Gourmet Franchise Holdings, LLC",
+    "dba_name": "Gourmet Express",
+    "ein": "73-4918265",
+    "address": {
+      "street": "850 Restaurant Row",
+      "city": "Houston",
+      "state": "TX",
+      "zip": "77001",
+      "country": "USA"
+    },
+    "industry": "Food Service - Fast Casual Restaurant",
+    "revenue": 0.00
+  },
+  {
+    "id": "MD-2023-025",
+    "application_id": "APP-2023-025",
+    "legal_name": "Superior Construction Services, Inc.",
+    "dba_name": "Superior Construction",
+    "ein": "36-5827194",
+    "address": {
+      "street": "4800 Builder's Plaza",
+      "city": "Salt Lake City",
+      "state": "UT",
+      "zip": "84101",
+      "country": "USA"
+    },
+    "industry": "Construction - Residential",
+    "revenue": 660000.00
+  },
+  {
+    "id": "MD-2023-026",
+    "application_id": "APP-2023-026",
+    "legal_name": "Urban Retail Concepts, LLC",
+    "dba_name": "Urban Concepts",
+    "ein": "19-7364582",
+    "address": {
+      "street": "600 Shopping District",
+      "city": "St. Louis",
+      "state": "MO",
+      "zip": "63101",
+      "country": "USA"
+    },
+    "industry": "Retail - Home Goods",
+    "revenue": 336000.00
+  },
+  {
+    "id": "MD-2023-027",
+    "application_id": "APP-2023-027",
+    "legal_name": "Industrial Manufacturing Enterprises, Inc.",
+    "dba_name": "IME Manufacturing",
+    "ein": "84-2736915",
+    "address": {
+      "street": "6000 Factory Blvd",
+      "city": "Pittsburgh",
+      "state": "PA",
+      "zip": "15201",
+      "country": "USA"
+    },
+    "industry": "Manufacturing - Heavy Equipment",
+    "revenue": 1320000.00
+  },
+  {
+    "id": "MD-2023-028",
+    "application_id": "APP-2023-028",
+    "legal_name": "Digital Commerce Solutions, LLC",
+    "dba_name": "DigiCommerce",
+    "ein": "57-3819264",
+    "address": {
+      "street": "444 E-Commerce Way",
+      "city": "Portland",
+      "state": "OR",
+      "zip": "97204",
+      "country": "USA"
+    },
+    "industry": "E-commerce - Specialty Retail",
+    "revenue": 456000.00
+  },
+  {
+    "id": "MD-2023-029",
+    "application_id": "APP-2023-029",
+    "legal_name": "Advanced Healthcare Providers, P.C.",
+    "dba_name": "Advanced Healthcare",
+    "ein": "64-9273815",
+    "address": {
+      "street": "2200 Medical Park, Suite 300",
+      "city": "Baltimore",
+      "state": "MD",
+      "zip": "21201",
+      "country": "USA"
+    },
+    "industry": "Healthcare - Specialty Practice",
+    "revenue": 780000.00
+  },
+  {
+    "id": "MD-2023-030",
+    "application_id": "APP-2023-030",
+    "legal_name": "Premier Real Estate Development, LLC",
+    "dba_name": "Premier Developments",
+    "ein": "93-6472815",
+    "address": {
+      "street": "1900 Property Plaza",
+      "city": "San Jose",
+      "state": "CA",
+      "zip": "95101",
+      "country": "USA"
+    },
+    "industry": "Real Estate - Development",
+    "revenue": 960000.00
   }
 ]
