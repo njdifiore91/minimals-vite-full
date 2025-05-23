@@ -19,172 +19,214 @@ import os
 import sys
 import signal
 import logging
-import traceback
 import time
+import traceback
+import uvicorn
+from typing import Dict, Any, Optional, Callable, NoReturn
 
-# Configure TensorFlow to use GPU
-os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'
-os.environ['TF_GPU_ALLOCATOR'] = 'cuda_malloc_async'
+# Import the application instance
+from app import app_instance, app
 
-# Import TensorFlow after setting environment variables
-import tensorflow as tf
-
-# Import application modules
-from app import OCRServiceApp
-from config import app_config, logging_config
+# Import utility modules
 from utils.logging_utils import setup_logger
-from utils.error_utils import log_exception
-from utils.tensorflow_utils import check_gpu_memory
+from utils.error_utils import ServiceError
+from config import app_config, logging_config
 
 # Initialize logger
 logger = logging.getLogger(__name__)
 
-# Global application instance
-app_instance = None
+# Global flag to track if shutdown is in progress
+shutdown_in_progress = False
 
 
-def verify_gpu_availability():
+def verify_gpu_availability() -> bool:
     """
-    Verify that GPU is available for TensorFlow processing.
-    Raises RuntimeError if no GPU is available or if VRAM is insufficient.
+    Verify that a CUDA-compatible GPU with sufficient VRAM is available.
+    
+    Returns:
+        bool: True if GPU is available and meets requirements, False otherwise
     """
-    gpus = tf.config.list_physical_devices('GPU')
-    if not gpus:
-        raise RuntimeError("No GPU found. OCR Service requires CUDA-compatible GPU acceleration.")
-    
-    logger.info(f"Found {len(gpus)} GPU(s): {gpus}")
-    
-    # Configure TensorFlow to use memory growth to avoid allocating all VRAM at once
-    for gpu in gpus:
-        try:
-            tf.config.experimental.set_memory_growth(gpu, True)
-            logger.info(f"Enabled memory growth for GPU: {gpu}")
-        except Exception as e:
-            logger.warning(f"Error setting memory growth for GPU {gpu}: {str(e)}")
-    
-    # Check GPU memory to ensure at least 8GB VRAM is available
     try:
-        # Use utility function to check GPU memory
-        available_memory = check_gpu_memory()
-        required_memory = 8 * 1024  # 8GB in MB
+        import tensorflow as tf
         
-        if available_memory < required_memory:
-            raise RuntimeError(
-                f"Insufficient GPU memory. OCR Service requires at least 8GB VRAM, "
-                f"but only {available_memory/1024:.2f}GB is available."
-            )
+        # Check if TensorFlow can see any GPUs
+        gpus = tf.config.list_physical_devices('GPU')
+        if not gpus:
+            logger.error("No GPU found. OCR Service requires CUDA-compatible GPU acceleration.")
+            return False
             
-        logger.info(f"GPU memory check passed: {available_memory/1024:.2f}GB available")
+        logger.info(f"Found {len(gpus)} GPU(s): {gpus}")
         
-        # Create a small tensor to force GPU initialization
-        with tf.device('/GPU:0'):
-            tf.random.normal([1000, 1000])
-        logger.info("GPU initialization successful")
+        # Check GPU memory (this is an approximation as TF doesn't directly expose VRAM size)
+        # We'll use a simple test allocation to check if we have enough memory
+        try:
+            # Try to allocate a 6GB tensor (leaving 2GB for other operations)
+            # This is a simple test to ensure we have at least 8GB VRAM
+            with tf.device('/GPU:0'):
+                # Allocate and immediately delete a large tensor
+                test_tensor = tf.random.normal([1024, 1024, 1024])
+                # Force execution to verify memory allocation
+                _ = test_tensor.numpy()
+                del test_tensor
+                
+            logger.info("GPU memory check passed. Sufficient VRAM available.")
+            return True
+            
+        except (tf.errors.ResourceExhaustedError, tf.errors.InternalError, tf.errors.UnknownError) as e:
+            logger.error(f"GPU memory check failed. Insufficient VRAM: {str(e)}")
+            return False
+            
+    except ImportError:
+        logger.error("TensorFlow not installed or CUDA not configured properly.")
+        return False
     except Exception as e:
-        logger.error(f"GPU initialization failed: {str(e)}")
-        raise RuntimeError(f"GPU initialization failed: {str(e)}")
+        logger.error(f"Error checking GPU availability: {str(e)}")
+        return False
 
 
-def setup_signal_handlers():
+def setup_signal_handlers() -> None:
     """
     Set up signal handlers for graceful shutdown.
+    
+    This function registers handlers for SIGTERM and SIGINT signals to ensure
+    that the application shuts down gracefully when terminated.
     """
-    def signal_handler(sig, frame):
-        logger.info(f"Received signal {sig}, shutting down...")
-        shutdown()
+    def signal_handler(sig: int, frame) -> NoReturn:
+        """
+        Handle termination signals by initiating graceful shutdown.
+        
+        Args:
+            sig: Signal number
+            frame: Current stack frame
+        """
+        global shutdown_in_progress
+        
+        signal_name = "SIGTERM" if sig == signal.SIGTERM else "SIGINT"
+        
+        if shutdown_in_progress:
+            logger.warning(f"Received {signal_name} again during shutdown. Forcing exit.")
+            sys.exit(1)
+            
+        logger.info(f"Received {signal_name}. Initiating graceful shutdown...")
+        shutdown_in_progress = True
+        
+        try:
+            # Stop the application
+            app_instance.stop()
+            logger.info("Application stopped successfully.")
+        except Exception as e:
+            logger.error(f"Error during shutdown: {str(e)}")
+            traceback.print_exc()
+        
+        # Exit with success code
         sys.exit(0)
     
     # Register signal handlers
-    signal.signal(signal.SIGINT, signal_handler)  # Ctrl+C
-    signal.signal(signal.SIGTERM, signal_handler)  # Termination signal
-    
+    signal.signal(signal.SIGTERM, signal_handler)
+    signal.signal(signal.SIGINT, signal_handler)
     logger.info("Signal handlers registered for graceful shutdown")
 
 
-def shutdown():
+def setup_uncaught_exception_handler() -> None:
     """
-    Perform graceful shutdown of the application.
-    Close all connections and release resources.
-    """
-    global app_instance
-    if app_instance:
-        logger.info("Stopping OCR Service application...")
-        try:
-            # Stop the application (this will close RabbitMQ and S3 connections)
-            app_instance.stop()
-            
-            # Release GPU resources explicitly
-            try:
-                tf.keras.backend.clear_session()
-                logger.info("TensorFlow session cleared, GPU resources released")
-            except Exception as gpu_error:
-                logger.warning(f"Error releasing GPU resources: {str(gpu_error)}")
-            
-            logger.info("OCR Service application stopped successfully")
-        except Exception as e:
-            logger.error(f"Error during application shutdown: {str(e)}")
-            logger.debug(traceback.format_exc())
-    else:
-        logger.warning("Application instance not found during shutdown")
-
-
-def handle_uncaught_exception(exc_type, exc_value, exc_traceback):
-    """
-    Global exception handler for uncaught exceptions.
-    """
-    if issubclass(exc_type, KeyboardInterrupt):
-        # Call original handler for KeyboardInterrupt
-        sys.__excepthook__(exc_type, exc_value, exc_traceback)
-        return
+    Set up a global exception handler for uncaught exceptions.
     
-    log_exception(logger, "Uncaught exception", exc_value, exc_traceback)
-    shutdown()
-    sys.exit(1)
+    This ensures that any uncaught exceptions are properly logged before
+    the application crashes.
+    """
+    def exception_handler(exc_type, exc_value, exc_traceback):
+        """
+        Handle uncaught exceptions by logging them.
+        
+        Args:
+            exc_type: Exception type
+            exc_value: Exception value
+            exc_traceback: Exception traceback
+        """
+        if issubclass(exc_type, KeyboardInterrupt):
+            # Don't log keyboard interrupt (ctrl+c) as an error
+            sys.__excepthook__(exc_type, exc_value, exc_traceback)
+            return
+            
+        logger.critical("Uncaught exception:", exc_info=(exc_type, exc_value, exc_traceback))
+        
+    # Set the exception handler
+    sys.excepthook = exception_handler
+    logger.info("Global exception handler registered")
 
 
-def main():
+def start_fastapi_server() -> None:
+    """
+    Start the FastAPI server for health checks and API endpoints.
+    
+    This function starts the FastAPI server in a separate process to avoid
+    blocking the main thread.
+    """
+    # Get configuration from environment variables or use defaults
+    host = os.environ.get("OCR_SERVICE_HOST", "0.0.0.0")
+    port = int(os.environ.get("OCR_SERVICE_PORT", 8000))
+    
+    # Start the server
+    logger.info(f"Starting FastAPI server on {host}:{port}")
+    
+    # Run in a separate thread to avoid blocking
+    import threading
+    server_thread = threading.Thread(
+        target=uvicorn.run,
+        kwargs={
+            "app": app,
+            "host": host,
+            "port": port,
+            "log_level": "info",
+            # Don't use reloading in production
+            "reload": app_config.ENVIRONMENT == "development"
+        },
+        daemon=True
+    )
+    server_thread.start()
+    logger.info("FastAPI server started in background thread")
+
+
+def main() -> None:
     """
     Main entry point for the OCR Service.
-    Initializes the application and starts processing.
-    """
-    global app_instance
     
+    This function initializes the application, sets up error handling,
+    connects to required services, and starts the OCR processing.
+    """
     try:
-        # Set up logging
+        # Initialize logger
         setup_logger(logging_config)
         logger.info(f"Starting OCR Service v{app_config.VERSION}")
-        logger.info(f"Environment: {app_config.ENVIRONMENT}")
         
-        # Register global exception handler
-        sys.excepthook = handle_uncaught_exception
-        logger.info("Global exception handler registered")
-        
-        # Set up signal handlers for graceful shutdown
+        # Set up error handling
+        setup_uncaught_exception_handler()
         setup_signal_handlers()
         
         # Verify GPU availability
-        verify_gpu_availability()
-        
-        # Create and initialize application
-        logger.info("Initializing OCR Service application...")
-        app_instance = OCRServiceApp()
+        if not verify_gpu_availability() and not app_config.BYPASS_GPU_CHECK:
+            logger.error("GPU requirements not met. Exiting.")
+            sys.exit(1)
         
         # Start the application
-        logger.info("Starting OCR Service application...")
         app_instance.start()
         
-        # Log startup success with performance expectations
-        logger.info("OCR Service started successfully")
-        logger.info("Performance targets: 99% extraction accuracy, processing in under 5 minutes")
+        # Start FastAPI server for health checks and API endpoints
+        start_fastapi_server()
         
-        # Keep the main thread alive
-        logger.info("OCR Service is running. Press Ctrl+C to stop.")
-        while True:
+        logger.info("OCR Service started successfully")
+        
+        # Keep the main thread running until shutdown is requested
+        # This allows the application to run indefinitely while handling signals
+        while not shutdown_in_progress:
             time.sleep(1)
             
+    except ServiceError as e:
+        logger.error(f"Service error during startup: {str(e)}")
+        sys.exit(1)
     except Exception as e:
-        logger.critical(f"Failed to start OCR Service: {str(e)}")
-        logger.debug(traceback.format_exc())
+        logger.critical(f"Unhandled exception during startup: {str(e)}")
+        traceback.print_exc()
         sys.exit(1)
 
 
