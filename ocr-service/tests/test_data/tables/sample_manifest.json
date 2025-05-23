@@ -1,785 +1,490 @@
 {
-  "version": "1.0.0",
-  "description": "Manifest of tabular document test samples for OCR service validation",
-  "last_updated": "2025-05-21",
-  "table_types": [
-    "SIMPLE",
-    "COMPLEX",
-    "MERGED_CELLS",
-    "MULTI_PAGE",
-    "BORDERED",
-    "BORDERLESS"
-  ],
-  "document_categories": [
-    "FINANCIAL_STATEMENT",
-    "BANK_STATEMENT",
-    "INVOICE",
-    "TRANSACTION_HISTORY",
-    "INVENTORY_LIST",
-    "PRICE_LIST",
-    "SCHEDULE",
-    "REPORT"
+  "manifest_version": "1.0.0",
+  "description": "Manifest of tabular document test samples for OCR testing in MCA application processing",
+  "last_updated": "2025-05-23",
+  "table_categories": [
+    "financial_tables",
+    "application_tables",
+    "transaction_tables",
+    "comparison_tables",
+    "mixed_content_tables"
   ],
   "quality_levels": [
-    "HIGH",
-    "MEDIUM",
-    "LOW"
+    "high",
+    "medium",
+    "low"
   ],
-  "test_samples": [
+  "documents": [
     {
-      "id": "financial_table_001",
-      "file_path": "tables/financial_tables/revenue_table.pdf",
-      "document_category": "FINANCIAL_STATEMENT",
-      "table_type": "SIMPLE",
-      "quality": "HIGH",
-      "description": "Monthly revenue table with quarterly totals",
-      "table_structure": {
-        "rows": 13,
-        "columns": 3,
-        "header_row": true,
-        "merged_cells": false,
-        "expected_confidence": 0.98
+      "id": "simple_table_001",
+      "filename": "simple_table_001.pdf",
+      "category": "financial_tables",
+      "document_type": "financial_statement",
+      "quality": "high",
+      "orientation": "portrait",
+      "page_count": 1,
+      "characteristics": {
+        "resolution": "300dpi",
+        "has_merged_cells": false,
+        "has_borders": true,
+        "has_background_color": false,
+        "complexity": "low"
       },
-      "expected_headers": [
-        {
-          "value": "Month",
-          "position": {"x1": 100, "y1": 150, "x2": 200, "y2": 170},
-          "expected_confidence": 0.99
-        },
-        {
-          "value": "Revenue",
-          "position": {"x1": 300, "y1": 150, "x2": 400, "y2": 170},
-          "expected_confidence": 0.99
-        },
-        {
-          "value": "Growth (%)",
-          "position": {"x1": 500, "y1": 150, "x2": 600, "y2": 170},
-          "expected_confidence": 0.98
-        }
-      ],
-      "expected_cells": [
-        {
-          "row": 1,
-          "column": 0,
-          "value": "January",
-          "position": {"x1": 100, "y1": 180, "x2": 200, "y2": 200},
-          "expected_confidence": 0.99
-        },
-        {
-          "row": 1,
-          "column": 1,
-          "value": "$45,678.90",
-          "position": {"x1": 300, "y1": 180, "x2": 400, "y2": 200},
-          "expected_confidence": 0.97
-        },
-        {
-          "row": 1,
-          "column": 2,
-          "value": "N/A",
-          "position": {"x1": 500, "y1": 180, "x2": 600, "y2": 200},
-          "expected_confidence": 0.99
-        },
-        {
-          "row": 2,
-          "column": 0,
-          "value": "February",
-          "position": {"x1": 100, "y1": 210, "x2": 200, "y2": 230},
-          "expected_confidence": 0.99
-        },
-        {
-          "row": 2,
-          "column": 1,
-          "value": "$48,765.43",
-          "position": {"x1": 300, "y1": 210, "x2": 400, "y2": 230},
-          "expected_confidence": 0.97
-        },
-        {
-          "row": 2,
-          "column": 2,
-          "value": "6.76%",
-          "position": {"x1": 500, "y1": 210, "x2": 600, "y2": 230},
-          "expected_confidence": 0.96
-        },
-        {
-          "row": 3,
-          "column": 0,
-          "value": "March",
-          "position": {"x1": 100, "y1": 240, "x2": 200, "y2": 260},
-          "expected_confidence": 0.99
-        },
-        {
-          "row": 3,
-          "column": 1,
-          "value": "$52,345.67",
-          "position": {"x1": 300, "y1": 240, "x2": 400, "y2": 260},
-          "expected_confidence": 0.97
-        },
-        {
-          "row": 3,
-          "column": 2,
-          "value": "7.34%",
-          "position": {"x1": 500, "y1": 240, "x2": 600, "y2": 260},
-          "expected_confidence": 0.96
-        },
-        {
-          "row": 4,
-          "column": 0,
-          "value": "Q1 Total",
-          "position": {"x1": 100, "y1": 270, "x2": 200, "y2": 290},
-          "expected_confidence": 0.98
-        },
-        {
-          "row": 4,
-          "column": 1,
-          "value": "$146,790.00",
-          "position": {"x1": 300, "y1": 270, "x2": 400, "y2": 290},
-          "expected_confidence": 0.96
-        },
-        {
-          "row": 4,
-          "column": 2,
-          "value": "",
-          "position": {"x1": 500, "y1": 270, "x2": 600, "y2": 290},
-          "expected_confidence": 0.99
-        }
-      ],
-      "expected_classification_confidence": 0.99,
-      "expected_overall_confidence": 0.97
+      "expected_extraction": {
+        "tables": [
+          {
+            "name": "monthly_revenue",
+            "position": {"page": 1, "top": 200, "left": 100, "bottom": 400, "right": 700},
+            "expected_confidence": 0.98,
+            "rows": 7,
+            "columns": 4,
+            "headers": ["Month", "Revenue", "Expenses", "Profit"],
+            "data": [
+              ["January", "$125,000.00", "$85,000.00", "$40,000.00"],
+              ["February", "$132,500.00", "$87,500.00", "$45,000.00"],
+              ["March", "$145,000.00", "$92,000.00", "$53,000.00"],
+              ["April", "$150,000.00", "$95,000.00", "$55,000.00"],
+              ["May", "$155,000.00", "$98,000.00", "$57,000.00"],
+              ["June", "$162,500.00", "$102,500.00", "$60,000.00"]
+            ]
+          }
+        ]
+      }
     },
     {
-      "id": "bank_statement_table_001",
-      "file_path": "tables/financial_tables/bank_statement_table.pdf",
-      "document_category": "BANK_STATEMENT",
-      "table_type": "BORDERED",
-      "quality": "HIGH",
-      "description": "Bank statement transaction table with date, description, and amount columns",
-      "table_structure": {
-        "rows": 15,
-        "columns": 4,
-        "header_row": true,
-        "merged_cells": false,
-        "expected_confidence": 0.97
+      "id": "complex_table_001",
+      "filename": "complex_table_001.pdf",
+      "category": "financial_tables",
+      "document_type": "financial_statement",
+      "quality": "high",
+      "orientation": "landscape",
+      "page_count": 1,
+      "characteristics": {
+        "resolution": "300dpi",
+        "has_merged_cells": true,
+        "has_borders": true,
+        "has_background_color": true,
+        "complexity": "high"
       },
-      "expected_headers": [
-        {
-          "value": "Date",
-          "position": {"x1": 100, "y1": 200, "x2": 150, "y2": 220},
-          "expected_confidence": 0.99
-        },
-        {
-          "value": "Description",
-          "position": {"x1": 160, "y1": 200, "x2": 400, "y2": 220},
-          "expected_confidence": 0.99
-        },
-        {
-          "value": "Withdrawals",
-          "position": {"x1": 410, "y1": 200, "x2": 500, "y2": 220},
-          "expected_confidence": 0.98
-        },
-        {
-          "value": "Deposits",
-          "position": {"x1": 510, "y1": 200, "x2": 600, "y2": 220},
-          "expected_confidence": 0.98
-        }
-      ],
-      "expected_cells": [
-        {
-          "row": 1,
-          "column": 0,
-          "value": "04/01/2025",
-          "position": {"x1": 100, "y1": 230, "x2": 150, "y2": 250},
-          "expected_confidence": 0.97
-        },
-        {
-          "row": 1,
-          "column": 1,
-          "value": "Opening Balance",
-          "position": {"x1": 160, "y1": 230, "x2": 400, "y2": 250},
-          "expected_confidence": 0.98
-        },
-        {
-          "row": 1,
-          "column": 2,
-          "value": "",
-          "position": {"x1": 410, "y1": 230, "x2": 500, "y2": 250},
-          "expected_confidence": 0.99
-        },
-        {
-          "row": 1,
-          "column": 3,
-          "value": "$125,432.67",
-          "position": {"x1": 510, "y1": 230, "x2": 600, "y2": 250},
-          "expected_confidence": 0.96
-        },
-        {
-          "row": 2,
-          "column": 0,
-          "value": "04/05/2025",
-          "position": {"x1": 100, "y1": 260, "x2": 150, "y2": 280},
-          "expected_confidence": 0.97
-        },
-        {
-          "row": 2,
-          "column": 1,
-          "value": "Vendor Payment - ABC Supplies",
-          "position": {"x1": 160, "y1": 260, "x2": 400, "y2": 280},
-          "expected_confidence": 0.95
-        },
-        {
-          "row": 2,
-          "column": 2,
-          "value": "$12,543.87",
-          "position": {"x1": 410, "y1": 260, "x2": 500, "y2": 280},
-          "expected_confidence": 0.96
-        },
-        {
-          "row": 2,
-          "column": 3,
-          "value": "",
-          "position": {"x1": 510, "y1": 260, "x2": 600, "y2": 280},
-          "expected_confidence": 0.99
-        }
-      ],
-      "expected_classification_confidence": 0.98,
-      "expected_overall_confidence": 0.97
-    },
-    {
-      "id": "invoice_table_001",
-      "file_path": "tables/financial_tables/invoice_line_items.pdf",
-      "document_category": "INVOICE",
-      "table_type": "COMPLEX",
-      "quality": "HIGH",
-      "description": "Invoice line items table with product details, quantities, and pricing",
-      "table_structure": {
-        "rows": 10,
-        "columns": 5,
-        "header_row": true,
-        "merged_cells": false,
-        "expected_confidence": 0.96
-      },
-      "expected_headers": [
-        {
-          "value": "Item #",
-          "position": {"x1": 50, "y1": 300, "x2": 100, "y2": 320},
-          "expected_confidence": 0.98
-        },
-        {
-          "value": "Description",
-          "position": {"x1": 110, "y1": 300, "x2": 350, "y2": 320},
-          "expected_confidence": 0.98
-        },
-        {
-          "value": "Quantity",
-          "position": {"x1": 360, "y1": 300, "x2": 420, "y2": 320},
-          "expected_confidence": 0.97
-        },
-        {
-          "value": "Unit Price",
-          "position": {"x1": 430, "y1": 300, "x2": 500, "y2": 320},
-          "expected_confidence": 0.97
-        },
-        {
-          "value": "Amount",
-          "position": {"x1": 510, "y1": 300, "x2": 580, "y2": 320},
-          "expected_confidence": 0.98
-        }
-      ],
-      "expected_cells": [
-        {
-          "row": 1,
-          "column": 0,
-          "value": "1001",
-          "position": {"x1": 50, "y1": 330, "x2": 100, "y2": 350},
-          "expected_confidence": 0.99
-        },
-        {
-          "row": 1,
-          "column": 1,
-          "value": "Premium Business Cards - 16pt Matte",
-          "position": {"x1": 110, "y1": 330, "x2": 350, "y2": 350},
-          "expected_confidence": 0.94
-        },
-        {
-          "row": 1,
-          "column": 2,
-          "value": "500",
-          "position": {"x1": 360, "y1": 330, "x2": 420, "y2": 350},
-          "expected_confidence": 0.99
-        },
-        {
-          "row": 1,
-          "column": 3,
-          "value": "$0.25",
-          "position": {"x1": 430, "y1": 330, "x2": 500, "y2": 350},
-          "expected_confidence": 0.97
-        },
-        {
-          "row": 1,
-          "column": 4,
-          "value": "$125.00",
-          "position": {"x1": 510, "y1": 330, "x2": 580, "y2": 350},
-          "expected_confidence": 0.97
-        },
-        {
-          "row": 2,
-          "column": 0,
-          "value": "1002",
-          "position": {"x1": 50, "y1": 360, "x2": 100, "y2": 380},
-          "expected_confidence": 0.99
-        },
-        {
-          "row": 2,
-          "column": 1,
-          "value": "Custom Letterhead - 100# Linen",
-          "position": {"x1": 110, "y1": 360, "x2": 350, "y2": 380},
-          "expected_confidence": 0.94
-        },
-        {
-          "row": 2,
-          "column": 2,
-          "value": "250",
-          "position": {"x1": 360, "y1": 360, "x2": 420, "y2": 380},
-          "expected_confidence": 0.99
-        },
-        {
-          "row": 2,
-          "column": 3,
-          "value": "$0.45",
-          "position": {"x1": 430, "y1": 360, "x2": 500, "y2": 380},
-          "expected_confidence": 0.97
-        },
-        {
-          "row": 2,
-          "column": 4,
-          "value": "$112.50",
-          "position": {"x1": 510, "y1": 360, "x2": 580, "y2": 380},
-          "expected_confidence": 0.97
-        }
-      ],
-      "expected_classification_confidence": 0.97,
-      "expected_overall_confidence": 0.96
-    },
-    {
-      "id": "merged_cells_table_001",
-      "file_path": "tables/complex_tables/merged_cells_report.pdf",
-      "document_category": "REPORT",
-      "table_type": "MERGED_CELLS",
-      "quality": "HIGH",
-      "description": "Quarterly sales report with region-based merged cells",
-      "table_structure": {
-        "rows": 8,
-        "columns": 5,
-        "header_row": true,
-        "merged_cells": true,
-        "expected_confidence": 0.94
-      },
-      "expected_headers": [
-        {
-          "value": "Region",
-          "position": {"x1": 50, "y1": 100, "x2": 150, "y2": 120},
-          "expected_confidence": 0.98
-        },
-        {
-          "value": "Q1",
-          "position": {"x1": 160, "y1": 100, "x2": 250, "y2": 120},
-          "expected_confidence": 0.99
-        },
-        {
-          "value": "Q2",
-          "position": {"x1": 260, "y1": 100, "x2": 350, "y2": 120},
-          "expected_confidence": 0.99
-        },
-        {
-          "value": "Q3",
-          "position": {"x1": 360, "y1": 100, "x2": 450, "y2": 120},
-          "expected_confidence": 0.99
-        },
-        {
-          "value": "Q4",
-          "position": {"x1": 460, "y1": 100, "x2": 550, "y2": 120},
-          "expected_confidence": 0.99
-        }
-      ],
-      "expected_cells": [
-        {
-          "row": 1,
-          "column": 0,
-          "value": "North America",
-          "position": {"x1": 50, "y1": 130, "x2": 150, "y2": 170},
-          "merged": true,
-          "rowspan": 2,
-          "colspan": 1,
-          "expected_confidence": 0.96
-        },
-        {
-          "row": 1,
-          "column": 1,
-          "value": "$1,245,678",
-          "position": {"x1": 160, "y1": 130, "x2": 250, "y2": 150},
-          "merged": false,
-          "expected_confidence": 0.95
-        },
-        {
-          "row": 1,
-          "column": 2,
-          "value": "$1,356,789",
-          "position": {"x1": 260, "y1": 130, "x2": 350, "y2": 150},
-          "merged": false,
-          "expected_confidence": 0.95
-        },
-        {
-          "row": 1,
-          "column": 3,
-          "value": "$1,467,890",
-          "position": {"x1": 360, "y1": 130, "x2": 450, "y2": 150},
-          "merged": false,
-          "expected_confidence": 0.95
-        },
-        {
-          "row": 1,
-          "column": 4,
-          "value": "$1,578,901",
-          "position": {"x1": 460, "y1": 130, "x2": 550, "y2": 150},
-          "merged": false,
-          "expected_confidence": 0.95
-        },
-        {
-          "row": 2,
-          "column": 1,
-          "value": "$345,678",
-          "position": {"x1": 160, "y1": 150, "x2": 250, "y2": 170},
-          "merged": false,
-          "expected_confidence": 0.95
-        },
-        {
-          "row": 2,
-          "column": 2,
-          "value": "$456,789",
-          "position": {"x1": 260, "y1": 150, "x2": 350, "y2": 170},
-          "merged": false,
-          "expected_confidence": 0.95
-        },
-        {
-          "row": 2,
-          "column": 3,
-          "value": "$567,890",
-          "position": {"x1": 360, "y1": 150, "x2": 450, "y2": 170},
-          "merged": false,
-          "expected_confidence": 0.95
-        },
-        {
-          "row": 2,
-          "column": 4,
-          "value": "$678,901",
-          "position": {"x1": 460, "y1": 150, "x2": 550, "y2": 170},
-          "merged": false,
-          "expected_confidence": 0.95
-        }
-      ],
-      "expected_classification_confidence": 0.96,
-      "expected_overall_confidence": 0.94
-    },
-    {
-      "id": "borderless_table_001",
-      "file_path": "tables/complex_tables/borderless_price_list.pdf",
-      "document_category": "PRICE_LIST",
-      "table_type": "BORDERLESS",
-      "quality": "MEDIUM",
-      "description": "Product price list with no visible borders, relying on spacing for structure",
-      "table_structure": {
-        "rows": 12,
-        "columns": 3,
-        "header_row": true,
-        "merged_cells": false,
-        "expected_confidence": 0.92
-      },
-      "expected_headers": [
-        {
-          "value": "Product Name",
-          "position": {"x1": 50, "y1": 100, "x2": 300, "y2": 120},
-          "expected_confidence": 0.97
-        },
-        {
-          "value": "SKU",
-          "position": {"x1": 310, "y1": 100, "x2": 400, "y2": 120},
-          "expected_confidence": 0.98
-        },
-        {
-          "value": "Price",
-          "position": {"x1": 410, "y1": 100, "x2": 500, "y2": 120},
-          "expected_confidence": 0.98
-        }
-      ],
-      "expected_cells": [
-        {
-          "row": 1,
-          "column": 0,
-          "value": "Premium Leather Office Chair",
-          "position": {"x1": 50, "y1": 130, "x2": 300, "y2": 150},
-          "expected_confidence": 0.93
-        },
-        {
-          "row": 1,
-          "column": 1,
-          "value": "FRN-CH-001",
-          "position": {"x1": 310, "y1": 130, "x2": 400, "y2": 150},
-          "expected_confidence": 0.94
-        },
-        {
-          "row": 1,
-          "column": 2,
-          "value": "$299.99",
-          "position": {"x1": 410, "y1": 130, "x2": 500, "y2": 150},
-          "expected_confidence": 0.95
-        },
-        {
-          "row": 2,
-          "column": 0,
-          "value": "Adjustable Standing Desk",
-          "position": {"x1": 50, "y1": 160, "x2": 300, "y2": 180},
-          "expected_confidence": 0.93
-        },
-        {
-          "row": 2,
-          "column": 1,
-          "value": "FRN-DSK-002",
-          "position": {"x1": 310, "y1": 160, "x2": 400, "y2": 180},
-          "expected_confidence": 0.94
-        },
-        {
-          "row": 2,
-          "column": 2,
-          "value": "$499.99",
-          "position": {"x1": 410, "y1": 160, "x2": 500, "y2": 180},
-          "expected_confidence": 0.95
-        }
-      ],
-      "expected_classification_confidence": 0.94,
-      "expected_overall_confidence": 0.92
-    },
-    {
-      "id": "low_quality_table_001",
-      "file_path": "tables/quality_variations/low_quality_inventory.pdf",
-      "document_category": "INVENTORY_LIST",
-      "table_type": "SIMPLE",
-      "quality": "LOW",
-      "description": "Low quality scan of inventory list with faded text and noise",
-      "table_structure": {
-        "rows": 10,
-        "columns": 4,
-        "header_row": true,
-        "merged_cells": false,
-        "expected_confidence": 0.85
-      },
-      "expected_headers": [
-        {
-          "value": "Item ID",
-          "position": {"x1": 50, "y1": 100, "x2": 120, "y2": 120},
-          "expected_confidence": 0.90
-        },
-        {
-          "value": "Description",
-          "position": {"x1": 130, "y1": 100, "x2": 350, "y2": 120},
-          "expected_confidence": 0.88
-        },
-        {
-          "value": "Quantity",
-          "position": {"x1": 360, "y1": 100, "x2": 450, "y2": 120},
-          "expected_confidence": 0.89
-        },
-        {
-          "value": "Location",
-          "position": {"x1": 460, "y1": 100, "x2": 550, "y2": 120},
-          "expected_confidence": 0.87
-        }
-      ],
-      "expected_cells": [
-        {
-          "row": 1,
-          "column": 0,
-          "value": "INV-1001",
-          "position": {"x1": 50, "y1": 130, "x2": 120, "y2": 150},
-          "expected_confidence": 0.86
-        },
-        {
-          "row": 1,
-          "column": 1,
-          "value": "Wireless Keyboard and Mouse Combo",
-          "position": {"x1": 130, "y1": 130, "x2": 350, "y2": 150},
-          "expected_confidence": 0.82
-        },
-        {
-          "row": 1,
-          "column": 2,
-          "value": "45",
-          "position": {"x1": 360, "y1": 130, "x2": 450, "y2": 150},
-          "expected_confidence": 0.88
-        },
-        {
-          "row": 1,
-          "column": 3,
-          "value": "Warehouse A",
-          "position": {"x1": 460, "y1": 130, "x2": 550, "y2": 150},
-          "expected_confidence": 0.84
-        },
-        {
-          "row": 2,
-          "column": 0,
-          "value": "INV-1002",
-          "position": {"x1": 50, "y1": 160, "x2": 120, "y2": 180},
-          "expected_confidence": 0.86
-        },
-        {
-          "row": 2,
-          "column": 1,
-          "value": "27-inch 4K Monitor",
-          "position": {"x1": 130, "y1": 160, "x2": 350, "y2": 180},
-          "expected_confidence": 0.83
-        },
-        {
-          "row": 2,
-          "column": 2,
-          "value": "23",
-          "position": {"x1": 360, "y1": 160, "x2": 450, "y2": 180},
-          "expected_confidence": 0.89
-        },
-        {
-          "row": 2,
-          "column": 3,
-          "value": "Warehouse B",
-          "position": {"x1": 460, "y1": 160, "x2": 550, "y2": 180},
-          "expected_confidence": 0.83
-        }
-      ],
-      "expected_classification_confidence": 0.90,
-      "expected_overall_confidence": 0.85
+      "expected_extraction": {
+        "tables": [
+          {
+            "name": "quarterly_financials",
+            "position": {"page": 1, "top": 150, "left": 50, "bottom": 600, "right": 950},
+            "expected_confidence": 0.96,
+            "rows": 15,
+            "columns": 11,
+            "has_merged_cells": true,
+            "has_nested_headers": true,
+            "headers": [
+              "Category", 
+              "Subcategory", 
+              "Jan", "Feb", "Mar", "Q1 Total", 
+              "Apr", "May", "Jun", "Q2 Total", 
+              "H1 Total"
+            ],
+            "data": [
+              ["Revenue", "Product Sales", "$250,000.00", "$265,000.00", "$285,000.00", "$800,000.00", "$290,000.00", "$305,000.00", "$315,000.00", "$910,000.00", "$1,710,000.00"],
+              ["Revenue", "Service Revenue", "$125,000.00", "$130,000.00", "$140,000.00", "$395,000.00", "$145,000.00", "$150,000.00", "$155,000.00", "$450,000.00", "$845,000.00"],
+              ["Revenue", "Other Revenue", "$15,000.00", "$17,500.00", "$20,000.00", "$52,500.00", "$22,500.00", "$25,000.00", "$27,500.00", "$75,000.00", "$127,500.00"],
+              ["Revenue", "Total Revenue", "$390,000.00", "$412,500.00", "$445,000.00", "$1,247,500.00", "$457,500.00", "$480,000.00", "$497,500.00", "$1,435,000.00", "$2,682,500.00"],
+              ["Expenses", "Cost of Goods Sold", "$150,000.00", "$159,000.00", "$171,000.00", "$480,000.00", "$174,000.00", "$183,000.00", "$189,000.00", "$546,000.00", "$1,026,000.00"],
+              ["Expenses", "Salaries and Wages", "$95,000.00", "$95,000.00", "$95,000.00", "$285,000.00", "$100,000.00", "$100,000.00", "$100,000.00", "$300,000.00", "$585,000.00"],
+              ["Expenses", "Rent", "$25,000.00", "$25,000.00", "$25,000.00", "$75,000.00", "$25,000.00", "$25,000.00", "$25,000.00", "$75,000.00", "$150,000.00"],
+              ["Expenses", "Utilities", "$7,500.00", "$8,000.00", "$8,500.00", "$24,000.00", "$8,000.00", "$7,500.00", "$7,000.00", "$22,500.00", "$46,500.00"],
+              ["Expenses", "Marketing", "$15,000.00", "$17,500.00", "$20,000.00", "$52,500.00", "$22,500.00", "$25,000.00", "$27,500.00", "$75,000.00", "$127,500.00"],
+              ["Expenses", "Other Expenses", "$12,500.00", "$13,000.00", "$13,500.00", "$39,000.00", "$14,000.00", "$14,500.00", "$15,000.00", "$43,500.00", "$82,500.00"],
+              ["Expenses", "Total Expenses", "$305,000.00", "$317,500.00", "$333,000.00", "$955,500.00", "$343,500.00", "$355,000.00", "$363,500.00", "$1,062,000.00", "$2,017,500.00"],
+              ["Profit", "Gross Profit", "$240,000.00", "$253,500.00", "$274,000.00", "$767,500.00", "$283,500.00", "$297,000.00", "$308,500.00", "$889,000.00", "$1,656,500.00"],
+              ["Profit", "Operating Profit", "$85,000.00", "$95,000.00", "$112,000.00", "$292,000.00", "$114,000.00", "$125,000.00", "$134,000.00", "$373,000.00", "$665,000.00"],
+              ["Profit", "Net Profit", "$68,000.00", "$76,000.00", "$89,600.00", "$233,600.00", "$91,200.00", "$100,000.00", "$107,200.00", "$298,400.00", "$532,000.00"]
+            ],
+            "merged_cells": [
+              {"row_start": 0, "row_end": 3, "col_start": 0, "col_end": 0},
+              {"row_start": 4, "row_end": 10, "col_start": 0, "col_end": 0},
+              {"row_start": 11, "row_end": 13, "col_start": 0, "col_end": 0}
+            ]
+          }
+        ]
+      }
     },
     {
       "id": "multi_page_table_001",
-      "file_path": "tables/complex_tables/multi_page_transaction_history.pdf",
-      "document_category": "TRANSACTION_HISTORY",
-      "table_type": "MULTI_PAGE",
-      "quality": "HIGH",
-      "description": "Transaction history spanning multiple pages with consistent headers",
-      "table_structure": {
-        "rows": 50,
-        "columns": 4,
-        "header_row": true,
-        "merged_cells": false,
-        "pages": 3,
-        "expected_confidence": 0.95
+      "filename": "multi_page_table_001.pdf",
+      "category": "transaction_tables",
+      "document_type": "bank_statement",
+      "quality": "high",
+      "orientation": "portrait",
+      "page_count": 3,
+      "characteristics": {
+        "resolution": "300dpi",
+        "has_merged_cells": false,
+        "has_borders": true,
+        "has_background_color": false,
+        "complexity": "medium",
+        "spans_multiple_pages": true
       },
-      "expected_headers": [
-        {
-          "value": "Date",
-          "position": {"x1": 50, "y1": 100, "x2": 150, "y2": 120},
-          "expected_confidence": 0.98,
-          "repeats_on_pages": [1, 2, 3]
-        },
-        {
-          "value": "Transaction ID",
-          "position": {"x1": 160, "y1": 100, "x2": 260, "y2": 120},
-          "expected_confidence": 0.97,
-          "repeats_on_pages": [1, 2, 3]
-        },
-        {
-          "value": "Description",
-          "position": {"x1": 270, "y1": 100, "x2": 450, "y2": 120},
-          "expected_confidence": 0.98,
-          "repeats_on_pages": [1, 2, 3]
-        },
-        {
-          "value": "Amount",
-          "position": {"x1": 460, "y1": 100, "x2": 550, "y2": 120},
-          "expected_confidence": 0.98,
-          "repeats_on_pages": [1, 2, 3]
-        }
-      ],
-      "expected_cells": [
-        {
-          "row": 1,
-          "column": 0,
-          "value": "04/01/2025",
-          "position": {"x1": 50, "y1": 130, "x2": 150, "y2": 150},
-          "page": 1,
-          "expected_confidence": 0.96
-        },
-        {
-          "row": 1,
-          "column": 1,
-          "value": "TRX-10045678",
-          "position": {"x1": 160, "y1": 130, "x2": 260, "y2": 150},
-          "page": 1,
-          "expected_confidence": 0.95
-        },
-        {
-          "row": 1,
-          "column": 2,
-          "value": "Online Purchase - Amazon",
-          "position": {"x1": 270, "y1": 130, "x2": 450, "y2": 150},
-          "page": 1,
-          "expected_confidence": 0.94
-        },
-        {
-          "row": 1,
-          "column": 3,
-          "value": "-$45.67",
-          "position": {"x1": 460, "y1": 130, "x2": 550, "y2": 150},
-          "page": 1,
-          "expected_confidence": 0.96
-        },
-        {
-          "row": 20,
-          "column": 0,
-          "value": "04/15/2025",
-          "position": {"x1": 50, "y1": 130, "x2": 150, "y2": 150},
-          "page": 2,
-          "expected_confidence": 0.96
-        },
-        {
-          "row": 20,
-          "column": 1,
-          "value": "TRX-10045697",
-          "position": {"x1": 160, "y1": 130, "x2": 260, "y2": 150},
-          "page": 2,
-          "expected_confidence": 0.95
-        },
-        {
-          "row": 20,
-          "column": 2,
-          "value": "Payroll Deposit",
-          "position": {"x1": 270, "y1": 130, "x2": 450, "y2": 150},
-          "page": 2,
-          "expected_confidence": 0.95
-        },
-        {
-          "row": 20,
-          "column": 3,
-          "value": "$2,345.67",
-          "position": {"x1": 460, "y1": 130, "x2": 550, "y2": 150},
-          "page": 2,
-          "expected_confidence": 0.96
-        }
-      ],
-      "expected_classification_confidence": 0.97,
-      "expected_overall_confidence": 0.95
+      "expected_extraction": {
+        "tables": [
+          {
+            "name": "transaction_history",
+            "spans_multiple_pages": true,
+            "page_ranges": [1, 3],
+            "positions": [
+              {"page": 1, "top": 200, "left": 50, "bottom": 700, "right": 750},
+              {"page": 2, "top": 100, "left": 50, "bottom": 700, "right": 750},
+              {"page": 3, "top": 100, "left": 50, "bottom": 400, "right": 750}
+            ],
+            "expected_confidence": 0.95,
+            "rows": 50,
+            "columns": 5,
+            "headers": ["Date", "Description", "Reference", "Withdrawals", "Deposits"],
+            "data_sample": [
+              ["01/01/2025", "Beginning Balance", "", "", "$125,678.45"],
+              ["01/03/2025", "Customer Payment - XYZ Corp", "REF123456", "", "$12,500.00"],
+              ["01/05/2025", "Vendor Payment - ABC Supplies", "CHK1001", "$4,567.89", ""],
+              ["01/07/2025", "Customer Payment - 123 Industries", "REF123457", "", "$8,750.00"],
+              ["01/10/2025", "Payroll", "ACH-PAYROLL", "$15,678.45", ""],
+              ["01/15/2025", "Customer Payment - Smith Co", "REF123458", "", "$9,250.00"],
+              ["01/18/2025", "Rent Payment", "ACH-RENT", "$3,500.00", ""],
+              ["01/20/2025", "Utility Payment", "ACH-UTIL", "$876.54", ""],
+              ["01/25/2025", "Customer Payment - Johnson LLC", "REF123459", "", "$5,000.00"],
+              ["01/28/2025", "Insurance Payment", "ACH-INS", "$7,355.00", ""]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "application_table_001",
+      "filename": "application_table_001.pdf",
+      "category": "application_tables",
+      "document_type": "loan_application",
+      "quality": "high",
+      "orientation": "portrait",
+      "page_count": 1,
+      "characteristics": {
+        "resolution": "300dpi",
+        "has_merged_cells": false,
+        "has_borders": true,
+        "has_background_color": false,
+        "complexity": "low"
+      },
+      "expected_extraction": {
+        "tables": [
+          {
+            "name": "business_references",
+            "position": {"page": 1, "top": 300, "left": 100, "bottom": 500, "right": 700},
+            "expected_confidence": 0.97,
+            "rows": 4,
+            "columns": 4,
+            "headers": ["Reference Name", "Company", "Phone Number", "Relationship"],
+            "data": [
+              ["John Williams", "ABC Corporation", "(555) 123-4567", "Supplier"],
+              ["Sarah Johnson", "XYZ Industries", "(555) 987-6543", "Customer"],
+              ["Robert Brown", "First National Bank", "(555) 456-7890", "Banker"]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "medium_quality_table_001",
+      "filename": "medium_quality_table_001.pdf",
+      "category": "financial_tables",
+      "document_type": "financial_statement",
+      "quality": "medium",
+      "orientation": "portrait",
+      "page_count": 1,
+      "characteristics": {
+        "resolution": "200dpi",
+        "has_merged_cells": false,
+        "has_borders": true,
+        "has_background_color": false,
+        "complexity": "medium",
+        "issues": ["slight_blur", "low_contrast"]
+      },
+      "expected_extraction": {
+        "tables": [
+          {
+            "name": "annual_comparison",
+            "position": {"page": 1, "top": 200, "left": 100, "bottom": 500, "right": 700},
+            "expected_confidence": 0.90,
+            "rows": 8,
+            "columns": 4,
+            "headers": ["Metric", "2023", "2024", "2025 (Projected)"],
+            "data": [
+              ["Revenue", "$1,250,000.00", "$1,500,000.00", "$1,750,000.00"],
+              ["Cost of Goods Sold", "$750,000.00", "$900,000.00", "$1,050,000.00"],
+              ["Gross Profit", "$500,000.00", "$600,000.00", "$700,000.00"],
+              ["Operating Expenses", "$350,000.00", "$400,000.00", "$450,000.00"],
+              ["Operating Profit", "$150,000.00", "$200,000.00", "$250,000.00"],
+              ["Taxes", "$37,500.00", "$50,000.00", "$62,500.00"],
+              ["Net Profit", "$112,500.00", "$150,000.00", "$187,500.00"]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "low_quality_table_001",
+      "filename": "low_quality_table_001.pdf",
+      "category": "financial_tables",
+      "document_type": "financial_statement",
+      "quality": "low",
+      "orientation": "portrait",
+      "page_count": 1,
+      "characteristics": {
+        "resolution": "150dpi",
+        "has_merged_cells": false,
+        "has_borders": true,
+        "has_background_color": false,
+        "complexity": "medium",
+        "issues": ["significant_blur", "low_contrast", "skewed", "noise"]
+      },
+      "expected_extraction": {
+        "tables": [
+          {
+            "name": "expense_breakdown",
+            "position": {"page": 1, "top": 200, "left": 100, "bottom": 500, "right": 700},
+            "expected_confidence": 0.82,
+            "rows": 8,
+            "columns": 3,
+            "headers": ["Expense Category", "Amount", "Percentage"],
+            "data": [
+              ["Salaries and Wages", "$450,000.00", "45.0%"],
+              ["Rent", "$120,000.00", "12.0%"],
+              ["Utilities", "$35,000.00", "3.5%"],
+              ["Marketing", "$75,000.00", "7.5%"],
+              ["Insurance", "$50,000.00", "5.0%"],
+              ["Supplies", "$95,000.00", "9.5%"],
+              ["Other Expenses", "$175,000.00", "17.5%"]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "mixed_content_table_001",
+      "filename": "mixed_content_table_001.pdf",
+      "category": "mixed_content_tables",
+      "document_type": "application_form",
+      "quality": "high",
+      "orientation": "portrait",
+      "page_count": 1,
+      "characteristics": {
+        "resolution": "300dpi",
+        "has_merged_cells": true,
+        "has_borders": true,
+        "has_background_color": true,
+        "complexity": "high",
+        "contains_checkboxes": true
+      },
+      "expected_extraction": {
+        "tables": [
+          {
+            "name": "loan_options",
+            "position": {"page": 1, "top": 200, "left": 100, "bottom": 500, "right": 700},
+            "expected_confidence": 0.95,
+            "rows": 6,
+            "columns": 6,
+            "headers": ["Loan Type", "Amount Range", "Term", "Interest Rate", "Monthly Payment", "Selected"],
+            "data": [
+              ["Working Capital", "$50,000 - $250,000", "1-3 years", "8.5% - 12.0%", "$1,500 - $8,500", "☑"],
+              ["Equipment Financing", "$25,000 - $500,000", "2-7 years", "6.0% - 9.5%", "$400 - $8,000", "☐"],
+              ["Business Expansion", "$100,000 - $1,000,000", "5-10 years", "7.5% - 11.0%", "$1,200 - $13,500", "☐"],
+              ["Debt Consolidation", "$75,000 - $500,000", "3-7 years", "9.0% - 13.5%", "$1,800 - $12,000", "☐"],
+              ["Merchant Cash Advance", "$10,000 - $250,000", "6-18 months", "Factor rate: 1.1 - 1.5", "Daily payment", "☐"]
+            ],
+            "merged_cells": [
+              {"row_start": 0, "row_end": 0, "col_start": 0, "col_end": 5}
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "comparison_table_001",
+      "filename": "comparison_table_001.pdf",
+      "category": "comparison_tables",
+      "document_type": "financial_analysis",
+      "quality": "high",
+      "orientation": "landscape",
+      "page_count": 1,
+      "characteristics": {
+        "resolution": "300dpi",
+        "has_merged_cells": true,
+        "has_borders": true,
+        "has_background_color": true,
+        "complexity": "high"
+      },
+      "expected_extraction": {
+        "tables": [
+          {
+            "name": "competitor_analysis",
+            "position": {"page": 1, "top": 150, "left": 50, "bottom": 600, "right": 950},
+            "expected_confidence": 0.96,
+            "rows": 10,
+            "columns": 6,
+            "headers": ["Metric", "Our Company", "Competitor A", "Competitor B", "Competitor C", "Industry Average"],
+            "data": [
+              ["Annual Revenue", "$1,750,000", "$2,100,000", "$1,500,000", "$3,250,000", "$2,150,000"],
+              ["Market Share", "15.2%", "18.3%", "13.0%", "28.3%", "25.0%"],
+              ["Employee Count", "45", "60", "35", "85", "56"],
+              ["Customer Satisfaction", "4.8/5.0", "4.2/5.0", "4.5/5.0", "3.9/5.0", "4.3/5.0"],
+              ["Product Offerings", "12", "15", "8", "20", "14"],
+              ["Average Deal Size", "$35,000", "$28,000", "$32,000", "$42,000", "$34,250"],
+              ["Sales Cycle (days)", "45", "60", "50", "55", "52"],
+              ["Customer Retention", "92%", "85%", "88%", "79%", "86%"],
+              ["Profit Margin", "18.5%", "15.2%", "16.8%", "14.5%", "16.3%"]
+            ],
+            "merged_cells": [
+              {"row_start": 0, "row_end": 0, "col_start": 0, "col_end": 5}
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "nested_table_001",
+      "filename": "nested_table_001.pdf",
+      "category": "financial_tables",
+      "document_type": "financial_statement",
+      "quality": "high",
+      "orientation": "landscape",
+      "page_count": 1,
+      "characteristics": {
+        "resolution": "300dpi",
+        "has_merged_cells": true,
+        "has_borders": true,
+        "has_background_color": true,
+        "complexity": "very_high",
+        "has_nested_tables": true
+      },
+      "expected_extraction": {
+        "tables": [
+          {
+            "name": "financial_summary",
+            "position": {"page": 1, "top": 150, "left": 50, "bottom": 300, "right": 950},
+            "expected_confidence": 0.94,
+            "rows": 5,
+            "columns": 5,
+            "headers": ["Category", "Q1 2025", "Q2 2025", "Q3 2025", "Q4 2025"],
+            "data": [
+              ["Revenue", "$390,000", "$457,500", "$495,000", "$532,500"],
+              ["Expenses", "$305,000", "$343,500", "$375,000", "$397,500"],
+              ["Profit", "$85,000", "$114,000", "$120,000", "$135,000"],
+              ["Profit Margin", "21.8%", "24.9%", "24.2%", "25.4%"]
+            ]
+          },
+          {
+            "name": "revenue_breakdown",
+            "position": {"page": 1, "top": 350, "left": 50, "bottom": 500, "right": 950},
+            "expected_confidence": 0.95,
+            "rows": 5,
+            "columns": 5,
+            "headers": ["Revenue Stream", "Q1 2025", "Q2 2025", "Q3 2025", "Q4 2025"],
+            "data": [
+              ["Product Sales", "$250,000", "$290,000", "$315,000", "$340,000"],
+              ["Service Revenue", "$125,000", "$145,000", "$155,000", "$165,000"],
+              ["Licensing", "$10,000", "$15,000", "$17,500", "$20,000"],
+              ["Other Revenue", "$5,000", "$7,500", "$7,500", "$7,500"]
+            ]
+          },
+          {
+            "name": "expense_breakdown",
+            "position": {"page": 1, "top": 550, "left": 50, "bottom": 700, "right": 950},
+            "expected_confidence": 0.95,
+            "rows": 7,
+            "columns": 5,
+            "headers": ["Expense Category", "Q1 2025", "Q2 2025", "Q3 2025", "Q4 2025"],
+            "data": [
+              ["Cost of Goods Sold", "$150,000", "$174,000", "$189,000", "$204,000"],
+              ["Salaries and Wages", "$95,000", "$100,000", "$110,000", "$115,000"],
+              ["Rent and Utilities", "$32,500", "$32,500", "$32,500", "$32,500"],
+              ["Marketing", "$15,000", "$22,500", "$27,500", "$30,000"],
+              ["Other Expenses", "$12,500", "$14,500", "$16,000", "$16,000"]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "rotated_table_001",
+      "filename": "rotated_table_001.pdf",
+      "category": "financial_tables",
+      "document_type": "financial_statement",
+      "quality": "medium",
+      "orientation": "portrait",
+      "page_count": 1,
+      "characteristics": {
+        "resolution": "200dpi",
+        "has_merged_cells": false,
+        "has_borders": true,
+        "has_background_color": false,
+        "complexity": "medium",
+        "rotation_angle": 90
+      },
+      "expected_extraction": {
+        "tables": [
+          {
+            "name": "quarterly_performance",
+            "position": {"page": 1, "top": 150, "left": 100, "bottom": 700, "right": 500},
+            "expected_confidence": 0.88,
+            "rows": 6,
+            "columns": 5,
+            "headers": ["Metric", "Q1 2025", "Q2 2025", "Q3 2025", "Q4 2025"],
+            "data": [
+              ["Revenue", "$390,000", "$457,500", "$495,000", "$532,500"],
+              ["Expenses", "$305,000", "$343,500", "$375,000", "$397,500"],
+              ["Profit", "$85,000", "$114,000", "$120,000", "$135,000"],
+              ["Growth Rate", "8.5%", "17.3%", "8.2%", "7.6%"],
+              ["Customer Count", "125", "142", "156", "175"]
+            ],
+            "rotation_angle": 90
+          }
+        ]
+      }
     }
   ],
-  "confidence_thresholds": {
-    "high_confidence": 0.90,
-    "medium_confidence": 0.75,
-    "low_confidence": 0.60,
-    "human_review_threshold": 0.75
-  },
   "test_parameters": {
-    "simple_table_accuracy_target": 0.97,
-    "complex_table_accuracy_target": 0.94,
-    "merged_cells_accuracy_target": 0.92,
-    "borderless_table_accuracy_target": 0.90,
-    "multi_page_table_accuracy_target": 0.93,
-    "low_quality_table_accuracy_target": 0.85,
-    "overall_table_accuracy_target": 0.93,
-    "structure_recognition_accuracy_target": 0.95,
-    "cell_content_extraction_accuracy_target": 0.94
-  }
+    "confidence_thresholds": {
+      "high_quality": 0.95,
+      "medium_quality": 0.85,
+      "low_quality": 0.75
+    },
+    "accuracy_metrics": {
+      "table_structure": {
+        "row_count_match": "Number of rows must match exactly",
+        "column_count_match": "Number of columns must match exactly",
+        "header_match": "Headers must match exactly, including capitalization",
+        "cell_content_match": {
+          "text": "Text must match with Levenshtein distance <= 2",
+          "numbers": "Numeric values must be within 0.1% of expected value",
+          "currency": "Currency values must be within 0.1% of expected value",
+          "dates": "Dates must match exactly in normalized format (YYYY-MM-DD)"
+        }
+      },
+      "position_tolerance": {
+        "high_quality": {"x": 10, "y": 5},
+        "medium_quality": {"x": 15, "y": 10},
+        "low_quality": {"x": 25, "y": 15}
+      }
+    },
+    "performance_requirements": {
+      "processing_time": {
+        "per_page": "< 3 seconds",
+        "per_table": "< 5 seconds"
+      },
+      "memory_usage": "< 1.5GB per document",
+      "gpu_acceleration": "Required for production environment"
+    }
+  },
+  "related_manifests": [
+    "typed_documents/financial_documents/financial_documents_manifest.json",
+    "typed_documents/invoices/invoices_manifest.json",
+    "typed_documents/quality_variations/low_quality_manifest.json",
+    "typed_documents/quality_variations/medium_quality_manifest.json",
+    "typed_documents/quality_variations/high_quality_manifest.json"
+  ]
 }
