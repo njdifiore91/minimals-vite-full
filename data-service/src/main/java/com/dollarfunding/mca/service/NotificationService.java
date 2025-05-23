@@ -1,114 +1,234 @@
 package com.dollarfunding.mca.service;
 
-import com.dollarfunding.mca.entity.Application;
-import com.dollarfunding.mca.entity.Document;
-import com.dollarfunding.mca.entity.EventType;
+import com.dollarfunding.mca.dto.notification.NotificationDeliveryStatusDTO;
+import com.dollarfunding.mca.dto.notification.NotificationRequestDTO;
+import com.dollarfunding.mca.dto.notification.NotificationResponseDTO;
+import com.dollarfunding.mca.dto.notification.NotificationTemplateDTO;
+import com.dollarfunding.mca.dto.notification.NotificationTypeEnum;
+import com.dollarfunding.mca.dto.notification.RecipientDTO;
 
+import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * Service interface that defines the contract for notification management in the MCA application.
- * It provides methods for sending notifications about application status changes,
- * document processing results, and system events.
- * 
- * This interface is implemented by NotificationServiceImpl and used by other services
+ * It provides methods for sending notifications about application status changes, document processing results,
+ * and system events. This interface is implemented by NotificationServiceImpl and used by other services
  * to notify users and external systems about important events.
  */
 public interface NotificationService {
-    
+
     /**
      * Sends a notification about an application status change.
-     * 
-     * @param application The application that had a status change
-     * @param previousStatus The previous status of the application
+     *
+     * @param applicationId The ID of the application whose status has changed
+     * @param oldStatus The previous status of the application
      * @param newStatus The new status of the application
-     * @return true if the notification was sent successfully, false otherwise
+     * @param metadata Additional metadata about the status change
+     * @return The notification response containing the notification ID and delivery status
      */
-    boolean sendApplicationStatusNotification(Application application, String previousStatus, String newStatus);
-    
+    NotificationResponseDTO sendApplicationStatusNotification(
+            String applicationId,
+            String oldStatus,
+            String newStatus,
+            Map<String, Object> metadata);
+
     /**
-     * Sends a notification about a new application being created.
-     * 
-     * @param application The newly created application
-     * @return true if the notification was sent successfully, false otherwise
+     * Sends a notification about document processing results.
+     *
+     * @param applicationId The ID of the application the document belongs to
+     * @param documentId The ID of the processed document
+     * @param documentType The type of the document
+     * @param processingStatus The status of the document processing
+     * @param extractedData Data extracted from the document (if applicable)
+     * @param metadata Additional metadata about the document processing
+     * @return The notification response containing the notification ID and delivery status
      */
-    boolean sendApplicationCreatedNotification(Application application);
-    
+    NotificationResponseDTO sendDocumentProcessingNotification(
+            String applicationId,
+            String documentId,
+            String documentType,
+            String processingStatus,
+            Map<String, Object> extractedData,
+            Map<String, Object> metadata);
+
     /**
-     * Sends a notification about an application being approved.
-     * 
-     * @param application The approved application
-     * @return true if the notification was sent successfully, false otherwise
-     */
-    boolean sendApplicationApprovedNotification(Application application);
-    
-    /**
-     * Sends a notification about an application being rejected.
-     * 
-     * @param application The rejected application
-     * @param reason The reason for rejection
-     * @return true if the notification was sent successfully, false otherwise
-     */
-    boolean sendApplicationRejectedNotification(Application application, String reason);
-    
-    /**
-     * Sends a notification about a document being uploaded.
-     * 
-     * @param document The uploaded document
-     * @param applicationId The ID of the application associated with the document
-     * @return true if the notification was sent successfully, false otherwise
-     */
-    boolean sendDocumentUploadedNotification(Document document, Long applicationId);
-    
-    /**
-     * Sends a notification about a document being processed.
-     * 
-     * @param document The processed document
-     * @param applicationId The ID of the application associated with the document
-     * @param extractionResults The results of the document data extraction
-     * @return true if the notification was sent successfully, false otherwise
-     */
-    boolean sendDocumentProcessedNotification(Document document, Long applicationId, Map<String, Object> extractionResults);
-    
-    /**
-     * Sends a system event notification.
-     * 
+     * Sends a notification about a system event.
+     *
      * @param eventType The type of system event
-     * @param payload The event payload
-     * @return true if the notification was sent successfully, false otherwise
+     * @param severity The severity of the event (INFO, WARNING, ERROR, CRITICAL)
+     * @param message The event message
+     * @param metadata Additional metadata about the event
+     * @return The notification response containing the notification ID and delivery status
      */
-    boolean sendSystemEventNotification(EventType eventType, Map<String, Object> payload);
-    
+    NotificationResponseDTO sendSystemEventNotification(
+            String eventType,
+            String severity,
+            String message,
+            Map<String, Object> metadata);
+
     /**
-     * Retrieves notification templates from the cache or loads them from the filesystem.
-     * 
-     * @param templateName The name of the template to retrieve
-     * @return The template content as a string
+     * Sends a custom notification with the specified parameters.
+     *
+     * @param notificationRequest The notification request containing all notification details
+     * @return The notification response containing the notification ID and delivery status
      */
-    String getNotificationTemplate(String templateName);
-    
+    NotificationResponseDTO sendNotification(NotificationRequestDTO notificationRequest);
+
     /**
-     * Refreshes the notification template cache.
-     * 
-     * @param templateName The name of the template to refresh, or null to refresh all templates
-     */
-    void refreshNotificationTemplates(String templateName);
-    
-    /**
-     * Tracks the delivery status of a notification.
-     * 
+     * Retrieves the delivery status of a notification.
+     *
      * @param notificationId The ID of the notification
-     * @param status The delivery status
-     * @param details Additional details about the delivery status
+     * @return The notification delivery status
      */
-    void trackNotificationDeliveryStatus(String notificationId, String status, Map<String, Object> details);
-    
+    NotificationDeliveryStatusDTO getNotificationStatus(String notificationId);
+
     /**
-     * Retries a failed notification delivery.
-     * 
-     * @param notificationId The ID of the failed notification
-     * @param maxAttempts The maximum number of retry attempts
-     * @return true if the retry was successful, false otherwise
+     * Retrieves the delivery statuses of multiple notifications.
+     *
+     * @param notificationIds The IDs of the notifications
+     * @return A map of notification IDs to their delivery statuses
      */
-    boolean retryFailedNotification(String notificationId, int maxAttempts);
+    Map<String, NotificationDeliveryStatusDTO> getNotificationStatuses(List<String> notificationIds);
+
+    /**
+     * Creates a new notification template.
+     *
+     * @param template The notification template to create
+     * @return The created notification template with its assigned ID
+     */
+    NotificationTemplateDTO createNotificationTemplate(NotificationTemplateDTO template);
+
+    /**
+     * Updates an existing notification template.
+     *
+     * @param templateId The ID of the template to update
+     * @param template The updated notification template
+     * @return The updated notification template
+     */
+    NotificationTemplateDTO updateNotificationTemplate(String templateId, NotificationTemplateDTO template);
+
+    /**
+     * Retrieves a notification template by its ID.
+     *
+     * @param templateId The ID of the template to retrieve
+     * @return The notification template, or empty if not found
+     */
+    Optional<NotificationTemplateDTO> getNotificationTemplate(String templateId);
+
+    /**
+     * Retrieves all notification templates for a specific notification type.
+     *
+     * @param notificationType The type of notification
+     * @return A list of notification templates for the specified type
+     */
+    List<NotificationTemplateDTO> getNotificationTemplatesByType(NotificationTypeEnum notificationType);
+
+    /**
+     * Deletes a notification template.
+     *
+     * @param templateId The ID of the template to delete
+     * @return true if the template was deleted, false otherwise
+     */
+    boolean deleteNotificationTemplate(String templateId);
+
+    /**
+     * Adds a recipient to receive notifications for a specific application.
+     *
+     * @param applicationId The ID of the application
+     * @param recipient The recipient to add
+     * @return The added recipient with its assigned ID
+     */
+    RecipientDTO addApplicationRecipient(String applicationId, RecipientDTO recipient);
+
+    /**
+     * Removes a recipient from receiving notifications for a specific application.
+     *
+     * @param applicationId The ID of the application
+     * @param recipientId The ID of the recipient to remove
+     * @return true if the recipient was removed, false otherwise
+     */
+    boolean removeApplicationRecipient(String applicationId, String recipientId);
+
+    /**
+     * Retrieves all recipients configured to receive notifications for a specific application.
+     *
+     * @param applicationId The ID of the application
+     * @return A list of recipients for the specified application
+     */
+    List<RecipientDTO> getApplicationRecipients(String applicationId);
+
+    /**
+     * Adds a recipient to receive system notifications.
+     *
+     * @param recipient The recipient to add
+     * @return The added recipient with its assigned ID
+     */
+    RecipientDTO addSystemRecipient(RecipientDTO recipient);
+
+    /**
+     * Removes a recipient from receiving system notifications.
+     *
+     * @param recipientId The ID of the recipient to remove
+     * @return true if the recipient was removed, false otherwise
+     */
+    boolean removeSystemRecipient(String recipientId);
+
+    /**
+     * Retrieves all recipients configured to receive system notifications.
+     *
+     * @return A list of system notification recipients
+     */
+    List<RecipientDTO> getSystemRecipients();
+
+    /**
+     * Resends a notification that was previously sent.
+     *
+     * @param notificationId The ID of the notification to resend
+     * @return The notification response for the resent notification
+     */
+    NotificationResponseDTO resendNotification(String notificationId);
+
+    /**
+     * Cancels a pending notification that has not yet been delivered.
+     *
+     * @param notificationId The ID of the notification to cancel
+     * @return true if the notification was cancelled, false otherwise
+     */
+    boolean cancelNotification(String notificationId);
+
+    /**
+     * Sends a notification using a template.
+     *
+     * @param templateId The ID of the template to use
+     * @param templateVariables The variables to substitute in the template
+     * @param recipients The recipients of the notification
+     * @param metadata Additional metadata for the notification
+     * @return The notification response containing the notification ID and delivery status
+     */
+    NotificationResponseDTO sendTemplatedNotification(
+            String templateId,
+            Map<String, Object> templateVariables,
+            List<RecipientDTO> recipients,
+            Map<String, Object> metadata);
+
+    /**
+     * Configures notification channels for a specific application.
+     *
+     * @param applicationId The ID of the application
+     * @param channelConfigurations A map of channel types to their configurations
+     * @return true if the channels were configured successfully, false otherwise
+     */
+    boolean configureApplicationNotificationChannels(
+            String applicationId,
+            Map<String, Object> channelConfigurations);
+
+    /**
+     * Retrieves the notification channel configurations for a specific application.
+     *
+     * @param applicationId The ID of the application
+     * @return A map of channel types to their configurations
+     */
+    Map<String, Object> getApplicationNotificationChannels(String applicationId);
 }
