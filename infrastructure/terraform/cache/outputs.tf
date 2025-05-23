@@ -1,230 +1,238 @@
 # Redis Cache Infrastructure Outputs
-# This file exports essential Redis information as outputs, including connection endpoints,
-# port numbers, and resource identifiers for the MCA Application Processing System.
+# These outputs provide essential Redis information for other Terraform modules and application configuration
 
-# Application Data Cache Outputs
-
-output "redis_app_data_id" {
-  description = "ID of the Redis application data replication group"
-  value       = aws_elasticache_replication_group.redis_app_data.id
+# Resource Identifiers
+output "redis_app_data_replication_group_id" {
+  description = "The ID of the Redis application data replication group"
+  value       = module.redis_app_data.replication_group_id
 }
 
-output "redis_app_data_arn" {
-  description = "ARN of the Redis application data replication group"
-  value       = aws_elasticache_replication_group.redis_app_data.arn
+output "redis_user_sessions_replication_group_id" {
+  description = "The ID of the Redis user sessions replication group"
+  value       = module.redis_user_sessions.replication_group_id
 }
 
+# Connection Endpoints - Primary
 output "redis_app_data_primary_endpoint" {
-  description = "Primary endpoint for the Redis application data cluster"
-  value       = aws_elasticache_replication_group.redis_app_data.primary_endpoint_address
-}
-
-output "redis_app_data_reader_endpoint" {
-  description = "Reader endpoint for the Redis application data cluster"
-  value       = aws_elasticache_replication_group.redis_app_data.reader_endpoint_address
-}
-
-output "redis_app_data_configuration_endpoint" {
-  description = "Configuration endpoint for the Redis application data cluster"
-  value       = aws_elasticache_replication_group.redis_app_data.configuration_endpoint_address
-}
-
-output "redis_app_data_port" {
-  description = "Port number for the Redis application data cluster"
-  value       = aws_elasticache_replication_group.redis_app_data.port
-}
-
-output "redis_app_data_engine_version" {
-  description = "Redis engine version for the application data cluster"
-  value       = aws_elasticache_replication_group.redis_app_data.engine_version
-}
-
-# User Sessions Cache Outputs
-
-output "redis_user_sessions_id" {
-  description = "ID of the Redis user sessions replication group"
-  value       = aws_elasticache_replication_group.redis_user_sessions.id
-}
-
-output "redis_user_sessions_arn" {
-  description = "ARN of the Redis user sessions replication group"
-  value       = aws_elasticache_replication_group.redis_user_sessions.arn
+  description = "The primary endpoint address for the Redis application data cluster"
+  value       = module.redis_app_data.primary_endpoint_address
 }
 
 output "redis_user_sessions_primary_endpoint" {
-  description = "Primary endpoint for the Redis user sessions cluster"
-  value       = aws_elasticache_replication_group.redis_user_sessions.primary_endpoint_address
+  description = "The primary endpoint address for the Redis user sessions cluster"
+  value       = module.redis_user_sessions.primary_endpoint_address
+}
+
+# Connection Endpoints - Reader
+output "redis_app_data_reader_endpoint" {
+  description = "The reader endpoint address for the Redis application data cluster"
+  value       = module.redis_app_data.reader_endpoint_address
 }
 
 output "redis_user_sessions_reader_endpoint" {
-  description = "Reader endpoint for the Redis user sessions cluster"
-  value       = aws_elasticache_replication_group.redis_user_sessions.reader_endpoint_address
+  description = "The reader endpoint address for the Redis user sessions cluster"
+  value       = module.redis_user_sessions.reader_endpoint_address
+}
+
+# Configuration Endpoints (for cluster mode)
+output "redis_app_data_configuration_endpoint" {
+  description = "The configuration endpoint for the Redis application data cluster (cluster mode)"
+  value       = module.redis_app_data.configuration_endpoint_address
 }
 
 output "redis_user_sessions_configuration_endpoint" {
-  description = "Configuration endpoint for the Redis user sessions cluster"
-  value       = aws_elasticache_replication_group.redis_user_sessions.configuration_endpoint_address
+  description = "The configuration endpoint for the Redis user sessions cluster (cluster mode)"
+  value       = module.redis_user_sessions.configuration_endpoint_address
+}
+
+# Port Information
+output "redis_app_data_port" {
+  description = "The port on which Redis application data cluster is listening"
+  value       = module.redis_app_data.port
 }
 
 output "redis_user_sessions_port" {
-  description = "Port number for the Redis user sessions cluster"
-  value       = aws_elasticache_replication_group.redis_user_sessions.port
+  description = "The port on which Redis user sessions cluster is listening"
+  value       = module.redis_user_sessions.port
 }
 
-output "redis_user_sessions_engine_version" {
-  description = "Redis engine version for the user sessions cluster"
-  value       = aws_elasticache_replication_group.redis_user_sessions.engine_version
-}
-
-# Connection String Templates for Different Service Types
-
+# Connection Strings for ioredis 5.3.2 (non-TLS)
 output "redis_app_data_connection_string" {
-  description = "Connection string for the Redis application data cluster (format: redis://host:port)"
-  value       = "redis://${aws_elasticache_replication_group.redis_app_data.primary_endpoint_address}:${aws_elasticache_replication_group.redis_app_data.port}"
-  sensitive   = true
-}
-
-output "redis_app_data_connection_string_tls" {
-  description = "TLS connection string for the Redis application data cluster (format: rediss://host:port)"
-  value       = "rediss://${aws_elasticache_replication_group.redis_app_data.primary_endpoint_address}:${aws_elasticache_replication_group.redis_app_data.port}"
+  description = "Connection string for Redis application data cluster compatible with ioredis 5.3.2"
+  value       = "redis://${module.redis_app_data.primary_endpoint_address}:${module.redis_app_data.port}/0"
   sensitive   = true
 }
 
 output "redis_user_sessions_connection_string" {
-  description = "Connection string for the Redis user sessions cluster (format: redis://host:port)"
-  value       = "redis://${aws_elasticache_replication_group.redis_user_sessions.primary_endpoint_address}:${aws_elasticache_replication_group.redis_user_sessions.port}"
+  description = "Connection string for Redis user sessions cluster compatible with ioredis 5.3.2"
+  value       = "redis://${module.redis_user_sessions.primary_endpoint_address}:${module.redis_user_sessions.port}/0"
+  sensitive   = true
+}
+
+# Connection Strings for ioredis 5.3.2 (TLS)
+output "redis_app_data_connection_string_tls" {
+  description = "TLS connection string for Redis application data cluster compatible with ioredis 5.3.2"
+  value       = "rediss://${module.redis_app_data.primary_endpoint_address}:${module.redis_app_data.port}/0"
   sensitive   = true
 }
 
 output "redis_user_sessions_connection_string_tls" {
-  description = "TLS connection string for the Redis user sessions cluster (format: rediss://host:port)"
-  value       = "rediss://${aws_elasticache_replication_group.redis_user_sessions.primary_endpoint_address}:${aws_elasticache_replication_group.redis_user_sessions.port}"
+  description = "TLS connection string for Redis user sessions cluster compatible with ioredis 5.3.2"
+  value       = "rediss://${module.redis_user_sessions.primary_endpoint_address}:${module.redis_user_sessions.port}/0"
   sensitive   = true
 }
 
-# ioredis 5.3.2 Compatible Connection Configuration
-
-output "redis_app_data_ioredis_config" {
-  description = "ioredis 5.3.2 compatible configuration for the Redis application data cluster"
-  value = jsonencode({
-    host      = aws_elasticache_replication_group.redis_app_data.primary_endpoint_address
-    port      = aws_elasticache_replication_group.redis_app_data.port
-    tls       = true
-    db        = 0
-    keyPrefix = "mca:app:"
-    retryStrategy = {
-      maxRetryTime = 10000
-      retries      = 10
-    }
-    commandTimeout = 5000
-    enableOfflineQueue = true
-    connectTimeout = 10000
-    maxRetriesPerRequest = 3
-  })
-  sensitive = true
+# Cluster Mode Connection Strings (for ioredis cluster mode)
+output "redis_app_data_cluster_connection_string" {
+  description = "Cluster mode connection string for Redis application data cluster"
+  value       = var.enable_cluster_mode ? "redis://${module.redis_app_data.configuration_endpoint_address}:${module.redis_app_data.port}" : null
+  sensitive   = true
 }
 
-output "redis_user_sessions_ioredis_config" {
-  description = "ioredis 5.3.2 compatible configuration for the Redis user sessions cluster"
-  value = jsonencode({
-    host      = aws_elasticache_replication_group.redis_user_sessions.primary_endpoint_address
-    port      = aws_elasticache_replication_group.redis_user_sessions.port
-    tls       = true
-    db        = 0
-    keyPrefix = "mca:session:"
-    retryStrategy = {
-      maxRetryTime = 10000
-      retries      = 10
-    }
-    commandTimeout = 5000
-    enableOfflineQueue = true
-    connectTimeout = 10000
-    maxRetriesPerRequest = 3
-  })
-  sensitive = true
+output "redis_user_sessions_cluster_connection_string" {
+  description = "Cluster mode connection string for Redis user sessions cluster"
+  value       = var.enable_cluster_mode ? "redis://${module.redis_user_sessions.configuration_endpoint_address}:${module.redis_user_sessions.port}" : null
+  sensitive   = true
 }
 
-# Monitoring and Logging Configuration
-
-output "redis_app_data_cloudwatch_alarms" {
-  description = "CloudWatch alarm ARNs for the Redis application data cluster"
-  value = {
-    cpu_utilization = aws_cloudwatch_metric_alarm.redis_app_data_cpu.arn
-    memory_usage    = aws_cloudwatch_metric_alarm.redis_app_data_memory.arn
-  }
+# Cluster Mode Connection Strings with TLS
+output "redis_app_data_cluster_connection_string_tls" {
+  description = "Cluster mode TLS connection string for Redis application data cluster"
+  value       = var.enable_cluster_mode ? "rediss://${module.redis_app_data.configuration_endpoint_address}:${module.redis_app_data.port}" : null
+  sensitive   = true
 }
 
-output "redis_user_sessions_cloudwatch_alarms" {
-  description = "CloudWatch alarm ARNs for the Redis user sessions cluster"
-  value = {
-    cpu_utilization = aws_cloudwatch_metric_alarm.redis_user_sessions_cpu.arn
-    memory_usage    = aws_cloudwatch_metric_alarm.redis_user_sessions_memory.arn
-  }
+output "redis_user_sessions_cluster_connection_string_tls" {
+  description = "Cluster mode TLS connection string for Redis user sessions cluster"
+  value       = var.enable_cluster_mode ? "rediss://${module.redis_user_sessions.configuration_endpoint_address}:${module.redis_user_sessions.port}" : null
+  sensitive   = true
 }
 
-output "redis_log_group_names" {
-  description = "CloudWatch log group names for Redis slow logs"
-  value = {
-    app_data      = "/aws/elasticache/${aws_elasticache_replication_group.redis_app_data.id}/slowlog"
-    user_sessions = "/aws/elasticache/${aws_elasticache_replication_group.redis_user_sessions.id}/slowlog"
-  }
+# TTL Settings
+output "redis_app_data_ttl_seconds" {
+  description = "TTL for application data in Redis cache (15 minutes)"
+  value       = var.app_data_ttl_seconds
 }
 
-# Security Configuration
-
-output "redis_security_group_id" {
-  description = "ID of the security group for Redis clusters"
-  value       = aws_security_group.redis_security_group.id
+output "redis_user_sessions_ttl_seconds" {
+  description = "TTL for user sessions in Redis session store (24 hours)"
+  value       = var.user_sessions_ttl_seconds
 }
 
-output "redis_subnet_group_name" {
-  description = "Name of the subnet group for Redis clusters"
-  value       = aws_elasticache_subnet_group.redis_subnet_group.name
+# Eviction Policies
+output "redis_app_data_eviction_policy" {
+  description = "Eviction policy for Redis application data cluster"
+  value       = var.app_data_eviction_policy
 }
 
-# TTL and Eviction Policy Information
-
-output "redis_app_data_ttl_info" {
-  description = "TTL and eviction policy information for the Redis application data cluster"
-  value = {
-    ttl            = "15-minutes"
-    eviction_policy = "allkeys-lru"
-    parameter_group = aws_elasticache_parameter_group.redis_app_data_params.name
-  }
+output "redis_user_sessions_eviction_policy" {
+  description = "Eviction policy for Redis user sessions cluster"
+  value       = var.user_sessions_eviction_policy
 }
 
-output "redis_user_sessions_ttl_info" {
-  description = "TTL and eviction policy information for the Redis user sessions cluster"
-  value = {
-    ttl            = "24-hours"
-    eviction_policy = "noeviction"
-    parameter_group = aws_elasticache_parameter_group.redis_user_sessions_params.name
-  }
+# Monitoring and Logging
+output "redis_dashboard_url" {
+  description = "URL to the Redis performance dashboard in CloudWatch"
+  value       = "https://${local.aws_region}.console.aws.amazon.com/cloudwatch/home?region=${local.aws_region}#dashboards:name=${aws_cloudwatch_dashboard.redis_performance_dashboard.dashboard_name}"
 }
 
-# Environment Information
-
-output "redis_environment" {
-  description = "Environment in which Redis clusters are deployed"
-  value       = var.environment
+output "redis_app_data_alarm_actions" {
+  description = "List of ARNs of actions to take when Redis application data alarms are triggered"
+  value       = var.alarm_actions
 }
 
-# Cluster Configuration
+output "redis_user_sessions_alarm_actions" {
+  description = "List of ARNs of actions to take when Redis user sessions alarms are triggered"
+  value       = var.alarm_actions
+}
 
-output "redis_cluster_config" {
-  description = "Cluster configuration for Redis instances"
-  value = {
-    app_data = {
-      num_node_groups         = aws_elasticache_replication_group.redis_app_data.cluster_mode[0].num_node_groups
-      replicas_per_node_group = aws_elasticache_replication_group.redis_app_data.cluster_mode[0].replicas_per_node_group
-      node_type               = aws_elasticache_replication_group.redis_app_data.node_type
-      data_tiering_enabled    = aws_elasticache_replication_group.redis_app_data.data_tiering_enabled
-    }
-    user_sessions = {
-      num_node_groups         = aws_elasticache_replication_group.redis_user_sessions.cluster_mode[0].num_node_groups
-      replicas_per_node_group = aws_elasticache_replication_group.redis_user_sessions.cluster_mode[0].replicas_per_node_group
-      node_type               = aws_elasticache_replication_group.redis_user_sessions.node_type
-      data_tiering_enabled    = aws_elasticache_replication_group.redis_user_sessions.data_tiering_enabled
-    }
-  }
+# SSM Parameter Paths
+output "redis_app_data_endpoint_ssm_parameter" {
+  description = "SSM parameter path for Redis application data endpoint"
+  value       = aws_ssm_parameter.redis_app_data_endpoint.name
+}
+
+output "redis_user_sessions_endpoint_ssm_parameter" {
+  description = "SSM parameter path for Redis user sessions endpoint"
+  value       = aws_ssm_parameter.redis_user_sessions_endpoint.name
+}
+
+output "redis_app_data_connection_string_ssm_parameter" {
+  description = "SSM parameter path for Redis application data connection string"
+  value       = aws_ssm_parameter.redis_app_data_connection_string.name
+}
+
+output "redis_user_sessions_connection_string_ssm_parameter" {
+  description = "SSM parameter path for Redis user sessions connection string"
+  value       = aws_ssm_parameter.redis_user_sessions_connection_string.name
+}
+
+# Cluster Information
+output "redis_app_data_node_type" {
+  description = "The node type of the Redis application data cluster"
+  value       = local.redis_node_type
+}
+
+output "redis_user_sessions_node_type" {
+  description = "The node type of the Redis user sessions cluster"
+  value       = local.redis_node_type
+}
+
+output "redis_app_data_num_shards" {
+  description = "The number of shards in the Redis application data cluster"
+  value       = local.app_data_num_shards
+}
+
+output "redis_user_sessions_num_shards" {
+  description = "The number of shards in the Redis user sessions cluster"
+  value       = local.user_sessions_num_shards
+}
+
+output "redis_app_data_replicas_per_shard" {
+  description = "The number of replicas per shard in the Redis application data cluster"
+  value       = local.app_data_replicas_per_shard
+}
+
+output "redis_user_sessions_replicas_per_shard" {
+  description = "The number of replicas per shard in the Redis user sessions cluster"
+  value       = local.user_sessions_replicas_per_shard
+}
+
+# Version Information
+output "redis_version" {
+  description = "The version of Redis used in the clusters"
+  value       = "7.0"
+}
+
+output "ioredis_client_version" {
+  description = "The recommended ioredis client version for connecting to Redis"
+  value       = "5.3.2"
+}
+
+# Security Information
+output "redis_transit_encryption_enabled" {
+  description = "Whether transit encryption is enabled for Redis clusters"
+  value       = var.transit_encryption_enabled
+}
+
+output "redis_at_rest_encryption_enabled" {
+  description = "Whether at-rest encryption is enabled for Redis clusters"
+  value       = var.at_rest_encryption_enabled
+}
+
+# High Availability Information
+output "redis_multi_az_enabled" {
+  description = "Whether multi-AZ is enabled for Redis clusters"
+  value       = var.enable_multi_az
+}
+
+output "redis_automatic_failover_enabled" {
+  description = "Whether automatic failover is enabled for Redis clusters"
+  value       = var.enable_automatic_failover
+}
+
+# Data Tiering Information
+output "redis_data_tiering_enabled" {
+  description = "Whether data tiering is enabled for Redis clusters"
+  value       = local.enable_data_tiering
 }
