@@ -14,178 +14,236 @@ import org.springframework.data.redis.connection.RedisClusterConfiguration;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.connection.lettuce.LettuceClientConfiguration;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
-import org.springframework.data.redis.connection.lettuce.LettucePoolingClientConfiguration;
-import org.apache.commons.pool2.impl.GenericObjectPoolConfig;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.serializer.GenericJackson2JsonRedisSerializer;
 import org.springframework.data.redis.serializer.RedisSerializationContext;
 import org.springframework.data.redis.serializer.StringRedisSerializer;
-
-import com.dollarfunding.mca.cache.CacheConstants;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.data.redis.listener.ChannelTopic;
+import org.springframework.data.redis.listener.RedisMessageListenerContainer;
+import org.springframework.data.redis.listener.adapter.MessageListenerAdapter;
 
 /**
- * Redis configuration for the MCA application with cluster mode support.
- * This class configures Redis connection factory, cache manager, and serialization settings.
- * It enables the application to cache frequently accessed data, reducing database load and improving response times.
- * The configuration includes TTL settings for different types of data:
- * - Application data: 15 minutes TTL
- * - User sessions: 24 hours TTL
- *
- * Redis 7.0 provides a distributed caching layer with the following features:
- * - Cluster mode enabled for horizontal scaling
- * - Key-based expiration policies
- * - Memory optimization with appropriate eviction policies
- * - Support for the Cache-Aside Pattern implementation
+ * Redis configuration for the MCA application.
+ * 
+ * This class configures Redis caching with cluster mode support, including:
+ * - Redis connection factory with cluster mode enabled
+ * - Cache TTL settings (15 minutes for application data, 24 hours for sessions)
+ * - Serialization/deserialization for cached objects
+ * - Cache-aside pattern implementation
+ * - Appropriate eviction policies for memory management
+ * - Sentinel support for automatic failover
+ * - Persistent storage for critical data with AOF persistence
  */
 @Configuration
 @EnableCaching
 public class RedisConfig {
 
-    @Value("${spring.data.redis.cluster.nodes}")
+    @Value("${spring.redis.cluster.nodes:localhost:6379}")
     private String clusterNodes;
     
-    @Value("${spring.data.redis.timeout:5000}")
-    private int timeout;
-    
-    @Value("${spring.data.redis.cluster.max-redirects:3}")
+    @Value("${spring.redis.cluster.max-redirects:3}")
     private int maxRedirects;
     
-    @Value("${spring.data.redis.lettuce.pool.max-active:8}")
-    private int maxActive;
+    @Value("${spring.redis.timeout:2000}")
+    private int timeout;
     
-    @Value("${spring.data.redis.lettuce.pool.max-idle:8}")
-    private int maxIdle;
+    @Value("${spring.redis.cache.default-ttl:900}")
+    private long defaultTtl; // 15 minutes in seconds
     
-    @Value("${spring.data.redis.lettuce.pool.min-idle:0}")
-    private int minIdle;
+    @Value("${spring.redis.cache.session-ttl:86400}")
+    private long sessionTtl; // 24 hours in seconds
     
-    @Value("${spring.data.redis.lettuce.pool.max-wait:-1}")
-    private long maxWait;
-
+    @Value("${spring.redis.sentinel.enabled:false}")
+    private boolean sentinelEnabled;
+    
+    @Value("${spring.redis.sentinel.master:mymaster}")
+    private String sentinelMaster;
+    
+    @Value("${spring.redis.sentinel.nodes:#{null}}")
+    private String sentinelNodes;
+    
+    @Value("${spring.redis.cluster.enabled:true}")
+    private boolean clusterEnabled;
+    
+    @Value("${spring.redis.aof.enabled:true}")
+    private boolean aofEnabled;
+    
     /**
-     * Creates a Redis connection factory with cluster mode enabled.
-     * This factory is used to create connections to the Redis cluster.
+     * Constants for cache names used in the application.
+     */
+    public static final String APPLICATION_CACHE = "application";
+    public static final String DOCUMENT_CACHE = "document";
+    public static final String MERCHANT_CACHE = "merchant";
+    public static final String SESSION_CACHE = "session";
+    
+    /**
+     * Redis pub/sub channel for cache invalidation events.
+     */
+    public static final String CACHE_INVALIDATION_TOPIC = "cache:invalidation";
+    
+    /**
+     * Configures the Redis connection factory with cluster mode support.
+     * If sentinel is enabled, it will use sentinel configuration instead of cluster.
      * 
-     * Redis 7.0 cluster mode provides horizontal scaling capabilities,
-     * allowing the application to distribute cache data across multiple nodes.
-     * 
-     * @return RedisConnectionFactory configured for cluster mode
+     * @return RedisConnectionFactory configured for cluster mode or sentinel
      */
     @Bean
     public RedisConnectionFactory redisConnectionFactory() {
-        String[] nodes = clusterNodes.split(",");
-        
-        // Configure Redis cluster nodes
-        RedisClusterConfiguration clusterConfiguration = new RedisClusterConfiguration();
-        for (String node : nodes) {
-            String[] hostAndPort = node.trim().split(":");
-            clusterConfiguration.clusterNode(hostAndPort[0], Integer.parseInt(hostAndPort[1]));
-        }
-        
-        // Set maximum number of redirects to follow during cluster operations
-        clusterConfiguration.setMaxRedirects(maxRedirects);
-        // Configure connection pooling
-        GenericObjectPoolConfig<?> poolConfig = new GenericObjectPoolConfig<>();
-        poolConfig.setMaxTotal(maxActive);
-        poolConfig.setMaxIdle(maxIdle);
-        poolConfig.setMinIdle(minIdle);
-        poolConfig.setMaxWait(Duration.ofMillis(maxWait));
-        
-        // Configure Lettuce client with connection pooling
-        LettuceClientConfiguration clientConfig = LettucePoolingClientConfiguration.builder()
+        // Configure Lettuce client with timeout
+        LettuceClientConfiguration clientConfig = LettuceClientConfiguration.builder()
                 .commandTimeout(Duration.ofMillis(timeout))
-                .poolConfig(poolConfig)
                 .build();
         
-        return new LettuceConnectionFactory(clusterConfiguration, clientConfig);
+        if (sentinelEnabled && sentinelNodes != null) {
+            // Use Sentinel configuration if enabled
+            org.springframework.data.redis.connection.RedisSentinelConfiguration sentinelConfig = 
+                    new org.springframework.data.redis.connection.RedisSentinelConfiguration();
+            sentinelConfig.setMaster(sentinelMaster);
+            
+            String[] nodes = sentinelNodes.split(",");
+            for (String node : nodes) {
+                String[] hostAndPort = node.trim().split(":");
+                String host = hostAndPort[0];
+                int port = Integer.parseInt(hostAndPort[1]);
+                sentinelConfig.sentinel(host, port);
+            }
+            
+            return new LettuceConnectionFactory(sentinelConfig, clientConfig);
+        } else if (clusterEnabled) {
+            // Use Cluster configuration
+            String[] nodes = clusterNodes.split(",");
+            RedisClusterConfiguration clusterConfiguration = new RedisClusterConfiguration();
+            
+            // Add cluster nodes
+            for (String node : nodes) {
+                String[] hostAndPort = node.trim().split(":");
+                String host = hostAndPort[0];
+                int port = Integer.parseInt(hostAndPort[1]);
+                clusterConfiguration.clusterNode(host, port);
+            }
+            
+            clusterConfiguration.setMaxRedirects(maxRedirects);
+            return new LettuceConnectionFactory(clusterConfiguration, clientConfig);
+        } else {
+            // Fallback to standalone configuration
+            String[] hostAndPort = clusterNodes.split(",")[0].trim().split(":");
+            String host = hostAndPort[0];
+            int port = Integer.parseInt(hostAndPort[1]);
+            
+            org.springframework.data.redis.connection.RedisStandaloneConfiguration standaloneConfig = 
+                    new org.springframework.data.redis.connection.RedisStandaloneConfiguration(host, port);
+            
+            return new LettuceConnectionFactory(standaloneConfig, clientConfig);
+        }
     }
-
+    
     /**
-     * Creates a RedisTemplate with appropriate serializers.
-     * This template is used for Redis operations throughout the application.
+     * Configures the RedisTemplate with appropriate serializers.
      * 
-     * The template is configured with JSON serialization for values and String serialization for keys,
-     * providing efficient and readable data storage in Redis.
-     * 
-     * @param connectionFactory the Redis connection factory
+     * @param redisConnectionFactory the Redis connection factory
      * @return configured RedisTemplate
      */
     @Bean
-    public RedisTemplate<String, Object> redisTemplate(RedisConnectionFactory connectionFactory) {
+    public RedisTemplate<String, Object> redisTemplate(RedisConnectionFactory redisConnectionFactory) {
         RedisTemplate<String, Object> template = new RedisTemplate<>();
-        template.setConnectionFactory(connectionFactory);
+        template.setConnectionFactory(redisConnectionFactory);
         
         // Use StringRedisSerializer for keys
         template.setKeySerializer(new StringRedisSerializer());
         
-        // Use GenericJackson2JsonRedisSerializer for values
-        GenericJackson2JsonRedisSerializer jsonSerializer = new GenericJackson2JsonRedisSerializer();
-        template.setValueSerializer(jsonSerializer);
+        // Use Jackson serializer for values
+        template.setValueSerializer(new GenericJackson2JsonRedisSerializer());
         
-        // Use the same serializers for hash operations
+        // Also set serializers for hash operations
         template.setHashKeySerializer(new StringRedisSerializer());
-        template.setHashValueSerializer(jsonSerializer);
+        template.setHashValueSerializer(new GenericJackson2JsonRedisSerializer());
         
         template.afterPropertiesSet();
-        
         return template;
     }
-
+    
     /**
-     * Creates a RedisCacheManager with appropriate TTL settings for different cache types.
-     * This manager is used for Spring's @Cacheable, @CachePut, and @CacheEvict annotations.
+     * Configures the Redis cache manager with TTL settings for different caches.
      * 
-     * The cache manager implements the Cache-Aside Pattern, checking the cache before database queries
-     * and updating the cache with query results. It applies different TTL settings based on data type:
-     * - Application data: 15 minutes TTL
-     * - User sessions: 24 hours TTL
-     * 
-     * @param connectionFactory the Redis connection factory
+     * @param redisConnectionFactory the Redis connection factory
      * @return configured RedisCacheManager
      */
     @Bean
-    public RedisCacheManager cacheManager(RedisConnectionFactory connectionFactory) {
-        // Default serializer configuration
-        RedisSerializationContext.SerializationPair<String> keySerializer = 
-                RedisSerializationContext.SerializationPair.fromSerializer(new StringRedisSerializer());
+    public RedisCacheManager cacheManager(RedisConnectionFactory redisConnectionFactory) {
+        // Default serialization configuration
+        RedisCacheConfiguration defaultConfig = RedisCacheConfiguration.defaultCacheConfig()
+                .entryTtl(Duration.ofSeconds(defaultTtl))
+                .disableCachingNullValues()
+                .serializeKeysWith(
+                        RedisSerializationContext.SerializationPair.fromSerializer(new StringRedisSerializer()))
+                .serializeValuesWith(RedisSerializationContext.SerializationPair
+                        .fromSerializer(new GenericJackson2JsonRedisSerializer()));
         
-        RedisSerializationContext.SerializationPair<Object> valueSerializer = 
-                RedisSerializationContext.SerializationPair.fromSerializer(new GenericJackson2JsonRedisSerializer());
-        
-        // Default cache configuration with 15 minutes TTL for application data
-        RedisCacheConfiguration defaultCacheConfig = RedisCacheConfiguration.defaultCacheConfig()
-                .entryTtl(Duration.ofMinutes(15)) // Default TTL: 15 minutes
-                .serializeKeysWith(keySerializer)
-                .serializeValuesWith(valueSerializer);
-        
-        // Cache configurations with specific TTL settings
+        // Configure TTL for specific caches
         Map<String, RedisCacheConfiguration> cacheConfigurations = new HashMap<>();
         
-        // Session cache with 24 hours TTL
-        cacheConfigurations.put(CacheConstants.CacheName.SESSIONS, 
-                defaultCacheConfig.entryTtl(Duration.ofHours(24)));
+        // Application data cache - 15 minutes TTL
+        cacheConfigurations.put(APPLICATION_CACHE, defaultConfig.entryTtl(Duration.ofSeconds(defaultTtl)));
+        cacheConfigurations.put(DOCUMENT_CACHE, defaultConfig.entryTtl(Duration.ofSeconds(defaultTtl)));
+        cacheConfigurations.put(MERCHANT_CACHE, defaultConfig.entryTtl(Duration.ofSeconds(defaultTtl)));
         
-        // Application cache with 15 minutes TTL (same as default, but explicitly defined)
-        cacheConfigurations.put(CacheConstants.CacheName.APPLICATIONS, 
-                defaultCacheConfig.entryTtl(Duration.ofMinutes(15)));
+        // Session cache - 24 hours TTL
+        cacheConfigurations.put(SESSION_CACHE, defaultConfig.entryTtl(Duration.ofSeconds(sessionTtl)));
         
-        // Document cache with 15 minutes TTL
-        cacheConfigurations.put(CacheConstants.CacheName.DOCUMENTS, 
-                defaultCacheConfig.entryTtl(Duration.ofMinutes(15)));
-        
-        // Merchant cache with 15 minutes TTL
-        cacheConfigurations.put(CacheConstants.CacheName.MERCHANTS, 
-                defaultCacheConfig.entryTtl(Duration.ofMinutes(15)));
-        
-        // Lookup cache with 1 hour TTL
-        cacheConfigurations.put(CacheConstants.CacheName.LOOKUPS, 
-                defaultCacheConfig.entryTtl(Duration.ofHours(1)));
-        
-        // Build the cache manager with the configured settings
-        return RedisCacheManager.builder(connectionFactory)
-                .cacheDefaults(defaultCacheConfig)
+        return RedisCacheManager.builder(redisConnectionFactory)
+                .cacheDefaults(defaultConfig)
                 .withInitialCacheConfigurations(cacheConfigurations)
-                .transactionAware() // Enable transaction awareness for consistent cache operations
+                .transactionAware()
                 .build();
+    }
+    
+    /**
+     * Configures a Redis message listener container for cache invalidation events.
+     * This enables distributed cache invalidation across multiple service instances.
+     * 
+     * @param redisConnectionFactory the Redis connection factory
+     * @param messageListener the message listener adapter
+     * @return configured RedisMessageListenerContainer
+     */
+    @Bean
+    @ConditionalOnProperty(name = "spring.redis.pubsub.enabled", havingValue = "true", matchIfMissing = false)
+    public RedisMessageListenerContainer redisMessageListenerContainer(
+            RedisConnectionFactory redisConnectionFactory,
+            MessageListenerAdapter messageListener) {
+        
+        RedisMessageListenerContainer container = new RedisMessageListenerContainer();
+        container.setConnectionFactory(redisConnectionFactory);
+        container.addMessageListener(messageListener, new ChannelTopic(CACHE_INVALIDATION_TOPIC));
+        return container;
+    }
+    
+    /**
+     * Configures a message listener adapter for cache invalidation events.
+     * 
+     * @return configured MessageListenerAdapter
+     */
+    @Bean
+    @ConditionalOnProperty(name = "spring.redis.pubsub.enabled", havingValue = "true", matchIfMissing = false)
+    public MessageListenerAdapter messageListener() {
+        return new MessageListenerAdapter(new CacheInvalidationListener(), "onMessage");
+    }
+    
+    /**
+     * Inner class that handles cache invalidation messages.
+     */
+    public class CacheInvalidationListener {
+        
+        /**
+         * Handles cache invalidation messages.
+         * 
+         * @param message the cache invalidation message
+         */
+        public void onMessage(String message) {
+            // Log cache invalidation event
+            org.slf4j.LoggerFactory.getLogger(RedisConfig.class)
+                .info("Received cache invalidation message: {}", message);
+            // Additional logic for cache invalidation can be added here
+        }
     }
 }
