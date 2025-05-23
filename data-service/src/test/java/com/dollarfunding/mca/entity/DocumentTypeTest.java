@@ -3,7 +3,6 @@ package com.dollarfunding.mca.entity;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.Arrays;
-import java.util.Optional;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -17,10 +16,9 @@ import org.junit.jupiter.params.provider.ValueSource;
  * <p>
  * These tests verify the behavior of the DocumentType enum, including:
  * - Enum constants and their descriptions
- * - Methods for finding document types by name or description
- * - Document categorization methods (financial, PII)
- * - OCR confidence threshold determination
- * - Conversion methods for serialization and deserialization
+ * - Methods for document type identification based on content
+ * - Validation and conversion methods
+ * - JPA persistence through the DocumentTypeConverter
  * </p>
  */
 public class DocumentTypeTest {
@@ -50,141 +48,136 @@ public class DocumentTypeTest {
         assertEquals("Miscellaneous", DocumentType.MISCELLANEOUS.getDescription());
     }
 
+    @Test
+    @DisplayName("identifyFromContent() should correctly identify document types from filenames")
+    public void identifyFromContent_ShouldIdentifyDocumentTypesFromFilenames() {
+        // Bank statements
+        assertEquals(DocumentType.BANK_STATEMENT, 
+                DocumentType.identifyFromContent("application/pdf", "bank_statement_march.pdf"));
+        assertEquals(DocumentType.BANK_STATEMENT, 
+                DocumentType.identifyFromContent("application/pdf", "Chase_Statement_2023.pdf"));
+        
+        // Tax returns
+        assertEquals(DocumentType.TAX_RETURN, 
+                DocumentType.identifyFromContent("application/pdf", "2022_tax_return.pdf"));
+        assertEquals(DocumentType.TAX_RETURN, 
+                DocumentType.identifyFromContent("application/pdf", "Form_1040_Schedule_C.pdf"));
+        
+        // Business licenses
+        assertEquals(DocumentType.BUSINESS_LICENSE, 
+                DocumentType.identifyFromContent("application/pdf", "business_license_2023.pdf"));
+        assertEquals(DocumentType.BUSINESS_LICENSE, 
+                DocumentType.identifyFromContent("application/pdf", "NYC_Business_Permit.pdf"));
+        
+        // Invoices
+        assertEquals(DocumentType.INVOICE, 
+                DocumentType.identifyFromContent("application/pdf", "invoice_123456.pdf"));
+        assertEquals(DocumentType.INVOICE, 
+                DocumentType.identifyFromContent("application/pdf", "customer_receipt_may.pdf"));
+        
+        // ID verification
+        assertEquals(DocumentType.ID_VERIFICATION, 
+                DocumentType.identifyFromContent("image/jpeg", "passport_scan.jpg"));
+        assertEquals(DocumentType.ID_VERIFICATION, 
+                DocumentType.identifyFromContent("image/jpeg", "drivers_license_front.jpg"));
+        
+        // Miscellaneous (default)
+        assertEquals(DocumentType.MISCELLANEOUS, 
+                DocumentType.identifyFromContent("application/pdf", "document.pdf"));
+    }
+
+    @Test
+    @DisplayName("identifyFromContent() should return MISCELLANEOUS for null filename")
+    public void identifyFromContent_ShouldReturnMiscellaneousForNullFilename() {
+        assertEquals(DocumentType.MISCELLANEOUS, 
+                DocumentType.identifyFromContent("application/pdf", null));
+    }
+
     @ParameterizedTest
     @EnumSource(DocumentType.class)
-    @DisplayName("findByName() should find enum constant by name")
-    public void findByName_ShouldFindEnumConstantByName(DocumentType documentType) {
+    @DisplayName("isValid() should return true for valid document type names")
+    public void isValid_ShouldReturnTrueForValidNames(DocumentType documentType) {
         String name = documentType.name();
-        Optional<DocumentType> result = DocumentType.findByName(name);
+        assertTrue(DocumentType.isValid(name), "isValid() should return true for valid document type name");
         
-        assertTrue(result.isPresent(), "findByName() should find the enum constant");
-        assertEquals(documentType, result.get(), "findByName() should return the correct enum constant");
-    }
-
-    @ParameterizedTest
-    @EnumSource(DocumentType.class)
-    @DisplayName("findByName() should find enum constant by name (case-insensitive)")
-    public void findByName_ShouldBeCaseInsensitive(DocumentType documentType) {
-        String lowerCaseName = documentType.name().toLowerCase();
-        Optional<DocumentType> result = DocumentType.findByName(lowerCaseName);
-        
-        assertTrue(result.isPresent(), "findByName() should find the enum constant (case-insensitive)");
-        assertEquals(documentType, result.get(), "findByName() should return the correct enum constant");
+        // Test case-insensitivity
+        String upperCaseName = name.toUpperCase();
+        assertTrue(DocumentType.isValid(upperCaseName), "isValid() should handle uppercase names");
     }
 
     @ParameterizedTest
     @NullAndEmptySource
-    @ValueSource(strings = {"INVALID_DOCUMENT_TYPE", "unknown"})
-    @DisplayName("findByName() should return empty Optional for invalid name")
-    public void findByName_ShouldReturnEmptyOptionalForInvalidName(String invalidName) {
-        Optional<DocumentType> result = DocumentType.findByName(invalidName);
-        assertFalse(result.isPresent(), "findByName() should return an empty Optional for invalid name");
+    @ValueSource(strings = {"INVALID_DOCUMENT_TYPE", "unknown", "bank statement"})
+    @DisplayName("isValid() should return false for invalid document type names")
+    public void isValid_ShouldReturnFalseForInvalidNames(String invalidName) {
+        assertFalse(DocumentType.isValid(invalidName), "isValid() should return false for invalid document type name");
     }
 
     @ParameterizedTest
     @EnumSource(DocumentType.class)
-    @DisplayName("findByDescription() should find enum constant by description")
-    public void findByDescription_ShouldFindEnumConstantByDescription(DocumentType documentType) {
-        String description = documentType.getDescription();
-        Optional<DocumentType> result = DocumentType.findByDescription(description);
-        
-        assertTrue(result.isPresent(), "findByDescription() should find the enum constant");
-        assertEquals(documentType, result.get(), "findByDescription() should return the correct enum constant");
-    }
-
-    @ParameterizedTest
-    @EnumSource(DocumentType.class)
-    @DisplayName("findByDescription() should find enum constant by description (case-insensitive)")
-    public void findByDescription_ShouldBeCaseInsensitive(DocumentType documentType) {
-        String lowerCaseDescription = documentType.getDescription().toLowerCase();
-        Optional<DocumentType> result = DocumentType.findByDescription(lowerCaseDescription);
-        
-        assertTrue(result.isPresent(), "findByDescription() should find the enum constant (case-insensitive)");
-        assertEquals(documentType, result.get(), "findByDescription() should return the correct enum constant");
-    }
-
-    @ParameterizedTest
-    @NullAndEmptySource
-    @ValueSource(strings = {"Invalid Document Type", "Unknown Document"})
-    @DisplayName("findByDescription() should return empty Optional for invalid description")
-    public void findByDescription_ShouldReturnEmptyOptionalForInvalidDescription(String invalidDescription) {
-        Optional<DocumentType> result = DocumentType.findByDescription(invalidDescription);
-        assertFalse(result.isPresent(), "findByDescription() should return an empty Optional for invalid description");
-    }
-
-    @Test
-    @DisplayName("isFinancialDocument() should correctly identify financial documents")
-    public void isFinancialDocument_ShouldIdentifyFinancialDocuments() {
-        assertTrue(DocumentType.BANK_STATEMENT.isFinancialDocument(), "BANK_STATEMENT should be a financial document");
-        assertTrue(DocumentType.TAX_RETURN.isFinancialDocument(), "TAX_RETURN should be a financial document");
-        assertTrue(DocumentType.INVOICE.isFinancialDocument(), "INVOICE should be a financial document");
-        
-        assertFalse(DocumentType.BUSINESS_LICENSE.isFinancialDocument(), "BUSINESS_LICENSE should not be a financial document");
-        assertFalse(DocumentType.ID_VERIFICATION.isFinancialDocument(), "ID_VERIFICATION should not be a financial document");
-        assertFalse(DocumentType.MISCELLANEOUS.isFinancialDocument(), "MISCELLANEOUS should not be a financial document");
-    }
-
-    @Test
-    @DisplayName("containsPII() should correctly identify documents with PII")
-    public void containsPII_ShouldIdentifyDocumentsWithPII() {
-        assertTrue(DocumentType.ID_VERIFICATION.containsPII(), "ID_VERIFICATION should contain PII");
-        assertTrue(DocumentType.TAX_RETURN.containsPII(), "TAX_RETURN should contain PII");
-        
-        assertFalse(DocumentType.BANK_STATEMENT.containsPII(), "BANK_STATEMENT should not contain PII");
-        assertFalse(DocumentType.BUSINESS_LICENSE.containsPII(), "BUSINESS_LICENSE should not contain PII");
-        assertFalse(DocumentType.INVOICE.containsPII(), "INVOICE should not contain PII");
-        assertFalse(DocumentType.MISCELLANEOUS.containsPII(), "MISCELLANEOUS should not contain PII");
-    }
-
-    @Test
-    @DisplayName("getOcrConfidenceThreshold() should return correct threshold for each document type")
-    public void getOcrConfidenceThreshold_ShouldReturnCorrectThreshold() {
-        assertEquals(0.85, DocumentType.BANK_STATEMENT.getOcrConfidenceThreshold(), 0.001, 
-                "BANK_STATEMENT should have 0.85 OCR confidence threshold");
-        assertEquals(0.80, DocumentType.TAX_RETURN.getOcrConfidenceThreshold(), 0.001, 
-                "TAX_RETURN should have 0.80 OCR confidence threshold");
-        assertEquals(0.75, DocumentType.INVOICE.getOcrConfidenceThreshold(), 0.001, 
-                "INVOICE should have 0.75 OCR confidence threshold");
-        assertEquals(0.70, DocumentType.BUSINESS_LICENSE.getOcrConfidenceThreshold(), 0.001, 
-                "BUSINESS_LICENSE should have 0.70 OCR confidence threshold");
-        assertEquals(0.90, DocumentType.ID_VERIFICATION.getOcrConfidenceThreshold(), 0.001, 
-                "ID_VERIFICATION should have 0.90 OCR confidence threshold");
-        assertEquals(0.65, DocumentType.MISCELLANEOUS.getOcrConfidenceThreshold(), 0.001, 
-                "MISCELLANEOUS should have 0.65 OCR confidence threshold");
-    }
-
-    @ParameterizedTest
-    @EnumSource(DocumentType.class)
-    @DisplayName("fromString() should correctly convert string to enum constant")
-    public void fromString_ShouldConvertStringToEnumConstant(DocumentType documentType) {
-        // Test with enum name
+    @DisplayName("fromString() should convert valid string to DocumentType")
+    public void fromString_ShouldConvertValidString(DocumentType documentType) {
         String name = documentType.name();
-        DocumentType defaultType = DocumentType.MISCELLANEOUS;
-        DocumentType result = DocumentType.fromString(name, defaultType);
-        assertEquals(documentType, result, "fromString() should convert enum name to correct enum constant");
+        assertEquals(documentType, DocumentType.fromString(name), 
+                "fromString() should return the correct enum constant");
         
-        // Test with description
-        String description = documentType.getDescription();
-        result = DocumentType.fromString(description, defaultType);
-        assertEquals(documentType, result, "fromString() should convert description to correct enum constant");
+        // Test case-insensitivity
+        String lowerCaseName = name.toLowerCase();
+        assertEquals(documentType, DocumentType.fromString(lowerCaseName), 
+                "fromString() should be case-insensitive");
     }
 
     @ParameterizedTest
     @NullAndEmptySource
-    @ValueSource(strings = {"INVALID_DOCUMENT_TYPE", "Unknown Document"})
-    @DisplayName("fromString() should return default type for invalid string")
-    public void fromString_ShouldReturnDefaultTypeForInvalidString(String invalidString) {
-        DocumentType defaultType = DocumentType.MISCELLANEOUS;
-        DocumentType result = DocumentType.fromString(invalidString, defaultType);
-        assertEquals(defaultType, result, "fromString() should return the default type for invalid string");
+    @ValueSource(strings = {"INVALID_DOCUMENT_TYPE", "unknown", "bank statement"})
+    @DisplayName("fromString() should return MISCELLANEOUS for invalid strings")
+    public void fromString_ShouldReturnMiscellaneousForInvalidStrings(String invalidName) {
+        assertEquals(DocumentType.MISCELLANEOUS, DocumentType.fromString(invalidName), 
+                "fromString() should return MISCELLANEOUS for invalid document type name");
     }
 
-    @ParameterizedTest
-    @EnumSource(DocumentType.class)
-    @DisplayName("toString() should return the enum name")
-    public void toString_ShouldReturnEnumName(DocumentType documentType) {
-        assertEquals(documentType.name(), documentType.toString(), 
-                "toString() should return the enum name");
+    @Test
+    @DisplayName("DocumentTypeConverter should convert enum to database column")
+    public void documentTypeConverter_ShouldConvertEnumToDatabaseColumn() {
+        DocumentType.DocumentTypeConverter converter = new DocumentType.DocumentTypeConverter();
+        
+        // Test all enum values
+        for (DocumentType documentType : DocumentType.values()) {
+            String dbValue = converter.convertToDatabaseColumn(documentType);
+            assertEquals(documentType.name(), dbValue, 
+                    "Converter should store enum name in database column");
+        }
+        
+        // Test null handling
+        assertNull(converter.convertToDatabaseColumn(null), 
+                "Converter should handle null enum value");
+    }
+
+    @Test
+    @DisplayName("DocumentTypeConverter should convert database column to enum")
+    public void documentTypeConverter_ShouldConvertDatabaseColumnToEnum() {
+        DocumentType.DocumentTypeConverter converter = new DocumentType.DocumentTypeConverter();
+        
+        // Test all enum values
+        for (DocumentType documentType : DocumentType.values()) {
+            DocumentType result = converter.convertToEntityAttribute(documentType.name());
+            assertEquals(documentType, result, 
+                    "Converter should restore correct enum from database column");
+        }
+        
+        // Test case-insensitivity
+        assertEquals(DocumentType.BANK_STATEMENT, 
+                converter.convertToEntityAttribute("bank_statement"), 
+                "Converter should handle case variations");
+        
+        // Test invalid value (should return MISCELLANEOUS)
+        assertEquals(DocumentType.MISCELLANEOUS, 
+                converter.convertToEntityAttribute("INVALID_TYPE"), 
+                "Converter should return MISCELLANEOUS for invalid database value");
+        
+        // Test null handling
+        assertNull(converter.convertToEntityAttribute(null), 
+                "Converter should handle null database value");
     }
 
     @Test
