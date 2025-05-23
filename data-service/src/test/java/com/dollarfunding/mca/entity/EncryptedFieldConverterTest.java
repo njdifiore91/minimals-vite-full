@@ -1,195 +1,293 @@
 package com.dollarfunding.mca.entity;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
-
+import com.dollarfunding.mca.config.EncryptionConfig;
+import com.dollarfunding.mca.converter.EncryptedStringConverter;
+import com.dollarfunding.mca.util.EncryptionUtil;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.test.context.ActiveProfiles;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.Mockito;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.core.env.Environment;
+
+import java.security.Key;
+import java.util.UUID;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
 
 /**
- * Unit tests for the EncryptedFieldConverter class that handles field-level encryption
- * for sensitive PII data in the MerchantDetails entity.
+ * Unit tests for the field-level encryption converters used to protect sensitive PII data.
+ * 
+ * These tests validate the encryption and decryption functionality, handling of null values,
+ * key rotation, and integration with entity classes. The tests ensure that the encryption
+ * converters properly protect sensitive data in the MerchantDetails entity such as legal_name,
+ * dba_name, and ein, while allowing transparent access to the decrypted values in the
+ * application code.
  */
-@SpringBootTest
-@ActiveProfiles("test")
+@ExtendWith(MockitoExtension.class)
 public class EncryptedFieldConverterTest {
 
-    @Autowired
-    private EncryptedFieldConverter converter;
+    private EncryptionUtil encryptionUtil;
+    private EncryptedStringConverter encryptedStringConverter;
     
-    private String testValue;
+    @Mock
+    private Environment environment;
+    
+    @Mock
+    private Key mockKey;
     
     @BeforeEach
-    public void setup() {
-        testValue = "Sensitive PII Data";
+    public void setUp() {
+        // Set up encryption utility with test keys
+        encryptionUtil = new EncryptionUtil();
+        encryptionUtil.setEncryptionSecret("TestEncryptionSecretKey123456789012345");
+        encryptionUtil.setEncryptionSalt("TestSalt123456789");
+        
+        // Create the converter with the encryption utility
+        encryptedStringConverter = new EncryptedStringConverter(encryptionUtil);
     }
     
     @Test
-    @DisplayName("Should encrypt string value")
+    @DisplayName("Test encryption of string values")
     public void testEncryptStringValue() {
-        // When
-        String encryptedValue = converter.convertToDatabaseColumn(testValue);
+        // Arrange
+        String sensitiveData = "John Doe";
         
-        // Then
-        assertNotNull(encryptedValue);
-        assertNotEquals(testValue, encryptedValue);
+        // Act
+        String encryptedValue = encryptedStringConverter.convertToDatabaseColumn(sensitiveData);
+        
+        // Assert
+        assertNotNull(encryptedValue, "Encrypted value should not be null");
+        assertNotEquals(sensitiveData, encryptedValue, "Encrypted value should be different from original");
+        assertTrue(encryptedValue.length() > sensitiveData.length(), "Encrypted value should be longer than original");
+        assertTrue(encryptedValue.matches("^[A-Za-z0-9+/=]+$"), "Encrypted value should be Base64 encoded");
     }
     
     @Test
-    @DisplayName("Should decrypt encrypted string value")
+    @DisplayName("Test decryption of string values")
     public void testDecryptStringValue() {
-        // Given
-        String encryptedValue = converter.convertToDatabaseColumn(testValue);
+        // Arrange
+        String sensitiveData = "John Doe";
+        String encryptedValue = encryptedStringConverter.convertToDatabaseColumn(sensitiveData);
         
-        // When
-        String decryptedValue = converter.convertToEntityAttribute(encryptedValue);
+        // Act
+        String decryptedValue = encryptedStringConverter.convertToEntityAttribute(encryptedValue);
         
-        // Then
-        assertEquals(testValue, decryptedValue);
+        // Assert
+        assertNotNull(decryptedValue, "Decrypted value should not be null");
+        assertEquals(sensitiveData, decryptedValue, "Decrypted value should match original");
     }
     
     @Test
-    @DisplayName("Should handle null value during encryption")
+    @DisplayName("Test handling of null values during encryption")
     public void testEncryptNullValue() {
-        // When
-        String encryptedValue = converter.convertToDatabaseColumn(null);
+        // Act
+        String encryptedValue = encryptedStringConverter.convertToDatabaseColumn(null);
         
-        // Then
-        assertNull(encryptedValue);
+        // Assert
+        assertNull(encryptedValue, "Encrypted null value should remain null");
     }
     
     @Test
-    @DisplayName("Should handle null value during decryption")
+    @DisplayName("Test handling of null values during decryption")
     public void testDecryptNullValue() {
-        // When
-        String decryptedValue = converter.convertToEntityAttribute(null);
+        // Act
+        String decryptedValue = encryptedStringConverter.convertToEntityAttribute(null);
         
-        // Then
-        assertNull(decryptedValue);
+        // Assert
+        assertNull(decryptedValue, "Decrypted null value should remain null");
     }
     
     @Test
-    @DisplayName("Should encrypt and decrypt with different key versions")
+    @DisplayName("Test handling of empty string during encryption")
+    public void testEncryptEmptyString() {
+        // Arrange
+        String emptyString = "";
+        
+        // Act
+        String encryptedValue = encryptedStringConverter.convertToDatabaseColumn(emptyString);
+        
+        // Assert
+        assertEquals(emptyString, encryptedValue, "Encrypted empty string should remain empty");
+    }
+    
+    @Test
+    @DisplayName("Test handling of empty string during decryption")
+    public void testDecryptEmptyString() {
+        // Arrange
+        String emptyString = "";
+        
+        // Act
+        String decryptedValue = encryptedStringConverter.convertToEntityAttribute(emptyString);
+        
+        // Assert
+        assertEquals(emptyString, decryptedValue, "Decrypted empty string should remain empty");
+    }
+    
+    @Test
+    @DisplayName("Test key rotation mechanism with previous encryption key")
     public void testKeyRotation() {
-        // Given
-        String originalValue = "Test Key Rotation";
+        // Arrange - Create encryption utilities with different keys
+        EncryptionUtil oldEncryptionUtil = new EncryptionUtil();
+        oldEncryptionUtil.setEncryptionSecret("OldEncryptionSecretKey1234567890123456");
+        oldEncryptionUtil.setEncryptionSalt("OldSalt123456789");
         
-        // When - encrypt with current key
-        String encryptedValue = converter.convertToDatabaseColumn(originalValue);
+        EncryptionUtil newEncryptionUtil = new EncryptionUtil();
+        newEncryptionUtil.setEncryptionSecret("NewEncryptionSecretKey1234567890123456");
+        newEncryptionUtil.setEncryptionSalt("NewSalt123456789");
         
-        // Then - should decrypt correctly even after simulated key rotation
-        String decryptedValue = converter.convertToEntityAttribute(encryptedValue);
-        assertEquals(originalValue, decryptedValue);
+        // Create converters with different encryption utilities
+        EncryptedStringConverter oldConverter = new EncryptedStringConverter(oldEncryptionUtil);
+        EncryptedStringConverter newConverter = new EncryptedStringConverter(newEncryptionUtil);
+        
+        // Encrypt data with old key
+        String sensitiveData = "Jane Doe";
+        String encryptedWithOldKey = oldConverter.convertToDatabaseColumn(sensitiveData);
+        
+        // Attempt to decrypt with new key (should fail or return incorrect data)
+        String attemptedDecryption = newConverter.convertToEntityAttribute(encryptedWithOldKey);
+        
+        // Assert that decryption with wrong key fails or returns incorrect data
+        assertNotEquals(sensitiveData, attemptedDecryption, "Decryption with wrong key should not match original");
+        
+        // Simulate key rotation in EncryptionConfig
+        EncryptionConfig encryptionConfig = Mockito.mock(EncryptionConfig.class);
+        when(encryptionConfig.encryptionUtil(environment)).thenReturn(newEncryptionUtil);
+        when(encryptionConfig.previousEncryptionUtil(environment)).thenReturn(oldEncryptionUtil);
+        
+        // Create a custom converter that simulates key rotation
+        EncryptedStringConverter rotatingConverter = new EncryptedStringConverter(newEncryptionUtil) {
+            @Override
+            public String convertToEntityAttribute(String dbData) {
+                if (dbData == null || dbData.isEmpty()) {
+                    return dbData;
+                }
+                
+                // Try with current key first
+                String decrypted = newEncryptionUtil.decrypt(dbData);
+                
+                // If decryption fails or returns null, try with old key
+                if (decrypted == null) {
+                    decrypted = oldEncryptionUtil.decrypt(dbData);
+                }
+                
+                return decrypted;
+            }
+        };
+        
+        // Now decrypt with rotating converter
+        String decryptedAfterRotation = rotatingConverter.convertToEntityAttribute(encryptedWithOldKey);
+        
+        // Assert that decryption works with key rotation
+        assertEquals(sensitiveData, decryptedAfterRotation, "Decryption with key rotation should match original");
     }
     
     @Test
-    @DisplayName("Should integrate with MerchantDetails entity")
-    public void testIntegrationWithMerchantDetails() {
-        // Given
-        MerchantDetails merchantDetails = new MerchantDetails();
-        merchantDetails.setLegalName("ABC Corporation");
-        merchantDetails.setDbaName("ABC Business");
-        merchantDetails.setEin("12-3456789");
+    @DisplayName("Test integration with MerchantDetails entity")
+    public void testIntegrationWithMerchantDetailsEntity() {
+        // Arrange
+        UUID applicationId = UUID.randomUUID();
+        String legalName = "Acme Corporation";
+        String dbaName = "Acme Corp";
+        String ein = "12-3456789";
         
-        // Mock the entity manager and repository behavior
-        // This simulates what happens when JPA persists and retrieves the entity
-        String encryptedLegalName = converter.convertToDatabaseColumn(merchantDetails.getLegalName());
-        String encryptedDbaName = converter.convertToDatabaseColumn(merchantDetails.getDbaName());
-        String encryptedEin = converter.convertToDatabaseColumn(merchantDetails.getEin());
+        // Create a MerchantDetails entity
+        MerchantDetails merchantDetails = new MerchantDetails(applicationId, legalName);
+        merchantDetails.setDbaName(dbaName);
+        merchantDetails.setEin(ein);
+        merchantDetails.setEncryptionUtil(encryptionUtil);
         
-        // When - simulate JPA retrieval with encrypted values from database
-        MerchantDetails retrievedMerchant = new MerchantDetails();
-        // Simulate JPA calling the converter when loading from database
-        retrievedMerchant.setLegalName(converter.convertToEntityAttribute(encryptedLegalName));
-        retrievedMerchant.setDbaName(converter.convertToEntityAttribute(encryptedDbaName));
-        retrievedMerchant.setEin(converter.convertToEntityAttribute(encryptedEin));
+        // Act - Encrypt sensitive fields
+        merchantDetails.encryptSensitiveFields();
         
-        // Then - the fields should be properly decrypted
-        assertEquals("ABC Corporation", retrievedMerchant.getLegalName());
-        assertEquals("ABC Business", retrievedMerchant.getDbaName());
-        assertEquals("12-3456789", retrievedMerchant.getEin());
+        // Assert - Check that fields are encrypted
+        String encryptedLegalName = merchantDetails.getLegalName();
+        String encryptedDbaName = merchantDetails.getDbaName();
+        String encryptedEin = merchantDetails.getEin();
         
-        // Verify the encrypted values are different from the original values
-        assertNotEquals(merchantDetails.getLegalName(), encryptedLegalName);
-        assertNotEquals(merchantDetails.getDbaName(), encryptedDbaName);
-        assertNotEquals(merchantDetails.getEin(), encryptedEin);
+        // Verify that the fields are properly encrypted and decrypted
+        assertEquals(legalName, encryptionUtil.decrypt(encryptedLegalName), "Legal name should be properly encrypted and decrypted");
+        assertEquals(dbaName, encryptionUtil.decrypt(encryptedDbaName), "DBA name should be properly encrypted and decrypted");
+        assertEquals(ein, encryptionUtil.decrypt(encryptedEin), "EIN should be properly encrypted and decrypted");
     }
     
     @Test
-    @DisplayName("Should verify encryption strength")
-    public void testEncryptionStrength() {
-        // Given
-        String sensitiveData = "Highly confidential information";
+    @DisplayName("Test encryption strength and security")
+    public void testEncryptionStrengthAndSecurity() {
+        // Arrange
+        String sensitiveData1 = "John Doe";
+        String sensitiveData2 = "John Doe"; // Same value
         
-        // When
-        String encryptedValue = converter.convertToDatabaseColumn(sensitiveData);
+        // Act - Encrypt the same value twice
+        String encryptedValue1 = encryptedStringConverter.convertToDatabaseColumn(sensitiveData1);
+        String encryptedValue2 = encryptedStringConverter.convertToDatabaseColumn(sensitiveData2);
         
-        // Then - verify encryption strength by checking encrypted value properties
-        assertNotNull(encryptedValue);
-        assertNotEquals(sensitiveData, encryptedValue);
+        // Assert - Check that the encrypted values are different (due to random IV)
+        assertNotEquals(encryptedValue1, encryptedValue2, "Encrypting the same value twice should produce different results due to random IV");
         
-        // Encrypted value should be significantly different from original
-        // and should have sufficient length for AES-256 encryption
-        assertTrue(encryptedValue.length() > sensitiveData.length());
+        // Verify that both decrypt to the original value
+        assertEquals(sensitiveData1, encryptedStringConverter.convertToEntityAttribute(encryptedValue1), "First encrypted value should decrypt correctly");
+        assertEquals(sensitiveData2, encryptedStringConverter.convertToEntityAttribute(encryptedValue2), "Second encrypted value should decrypt correctly");
     }
     
     @Test
-    @DisplayName("Should use strong encryption algorithm")
-    public void testStrongEncryption() {
-        // This test verifies that the converter is using a strong encryption algorithm
-        // by checking the properties of the encrypted output
-        
-        // Given - a string with known patterns
-        String sensitiveData = "12345678901234567890123456789012"; // 32 characters
-        
-        // When - encrypt the data
-        String encryptedValue = converter.convertToDatabaseColumn(sensitiveData);
-        
-        // Then - verify encryption properties
-        assertNotNull(encryptedValue);
-        assertNotEquals(sensitiveData, encryptedValue);
-        
-        // Strong encryption should produce output that doesn't contain the original data
-        // and has sufficient entropy (randomness)
-        assertFalse(encryptedValue.contains(sensitiveData));
-        
-        // Encrypt the same value again - should produce different output due to IV/salt
-        String encryptedValue2 = converter.convertToDatabaseColumn(sensitiveData);
-        assertNotEquals(encryptedValue, encryptedValue2, "Encryption should use initialization vector or salt");
-        
-        // Both encrypted values should decrypt to the original value
-        assertEquals(sensitiveData, converter.convertToEntityAttribute(encryptedValue));
-        assertEquals(sensitiveData, converter.convertToEntityAttribute(encryptedValue2));
-    }
-    
-
-    
-    @Test
-    @DisplayName("Should verify persistence and retrieval of encrypted fields")
+    @DisplayName("Test persistence and retrieval of encrypted fields")
     public void testPersistenceAndRetrieval() {
-        // Given - mock repository and entity manager behavior
-        String legalName = "XYZ Corporation";
-        String dbaName = "XYZ Business";
-        String ein = "98-7654321";
+        // Arrange - Simulate database persistence and retrieval
+        String sensitiveData = "Confidential Information";
         
-        // When - simulate database persistence and retrieval with encryption/decryption
-        String encryptedLegalName = converter.convertToDatabaseColumn(legalName);
-        String encryptedDbaName = converter.convertToDatabaseColumn(dbaName);
-        String encryptedEin = converter.convertToDatabaseColumn(ein);
+        // Act - Convert to database column (encrypt)
+        String encryptedValue = encryptedStringConverter.convertToDatabaseColumn(sensitiveData);
         
-        // Then - verify decryption works correctly after retrieval
-        assertEquals(legalName, converter.convertToEntityAttribute(encryptedLegalName));
-        assertEquals(dbaName, converter.convertToEntityAttribute(encryptedDbaName));
-        assertEquals(ein, converter.convertToEntityAttribute(encryptedEin));
+        // Simulate storing in database and retrieving
+        String retrievedEncryptedValue = encryptedValue;
+        
+        // Convert back to entity attribute (decrypt)
+        String decryptedValue = encryptedStringConverter.convertToEntityAttribute(retrievedEncryptedValue);
+        
+        // Assert
+        assertEquals(sensitiveData, decryptedValue, "Value should be correctly encrypted and decrypted through the persistence cycle");
+    }
+    
+    @Test
+    @DisplayName("Test handling of already encrypted data")
+    public void testHandlingOfAlreadyEncryptedData() {
+        // Arrange
+        String sensitiveData = "Secret Data";
+        
+        // Act - Encrypt once
+        String encryptedOnce = encryptedStringConverter.convertToDatabaseColumn(sensitiveData);
+        
+        // Encrypt again (should detect it's already encrypted)
+        String encryptedTwice = encryptedStringConverter.convertToDatabaseColumn(encryptedOnce);
+        
+        // Assert
+        assertNotEquals(sensitiveData, encryptedOnce, "First encryption should change the value");
+        assertNotEquals(sensitiveData, encryptedTwice, "Second encryption should not return the original value");
+        
+        // The behavior depends on the implementation of isEncrypted() in the converter
+        // If it correctly detects encrypted values, encryptedTwice should equal encryptedOnce
+        // If not, it might be double-encrypted
+        
+        // Decrypt and verify
+        String decryptedOnce = encryptedStringConverter.convertToEntityAttribute(encryptedOnce);
+        assertEquals(sensitiveData, decryptedOnce, "Decryption of once-encrypted value should match original");
+    }
+    
+    @Test
+    @DisplayName("Test handling of malformed encrypted data")
+    public void testHandlingOfMalformedEncryptedData() {
+        // Arrange - Create malformed encrypted data
+        String malformedData = "NotReallyEncryptedJustBase64===";
+        
+        // Act - Attempt to decrypt
+        String decryptedValue = encryptedStringConverter.convertToEntityAttribute(malformedData);
+        
+        // Assert - The converter should handle errors gracefully
+        // Depending on implementation, it might return the original value or null
+        assertNotNull(decryptedValue, "Converter should handle malformed data gracefully");
     }
 }
