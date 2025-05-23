@@ -4,466 +4,839 @@
 """
 Unit tests for the error_utils module.
 
-This module contains tests for error object creation, error classification,
-error context enrichment, retry eligibility determination, and error serialization
-to ensure consistent error handling across the OCR service.
+This module contains tests for the error handling utilities in the OCR Service,
+including error classification, context enrichment, retry eligibility determination,
+and error serialization for logging and message publishing.
+
+These tests ensure that the OCR Service can properly handle errors in various scenarios:
+1. Error handling for unreadable documents or processing failures (section 4.1.8)
+2. Connection error handling and recovery strategies (section 4.1.8)
+3. Retry logic for RabbitMQ message publishing (section 4.1.8)
+
+The test suite validates:
+- Standardized error handling functions
+- Error classification (validation, connection, processing)
+- Error context enrichment functions
+- Retry eligibility determination based on error type
+- Error serialization for logging and message publishing
 """
 
 import json
 import logging
-import pytest
+import sys
+import time
+from datetime import datetime
 from unittest.mock import MagicMock, patch
 
+import pytest
+
+# Import the error_utils module - adjust the import path as needed for your project structure
 from src.utils.error_utils import (
     ErrorCategory,
-    ErrorContext,
     ErrorSeverity,
-    OCRServiceError,
-    classify_exception,
-    create_error,
-    create_error_from_exception,
+    RetryStrategy,
+    ServiceError,
+    calculate_retry_delay,
+    categorize_exception,
+    create_service_error,
     enrich_error_context,
-    format_error_for_message,
-    format_error_for_response,
-    generate_error_code,
+    format_error_for_logging,
+    format_error_for_publishing,
+    get_caller_info,
+    handle_boto_error,
+    handle_uncaught_exception,
+    increment_retry_count,
     is_retry_eligible,
-    setup_global_exception_handler
+    safe_execute,
+    set_global_exception_handler,
 )
+
+# Import StorageErrorCode - handle the case where it might not be available
+try:
+    from src.types.storage import StorageErrorCode
+except ImportError:
+    # Define a fallback if the import fails, matching the fallback in error_utils.py
+    from enum import Enum, auto
+    class StorageErrorCode(Enum):
+        CONNECTION_ERROR = auto()
+        AUTHENTICATION_ERROR = auto()
+        PERMISSION_DENIED = auto()
+        RESOURCE_NOT_FOUND = auto()
+        BUCKET_NOT_FOUND = auto()
+        OBJECT_NOT_FOUND = auto()
+        INVALID_REQUEST = auto()
+        TIMEOUT = auto()
+        INTERNAL_ERROR = auto()
+        UNKNOWN_ERROR = auto()
 
 
 # Fixtures
 @pytest.fixture
-def sample_error_context():
-    """Create a sample error context for testing."""
-    return ErrorContext(
-        document_id="doc123",
-        request_id="req456",
-        operation="test_operation",
-        component="test_component",
-        additional_info={"test_key": "test_value"}
-    )
+def sample_exception():
+    """Return a sample exception for testing."""
+    return ValueError("Invalid document format")
 
 
 @pytest.fixture
-def sample_error(sample_error_context):
-    """Create a sample error for testing."""
-    return OCRServiceError(
-        message="Test error message",
+def connection_exception():
+    """Return a connection exception for testing."""
+    return ConnectionError("Failed to connect to RabbitMQ")
+
+
+@pytest.fixture
+def system_exception():
+    """Return a system exception for testing."""
+    return MemoryError("Out of memory")
+
+
+@pytest.fixture
+def service_error():
+    """Return a sample ServiceError for testing."""
+    return ServiceError(
+        message="Test error",
         category=ErrorCategory.PROCESSING,
-        severity=ErrorSeverity.ERROR,
-        error_code="PROC001",
-        context=sample_error_context,
-        retry_eligible=True,
-        max_retries=3
+        severity=ErrorSeverity.MEDIUM,
+        retry_strategy=RetryStrategy.EXPONENTIAL,
+        details={"document_id": "doc123", "retry_count": 0},
     )
 
 
 @pytest.fixture
-def mock_logger():
-    """Create a mock logger for testing."""
-    return MagicMock(spec=logging.Logger)
+def boto3_client_error():
+    """Return a mocked boto3 ClientError for testing."""
+    error_response = {"Error": {"Code": "NoSuchKey", "Message": "The specified key does not exist."}}
+    return MagicMock(
+        response=error_response,
+        __str__=lambda self: "An error occurred (NoSuchKey) when calling the GetObject operation: The specified key does not exist."
+    )
 
 
-# Test Error Object Creation
-class TestErrorObjectCreation:
-    """Tests for error object creation functions."""
+# Test ServiceError class
+class TestServiceError:
+    """Tests for the ServiceError class."""
 
-    def test_create_error_with_all_parameters(self, sample_error_context):
-        """Test creating an error with all parameters specified."""
-        error = create_error(
+    def test_init(self):
+        """Test ServiceError initialization."""
+        error = ServiceError(
             message="Test error",
-            error_code="PROC001",
-            category=ErrorCategory.PROCESSING,
-            severity=ErrorSeverity.ERROR,
-            context=sample_error_context,
-            retry_eligible=True,
-            max_retries=5
+            category=ErrorCategory.VALIDATION,
+            severity=ErrorSeverity.LOW,
+            retry_strategy=RetryStrategy.NONE,
+            details={"test": "value"},
         )
 
         assert error.message == "Test error"
-        assert error.error_code == "PROC001"
-        assert error.category == ErrorCategory.PROCESSING
-        assert error.severity == ErrorSeverity.ERROR
-        assert error.context == sample_error_context
-        assert error.retry_eligible is True
-        assert error.max_retries == 5
-        assert error.retry_count == 0
-
-    def test_create_error_with_minimal_parameters(self):
-        """Test creating an error with only required parameters."""
-        error = create_error(
-            message="Minimal error",
-            error_code="VAL001"
-        )
-
-        assert error.message == "Minimal error"
-        assert error.error_code == "VAL001"
         assert error.category == ErrorCategory.VALIDATION
-        assert error.severity == ErrorSeverity.ERROR
-        assert isinstance(error.context, ErrorContext)
-        assert error.retry_eligible is False  # VAL001 is not retry eligible
+        assert error.severity == ErrorSeverity.LOW
+        assert error.retry_strategy == RetryStrategy.NONE
+        assert error.details == {"test": "value"}
+        assert error.original_exception is None
+        assert isinstance(error.timestamp, str)
+        assert isinstance(error.trace, list)
 
-    def test_create_error_from_exception(self):
-        """Test creating an error from an exception."""
-        exception = ValueError("Invalid value")
-        error = create_error_from_exception(
-            exception=exception,
-            operation="test_operation",
-            component="test_component",
-            document_id="doc123",
-            request_id="req456"
-        )
+    def test_to_dict(self, service_error):
+        """Test conversion to dictionary."""
+        error_dict = service_error.to_dict()
 
-        assert error.message == "Invalid value"
-        assert error.category == ErrorCategory.VALIDATION
-        assert error.exception is exception
-        assert error.context.operation == "test_operation"
-        assert error.context.component == "test_component"
-        assert error.context.document_id == "doc123"
-        assert error.context.request_id == "req456"
+        assert error_dict["message"] == "Test error"
+        assert error_dict["category"] == "PROCESSING"
+        assert error_dict["severity"] == "MEDIUM"
+        assert error_dict["retry_strategy"] == "EXPONENTIAL"
+        assert error_dict["details"] == {"document_id": "doc123", "retry_count": 0}
+        assert error_dict["original_exception"] is None
+        assert isinstance(error_dict["timestamp"], str)
+        assert isinstance(error_dict["trace"], list)
 
-    def test_post_init_captures_traceback(self):
-        """Test that __post_init__ captures traceback from exception."""
-        try:
-            raise ValueError("Test exception")
-        except ValueError as e:
-            error = OCRServiceError(
-                message="Error with exception",
-                category=ErrorCategory.VALIDATION,
-                severity=ErrorSeverity.ERROR,
-                error_code="VAL001",
-                exception=e
-            )
-
-        assert error.traceback is not None
-        assert "ValueError: Test exception" in error.traceback
-
-
-# Test Error Classification
-class TestErrorClassification:
-    """Tests for error classification functions."""
-
-    def test_classify_exception(self):
-        """Test classifying different exception types."""
-        assert classify_exception(ValueError()) == ErrorCategory.VALIDATION
-        assert classify_exception(ConnectionError()) == ErrorCategory.CONNECTION
-        assert classify_exception(FileNotFoundError()) == ErrorCategory.STORAGE
-        assert classify_exception(PermissionError()) == ErrorCategory.SECURITY
-        assert classify_exception(MemoryError()) == ErrorCategory.SYSTEM
-        assert classify_exception(Exception()) == ErrorCategory.UNKNOWN
-
-    def test_generate_error_code(self):
-        """Test generating error codes from categories."""
-        assert generate_error_code(ErrorCategory.VALIDATION) == "VAL001"
-        assert generate_error_code(ErrorCategory.CONNECTION) == "CONN001"
-        assert generate_error_code(ErrorCategory.PROCESSING, 2) == "PROC002"
-        assert generate_error_code(ErrorCategory.STORAGE, 3) == "STOR003"
-        assert generate_error_code(ErrorCategory.UNKNOWN) == "UNK001"
-
-    def test_is_retry_eligible(self):
-        """Test determining retry eligibility based on error code and category."""
-        # Non-retryable error codes
-        assert is_retry_eligible("VAL001", ErrorCategory.VALIDATION) is False
-        assert is_retry_eligible("PROC002", ErrorCategory.PROCESSING) is False
-        assert is_retry_eligible("SEC001", ErrorCategory.SECURITY) is False
-
-        # Retryable error codes
-        assert is_retry_eligible("CONN003", ErrorCategory.CONNECTION) is True
-        assert is_retry_eligible("PROC001", ErrorCategory.PROCESSING) is True
-        assert is_retry_eligible("STOR001", ErrorCategory.STORAGE) is True
-        assert is_retry_eligible("MSG001", ErrorCategory.MESSAGING) is True
-
-
-# Test Error Context Enrichment
-class TestErrorContextEnrichment:
-    """Tests for error context enrichment functions."""
-
-    def test_enrich_error_context(self, sample_error):
-        """Test enriching an error with additional context."""
-        # Original context
-        assert sample_error.context.document_id == "doc123"
-        assert sample_error.context.request_id == "req456"
-        
-        # Enrich with new values
-        enriched_error = enrich_error_context(
-            error=sample_error,
-            document_id="new_doc_id",
-            request_id="new_req_id",
-            operation="new_operation",
-            component="new_component",
-            additional_info={"new_key": "new_value"}
-        )
-        
-        # Check that context was updated
-        assert enriched_error.context.document_id == "new_doc_id"
-        assert enriched_error.context.request_id == "new_req_id"
-        assert enriched_error.context.operation == "new_operation"
-        assert enriched_error.context.component == "new_component"
-        assert enriched_error.context.additional_info["test_key"] == "test_value"  # Original value preserved
-        assert enriched_error.context.additional_info["new_key"] == "new_value"  # New value added
-        
-        # Verify it's the same error object (modified in place)
-        assert enriched_error is sample_error
-
-    def test_enrich_error_context_partial_update(self, sample_error):
-        """Test enriching an error with partial context update."""
-        # Only update some fields
-        enriched_error = enrich_error_context(
-            error=sample_error,
-            operation="partial_update"
-        )
-        
-        # Check that only specified fields were updated
-        assert enriched_error.context.document_id == "new_doc_id"  # From previous test
-        assert enriched_error.context.request_id == "new_req_id"  # From previous test
-        assert enriched_error.context.operation == "partial_update"  # Updated
-        assert enriched_error.context.component == "new_component"  # From previous test
-
-
-# Test Error Serialization
-class TestErrorSerialization:
-    """Tests for error serialization functions."""
-
-    def test_to_dict(self, sample_error):
-        """Test converting an error to a dictionary."""
-        error_dict = sample_error.to_dict()
-        
-        # Check that the dictionary contains expected keys
-        assert "message" in error_dict
-        assert "category" in error_dict
-        assert "severity" in error_dict
-        assert "error_code" in error_dict
-        assert "context" in error_dict
-        assert "traceback" in error_dict
-        assert "retry_eligible" in error_dict
-        assert "retry_count" in error_dict
-        assert "max_retries" in error_dict
-        
-        # Check that enum values are converted to strings
-        assert error_dict["category"] == ErrorCategory.PROCESSING.value
-        assert error_dict["severity"] == ErrorSeverity.ERROR.value
-        
-        # Check that exception is removed
-        assert "exception" not in error_dict
-
-    def test_to_json(self, sample_error):
-        """Test converting an error to JSON."""
-        error_json = sample_error.to_json()
-        
-        # Check that the result is valid JSON
+    def test_to_json(self, service_error):
+        """Test conversion to JSON."""
+        error_json = service_error.to_json()
         error_dict = json.loads(error_json)
-        
-        # Check that the JSON contains expected keys
-        assert "message" in error_dict
-        assert "category" in error_dict
-        assert "severity" in error_dict
-        assert "error_code" in error_dict
 
-    def test_format_error_for_response(self, sample_error):
-        """Test formatting an error for API response."""
-        response = format_error_for_response(sample_error)
-        
-        # Check that the response has the expected structure
-        assert "error" in response
-        assert "code" in response["error"]
-        assert "message" in response["error"]
-        assert "category" in response["error"]
-        assert "timestamp" in response["error"]
-        assert "request_id" in response["error"]
-        
-        # Check specific values
-        assert response["error"]["code"] == sample_error.error_code
-        assert response["error"]["message"] == sample_error.message
-        assert response["error"]["category"] == sample_error.category.value
-        assert response["error"]["request_id"] == sample_error.context.request_id
-
-    def test_format_error_for_message(self, sample_error):
-        """Test formatting an error for RabbitMQ message."""
-        message = format_error_for_message(sample_error)
-        
-        # Check that the message has the expected structure
-        assert "error" in message
-        assert "code" in message["error"]
-        assert "message" in message["error"]
-        assert "category" in message["error"]
-        assert "severity" in message["error"]
-        assert "document_id" in message["error"]
-        assert "request_id" in message["error"]
-        assert "operation" in message["error"]
-        assert "component" in message["error"]
-        assert "timestamp" in message["error"]
-        assert "retry_count" in message["error"]
-        assert "additional_info" in message["error"]
-        
-        # Check specific values
-        assert message["error"]["code"] == sample_error.error_code
-        assert message["error"]["message"] == sample_error.message
-        assert message["error"]["category"] == sample_error.category.value
-        assert message["error"]["severity"] == sample_error.severity.value
-        assert message["error"]["document_id"] == sample_error.context.document_id
-        assert message["error"]["request_id"] == sample_error.context.request_id
-        assert message["error"]["operation"] == sample_error.context.operation
-        assert message["error"]["component"] == sample_error.context.component
-        assert message["error"]["retry_count"] == sample_error.retry_count
+        assert error_dict["message"] == "Test error"
+        assert error_dict["category"] == "PROCESSING"
+        assert error_dict["severity"] == "MEDIUM"
+        assert error_dict["retry_strategy"] == "EXPONENTIAL"
+        assert error_dict["details"] == {"document_id": "doc123", "retry_count": 0}
 
 
-# Test Logging Functionality
-class TestLoggingFunctionality:
-    """Tests for error logging functions."""
+# Test create_service_error function
+class TestCreateServiceError:
+    """Tests for the create_service_error function."""
 
-    def test_log_error_severity(self, sample_error, mock_logger):
-        """Test logging errors with different severity levels."""
-        # Test ERROR severity
-        sample_error.severity = ErrorSeverity.ERROR
-        sample_error.log(mock_logger)
-        mock_logger.error.assert_called_once()
-        mock_logger.reset_mock()
-        
-        # Test CRITICAL severity
-        sample_error.severity = ErrorSeverity.CRITICAL
-        sample_error.log(mock_logger)
-        mock_logger.critical.assert_called_once()
-        mock_logger.reset_mock()
-        
-        # Test WARNING severity
-        sample_error.severity = ErrorSeverity.WARNING
-        sample_error.log(mock_logger)
-        mock_logger.warning.assert_called_once()
-        mock_logger.reset_mock()
-        
-        # Test INFO severity
-        sample_error.severity = ErrorSeverity.INFO
-        sample_error.log(mock_logger)
-        mock_logger.info.assert_called_once()
+    def test_create_with_defaults(self, sample_exception):
+        """Test creating a ServiceError with default values."""
+        error = create_service_error(sample_exception)
 
-    def test_log_with_traceback(self, mock_logger):
-        """Test logging errors with traceback."""
-        try:
-            raise ValueError("Test exception for traceback")
-        except ValueError as e:
-            error = create_error_from_exception(
-                exception=e,
-                operation="test_operation"
+        assert error.message == str(sample_exception)
+        assert error.category == ErrorCategory.UNKNOWN
+        assert error.severity == ErrorSeverity.MEDIUM
+        assert error.retry_strategy == RetryStrategy.NONE
+        assert error.original_exception == sample_exception
+        assert error.details == {}
+
+    def test_create_with_custom_values(self, sample_exception):
+        """Test creating a ServiceError with custom values."""
+        error = create_service_error(
+            sample_exception,
+            category=ErrorCategory.VALIDATION,
+            severity=ErrorSeverity.LOW,
+            retry_strategy=RetryStrategy.IMMEDIATE,
+            details={"test": "value"},
+        )
+
+        assert error.message == str(sample_exception)
+        assert error.category == ErrorCategory.VALIDATION
+        assert error.severity == ErrorSeverity.LOW
+        assert error.retry_strategy == RetryStrategy.IMMEDIATE
+        assert error.original_exception == sample_exception
+        assert error.details == {"test": "value"}
+
+    def test_create_with_auto_severity(self, connection_exception):
+        """Test automatic severity determination."""
+        error = create_service_error(
+            connection_exception,
+            category=ErrorCategory.CONNECTION,
+        )
+
+        assert error.severity == ErrorSeverity.HIGH
+
+    def test_create_with_auto_retry_strategy(self, connection_exception):
+        """Test automatic retry strategy determination."""
+        error = create_service_error(
+            connection_exception,
+            category=ErrorCategory.CONNECTION,
+        )
+
+        assert error.retry_strategy == RetryStrategy.EXPONENTIAL
+        
+    def test_document_processing_failure_handling(self):
+        """Test error handling for unreadable documents or processing failures.
+        
+        This test verifies the error handling for document processing failures
+        as required in section 4.1.8 of the technical specification.
+        """
+        # Define custom OCR processing exceptions
+        class OCRProcessingError(Exception):
+            pass
+            
+        class DocumentUnreadableError(Exception):
+            pass
+            
+        class LowQualityDocumentError(Exception):
+            pass
+        
+        # Test various document processing error scenarios
+        processing_errors = [
+            # Unreadable document errors
+            DocumentUnreadableError("Document is completely unreadable"),
+            OCRProcessingError("Failed to extract text from document"),
+            LowQualityDocumentError("Document quality too low for accurate OCR"),
+            
+            # Processing failures
+            ValueError("Invalid document format for OCR processing"),
+            TypeError("Document type not supported for OCR"),
+            RuntimeError("OCR engine failed during text extraction")
+        ]
+        
+        for exception in processing_errors:
+            # Create service error with PROCESSING category
+            error = create_service_error(
+                exception,
+                category=ErrorCategory.PROCESSING,
+                details={
+                    "document_id": "doc-123",
+                    "document_type": "application_form",
+                    "ocr_engine": "tensorflow-ocr-v2",
+                    "processing_stage": "text_extraction"
+                }
             )
-        
-        # Log the error
-        error.log(mock_logger)
-        
-        # For ERROR and CRITICAL severity, traceback should be logged
-        mock_logger.debug.assert_called_once()
-        call_args = mock_logger.debug.call_args[0][0]
-        assert "Traceback for error" in call_args
+            
+            # Verify error properties
+            assert error.category == ErrorCategory.PROCESSING
+            
+            # Check if severity is appropriate (MEDIUM for most processing errors)
+            assert error.severity in [ErrorSeverity.MEDIUM, ErrorSeverity.HIGH]
+            
+            # Verify document context is included
+            assert "document_id" in error.details
+            assert "document_type" in error.details
+            assert "ocr_engine" in error.details
+            assert "processing_stage" in error.details
+            
+            # Format for logging and verify document context is preserved
+            log_format = format_error_for_logging(error)
+            assert "error_details" in log_format
+            assert log_format["error_details"]["document_id"] == "doc-123"
+            assert log_format["error_details"]["document_type"] == "application_form"
+            
+            # Format for publishing and verify sensitive details are handled appropriately
+            publish_format = format_error_for_publishing(error)
+            assert "error" in publish_format
+            assert "details" in publish_format["error"]
+            assert publish_format["error"]["details"]["document_id"] == "doc-123"
+            
+            # Verify retry eligibility based on error type
+            if isinstance(exception, (ValueError, TypeError)):
+                # Data validation errors should not be retried
+                assert not is_retry_eligible(error)
+            elif isinstance(exception, (RuntimeError, OCRProcessingError)):
+                # Processing errors might be retried
+                if error.retry_strategy != RetryStrategy.NONE:
+                    assert is_retry_eligible(error)
+                    
+            # For low quality documents, we might want to flag for human review
+            if isinstance(exception, LowQualityDocumentError):
+                # Enrich with flag for human review
+                error = enrich_error_context(error, {"requires_human_review": True})
+                assert error.details["requires_human_review"] is True
 
-    @patch('src.utils.error_utils.logger')
-    def test_log_with_default_logger(self, default_logger, sample_error):
-        """Test logging with the default module logger."""
-        sample_error.log()  # No logger provided
-        default_logger.error.assert_called_once()
+
+# Test categorize_exception function
+class TestCategorizeException:
+    """Tests for the categorize_exception function."""
+
+    def test_connection_error(self):
+        """Test categorizing connection errors."""
+        exceptions = [
+            ConnectionError("Connection failed"),
+            TimeoutError("Connection timed out"),
+            ConnectionRefusedError("Connection refused"),
+            ConnectionResetError("Connection reset"),
+        ]
+
+        for exception in exceptions:
+            assert categorize_exception(exception) == ErrorCategory.CONNECTION
+
+    def test_validation_error(self):
+        """Test categorizing validation errors."""
+        exceptions = [
+            ValueError("Invalid value"),
+            TypeError("Invalid type"),
+            KeyError("Missing key"),
+            AttributeError("Missing attribute"),
+        ]
+
+        for exception in exceptions:
+            assert categorize_exception(exception) == ErrorCategory.VALIDATION
+
+    def test_system_error(self):
+        """Test categorizing system errors."""
+        exceptions = [
+            MemoryError("Out of memory"),
+            OSError("OS error"),
+            IOError("IO error"),
+            SystemError("System error"),
+        ]
+
+        for exception in exceptions:
+            assert categorize_exception(exception) == ErrorCategory.SYSTEM
+
+    def test_processing_error(self):
+        """Test categorizing processing errors."""
+        class OCRError(Exception):
+            pass
+
+        class DocumentError(Exception):
+            pass
+
+        exceptions = [
+            OCRError("OCR failed"),
+            DocumentError("Document processing failed"),
+        ]
+
+        for exception in exceptions:
+            assert categorize_exception(exception) == ErrorCategory.PROCESSING
+
+    def test_unknown_error(self):
+        """Test categorizing unknown errors."""
+        class CustomError(Exception):
+            pass
+
+        exception = CustomError("Custom error")
+        assert categorize_exception(exception) == ErrorCategory.UNKNOWN
+        
+    def test_connection_error_recovery_strategy(self):
+        """Test connection error handling and recovery strategy determination.
+        
+        This test verifies the error handling for connection errors and the
+        determination of appropriate recovery strategies as required in
+        section 4.1.8 of the technical specification.
+        """
+        # Test various connection error scenarios
+        connection_errors = [
+            # RabbitMQ connection errors
+            ConnectionRefusedError("Connection refused to RabbitMQ server"),
+            ConnectionResetError("Connection reset by RabbitMQ server"),
+            TimeoutError("Connection to RabbitMQ timed out"),
+            
+            # S3 connection errors
+            ConnectionError("Failed to connect to S3 storage"),
+            TimeoutError("S3 operation timed out"),
+            
+            # Generic connection errors
+            ConnectionError("Network connection interrupted")
+        ]
+        
+        for exception in connection_errors:
+            # Create service error from the exception
+            error = create_service_error(exception)
+            
+            # Verify error is categorized correctly
+            assert error.category == ErrorCategory.CONNECTION
+            
+            # Connection errors should have HIGH severity
+            assert error.severity == ErrorSeverity.HIGH
+            
+            # Connection errors should use exponential backoff
+            assert error.retry_strategy == RetryStrategy.EXPONENTIAL
+            
+            # Verify error is eligible for retry
+            assert is_retry_eligible(error)
+            
+            # Verify error context can be enriched with connection-specific details
+            connection_context = {
+                "host": "test-server",
+                "port": 5672,
+                "attempt": 1,
+                "last_connected": "2023-01-01T00:00:00Z"
+            }
+            
+            enriched_error = enrich_error_context(error, connection_context)
+            assert enriched_error.details["host"] == "test-server"
+            assert enriched_error.details["port"] == 5672
+            
+            # Verify error can be formatted for logging with connection details
+            log_format = format_error_for_logging(enriched_error)
+            assert "error_category" in log_format
+            assert log_format["error_category"] == "CONNECTION"
+            assert "error_details" in log_format
+            assert log_format["error_details"]["host"] == "test-server"
 
 
-# Test Retry Functionality
-class TestRetryFunctionality:
-    """Tests for error retry functions."""
+# Test enrich_error_context function
+class TestEnrichErrorContext:
+    """Tests for the enrich_error_context function."""
 
-    def test_increment_retry(self, sample_error):
-        """Test incrementing retry count."""
-        # Initial state
-        assert sample_error.retry_count == 0
-        assert sample_error.retry_eligible is True
-        assert sample_error.max_retries == 3
-        
-        # First retry
-        result = sample_error.increment_retry()
-        assert result is True  # Still eligible for retry
-        assert sample_error.retry_count == 1
-        
-        # Second retry
-        result = sample_error.increment_retry()
-        assert result is True  # Still eligible for retry
-        assert sample_error.retry_count == 2
-        
-        # Third retry
-        result = sample_error.increment_retry()
-        assert result is True  # Still eligible for retry
-        assert sample_error.retry_count == 3
-        
-        # Fourth retry (exceeds max_retries)
-        result = sample_error.increment_retry()
-        assert result is False  # No longer eligible for retry
-        assert sample_error.retry_count == 4
+    def test_enrich_empty_context(self, service_error):
+        """Test enriching with an empty context."""
+        original_details = service_error.details.copy()
+        enriched_error = enrich_error_context(service_error, {})
 
-    def test_retry_not_eligible(self):
-        """Test retry for non-eligible errors."""
-        error = create_error(
-            message="Non-retryable error",
-            error_code="VAL001",  # Validation errors are not retry-eligible
-            retry_eligible=False
+        assert enriched_error is service_error  # Should return the same object
+        assert enriched_error.details == original_details
+
+    def test_enrich_new_context(self, service_error):
+        """Test enriching with new context data."""
+        original_details = service_error.details.copy()
+        new_context = {"process_id": 12345, "timestamp": "2023-01-01T12:00:00Z"}
+
+        enriched_error = enrich_error_context(service_error, new_context)
+
+        assert enriched_error is service_error  # Should return the same object
+        assert enriched_error.details != original_details
+        assert enriched_error.details["document_id"] == "doc123"  # Original data preserved
+        assert enriched_error.details["retry_count"] == 0  # Original data preserved
+        assert enriched_error.details["process_id"] == 12345  # New data added
+        assert enriched_error.details["timestamp"] == "2023-01-01T12:00:00Z"  # New data added
+
+    def test_enrich_overwrite_context(self, service_error):
+        """Test enriching with context that overwrites existing data."""
+        new_context = {"document_id": "new_doc456", "new_field": "value"}
+
+        enriched_error = enrich_error_context(service_error, new_context)
+
+        assert enriched_error.details["document_id"] == "new_doc456"  # Overwritten
+        assert enriched_error.details["retry_count"] == 0  # Original data preserved
+        assert enriched_error.details["new_field"] == "value"  # New data added
+
+
+# Test is_retry_eligible function
+class TestIsRetryEligible:
+    """Tests for the is_retry_eligible function."""
+
+    def test_retry_strategy_none(self):
+        """Test retry eligibility with RetryStrategy.NONE."""
+        error = ServiceError(
+            message="Test error",
+            retry_strategy=RetryStrategy.NONE,
+        )
+
+        assert not is_retry_eligible(error)
+
+    def test_retry_count_exceeded(self):
+        """Test retry eligibility with retry count exceeded."""
+        error = ServiceError(
+            message="Test error",
+            retry_strategy=RetryStrategy.EXPONENTIAL,
+            details={"retry_count": 3},
+        )
+
+        assert not is_retry_eligible(error, max_retries=3)
+        assert is_retry_eligible(error, max_retries=4)
+
+    def test_fatal_severity(self):
+        """Test retry eligibility with fatal severity."""
+        error = ServiceError(
+            message="Test error",
+            retry_strategy=RetryStrategy.EXPONENTIAL,
+            severity=ErrorSeverity.FATAL,
+        )
+
+        assert not is_retry_eligible(error)
+
+    def test_eligible_for_retry(self):
+        """Test retry eligibility for a retry-eligible error."""
+        error = ServiceError(
+            message="Test error",
+            retry_strategy=RetryStrategy.EXPONENTIAL,
+            severity=ErrorSeverity.MEDIUM,
+            details={"retry_count": 1},
+        )
+
+        assert is_retry_eligible(error, max_retries=3)
+
+
+# Test increment_retry_count function
+class TestIncrementRetryCount:
+    """Tests for the increment_retry_count function."""
+
+    def test_increment_existing_count(self):
+        """Test incrementing an existing retry count."""
+        error = ServiceError(
+            message="Test error",
+            details={"retry_count": 2},
+        )
+
+        updated_error = increment_retry_count(error)
+
+        assert updated_error is error  # Should return the same object
+        assert updated_error.details["retry_count"] == 3
+
+    def test_increment_missing_count(self):
+        """Test incrementing a missing retry count."""
+        error = ServiceError(
+            message="Test error",
+            details={},
+        )
+
+        updated_error = increment_retry_count(error)
+
+        assert updated_error.details["retry_count"] == 1
+
+
+# Test calculate_retry_delay function
+class TestCalculateRetryDelay:
+    """Tests for the calculate_retry_delay function."""
+
+    def test_immediate_strategy(self):
+        """Test delay calculation with immediate strategy."""
+        error = ServiceError(
+            message="Test error",
+            retry_strategy=RetryStrategy.IMMEDIATE,
+            details={"retry_count": 2},
+        )
+
+        delay = calculate_retry_delay(error)
+
+        assert delay == 0.0
+
+    def test_exponential_strategy(self):
+        """Test delay calculation with exponential strategy."""
+        error = ServiceError(
+            message="Test error",
+            retry_strategy=RetryStrategy.EXPONENTIAL,
+            details={"retry_count": 2},
+        )
+
+        delay = calculate_retry_delay(error, base_delay=1.0)
+
+        assert delay == 4.0  # 1.0 * (2^2)
+
+    def test_linear_strategy(self):
+        """Test delay calculation with linear strategy."""
+        error = ServiceError(
+            message="Test error",
+            retry_strategy=RetryStrategy.LINEAR,
+            details={"retry_count": 3},
+        )
+
+        delay = calculate_retry_delay(error, base_delay=2.0)
+
+        assert delay == 6.0  # 2.0 * 3
+
+    def test_custom_strategy(self):
+        """Test delay calculation with custom strategy."""
+        error = ServiceError(
+            message="Test error",
+            retry_strategy=RetryStrategy.CUSTOM,
+            details={"retry_count": 2, "custom_delay": 5.5},
+        )
+
+        delay = calculate_retry_delay(error)
+
+        assert delay == 5.5
+
+    def test_custom_strategy_missing_delay(self):
+        """Test delay calculation with custom strategy but missing custom_delay."""
+        error = ServiceError(
+            message="Test error",
+            retry_strategy=RetryStrategy.CUSTOM,
+            details={"retry_count": 2},  # No custom_delay
+        )
+
+        delay = calculate_retry_delay(error, base_delay=3.0)
+
+        assert delay == 3.0  # Falls back to base_delay
+        
+    def test_rabbitmq_publishing_retry_scenario(self):
+        """Test a realistic RabbitMQ publishing retry scenario.
+        
+        This test simulates the retry logic for RabbitMQ message publishing
+        as required in section 4.1.8 of the technical specification.
+        """
+        # Create a connection error that would occur during RabbitMQ publishing
+        exception = ConnectionResetError("Connection reset by peer during message publish")
+        
+        # Create a service error with appropriate category
+        error = create_service_error(
+            exception,
+            category=ErrorCategory.CONNECTION
         )
         
-        # Attempt to retry
-        result = error.increment_retry()
-        assert result is False  # Not eligible for retry
-        assert error.retry_count == 0  # Count not incremented
+        # Verify the error is classified correctly
+        assert error.category == ErrorCategory.CONNECTION
+        assert error.severity == ErrorSeverity.HIGH
+        assert error.retry_strategy == RetryStrategy.EXPONENTIAL
+        
+        # Simulate retry logic
+        retry_count = 0
+        max_retries = 3
+        base_delay = 0.5  # 500ms
+        
+        # Initial check if retry is eligible
+        assert is_retry_eligible(error, max_retries=max_retries)
+        
+        # Simulate retry loop
+        while is_retry_eligible(error, max_retries=max_retries) and retry_count < 5:  # 5 is a safety limit
+            # Calculate delay for this retry attempt
+            delay = calculate_retry_delay(error, base_delay=base_delay)
+            
+            # For a connection error with exponential backoff, verify delay increases exponentially
+            expected_delay = base_delay * (2 ** retry_count)
+            assert delay == expected_delay
+            
+            # Increment retry count
+            error = increment_retry_count(error)
+            retry_count += 1
+        
+        # Verify we stopped at the right retry count
+        assert retry_count == max_retries
+        assert error.details["retry_count"] == max_retries
+        assert not is_retry_eligible(error, max_retries=max_retries)
 
-    def test_custom_max_retries(self):
-        """Test custom max_retries setting."""
-        error = create_error(
-            message="Custom retry error",
-            error_code="CONN001",
-            retry_eligible=True,
-            max_retries=5
+
+# Test format_error_for_logging function
+class TestFormatErrorForLogging:
+    """Tests for the format_error_for_logging function."""
+
+    def test_format_complete_error(self, service_error):
+        """Test formatting a complete error for logging."""
+        formatted = format_error_for_logging(service_error)
+
+        assert formatted["error_message"] == "Test error"
+        assert formatted["error_category"] == "PROCESSING"
+        assert formatted["error_severity"] == "MEDIUM"
+        assert isinstance(formatted["error_timestamp"], str)
+        assert formatted["error_details"] == {"document_id": "doc123", "retry_count": 0}
+        assert formatted["original_exception"] is None
+        assert isinstance(formatted["trace_excerpt"], list)
+
+    def test_format_with_original_exception(self):
+        """Test formatting an error with an original exception."""
+        original_exception = ValueError("Original error")
+        error = ServiceError(
+            message="Test error",
+            original_exception=original_exception,
         )
-        
-        # Perform 5 retries (should all be eligible)
-        for i in range(5):
-            result = error.increment_retry()
-            assert result is True
-            assert error.retry_count == i + 1
-        
-        # Sixth retry (exceeds max_retries)
-        result = error.increment_retry()
-        assert result is False
-        assert error.retry_count == 6
+
+        formatted = format_error_for_logging(error)
+
+        assert formatted["original_exception"] == str(original_exception)
+
+    def test_format_with_no_trace(self):
+        """Test formatting an error with no trace."""
+        error = ServiceError(
+            message="Test error",
+            trace=None,
+        )
+
+        formatted = format_error_for_logging(error)
+
+        assert formatted["trace_excerpt"] is None
 
 
-# Test Global Exception Handler
-class TestGlobalExceptionHandler:
-    """Tests for the global exception handler."""
+# Test format_error_for_publishing function
+class TestFormatErrorForPublishing:
+    """Tests for the format_error_for_publishing function."""
 
-    @patch('src.utils.error_utils.sys.__excepthook__')
-    @patch('src.utils.error_utils.create_error_from_exception')
-    def test_handle_uncaught_exception(self, mock_create_error, mock_excepthook):
-        """Test handling of uncaught exceptions."""
-        # Create a mock error
-        mock_error = MagicMock(spec=OCRServiceError)
-        mock_create_error.return_value = mock_error
+    def test_format_for_publishing(self, service_error):
+        """Test formatting an error for publishing."""
+        formatted = format_error_for_publishing(service_error)
+
+        assert "error" in formatted
+        assert formatted["error"]["message"] == "Test error"
+        assert formatted["error"]["category"] == "PROCESSING"
+        assert formatted["error"]["severity"] == "MEDIUM"
+        assert isinstance(formatted["error"]["timestamp"], str)
+        assert formatted["error"]["details"] == {"document_id": "doc123", "retry_count": 0}
         
-        # Call the handler with a test exception
+        # These should be excluded for security
+        assert "trace" not in formatted["error"]
+        assert "original_exception" not in formatted["error"]
+
+
+# Test get_caller_info function
+class TestGetCallerInfo:
+    """Tests for the get_caller_info function."""
+
+    def test_get_caller_info(self):
+        """Test getting caller information."""
+        def caller_function():
+            return get_caller_info()
+
+        caller_info = caller_function()
+
+        assert "module" in caller_info
+        assert "function" in caller_info
+        assert "line" in caller_info
+        assert caller_info["function"] == "test_get_caller_info"
+
+    @patch("inspect.currentframe", return_value=None)
+    def test_get_caller_info_no_frame(self, mock_currentframe):
+        """Test getting caller information when no frame is available."""
+        caller_info = get_caller_info()
+
+        assert caller_info == {"module": "unknown", "function": "unknown", "line": 0}
+
+
+# Test safe_execute function
+class TestSafeExecute:
+    """Tests for the safe_execute function."""
+
+    def test_successful_execution(self):
+        """Test safe execution of a successful function."""
+        def test_func(a, b):
+            return a + b
+
+        result = safe_execute(test_func, 1, 2)
+
+        assert result == 3
+
+    def test_failed_execution(self):
+        """Test safe execution of a failing function."""
+        def test_func():
+            raise ValueError("Test error")
+
+        result = safe_execute(test_func)
+
+        assert result is None
+
+    def test_failed_execution_with_default(self):
+        """Test safe execution of a failing function with a default value."""
+        def test_func():
+            raise ValueError("Test error")
+
+        result = safe_execute(test_func, default="default_value")
+
+        assert result == "default_value"
+
+
+# Test handle_boto_error function
+class TestHandleBotoError:
+    """Tests for the handle_boto_error function."""
+
+    def test_handle_no_such_key(self, boto3_client_error):
+        """Test handling a NoSuchKey error."""
+        error_code, error_message = handle_boto_error(boto3_client_error)
+
+        assert error_code == StorageErrorCode.OBJECT_NOT_FOUND
+        assert error_message == "The specified key does not exist."
+
+    def test_handle_access_denied(self):
+        """Test handling an AccessDenied error."""
+        error_response = {"Error": {"Code": "AccessDenied", "Message": "Access Denied"}}
+        boto_error = MagicMock(
+            response=error_response,
+            __str__=lambda self: "An error occurred (AccessDenied) when calling the GetObject operation: Access Denied"
+        )
+
+        error_code, error_message = handle_boto_error(boto_error)
+
+        assert error_code == StorageErrorCode.PERMISSION_DENIED
+        assert error_message == "Access Denied"
+
+    def test_handle_connection_error(self):
+        """Test handling a connection error."""
+        connection_error = Exception("Connection timed out")
+
+        error_code, error_message = handle_boto_error(connection_error)
+
+        assert error_code == StorageErrorCode.CONNECTION_ERROR
+        assert error_message == "Connection timed out"
+
+    def test_handle_unknown_error(self):
+        """Test handling an unknown error."""
+        unknown_error = Exception("Unknown error")
+
+        error_code, error_message = handle_boto_error(unknown_error)
+
+        assert error_code == StorageErrorCode.UNKNOWN_ERROR
+        assert error_message == "Unknown error"
+
+
+# Test handle_uncaught_exception function
+class TestHandleUncaughtException:
+    """Tests for the handle_uncaught_exception function."""
+
+    @patch("sys.stderr.write")
+    @patch("logging.critical")
+    def test_handle_regular_exception(self, mock_log_critical, mock_stderr_write):
+        """Test handling a regular exception."""
         exc_type = ValueError
-        exc_value = ValueError("Test uncaught exception")
+        exc_value = ValueError("Test error")
         exc_traceback = None
-        
-        from src.utils.error_utils import handle_uncaught_exception
-        handle_uncaught_exception(exc_type, exc_value, exc_traceback)
-        
-        # Verify that error was created and logged
-        mock_create_error.assert_called_once_with(
-            exception=exc_value,
-            operation="uncaught_exception",
-            component="global_exception_handler"
-        )
-        mock_error.log.assert_called_once()
-        
-        # Verify that original excepthook was called
-        mock_excepthook.assert_called_once_with(exc_type, exc_value, exc_traceback)
 
-    @patch('src.utils.error_utils.sys')
-    def test_setup_global_exception_handler(self, mock_sys):
-        """Test setting up the global exception handler."""
-        from src.utils.error_utils import handle_uncaught_exception, setup_global_exception_handler
-        
-        # Call the setup function
-        setup_global_exception_handler()
-        
-        # Verify that sys.excepthook was set
-        mock_sys.excepthook = handle_uncaught_exception
+        handle_uncaught_exception(exc_type, exc_value, exc_traceback)
+
+        # Check that logging.critical was called
+        mock_log_critical.assert_called_once()
+        # Check that sys.stderr.write was called
+        mock_stderr_write.assert_called_once()
+
+    @patch("sys.__excepthook__")
+    def test_handle_keyboard_interrupt(self, mock_sys_excepthook):
+        """Test handling a KeyboardInterrupt exception."""
+        exc_type = KeyboardInterrupt
+        exc_value = KeyboardInterrupt()
+        exc_traceback = None
+
+        handle_uncaught_exception(exc_type, exc_value, exc_traceback)
+
+        # Check that sys.__excepthook__ was called for KeyboardInterrupt
+        mock_sys_excepthook.assert_called_once_with(exc_type, exc_value, exc_traceback)
+
+
+# Test set_global_exception_handler function
+class TestSetGlobalExceptionHandler:
+    """Tests for the set_global_exception_handler function."""
+
+    def test_set_global_exception_handler(self):
+        """Test setting the global exception handler."""
+        original_excepthook = sys.excepthook
+
+        try:
+            set_global_exception_handler()
+            assert sys.excepthook == handle_uncaught_exception
+        finally:
+            # Restore the original excepthook to avoid affecting other tests
+            sys.excepthook = original_excepthook
