@@ -1,188 +1,339 @@
 package com.dollarfunding.mca.dto;
 
 import com.dollarfunding.mca.entity.MerchantDetails;
-import com.dollarfunding.mca.util.EncryptionUtil;
 import com.fasterxml.jackson.annotation.JsonFormat;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
-import java.util.Map;
+import java.time.LocalDateTime;
 
 /**
  * Data Transfer Object for returning merchant details to clients.
- * Provides a complete view of merchant information while handling sensitive PII data appropriately.
- * Used for API responses in the MCA application processing system.
+ * This class provides a complete view of merchant information while handling
+ * sensitive PII data appropriately. It includes all merchant fields with
+ * proper serialization for API responses.
+ * <p>
+ * Sensitive PII data fields are masked in the response to protect privacy.
+ * </p>
+ *
+ * @author MCA Application Team
  */
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class MerchantDetailsResponseDTO {
 
+    /**
+     * Unique identifier for the merchant details record.
+     */
     @JsonProperty("id")
     private Long id;
 
+    /**
+     * Associated application ID.
+     */
     @JsonProperty("application_id")
     private Long applicationId;
 
+    /**
+     * Legal name of the merchant (PII data).
+     * This field contains the full legal name for authorized users,
+     * or a masked version for users without full access permissions.
+     */
     @JsonProperty("legal_name")
     private String legalName;
 
+    /**
+     * Doing Business As name of the merchant (PII data).
+     * This field contains the full DBA name for authorized users,
+     * or a masked version for users without full access permissions.
+     */
     @JsonProperty("dba_name")
     private String dbaName;
 
+    /**
+     * Employer Identification Number (EIN) of the merchant (PII data).
+     * This field contains the full EIN for authorized users,
+     * or a masked version for users without full access permissions.
+     */
     @JsonProperty("ein")
     private String ein;
 
+    /**
+     * Address of the merchant (PII data).
+     * This is a complex structure containing address details.
+     */
     @JsonProperty("address")
-    private Map<String, String> address;
+    private AddressDTO address;
 
+    /**
+     * Industry of the merchant.
+     */
     @JsonProperty("industry")
     private String industry;
 
+    /**
+     * Annual revenue of the merchant.
+     * Formatted as a currency value with two decimal places.
+     */
     @JsonProperty("revenue")
     @JsonFormat(shape = JsonFormat.Shape.STRING)
     private BigDecimal revenue;
 
     /**
-     * Default constructor for Jackson deserialization
+     * Timestamp when the merchant details record was created.
      */
-    public MerchantDetailsResponseDTO() {
-    }
+    @JsonProperty("created_at")
+    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
+    private LocalDateTime createdAt;
 
     /**
-     * Constructor to create DTO from entity
-     * @param merchantDetails The merchant details entity
+     * Timestamp when the merchant details record was last updated.
      */
-    public MerchantDetailsResponseDTO(MerchantDetails merchantDetails) {
-        this.id = merchantDetails.getId();
-        this.applicationId = merchantDetails.getApplicationId();
-        
-        // Handle sensitive PII data appropriately
-        this.legalName = maskSensitiveData(merchantDetails.getLegalName());
-        this.dbaName = maskSensitiveData(merchantDetails.getDbaName());
-        this.ein = maskEIN(merchantDetails.getEin());
-        
-        this.address = merchantDetails.getAddress();
-        this.industry = merchantDetails.getIndustry();
-        this.revenue = merchantDetails.getRevenue();
-    }
+    @JsonProperty("updated_at")
+    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
+    private LocalDateTime updatedAt;
 
     /**
-     * Static factory method to create DTO from entity
-     * @param merchantDetails The merchant details entity
-     * @return A new MerchantDetailsResponseDTO instance
+     * Creates a new DTO from a MerchantDetails entity.
+     * This method handles the conversion of all fields, including proper
+     * formatting of address and financial information.
+     *
+     * @param entity The MerchantDetails entity
+     * @param maskPii Flag indicating whether to mask PII data
+     * @return A new MerchantDetailsResponseDTO with data from the entity
      */
-    public static MerchantDetailsResponseDTO fromEntity(MerchantDetails merchantDetails) {
-        if (merchantDetails == null) {
+    public static MerchantDetailsResponseDTO fromEntity(MerchantDetails entity, boolean maskPii) {
+        if (entity == null) {
             return null;
         }
-        return new MerchantDetailsResponseDTO(merchantDetails);
+
+        // Build the response DTO with all fields from the entity
+        MerchantDetailsResponseDTO dto = MerchantDetailsResponseDTO.builder()
+                .id(entity.getId())
+                .applicationId(entity.getApplication() != null ? entity.getApplication().getId() : null)
+                .industry(entity.getIndustry())
+                .revenue(entity.getRevenue())
+                .createdAt(entity.getCreatedAt())
+                .updatedAt(entity.getUpdatedAt())
+                .build();
+
+        // Handle PII data based on masking flag
+        if (maskPii) {
+            // Mask sensitive PII data for users without full access permissions
+            dto.setLegalName(maskName(entity.getLegalName()));
+            dto.setDbaName(entity.getDbaName() != null ? maskName(entity.getDbaName()) : null);
+            dto.setEin(maskEin(entity.getEin()));
+            dto.setAddress(maskAddress(entity.getAddress()));
+        } else {
+            // Include full PII data for authorized users
+            dto.setLegalName(entity.getLegalName());
+            dto.setDbaName(entity.getDbaName());
+            dto.setEin(entity.getEin());
+            dto.setAddress(AddressDTO.fromAddressObject(entity.getAddress()));
+        }
+
+        return dto;
     }
 
     /**
-     * Masks sensitive data for API responses
-     * @param data The sensitive data to mask
-     * @return Masked data string
+     * Creates a new DTO from a MerchantDetails entity with PII data masked.
+     * This is a convenience method that calls fromEntity(entity, true).
+     *
+     * @param entity The MerchantDetails entity
+     * @return A new MerchantDetailsResponseDTO with masked PII data
      */
-    private String maskSensitiveData(String data) {
-        if (data == null || data.isEmpty()) {
-            return data;
-        }
-        
-        // Show only first and last character, mask the rest
-        if (data.length() <= 2) {
-            return data;
-        }
-        
-        return data.substring(0, 1) + 
-               "*".repeat(data.length() - 2) + 
-               data.substring(data.length() - 1);
+    public static MerchantDetailsResponseDTO fromEntityWithMaskedPii(MerchantDetails entity) {
+        return fromEntity(entity, true);
     }
 
     /**
-     * Masks EIN (Employer Identification Number) for API responses
-     * Format: XX-XXXXXXX (show only last 4 digits)
+     * Creates a new DTO from a MerchantDetails entity with full PII data.
+     * This is a convenience method that calls fromEntity(entity, false).
+     *
+     * @param entity The MerchantDetails entity
+     * @return A new MerchantDetailsResponseDTO with full PII data
+     */
+    public static MerchantDetailsResponseDTO fromEntityWithFullPii(MerchantDetails entity) {
+        return fromEntity(entity, false);
+    }
+
+    /**
+     * Masks a name by showing only the first character followed by asterisks.
+     * For example, "Acme Corporation" becomes "A*** C***********".
+     *
+     * @param name The name to mask
+     * @return The masked name
+     */
+    private static String maskName(String name) {
+        if (name == null || name.isEmpty()) {
+            return name;
+        }
+
+        String[] parts = name.split("\\s+");
+        StringBuilder masked = new StringBuilder();
+
+        for (int i = 0; i < parts.length; i++) {
+            String part = parts[i];
+            if (part.length() > 0) {
+                masked.append(part.charAt(0));
+                for (int j = 1; j < part.length(); j++) {
+                    masked.append("*");
+                }
+            }
+            if (i < parts.length - 1) {
+                masked.append(" ");
+            }
+        }
+
+        return masked.toString();
+    }
+
+    /**
+     * Masks an EIN by showing only the last 4 digits.
+     * For example, "12-3456789" becomes "**-****6789".
+     *
      * @param ein The EIN to mask
-     * @return Masked EIN string
+     * @return The masked EIN
      */
-    private String maskEIN(String ein) {
+    private static String maskEin(String ein) {
         if (ein == null || ein.isEmpty()) {
             return ein;
         }
-        
-        // Format: XX-XXXXXXX (show only last 4 digits)
-        if (ein.contains("-") && ein.length() >= 10) {
-            return "**-***" + ein.substring(ein.length() - 4);
-        } else if (ein.length() >= 9) {
-            // Handle EIN without hyphen
-            return "*****" + ein.substring(ein.length() - 4);
+
+        // EIN format is XX-XXXXXXX (9 digits with hyphen)
+        if (ein.length() < 5) {
+            return "**-*******";
         }
-        
-        return ein;
+
+        return "**-***" + ein.substring(ein.length() - 4);
     }
 
-    // Getters and setters
+    /**
+     * Masks an address by partially obscuring street information while
+     * preserving city, state, and ZIP code.
+     *
+     * @param address The address to mask
+     * @return The masked address as an AddressDTO
+     */
+    private static AddressDTO maskAddress(MerchantDetails.Address address) {
+        if (address == null) {
+            return null;
+        }
 
-    public Long getId() {
-        return id;
+        // Create a masked version of the address
+        return AddressDTO.builder()
+                .street(maskStreetAddress(address.getStreet()))
+                .city(address.getCity())
+                .state(address.getState())
+                .zipCode(address.getZip())
+                .country(address.getCountry())
+                .build();
     }
 
-    public void setId(Long id) {
-        this.id = id;
+    /**
+     * Masks a street address by showing only the house/building number
+     * and replacing the street name with asterisks.
+     * For example, "123 Main Street" becomes "123 **** ******".
+     *
+     * @param street The street address to mask
+     * @return The masked street address
+     */
+    private static String maskStreetAddress(String street) {
+        if (street == null || street.isEmpty()) {
+            return street;
+        }
+
+        // Extract the house/building number (assuming it's at the beginning)
+        String[] parts = street.split("\\s+", 2);
+        if (parts.length < 2) {
+            return street;
+        }
+
+        // Keep the house/building number and mask the rest
+        StringBuilder masked = new StringBuilder(parts[0]);
+        masked.append(" ");
+
+        // Mask each word in the street name
+        String[] streetParts = parts[1].split("\\s+");
+        for (int i = 0; i < streetParts.length; i++) {
+            for (int j = 0; j < streetParts[i].length(); j++) {
+                masked.append("*");
+            }
+            if (i < streetParts.length - 1) {
+                masked.append(" ");
+            }
+        }
+
+        return masked.toString();
     }
 
-    public Long getApplicationId() {
-        return applicationId;
-    }
+    /**
+     * Inner class representing the address structure for API responses.
+     * Contains fields for street, city, state, ZIP code, and country.
+     */
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static class AddressDTO {
 
-    public void setApplicationId(Long applicationId) {
-        this.applicationId = applicationId;
-    }
+        /**
+         * Street address (PII data).
+         */
+        @JsonProperty("street")
+        private String street;
 
-    public String getLegalName() {
-        return legalName;
-    }
+        /**
+         * City (PII data).
+         */
+        @JsonProperty("city")
+        private String city;
 
-    public void setLegalName(String legalName) {
-        this.legalName = legalName;
-    }
+        /**
+         * State (2-letter code).
+         */
+        @JsonProperty("state")
+        private String state;
 
-    public String getDbaName() {
-        return dbaName;
-    }
+        /**
+         * ZIP code.
+         */
+        @JsonProperty("zip_code")
+        private String zipCode;
 
-    public void setDbaName(String dbaName) {
-        this.dbaName = dbaName;
-    }
+        /**
+         * Country.
+         */
+        @JsonProperty("country")
+        private String country;
 
-    public String getEin() {
-        return ein;
-    }
+        /**
+         * Creates a new AddressDTO from an Address object.
+         *
+         * @param address The Address object
+         * @return A new AddressDTO with data from the Address object
+         */
+        public static AddressDTO fromAddressObject(MerchantDetails.Address address) {
+            if (address == null) {
+                return null;
+            }
 
-    public void setEin(String ein) {
-        this.ein = ein;
-    }
-
-    public Map<String, String> getAddress() {
-        return address;
-    }
-
-    public void setAddress(Map<String, String> address) {
-        this.address = address;
-    }
-
-    public String getIndustry() {
-        return industry;
-    }
-
-    public void setIndustry(String industry) {
-        this.industry = industry;
-    }
-
-    public BigDecimal getRevenue() {
-        return revenue;
-    }
-
-    public void setRevenue(BigDecimal revenue) {
-        this.revenue = revenue;
+            return AddressDTO.builder()
+                    .street(address.getStreet())
+                    .city(address.getCity())
+                    .state(address.getState())
+                    .zipCode(address.getZip())
+                    .country(address.getCountry())
+                    .build();
+        }
     }
 }
