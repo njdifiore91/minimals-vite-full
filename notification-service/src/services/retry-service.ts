@@ -2,82 +2,76 @@
  * Retry Service
  * 
  * This service manages the retry mechanism for failed notification deliveries.
- * It implements an exponential backoff algorithm, maintains a retry queue,
- * and handles permanent failures after exhausting retry attempts.
+ * It implements an exponential backoff algorithm, maintains a retry queue, and
+ * handles permanent failures after exhausting retry attempts.
  * 
- * The service ensures reliable notification delivery even in the face of
- * temporary recipient unavailability by implementing sophisticated retry logic
- * with configurable parameters as specified in section 3.8.5.
+ * Key features:
+ * - Exponential backoff algorithm for retry scheduling
+ * - Retry queue management with prioritization
+ * - Retry attempt tracking and limit enforcement
+ * - Dead letter queue for persistently failed notifications
+ * - Retry status reporting and monitoring
+ * - Configurable retry parameters (counts, intervals, backoff factor)
  */
 
 import { EventEmitter } from 'events';
 import { Logger } from 'winston';
-import * as retryUtils from '../utils/retry';
-import type { IRetryConfig } from '../types/config';
-import type { INotification, NotificationStatus } from '../types/notification';
-import type { IWebhookDeliveryResult } from '../types/webhook';
-import type { IRetryOptions } from '../types/common';
+import { IWebhookDeliveryResult, IWebhookPayload, IWebhookRetryPolicy } from '../types/webhook';
+import { NotificationStatus } from '../types/notification';
+import { deadLetterQueueConfig, defaultRetryPolicy } from '../config/webhook';
+import {
+  RetryOptions,
+  RetryState,
+  calculateNextRetryTime,
+  createRetryState,
+  formatRetryForLogging,
+  isRetryExhausted,
+  prepareForNextRetry,
+  shouldRetry
+} from '../utils/retry';
 
 /**
- * Interface for retry queue items
+ * Interface for a notification that needs to be retried
  */
-export interface RetryQueueItem {
+export interface RetryItem {
   /** Unique identifier for the retry item */
   id: string;
-  /** The notification to retry */
-  notification: INotification;
-  /** The webhook delivery result from the failed attempt */
-  deliveryResult?: IWebhookDeliveryResult;
-  /** Retry state tracking attempts and scheduling */
-  retryState: retryUtils.RetryState;
-  /** Priority of the retry (higher numbers = higher priority) */
-  priority: number;
+  /** The webhook payload to deliver */
+  payload: IWebhookPayload;
+  /** The current retry state */
+  retryState: RetryState;
+  /** The webhook ID this notification is for */
+  webhookId: string;
+  /** The original error that caused the retry */
+  error: Error;
   /** Timestamp when the item was added to the retry queue */
   queuedAt: number;
-  /** Timestamp when the item should be processed */
-  scheduledAt: number;
-  /** Whether the item is currently being processed */
-  processing: boolean;
-  /** Additional metadata for the retry */
+  /** Priority of the retry (higher values are processed first) */
+  priority: number;
+  /** Additional metadata for the retry item */
   metadata?: Record<string, any>;
 }
 
 /**
- * Interface for dead letter queue items
+ * Interface for retry queue statistics
  */
-export interface DeadLetterQueueItem extends RetryQueueItem {
-  /** Reason the item was moved to the dead letter queue */
-  reason: string;
-  /** Timestamp when the item was moved to the dead letter queue */
-  deadLetteredAt: number;
-  /** Final error that caused the item to be dead-lettered */
-  finalError?: Error;
-}
-
-/**
- * Interface for retry statistics
- */
-export interface RetryStats {
+export interface RetryQueueStats {
   /** Total number of items in the retry queue */
-  queueSize: number;
-  /** Total number of items in the dead letter queue */
-  deadLetterSize: number;
-  /** Number of items currently being processed */
-  processingCount: number;
-  /** Number of successful retries */
-  successCount: number;
-  /** Number of failed retries */
-  failureCount: number;
-  /** Number of items moved to the dead letter queue */
-  deadLetterCount: number;
-  /** Average retry attempts before success */
-  avgAttemptsBeforeSuccess: number;
-  /** Distribution of retry attempts */
+  totalItems: number;
+  /** Number of items ready to be retried */
+  readyItems: number;
+  /** Number of items waiting for their next retry time */
+  waitingItems: number;
+  /** Number of items sent to the dead letter queue */
+  deadLetterItems: number;
+  /** Average retry attempts across all items */
+  averageAttempts: number;
+  /** Distribution of items by retry attempt */
   attemptDistribution: Record<number, number>;
-  /** Distribution of error types */
-  errorTypeDistribution: Record<string, number>;
-  /** Timestamp when the stats were generated */
-  timestamp: number;
+  /** Oldest item in the queue (timestamp) */
+  oldestItemTimestamp: number | null;
+  /** Newest item in the queue (timestamp) */
+  newestItemTimestamp: number | null;
 }
 
 /**
@@ -86,603 +80,605 @@ export interface RetryStats {
 export enum RetryServiceEvent {
   /** Emitted when an item is added to the retry queue */
   ITEM_QUEUED = 'item_queued',
-  /** Emitted when a retry is attempted */
-  RETRY_ATTEMPTED = 'retry_attempted',
-  /** Emitted when a retry succeeds */
-  RETRY_SUCCEEDED = 'retry_succeeded',
-  /** Emitted when a retry fails */
-  RETRY_FAILED = 'retry_failed',
-  /** Emitted when an item is moved to the dead letter queue */
-  DEAD_LETTERED = 'dead_lettered',
-  /** Emitted when the retry service encounters an error */
-  ERROR = 'error',
+  /** Emitted when an item is ready to be retried */
+  ITEM_READY = 'item_ready',
+  /** Emitted when an item is successfully retried */
+  RETRY_SUCCESS = 'retry_success',
+  /** Emitted when an item fails to be retried */
+  RETRY_FAILURE = 'retry_failure',
+  /** Emitted when an item is sent to the dead letter queue */
+  DEAD_LETTER = 'dead_letter',
+  /** Emitted when the retry queue is processed */
+  QUEUE_PROCESSED = 'queue_processed',
+  /** Emitted when an error occurs in the retry service */
+  ERROR = 'error'
 }
 
 /**
  * Service that manages the retry mechanism for failed notification deliveries.
- * 
- * This service implements an exponential backoff algorithm, maintains a retry queue,
- * and handles permanent failures after exhausting retry attempts. It ensures reliable
- * notification delivery even in the face of temporary recipient unavailability.
  */
 export class RetryService extends EventEmitter {
-  private retryQueue: Map<string, RetryQueueItem>;
-  private deadLetterQueue: Map<string, DeadLetterQueueItem>;
-  private processingItems: Set<string>;
-  private retryConfig: IRetryConfig;
+  private retryQueue: Map<string, RetryItem> = new Map();
+  private deadLetterQueue: Map<string, RetryItem> = new Map();
+  private processingInterval: NodeJS.Timeout | null = null;
   private logger: Logger;
-  private scheduler: NodeJS.Timeout | null;
-  private stats: RetryStats;
-  private isProcessing: boolean;
-  private webhookService: any; // Will be set via setWebhookService
+  private retryPolicy: IWebhookRetryPolicy;
+  private isProcessing: boolean = false;
+  private metrics: {
+    totalQueued: number;
+    totalRetried: number;
+    totalSucceeded: number;
+    totalFailed: number;
+    totalDeadLettered: number;
+  } = {
+    totalQueued: 0,
+    totalRetried: 0,
+    totalSucceeded: 0,
+    totalFailed: 0,
+    totalDeadLettered: 0
+  };
 
   /**
-   * Creates a new instance of the RetryService
+   * Creates a new RetryService instance
    * 
-   * @param retryConfig Configuration for the retry mechanism
-   * @param logger Logger instance for logging retry operations
+   * @param logger Winston logger instance
+   * @param retryPolicy Retry policy configuration (optional, uses default if not provided)
    */
-  constructor(retryConfig: IRetryConfig, logger: Logger) {
+  constructor(logger: Logger, retryPolicy: IWebhookRetryPolicy = defaultRetryPolicy) {
     super();
-    this.retryQueue = new Map<string, RetryQueueItem>();
-    this.deadLetterQueue = new Map<string, DeadLetterQueueItem>();
-    this.processingItems = new Set<string>();
-    this.retryConfig = retryConfig;
     this.logger = logger;
-    this.scheduler = null;
-    this.isProcessing = false;
-    this.webhookService = null;
-    
-    // Initialize statistics
-    this.stats = {
-      queueSize: 0,
-      deadLetterSize: 0,
-      processingCount: 0,
-      successCount: 0,
-      failureCount: 0,
-      deadLetterCount: 0,
-      avgAttemptsBeforeSuccess: 0,
-      attemptDistribution: {},
-      errorTypeDistribution: {},
-      timestamp: Date.now(),
-    };
-  }
-
-  /**
-   * Sets the webhook service to use for retry attempts
-   * This is set separately to avoid circular dependencies
-   * 
-   * @param webhookService The webhook service instance
-   */
-  public setWebhookService(webhookService: any): void {
-    this.webhookService = webhookService;
+    this.retryPolicy = retryPolicy;
   }
 
   /**
    * Starts the retry service
+   * 
+   * @param processingIntervalMs Interval in milliseconds to process the retry queue (default: 5000)
    */
-  public start(): void {
-    if (this.scheduler) {
-      return; // Already started
+  public start(processingIntervalMs: number = 5000): void {
+    if (this.processingInterval) {
+      this.stop();
     }
 
-    this.logger.info('Starting retry service');
-    
-    // Start the scheduler to process the retry queue
-    // Check every second for items that need to be retried
-    this.scheduler = setInterval(() => this.processRetryQueue(), 1000);
+    this.logger.info('Starting retry service', {
+      processingIntervalMs,
+      retryPolicy: this.retryPolicy
+    });
+
+    this.processingInterval = setInterval(() => {
+      this.processRetryQueue().catch(error => {
+        this.logger.error('Error processing retry queue', { error });
+        this.emit(RetryServiceEvent.ERROR, error);
+      });
+    }, processingIntervalMs);
   }
 
   /**
    * Stops the retry service
    */
   public stop(): void {
-    if (!this.scheduler) {
-      return; // Already stopped
+    if (this.processingInterval) {
+      clearInterval(this.processingInterval);
+      this.processingInterval = null;
+      this.logger.info('Retry service stopped');
     }
-
-    this.logger.info('Stopping retry service');
-    
-    clearInterval(this.scheduler);
-    this.scheduler = null;
   }
 
   /**
-   * Adds a failed notification to the retry queue
+   * Queues a failed notification for retry
    * 
-   * @param notification The notification that failed to deliver
-   * @param deliveryResult The result of the failed delivery attempt
-   * @param error The error that occurred during delivery
-   * @param options Optional retry options to override defaults
-   * @returns The created retry queue item
+   * @param payload The webhook payload to retry
+   * @param webhookId The ID of the webhook endpoint
+   * @param error The error that caused the failure
+   * @param priority Priority of the retry (higher values are processed first)
+   * @param metadata Additional metadata for the retry item
+   * @returns The created retry item
    */
-  public addToRetryQueue(
-    notification: INotification,
-    deliveryResult?: IWebhookDeliveryResult,
-    error?: Error,
-    options?: Partial<IRetryOptions>
-  ): RetryQueueItem {
-    if (!this.retryConfig.enabled) {
-      throw new Error('Retry mechanism is disabled');
-    }
+  public queueForRetry(
+    payload: IWebhookPayload,
+    webhookId: string,
+    error: Error,
+    priority: number = 0,
+    metadata?: Record<string, any>
+  ): RetryItem {
+    // Create a unique ID for the retry item
+    const id = `${payload.id}-${Date.now()}`;
 
-    // Create retry options by merging defaults with provided options
-    const retryOptions: retryUtils.RetryOptions = {
-      baseDelayMs: options?.initialDelayMs ?? this.retryConfig.initialDelay,
-      exponentialFactor: options?.backoffFactor ?? this.retryConfig.backoffMultiplier,
-      maxDelayMs: options?.maxDelayMs ?? this.retryConfig.maxDelay,
-      maxRetries: options?.maxRetries ?? this.retryConfig.maxAttempts,
-      jitterFactor: this.retryConfig.enableJitter ? 0.2 : 0, // 20% jitter if enabled
-    };
+    // Create the initial retry state
+    const retryState = createRetryState(error);
 
-    // Create initial retry state
-    const retryState = retryUtils.createRetryState(error);
-    
     // Prepare for the first retry
-    const preparedState = error 
-      ? retryUtils.prepareForNextRetry(retryState, error, retryOptions)
-      : retryState;
-    
-    // Determine priority based on notification priority
-    // Higher numbers = higher priority
-    let priority = 1; // Default priority
-    
-    if (notification.deliveryOptions?.priority) {
-      switch (notification.deliveryOptions.priority) {
-        case 'critical':
-          priority = 4;
-          break;
-        case 'high':
-          priority = 3;
-          break;
-        case 'medium':
-          priority = 2;
-          break;
-        case 'low':
-        default:
-          priority = 1;
-          break;
-      }
-    }
+    const updatedRetryState = prepareForNextRetry(
+      retryState,
+      error,
+      this.convertRetryPolicy(this.retryPolicy)
+    );
 
-    // Create the retry queue item
-    const queueItem: RetryQueueItem = {
-      id: notification.id,
-      notification,
-      deliveryResult,
-      retryState: preparedState,
-      priority,
+    // Create the retry item
+    const retryItem: RetryItem = {
+      id,
+      payload,
+      retryState: updatedRetryState,
+      webhookId,
+      error,
       queuedAt: Date.now(),
-      scheduledAt: preparedState.nextRetryTime || Date.now(),
-      processing: false,
-      metadata: {
-        retryOptions,
-        originalError: error?.message,
-        errorType: error?.constructor.name,
-      },
+      priority,
+      metadata
     };
 
     // Add to the retry queue
-    this.retryQueue.set(notification.id, queueItem);
-    
-    // Update notification status to RETRYING
-    notification.status = NotificationStatus.RETRYING;
-    notification.retryCount = preparedState.attempt;
-    notification.nextRetryAt = preparedState.nextRetryTime;
-    
-    // Update statistics
-    this.updateStats();
-    
-    // Log and emit event
-    this.logger.info(
-      `Added notification ${notification.id} to retry queue. Attempt: ${preparedState.attempt}, Next retry: ${new Date(preparedState.nextRetryTime || 0).toISOString()}`,
-      { notificationId: notification.id, retryState: retryUtils.formatRetryForLogging(preparedState) }
-    );
-    
-    this.emit(RetryServiceEvent.ITEM_QUEUED, queueItem);
-    
-    return queueItem;
+    this.retryQueue.set(id, retryItem);
+    this.metrics.totalQueued++;
+
+    this.logger.info('Notification queued for retry', {
+      id,
+      webhookId,
+      eventType: payload.eventType,
+      nextRetryTime: updatedRetryState.nextRetryTime
+        ? new Date(updatedRetryState.nextRetryTime).toISOString()
+        : null,
+      error: error.message
+    });
+
+    // Emit the queued event
+    this.emit(RetryServiceEvent.ITEM_QUEUED, retryItem);
+
+    return retryItem;
   }
 
   /**
-   * Processes the retry queue, attempting to deliver notifications that are due for retry
+   * Processes the retry queue, attempting to deliver notifications that are ready for retry
    */
-  private async processRetryQueue(): Promise<void> {
-    if (this.isProcessing || this.retryQueue.size === 0) {
-      return; // Already processing or queue is empty
+  public async processRetryQueue(): Promise<void> {
+    if (this.isProcessing) {
+      this.logger.debug('Retry queue is already being processed');
+      return;
     }
 
     this.isProcessing = true;
 
     try {
-      // Get all items that are due for retry, sorted by priority (highest first)
       const now = Date.now();
-      const dueItems = Array.from(this.retryQueue.values())
-        .filter(item => !item.processing && item.scheduledAt <= now)
-        .sort((a, b) => b.priority - a.priority);
+      const readyItems: RetryItem[] = [];
 
-      if (dueItems.length === 0) {
-        this.isProcessing = false;
-        return; // No items due for retry
+      // Find items that are ready to be retried
+      for (const item of this.retryQueue.values()) {
+        if (item.retryState.nextRetryTime && item.retryState.nextRetryTime <= now) {
+          readyItems.push(item);
+        }
       }
 
-      this.logger.debug(`Processing ${dueItems.length} items from retry queue`);
+      // Sort by priority (higher first) and then by age (older first)
+      readyItems.sort((a, b) => {
+        if (a.priority !== b.priority) {
+          return b.priority - a.priority; // Higher priority first
+        }
+        return a.queuedAt - b.queuedAt; // Older items first
+      });
 
-      // Process each due item
-      const processPromises = dueItems.map(item => this.processRetryItem(item));
-      
-      // Wait for all items to be processed
-      await Promise.all(processPromises);
-    } catch (error) {
-      this.logger.error('Error processing retry queue', { error });
-      this.emit(RetryServiceEvent.ERROR, error);
+      this.logger.debug('Processing retry queue', {
+        totalItems: this.retryQueue.size,
+        readyItems: readyItems.length
+      });
+
+      // Process each ready item
+      for (const item of readyItems) {
+        this.emit(RetryServiceEvent.ITEM_READY, item);
+        this.metrics.totalRetried++;
+
+        // This is where we would actually attempt to deliver the notification
+        // For now, we'll just simulate success or failure
+        // In a real implementation, this would call the webhook service to attempt delivery
+        try {
+          // Simulate a delivery attempt
+          // In a real implementation, this would be replaced with actual delivery logic
+          const success = Math.random() > 0.5; // 50% chance of success for simulation
+
+          if (success) {
+            // Successful delivery
+            this.handleRetrySuccess(item);
+          } else {
+            // Failed delivery
+            throw new Error('Simulated delivery failure');
+          }
+        } catch (error) {
+          // Handle retry failure
+          this.handleRetryFailure(item, error instanceof Error ? error : new Error(String(error)));
+        }
+      }
+
+      // Emit queue processed event with statistics
+      this.emit(RetryServiceEvent.QUEUE_PROCESSED, this.getQueueStats());
     } finally {
       this.isProcessing = false;
-      this.updateStats();
-    }
-  }
-
-  /**
-   * Processes a single retry queue item
-   * 
-   * @param item The retry queue item to process
-   */
-  private async processRetryItem(item: RetryQueueItem): Promise<void> {
-    if (!this.webhookService) {
-      this.logger.error('Cannot process retry item: webhook service not set');
-      return;
-    }
-
-    // Mark as processing
-    item.processing = true;
-    this.processingItems.add(item.id);
-
-    try {
-      this.logger.info(
-        `Attempting retry for notification ${item.id}. Attempt: ${item.retryState.attempt}`,
-        { notificationId: item.id, retryAttempt: item.retryState.attempt }
-      );
-
-      this.emit(RetryServiceEvent.RETRY_ATTEMPTED, item);
-
-      // Attempt to deliver the notification using the webhook service
-      const result = await this.webhookService.deliverWebhook(item.notification);
-
-      // If we get here, the delivery was successful
-      this.handleRetrySuccess(item, result);
-    } catch (error: any) {
-      // Delivery failed, handle the failure
-      this.handleRetryFailure(item, error);
-    } finally {
-      // Remove from processing set
-      item.processing = false;
-      this.processingItems.delete(item.id);
     }
   }
 
   /**
    * Handles a successful retry attempt
    * 
-   * @param item The retry queue item that succeeded
-   * @param result The result of the successful delivery
+   * @param item The retry item that was successfully delivered
    */
-  private handleRetrySuccess(item: RetryQueueItem, result: any): void {
-    // Remove from retry queue
+  private handleRetrySuccess(item: RetryItem): void {
+    // Remove the item from the retry queue
     this.retryQueue.delete(item.id);
+    this.metrics.totalSucceeded++;
 
-    // Update notification status
-    item.notification.status = NotificationStatus.DELIVERED;
-    item.notification.deliveredAt = Date.now();
-    item.notification.retryCount = item.retryState.attempt;
-    item.notification.nextRetryAt = undefined;
+    this.logger.info('Retry succeeded', {
+      id: item.id,
+      webhookId: item.webhookId,
+      eventType: item.payload.eventType,
+      attempts: item.retryState.attempt
+    });
 
-    // Update statistics
-    this.stats.successCount++;
-    
-    // Update attempt distribution
-    const attempt = item.retryState.attempt;
-    this.stats.attemptDistribution[attempt] = (this.stats.attemptDistribution[attempt] || 0) + 1;
-    
-    // Update average attempts before success
-    const totalSuccessfulAttempts = Object.entries(this.stats.attemptDistribution)
-      .reduce((sum, [attempt, count]) => sum + (parseInt(attempt) * count), 0);
-    
-    this.stats.avgAttemptsBeforeSuccess = totalSuccessfulAttempts / this.stats.successCount;
+    // Create a delivery result for the successful retry
+    const deliveryResult: IWebhookDeliveryResult = {
+      id: `${item.id}-success`,
+      webhookId: item.webhookId,
+      eventId: item.payload.id,
+      timestamp: new Date().toISOString(),
+      success: true,
+      statusCode: 200, // Simulated success status code
+      deliveryTimeMs: 0, // Not tracking actual delivery time in this example
+      retryCount: item.retryState.attempt
+    };
 
-    // Log and emit event
-    this.logger.info(
-      `Successfully delivered notification ${item.id} after ${item.retryState.attempt} retry attempts`,
-      { notificationId: item.id, retryAttempt: item.retryState.attempt, result }
-    );
-
-    this.emit(RetryServiceEvent.RETRY_SUCCEEDED, { item, result });
+    // Emit the success event
+    this.emit(RetryServiceEvent.RETRY_SUCCESS, item, deliveryResult);
   }
 
   /**
    * Handles a failed retry attempt
    * 
-   * @param item The retry queue item that failed
-   * @param error The error that occurred during the retry attempt
+   * @param item The retry item that failed to be delivered
+   * @param error The error that caused the failure
    */
-  private handleRetryFailure(item: RetryQueueItem, error: Error): void {
-    // Create retry options
-    const retryOptions: retryUtils.RetryOptions = item.metadata?.retryOptions || {
-      baseDelayMs: this.retryConfig.initialDelay,
-      exponentialFactor: this.retryConfig.backoffMultiplier,
-      maxDelayMs: this.retryConfig.maxDelay,
-      maxRetries: this.retryConfig.maxAttempts,
-      jitterFactor: this.retryConfig.enableJitter ? 0.2 : 0,
-    };
+  private handleRetryFailure(item: RetryItem, error: Error): void {
+    this.metrics.totalFailed++;
 
-    // Update retry state
-    const updatedState = retryUtils.prepareForNextRetry(item.retryState, error, retryOptions);
-    item.retryState = updatedState;
+    // Check if we should retry based on the error
+    if (!shouldRetry(error)) {
+      this.logger.warn('Non-retryable error, sending to dead letter queue', {
+        id: item.id,
+        webhookId: item.webhookId,
+        error: error.message
+      });
 
-    // Update error type distribution
-    const errorType = error.constructor.name;
-    this.stats.errorTypeDistribution[errorType] = (this.stats.errorTypeDistribution[errorType] || 0) + 1;
-
-    // Check if retry limit has been reached
-    if (updatedState.exhausted) {
-      this.moveToDeadLetterQueue(item, error);
+      // Send to dead letter queue
+      this.sendToDeadLetterQueue(item, error);
       return;
     }
 
-    // Update item for next retry
-    item.scheduledAt = updatedState.nextRetryTime || Date.now();
-    
-    // Update notification
-    item.notification.status = NotificationStatus.RETRYING;
-    item.notification.retryCount = updatedState.attempt;
-    item.notification.nextRetryAt = updatedState.nextRetryTime;
-    item.notification.failedAt = Date.now();
-    item.notification.errorDetails = error.message;
-
-    // Update statistics
-    this.stats.failureCount++;
-
-    // Log and emit event
-    this.logger.warn(
-      `Failed to deliver notification ${item.id}. Retry attempt: ${updatedState.attempt}. Next retry: ${new Date(updatedState.nextRetryTime || 0).toISOString()}`,
-      { 
-        notificationId: item.id, 
-        retryAttempt: updatedState.attempt, 
-        error: error.message,
-        nextRetry: updatedState.nextRetryTime ? new Date(updatedState.nextRetryTime).toISOString() : null
-      }
+    // Update the retry state
+    const updatedRetryState = prepareForNextRetry(
+      item.retryState,
+      error,
+      this.convertRetryPolicy(this.retryPolicy)
     );
 
-    this.emit(RetryServiceEvent.RETRY_FAILED, { item, error });
-  }
+    // Check if retry attempts have been exhausted
+    if (updatedRetryState.exhausted) {
+      this.logger.warn('Retry attempts exhausted, sending to dead letter queue', {
+        id: item.id,
+        webhookId: item.webhookId,
+        attempts: updatedRetryState.attempt,
+        error: error.message
+      });
 
-  /**
-   * Moves a retry queue item to the dead letter queue after exhausting retry attempts
-   * 
-   * @param item The retry queue item to move to the dead letter queue
-   * @param error The final error that caused the item to be dead-lettered
-   */
-  private moveToDeadLetterQueue(item: RetryQueueItem, error: Error): void {
-    // Remove from retry queue
-    this.retryQueue.delete(item.id);
+      // Send to dead letter queue
+      this.sendToDeadLetterQueue(item, error);
+      return;
+    }
 
-    // Create dead letter queue item
-    const deadLetterItem: DeadLetterQueueItem = {
+    // Update the retry item with the new state
+    const updatedItem: RetryItem = {
       ...item,
-      reason: `Retry limit exceeded after ${item.retryState.attempt} attempts`,
-      deadLetteredAt: Date.now(),
-      finalError: error,
+      retryState: updatedRetryState,
+      error
     };
 
-    // Add to dead letter queue
-    this.deadLetterQueue.set(item.id, deadLetterItem);
+    // Update the retry queue
+    this.retryQueue.set(item.id, updatedItem);
 
-    // Update notification status
-    item.notification.status = NotificationStatus.FAILED;
-    item.notification.failedAt = Date.now();
-    item.notification.errorDetails = `${error.message} (Retry limit exceeded after ${item.retryState.attempt} attempts)`;
-    item.notification.nextRetryAt = undefined;
+    this.logger.info('Retry failed, scheduled for next attempt', {
+      id: item.id,
+      webhookId: item.webhookId,
+      eventType: item.payload.eventType,
+      attempts: updatedRetryState.attempt,
+      nextRetryTime: updatedRetryState.nextRetryTime
+        ? new Date(updatedRetryState.nextRetryTime).toISOString()
+        : null,
+      error: error.message
+    });
 
-    // Update statistics
-    this.stats.deadLetterCount++;
+    // Create a delivery result for the failed retry
+    const deliveryResult: IWebhookDeliveryResult = {
+      id: `${item.id}-failure-${updatedRetryState.attempt}`,
+      webhookId: item.webhookId,
+      eventId: item.payload.id,
+      timestamp: new Date().toISOString(),
+      success: false,
+      statusCode: 500, // Simulated error status code
+      errorMessage: error.message,
+      deliveryTimeMs: 0, // Not tracking actual delivery time in this example
+      retryCount: updatedRetryState.attempt - 1, // Current attempt - 1 since this is the failure count
+      nextRetryAt: updatedRetryState.nextRetryTime
+        ? new Date(updatedRetryState.nextRetryTime).toISOString()
+        : undefined
+    };
 
-    // Log and emit event
-    this.logger.error(
-      `Moving notification ${item.id} to dead letter queue after ${item.retryState.attempt} failed retry attempts`,
-      { 
-        notificationId: item.id, 
-        retryAttempt: item.retryState.attempt, 
-        error: error.message,
-        retryHistory: item.retryState.retryHistory.map(time => new Date(time).toISOString())
+    // Emit the failure event
+    this.emit(RetryServiceEvent.RETRY_FAILURE, updatedItem, deliveryResult);
+  }
+
+  /**
+   * Sends a failed notification to the dead letter queue
+   * 
+   * @param item The retry item to send to the dead letter queue
+   * @param finalError The final error that caused the item to be sent to the dead letter queue
+   */
+  private sendToDeadLetterQueue(item: RetryItem, finalError: Error): void {
+    // Remove from the retry queue
+    this.retryQueue.delete(item.id);
+
+    // Add to the dead letter queue if enabled
+    if (deadLetterQueueConfig.enabled) {
+      // Update the item with the final error
+      const deadLetterItem: RetryItem = {
+        ...item,
+        error: finalError,
+        metadata: {
+          ...item.metadata,
+          finalErrorMessage: finalError.message,
+          finalErrorType: finalError.constructor.name,
+          finalErrorTime: Date.now(),
+          sentToDeadLetterQueueAt: Date.now()
+        }
+      };
+
+      // Add to the dead letter queue
+      this.deadLetterQueue.set(item.id, deadLetterItem);
+      this.metrics.totalDeadLettered++;
+
+      this.logger.warn('Notification sent to dead letter queue', {
+        id: item.id,
+        webhookId: item.webhookId,
+        eventType: item.payload.eventType,
+        attempts: item.retryState.attempt,
+        finalError: finalError.message
+      });
+
+      // In a real implementation, we would also publish to a dead letter exchange in RabbitMQ
+      // for administrative review and potential manual reprocessing
+
+      // Emit the dead letter event
+      this.emit(RetryServiceEvent.DEAD_LETTER, deadLetterItem);
+    } else {
+      this.logger.warn('Dead letter queue disabled, discarding failed notification', {
+        id: item.id,
+        webhookId: item.webhookId,
+        eventType: item.payload.eventType,
+        attempts: item.retryState.attempt,
+        finalError: finalError.message
+      });
+    }
+  }
+
+  /**
+   * Gets statistics about the retry queue
+   * 
+   * @returns Statistics about the retry queue
+   */
+  public getQueueStats(): RetryQueueStats {
+    const now = Date.now();
+    let readyItems = 0;
+    let waitingItems = 0;
+    let totalAttempts = 0;
+    let oldestTimestamp: number | null = null;
+    let newestTimestamp: number | null = null;
+    const attemptDistribution: Record<number, number> = {};
+
+    // Calculate statistics
+    for (const item of this.retryQueue.values()) {
+      // Count ready vs waiting items
+      if (item.retryState.nextRetryTime && item.retryState.nextRetryTime <= now) {
+        readyItems++;
+      } else {
+        waitingItems++;
       }
-    );
 
-    this.emit(RetryServiceEvent.DEAD_LETTERED, deadLetterItem);
+      // Track attempt distribution
+      const attempt = item.retryState.attempt;
+      attemptDistribution[attempt] = (attemptDistribution[attempt] || 0) + 1;
+
+      // Track total attempts for average calculation
+      totalAttempts += attempt;
+
+      // Track oldest and newest items
+      if (oldestTimestamp === null || item.queuedAt < oldestTimestamp) {
+        oldestTimestamp = item.queuedAt;
+      }
+      if (newestTimestamp === null || item.queuedAt > newestTimestamp) {
+        newestTimestamp = item.queuedAt;
+      }
+    }
+
+    return {
+      totalItems: this.retryQueue.size,
+      readyItems,
+      waitingItems,
+      deadLetterItems: this.deadLetterQueue.size,
+      averageAttempts: this.retryQueue.size > 0 ? totalAttempts / this.retryQueue.size : 0,
+      attemptDistribution,
+      oldestItemTimestamp: oldestTimestamp,
+      newestItemTimestamp: newestTimestamp
+    };
   }
 
   /**
-   * Gets an item from the retry queue by ID
+   * Gets metrics about the retry service
    * 
-   * @param id The ID of the retry queue item to get
-   * @returns The retry queue item, or undefined if not found
+   * @returns Metrics about the retry service
    */
-  public getRetryQueueItem(id: string): RetryQueueItem | undefined {
-    return this.retryQueue.get(id);
-  }
-
-  /**
-   * Gets an item from the dead letter queue by ID
-   * 
-   * @param id The ID of the dead letter queue item to get
-   * @returns The dead letter queue item, or undefined if not found
-   */
-  public getDeadLetterQueueItem(id: string): DeadLetterQueueItem | undefined {
-    return this.deadLetterQueue.get(id);
+  public getMetrics(): typeof this.metrics {
+    return { ...this.metrics };
   }
 
   /**
    * Gets all items in the retry queue
    * 
-   * @returns Array of all retry queue items
+   * @returns Array of all retry items
    */
-  public getAllRetryQueueItems(): RetryQueueItem[] {
+  public getAllRetryItems(): RetryItem[] {
     return Array.from(this.retryQueue.values());
   }
 
   /**
    * Gets all items in the dead letter queue
    * 
-   * @returns Array of all dead letter queue items
+   * @returns Array of all dead letter items
    */
-  public getAllDeadLetterQueueItems(): DeadLetterQueueItem[] {
+  public getAllDeadLetterItems(): RetryItem[] {
     return Array.from(this.deadLetterQueue.values());
   }
 
   /**
-   * Removes an item from the retry queue
+   * Gets a specific retry item by ID
    * 
-   * @param id The ID of the retry queue item to remove
-   * @returns True if the item was removed, false if it wasn't found
+   * @param id ID of the retry item to get
+   * @returns The retry item, or undefined if not found
    */
-  public removeFromRetryQueue(id: string): boolean {
-    const removed = this.retryQueue.delete(id);
-    if (removed) {
-      this.updateStats();
-    }
-    return removed;
+  public getRetryItem(id: string): RetryItem | undefined {
+    return this.retryQueue.get(id);
   }
 
   /**
-   * Removes an item from the dead letter queue
+   * Gets a specific dead letter item by ID
    * 
-   * @param id The ID of the dead letter queue item to remove
-   * @returns True if the item was removed, false if it wasn't found
+   * @param id ID of the dead letter item to get
+   * @returns The dead letter item, or undefined if not found
    */
-  public removeFromDeadLetterQueue(id: string): boolean {
-    const removed = this.deadLetterQueue.delete(id);
-    if (removed) {
-      this.updateStats();
-    }
-    return removed;
+  public getDeadLetterItem(id: string): RetryItem | undefined {
+    return this.deadLetterQueue.get(id);
   }
 
   /**
-   * Requeues an item from the dead letter queue back to the retry queue
+   * Removes a specific retry item from the queue
    * 
-   * @param id The ID of the dead letter queue item to requeue
-   * @param resetRetryCount Whether to reset the retry count (default: true)
-   * @returns The requeued retry queue item, or undefined if the item wasn't found
+   * @param id ID of the retry item to remove
+   * @returns True if the item was removed, false if it wasn't found
    */
-  public requeueFromDeadLetterQueue(id: string, resetRetryCount: boolean = true): RetryQueueItem | undefined {
+  public removeRetryItem(id: string): boolean {
+    return this.retryQueue.delete(id);
+  }
+
+  /**
+   * Removes a specific dead letter item from the queue
+   * 
+   * @param id ID of the dead letter item to remove
+   * @returns True if the item was removed, false if it wasn't found
+   */
+  public removeDeadLetterItem(id: string): boolean {
+    return this.deadLetterQueue.delete(id);
+  }
+
+  /**
+   * Clears all items from the retry queue
+   */
+  public clearRetryQueue(): void {
+    this.retryQueue.clear();
+    this.logger.info('Retry queue cleared');
+  }
+
+  /**
+   * Clears all items from the dead letter queue
+   */
+  public clearDeadLetterQueue(): void {
+    this.deadLetterQueue.clear();
+    this.logger.info('Dead letter queue cleared');
+  }
+
+  /**
+   * Requeues a dead letter item for retry
+   * 
+   * @param id ID of the dead letter item to requeue
+   * @param resetAttempts Whether to reset the retry attempts (default: true)
+   * @returns The requeued retry item, or undefined if the item wasn't found
+   */
+  public requeueDeadLetterItem(id: string, resetAttempts: boolean = true): RetryItem | undefined {
     const deadLetterItem = this.deadLetterQueue.get(id);
     if (!deadLetterItem) {
       return undefined;
     }
 
-    // Remove from dead letter queue
+    // Remove from the dead letter queue
     this.deadLetterQueue.delete(id);
 
-    // Create a new retry state if resetting retry count
-    const retryState = resetRetryCount 
-      ? retryUtils.createRetryState()
-      : deadLetterItem.retryState;
-
-    // Create retry options
-    const retryOptions: retryUtils.RetryOptions = deadLetterItem.metadata?.retryOptions || {
-      baseDelayMs: this.retryConfig.initialDelay,
-      exponentialFactor: this.retryConfig.backoffMultiplier,
-      maxDelayMs: this.retryConfig.maxDelay,
-      maxRetries: this.retryConfig.maxAttempts,
-      jitterFactor: this.retryConfig.enableJitter ? 0.2 : 0,
-    };
-
-    // Calculate next retry time
-    const nextRetryTime = retryUtils.calculateNextRetryTime(
-      resetRetryCount ? 0 : retryState.attempt,
-      retryOptions
-    );
-
-    // Create retry queue item
-    const queueItem: RetryQueueItem = {
+    // Create a new retry item with reset state if requested
+    const retryItem: RetryItem = {
       ...deadLetterItem,
-      retryState: {
-        ...retryState,
-        nextRetryTime,
-        exhausted: false,
-      },
-      scheduledAt: nextRetryTime,
-      processing: false,
+      retryState: resetAttempts ? createRetryState(deadLetterItem.error) : deadLetterItem.retryState,
       queuedAt: Date.now(),
+      metadata: {
+        ...deadLetterItem.metadata,
+        requeuedAt: Date.now(),
+        previouslyDeadLettered: true
+      }
     };
 
-    // Add to retry queue
-    this.retryQueue.set(id, queueItem);
-
-    // Update notification status
-    queueItem.notification.status = NotificationStatus.RETRYING;
-    queueItem.notification.retryCount = resetRetryCount ? 0 : retryState.attempt;
-    queueItem.notification.nextRetryAt = nextRetryTime;
-
-    // Update statistics
-    this.updateStats();
-
-    // Log requeue action
-    this.logger.info(
-      `Requeued notification ${id} from dead letter queue${resetRetryCount ? ' with reset retry count' : ''}`,
-      { notificationId: id, resetRetryCount }
+    // Prepare for retry
+    const updatedRetryState = prepareForNextRetry(
+      retryItem.retryState,
+      retryItem.error,
+      this.convertRetryPolicy(this.retryPolicy)
     );
 
-    return queueItem;
+    // Update the retry state
+    retryItem.retryState = updatedRetryState;
+
+    // Add to the retry queue
+    this.retryQueue.set(retryItem.id, retryItem);
+
+    this.logger.info('Dead letter item requeued for retry', {
+      id: retryItem.id,
+      webhookId: retryItem.webhookId,
+      eventType: retryItem.payload.eventType,
+      resetAttempts,
+      nextRetryTime: updatedRetryState.nextRetryTime
+        ? new Date(updatedRetryState.nextRetryTime).toISOString()
+        : null
+    });
+
+    // Emit the queued event
+    this.emit(RetryServiceEvent.ITEM_QUEUED, retryItem);
+
+    return retryItem;
   }
 
   /**
-   * Gets current retry statistics
+   * Updates the retry policy
    * 
-   * @returns Current retry statistics
+   * @param retryPolicy New retry policy configuration
    */
-  public getStats(): RetryStats {
-    this.updateStats();
-    return { ...this.stats, timestamp: Date.now() };
+  public updateRetryPolicy(retryPolicy: IWebhookRetryPolicy): void {
+    this.retryPolicy = retryPolicy;
+    this.logger.info('Retry policy updated', { retryPolicy });
   }
 
   /**
-   * Updates the retry statistics
-   */
-  private updateStats(): void {
-    this.stats.queueSize = this.retryQueue.size;
-    this.stats.deadLetterSize = this.deadLetterQueue.size;
-    this.stats.processingCount = this.processingItems.size;
-  }
-
-  /**
-   * Clears all items from the retry and dead letter queues
-   */
-  public clearAllQueues(): void {
-    this.retryQueue.clear();
-    this.deadLetterQueue.clear();
-    this.processingItems.clear();
-    this.updateStats();
-    this.logger.info('Cleared all retry and dead letter queues');
-  }
-
-  /**
-   * Gets the current retry configuration
+   * Converts an IWebhookRetryPolicy to RetryOptions
    * 
-   * @returns Current retry configuration
+   * @param policy The webhook retry policy to convert
+   * @returns Equivalent RetryOptions
    */
-  public getRetryConfig(): IRetryConfig {
-    return { ...this.retryConfig };
-  }
-
-  /**
-   * Updates the retry configuration
-   * 
-   * @param config New retry configuration (partial)
-   * @returns Updated retry configuration
-   */
-  public updateRetryConfig(config: Partial<IRetryConfig>): IRetryConfig {
-    this.retryConfig = { ...this.retryConfig, ...config };
-    this.logger.info('Updated retry configuration', { config: this.retryConfig });
-    return { ...this.retryConfig };
+  private convertRetryPolicy(policy: IWebhookRetryPolicy): RetryOptions {
+    return {
+      baseDelayMs: policy.initialDelayMs,
+      exponentialFactor: policy.backoffMultiplier,
+      maxDelayMs: policy.maxDelayMs,
+      maxRetries: policy.maxRetries,
+      jitterFactor: policy.useJitter ? (policy.jitterFactor || 0.1) : 0
+    };
   }
 }
 
