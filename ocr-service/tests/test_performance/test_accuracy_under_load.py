@@ -1,443 +1,689 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+"""Tests for OCR accuracy under various load conditions.
 
-"""
-Tests the accuracy of the OCR Service under various load conditions.
-
-Verifies that the service maintains the required 99% data extraction accuracy
-even when processing multiple documents concurrently or under sustained load.
+This module tests the OCR Service's ability to maintain the required 99% data extraction 
+accuracy even when processing multiple documents concurrently or under sustained load.
+It verifies that accuracy and confidence scoring remain reliable under different load
+scenarios, ensuring the service meets its performance requirements.
 """
 
+import asyncio
+import concurrent.futures
+import json
 import os
+import random
 import time
-import pytest
-import numpy as np
-import multiprocessing as mp
-from concurrent.futures import ProcessPoolExecutor
+from datetime import datetime
 from typing import Dict, List, Tuple, Any, Optional
 
-# Import OCR service modules
-from ocr_service.services import OCRService, confidence_service
-from ocr_service.models import model_factory
-from ocr_service.types import DocumentType, ExtractionResult, ConfidenceScore
+import numpy as np
+import pytest
+from fastapi.testclient import TestClient
+
+from src.app import app
+from src.models.confidence_scoring import (
+    ConfidenceScore,
+    calculate_document_confidence,
+    analyze_confidence_distribution
+)
+from src.models.model_factory import ModelFactory
+from src.services.ocr_service import OCRService
+from src.types.extraction import ExtractedData
+from src.types.models import OCRModelType
+from src.utils.metrics import calculate_accuracy, calculate_field_accuracy
 
 
 # Constants for test configuration
-MIN_REQUIRED_ACCURACY = 0.99  # 99% accuracy requirement
-CONCURRENCY_LEVELS = [1, 2, 4, 8, 16]  # Different concurrency levels to test
+CONCURRENCY_LEVELS = [1, 5, 10, 20]  # Number of concurrent document processing tasks
 SUSTAINED_DURATION = 60  # Duration in seconds for sustained load tests
-DOCUMENT_TYPES = ["application_form", "tax_return", "bank_statement", "invoice"]  # Document types to test
+ACCURACY_THRESHOLD = 0.99  # Required 99% accuracy threshold
+CONFIDENCE_THRESHOLD = 0.75  # Minimum acceptable confidence score
+DOCUMENT_TYPES = ["typed", "handwritten", "mixed"]  # Document types to test
+QUALITY_LEVELS = ["high", "medium", "low"]  # Document quality levels to test
 
 
-# Helper functions for accuracy calculation
-def calculate_accuracy(expected: Dict[str, Any], actual: Dict[str, Any]) -> float:
+@pytest.fixture
+def test_client() -> TestClient:
+    """Create a FastAPI test client for the OCR Service."""
+    return TestClient(app)
+
+
+@pytest.fixture
+def ocr_service() -> OCRService:
+    """Create an OCR Service instance for testing."""
+    return OCRService()
+
+
+@pytest.fixture
+def model_factory() -> ModelFactory:
+    """Create a ModelFactory instance for testing."""
+    return ModelFactory()
+
+
+@pytest.fixture
+def typed_documents(request) -> List[Dict[str, Any]]:
+    """Load typed document test data with expected extraction results.
+    
+    This fixture loads document metadata and expected extraction results from the
+    test_data/typed_documents directory. It can be parameterized with a specific
+    quality level (high, medium, low) to test different document qualities.
     """
-    Calculate the accuracy of OCR extraction by comparing expected and actual results.
+    quality = getattr(request, "param", "high")
+    
+    # Determine the manifest file path based on quality level
+    if quality == "high":
+        manifest_path = os.path.join("tests", "test_data", "typed_documents", 
+                                    "quality_variations", "high_quality_manifest.json")
+    elif quality == "medium":
+        manifest_path = os.path.join("tests", "test_data", "typed_documents", 
+                                    "sample_manifest.json")
+    elif quality == "low":
+        manifest_path = os.path.join("tests", "test_data", "typed_documents", 
+                                    "quality_variations", "low_quality_manifest.json")
+    else:
+        raise ValueError(f"Unknown quality level: {quality}")
+    
+    # Load the manifest file
+    try:
+        with open(manifest_path, "r") as f:
+            manifest = json.load(f)
+        return manifest["documents"]
+    except (FileNotFoundError, json.JSONDecodeError, KeyError) as e:
+        pytest.skip(f"Could not load typed document manifest: {e}")
+        return []
+
+
+@pytest.fixture
+def handwritten_documents() -> List[Dict[str, Any]]:
+    """Load handwritten document test data with expected extraction results."""
+    # This would load from a similar manifest file for handwritten documents
+    # For this test file, we'll simulate it with a placeholder
+    return [
+        {
+            "id": "hw001",
+            "path": "tests/test_data/handwritten_documents/sample1.pdf",
+            "expected_fields": {
+                "name": "John Smith",
+                "date": "2023-01-15",
+                "signature": True
+            },
+            "expected_accuracy": 0.95
+        }
+    ]
+
+
+@pytest.fixture
+def mixed_documents() -> List[Dict[str, Any]]:
+    """Load mixed content document test data with expected extraction results."""
+    # This would load from a similar manifest file for mixed documents
+    # For this test file, we'll simulate it with a placeholder
+    return [
+        {
+            "id": "mixed001",
+            "path": "tests/test_data/mixed_documents/sample1.pdf",
+            "expected_fields": {
+                "business_name": "ACME Corp",
+                "tax_id": "12-3456789",
+                "signature": True
+            },
+            "expected_accuracy": 0.97
+        }
+    ]
+
+
+@pytest.fixture
+def document_batch(typed_documents, handwritten_documents, mixed_documents) -> Dict[str, List[Dict[str, Any]]]:
+    """Create a batch of documents of different types for testing."""
+    return {
+        "typed": typed_documents,
+        "handwritten": handwritten_documents,
+        "mixed": mixed_documents
+    }
+
+
+def process_document(ocr_service: OCRService, document: Dict[str, Any]) -> Tuple[ExtractedData, float]:
+    """Process a single document and calculate its accuracy.
     
     Args:
-        expected: Dictionary of expected field values
-        actual: Dictionary of actual extracted field values
-    
+        ocr_service: The OCR service instance to use for processing
+        document: Document metadata including path and expected results
+        
     Returns:
-        float: Accuracy score between 0.0 and 1.0
+        Tuple containing the extraction results and the calculated accuracy
     """
-    if not expected or not actual:
-        return 0.0
-    
-    total_fields = len(expected)
-    correct_fields = 0
-    
-    for field, expected_value in expected.items():
-        if field in actual and actual[field] == expected_value:
-            correct_fields += 1
-    
-    return correct_fields / total_fields
+    # Process the document
+    try:
+        # In a real test, we would load the actual document file
+        # For this test file, we'll simulate the processing
+        document_path = document.get("path", "")
+        document_type = "application_form"  # Default document type
+        
+        # Determine the appropriate model type based on document type
+        if "typed" in document_path:
+            model_type = OCRModelType.TYPED
+        elif "handwritten" in document_path:
+            model_type = OCRModelType.HANDWRITTEN
+        else:
+            model_type = OCRModelType.HYBRID
+        
+        # Process the document (simulated for this test)
+        start_time = time.time()
+        extraction_results = ocr_service.process_document(
+            document_path=document_path,
+            model_type=model_type,
+            document_type=document_type
+        )
+        processing_time = time.time() - start_time
+        
+        # Calculate accuracy by comparing with expected fields
+        expected_fields = document.get("expected_fields", {})
+        accuracy = calculate_field_accuracy(
+            extracted_fields=extraction_results.get("fields", {}),
+            expected_fields=expected_fields
+        )
+        
+        return extraction_results, accuracy
+    except Exception as e:
+        # Log the error and return empty results with zero accuracy
+        print(f"Error processing document {document.get('id', 'unknown')}: {e}")
+        return {
+            "extraction_id": "",
+            "fields": {},
+            "tables": [],
+            "metadata": {},
+            "raw_text": "",
+            "low_confidence_fields": [],
+            "requires_verification": True,
+            "extraction_timestamp": datetime.now(),
+            "schema_version": "1.0",
+            "document_type": document_type
+        }, 0.0
 
 
-def calculate_batch_accuracy(results: List[Tuple[Dict[str, Any], Dict[str, Any]]]) -> float:
+async def process_document_async(ocr_service: OCRService, document: Dict[str, Any]) -> Tuple[ExtractedData, float]:
+    """Process a single document asynchronously.
+    
+    This is a wrapper around the synchronous process_document function to allow
+    it to be called in an asynchronous context.
     """
-    Calculate the average accuracy across a batch of extraction results.
+    # Simulate some async processing time
+    await asyncio.sleep(0.1)
+    return process_document(ocr_service, document)
+
+
+def calculate_batch_accuracy(results: List[Tuple[ExtractedData, float]]) -> Dict[str, Any]:
+    """Calculate aggregate accuracy metrics for a batch of processed documents.
     
     Args:
-        results: List of tuples containing (expected, actual) result pairs
-    
+        results: List of tuples containing extraction results and accuracy scores
+        
     Returns:
-        float: Average accuracy score between 0.0 and 1.0
+        Dictionary containing aggregate accuracy metrics
     """
     if not results:
-        return 0.0
+        return {
+            "mean_accuracy": 0.0,
+            "min_accuracy": 0.0,
+            "max_accuracy": 0.0,
+            "std_dev": 0.0,
+            "meets_threshold": False,
+            "accuracy_distribution": {},
+            "confidence_correlation": 0.0,
+            "processing_count": 0
+        }
     
-    accuracies = [calculate_accuracy(expected, actual) for expected, actual in results]
-    return sum(accuracies) / len(accuracies)
-
-
-# Test fixtures
-@pytest.fixture(scope="module")
-def ocr_service():
-    """
-    Fixture that provides an initialized OCR service instance.
-    """
-    service = OCRService()
-    # Ensure the service is properly initialized
-    service.initialize()
-    yield service
-    # Clean up resources after tests
-    service.shutdown()
-
-
-@pytest.fixture(scope="module")
-def document_datasets(request):
-    """
-    Fixture that provides test document datasets with known expected extraction results.
+    # Extract accuracy scores and confidence scores
+    accuracy_scores = [acc for _, acc in results]
+    confidence_scores = [float(calculate_document_confidence(res)) for res, _ in results]
     
-    Returns a dictionary mapping document types to lists of (document_path, expected_results) tuples.
-    """
-    # Base path for test documents
-    base_path = os.path.join(os.path.dirname(__file__), "../test_data")
+    # Calculate accuracy metrics
+    mean_accuracy = np.mean(accuracy_scores)
+    min_accuracy = np.min(accuracy_scores)
+    max_accuracy = np.max(accuracy_scores)
+    std_dev = np.std(accuracy_scores)
+    meets_threshold = mean_accuracy >= ACCURACY_THRESHOLD
     
-    # Load document datasets
-    datasets = {}
+    # Analyze accuracy distribution
+    accuracy_distribution = analyze_confidence_distribution(accuracy_scores)
     
-    for doc_type in DOCUMENT_TYPES:
-        doc_path = os.path.join(base_path, f"typed_documents/{doc_type}s")
-        if not os.path.exists(doc_path):
-            continue
-            
-        # Load manifest file with expected results
-        manifest_path = os.path.join(doc_path, f"{doc_type}_manifest.json")
-        if os.path.exists(manifest_path):
-            import json
-            with open(manifest_path, 'r') as f:
-                manifest = json.load(f)
-                
-            # Create list of (document_path, expected_results) tuples
-            dataset = []
-            for doc_id, doc_info in manifest.items():
-                doc_file_path = os.path.join(doc_path, doc_info["filename"])
-                if os.path.exists(doc_file_path):
-                    dataset.append((doc_file_path, doc_info["expected_results"]))
-            
-            datasets[doc_type] = dataset
+    # Calculate correlation between confidence and accuracy
+    if len(accuracy_scores) > 1 and len(confidence_scores) > 1:
+        confidence_correlation = np.corrcoef(accuracy_scores, confidence_scores)[0, 1]
+    else:
+        confidence_correlation = 0.0
     
-    return datasets
-
-
-# Test functions
-def process_document(args):
-    """
-    Process a single document and return the accuracy result.
-    This function is used by the multiprocessing pool.
-    
-    Args:
-        args: Tuple containing (service, document_path, expected_results)
-    
-    Returns:
-        Tuple: (expected_results, actual_results)
-    """
-    service, doc_path, expected = args
-    
-    # Process the document
-    result = service.process_document(doc_path)
-    
-    # Return the expected and actual results for accuracy calculation
-    return expected, result.extracted_data
+    return {
+        "mean_accuracy": float(mean_accuracy),
+        "min_accuracy": float(min_accuracy),
+        "max_accuracy": float(max_accuracy),
+        "std_dev": float(std_dev),
+        "meets_threshold": meets_threshold,
+        "accuracy_distribution": accuracy_distribution,
+        "confidence_correlation": float(confidence_correlation),
+        "processing_count": len(results)
+    }
 
 
 @pytest.mark.parametrize("concurrency", CONCURRENCY_LEVELS)
-def test_accuracy_at_different_concurrency_levels(ocr_service, document_datasets, concurrency):
-    """
-    Test that OCR accuracy remains above 99% at different concurrency levels.
+@pytest.mark.parametrize("document_type", DOCUMENT_TYPES)
+@pytest.mark.parametrize("typed_documents", QUALITY_LEVELS, indirect=True)
+def test_accuracy_with_concurrent_processing(ocr_service, document_batch, concurrency, document_type, typed_documents):
+    """Test OCR accuracy when processing multiple documents concurrently.
+    
+    This test verifies that the OCR service maintains its accuracy requirements
+    even when processing multiple documents concurrently at different concurrency
+    levels, with different document types and quality levels.
     
     Args:
-        ocr_service: OCR service fixture
-        document_datasets: Document datasets fixture
-        concurrency: Number of concurrent processes to use
+        ocr_service: The OCR service fixture
+        document_batch: Batch of test documents
+        concurrency: Number of concurrent processing tasks
+        document_type: Type of documents to test (typed, handwritten, mixed)
+        typed_documents: Typed documents with specific quality level (parameterized)
     """
-    # Skip if no datasets available
-    if not document_datasets:
-        pytest.skip("No document datasets available for testing")
+    # Skip if no documents of the specified type are available
+    documents = document_batch.get(document_type, [])
+    if not documents:
+        pytest.skip(f"No {document_type} documents available for testing")
     
-    # Flatten the datasets into a single list of (document_path, expected_results) tuples
-    all_documents = []
-    for doc_type, dataset in document_datasets.items():
-        all_documents.extend(dataset)
+    # Ensure we have enough documents for the concurrency level
+    # If not, duplicate the documents to reach the desired count
+    while len(documents) < concurrency:
+        documents.extend(documents[:concurrency - len(documents)])
     
-    # Limit the number of documents to process based on concurrency level
-    # to ensure we have enough documents for a meaningful test
-    num_docs = min(len(all_documents), concurrency * 5)  # Process at least 5 docs per worker
-    test_documents = all_documents[:num_docs]
+    # Select a subset of documents based on concurrency level
+    selected_documents = documents[:concurrency]
     
-    # Prepare arguments for multiprocessing
-    args = [(ocr_service, doc_path, expected) for doc_path, expected in test_documents]
+    # Process documents concurrently using ThreadPoolExecutor
+    results = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as executor:
+        future_to_doc = {executor.submit(process_document, ocr_service, doc): doc for doc in selected_documents}
+        for future in concurrent.futures.as_completed(future_to_doc):
+            doc = future_to_doc[future]
+            try:
+                extraction_results, accuracy = future.result()
+                results.append((extraction_results, accuracy))
+            except Exception as e:
+                print(f"Document processing failed: {e}")
+                # Add a failed result with zero accuracy
+                results.append(({}, 0.0))
     
-    # Process documents concurrently
-    with ProcessPoolExecutor(max_workers=concurrency) as executor:
-        results = list(executor.map(process_document, args))
+    # Calculate aggregate accuracy metrics
+    accuracy_metrics = calculate_batch_accuracy(results)
     
-    # Calculate overall accuracy
-    accuracy = calculate_batch_accuracy(results)
+    # Assert that accuracy meets the threshold
+    assert accuracy_metrics["meets_threshold"], (
+        f"Accuracy below threshold with concurrency={concurrency}, "
+        f"document_type={document_type}, mean_accuracy={accuracy_metrics['mean_accuracy']}"
+    )
     
-    # Assert that accuracy meets the requirement
-    assert accuracy >= MIN_REQUIRED_ACCURACY, \
-        f"Accuracy at concurrency level {concurrency} was {accuracy:.4f}, which is below the required {MIN_REQUIRED_ACCURACY:.4f}"
+    # Assert that minimum accuracy is acceptable
+    assert accuracy_metrics["min_accuracy"] >= 0.9, (
+        f"Minimum accuracy too low with concurrency={concurrency}, "
+        f"document_type={document_type}, min_accuracy={accuracy_metrics['min_accuracy']}"
+    )
+    
+    # Assert that standard deviation is within acceptable limits
+    assert accuracy_metrics["std_dev"] <= 0.05, (
+        f"Accuracy variation too high with concurrency={concurrency}, "
+        f"document_type={document_type}, std_dev={accuracy_metrics['std_dev']}"
+    )
+    
+    # Print detailed metrics for debugging
+    print(f"\nAccuracy metrics for concurrency={concurrency}, document_type={document_type}:")
+    print(f"Mean accuracy: {accuracy_metrics['mean_accuracy']:.4f}")
+    print(f"Min accuracy: {accuracy_metrics['min_accuracy']:.4f}")
+    print(f"Max accuracy: {accuracy_metrics['max_accuracy']:.4f}")
+    print(f"Standard deviation: {accuracy_metrics['std_dev']:.4f}")
+    print(f"Confidence correlation: {accuracy_metrics['confidence_correlation']:.4f}")
+    print(f"Processing count: {accuracy_metrics['processing_count']}")
 
 
-def test_accuracy_during_sustained_processing(ocr_service, document_datasets):
-    """
-    Test that OCR accuracy remains above 99% during sustained processing over time.
+@pytest.mark.asyncio
+@pytest.mark.parametrize("document_type", DOCUMENT_TYPES)
+@pytest.mark.parametrize("typed_documents", QUALITY_LEVELS, indirect=True)
+async def test_accuracy_during_sustained_processing(ocr_service, document_batch, document_type, typed_documents):
+    """Test OCR accuracy during sustained document processing over time.
+    
+    This test verifies that the OCR service maintains its accuracy requirements
+    even when processing documents continuously over an extended period, simulating
+    a sustained production load.
     
     Args:
-        ocr_service: OCR service fixture
-        document_datasets: Document datasets fixture
+        ocr_service: The OCR service fixture
+        document_batch: Batch of test documents
+        document_type: Type of documents to test (typed, handwritten, mixed)
+        typed_documents: Typed documents with specific quality level (parameterized)
     """
-    # Skip if no datasets available
-    if not document_datasets:
-        pytest.skip("No document datasets available for testing")
+    # Skip if no documents of the specified type are available
+    documents = document_batch.get(document_type, [])
+    if not documents:
+        pytest.skip(f"No {document_type} documents available for testing")
     
-    # Flatten the datasets into a single list of (document_path, expected_results) tuples
-    all_documents = []
-    for doc_type, dataset in document_datasets.items():
-        all_documents.extend(dataset)
-    
-    # If we don't have enough documents, repeat them to create a larger dataset
-    while len(all_documents) < 100:  # Ensure we have at least 100 documents for sustained testing
-        all_documents.extend(all_documents[:min(len(all_documents), 100 - len(all_documents))])
-    
-    # Use a moderate concurrency level for sustained processing
-    concurrency = min(8, mp.cpu_count())
-    
-    # Track accuracy over time
+    # Track results over time
+    all_results = []
     start_time = time.time()
     end_time = start_time + SUSTAINED_DURATION
     
-    accuracies = []
-    iteration = 0
-    
-    # Process documents in batches until the duration is reached
+    # Process documents continuously until the duration is reached
     while time.time() < end_time:
-        # Select a batch of documents for this iteration
-        batch_size = min(concurrency * 2, len(all_documents))
-        batch_start = (iteration * batch_size) % (len(all_documents) - batch_size)
-        batch = all_documents[batch_start:batch_start + batch_size]
+        # Select a random document to process
+        document = random.choice(documents)
         
-        # Prepare arguments for multiprocessing
-        args = [(ocr_service, doc_path, expected) for doc_path, expected in batch]
+        # Process the document asynchronously
+        extraction_results, accuracy = await process_document_async(ocr_service, document)
+        all_results.append((extraction_results, accuracy))
         
-        # Process documents concurrently
-        with ProcessPoolExecutor(max_workers=concurrency) as executor:
-            results = list(executor.map(process_document, args))
-        
-        # Calculate batch accuracy
-        batch_accuracy = calculate_batch_accuracy(results)
-        accuracies.append(batch_accuracy)
-        
-        iteration += 1
+        # Add a small delay to prevent overwhelming the system
+        await asyncio.sleep(0.1)
     
-    # Calculate overall accuracy across all batches
-    overall_accuracy = sum(accuracies) / len(accuracies)
+    # Calculate accuracy metrics for each time segment
+    segment_duration = SUSTAINED_DURATION / 3  # Split into 3 segments
+    segments = [[], [], []]
     
-    # Assert that accuracy meets the requirement
-    assert overall_accuracy >= MIN_REQUIRED_ACCURACY, \
-        f"Accuracy during sustained processing was {overall_accuracy:.4f}, which is below the required {MIN_REQUIRED_ACCURACY:.4f}"
+    # Distribute results into time segments
+    for i, result in enumerate(all_results):
+        segment_index = min(2, int(i * 3 / len(all_results)))
+        segments[segment_index].append(result)
     
-    # Also assert that no individual batch fell below the threshold
-    min_batch_accuracy = min(accuracies)
-    assert min_batch_accuracy >= MIN_REQUIRED_ACCURACY, \
-        f"Minimum batch accuracy during sustained processing was {min_batch_accuracy:.4f}, which is below the required {MIN_REQUIRED_ACCURACY:.4f}"
+    # Calculate metrics for each segment
+    segment_metrics = [calculate_batch_accuracy(segment) for segment in segments]
+    
+    # Assert that accuracy remains consistent across all segments
+    for i, metrics in enumerate(segment_metrics):
+        assert metrics["meets_threshold"], (
+            f"Accuracy below threshold in segment {i+1}/3 with document_type={document_type}, "
+            f"mean_accuracy={metrics['mean_accuracy']}"
+        )
+    
+    # Assert that accuracy doesn't degrade over time
+    if len(segment_metrics) >= 3:
+        # Compare first and last segment
+        first_accuracy = segment_metrics[0]["mean_accuracy"]
+        last_accuracy = segment_metrics[-1]["mean_accuracy"]
+        
+        assert last_accuracy >= first_accuracy * 0.95, (
+            f"Accuracy degraded over time with document_type={document_type}, "
+            f"first_segment={first_accuracy:.4f}, last_segment={last_accuracy:.4f}"
+        )
+    
+    # Print detailed metrics for debugging
+    print(f"\nSustained processing metrics for document_type={document_type}:")
+    print(f"Total documents processed: {len(all_results)}")
+    print(f"Processing rate: {len(all_results) / SUSTAINED_DURATION:.2f} docs/sec")
+    
+    for i, metrics in enumerate(segment_metrics):
+        print(f"\nSegment {i+1}/3 metrics:")
+        print(f"Mean accuracy: {metrics['mean_accuracy']:.4f}")
+        print(f"Min accuracy: {metrics['min_accuracy']:.4f}")
+        print(f"Max accuracy: {metrics['max_accuracy']:.4f}")
+        print(f"Standard deviation: {metrics['std_dev']:.4f}")
+        print(f"Documents processed: {metrics['processing_count']}")
 
 
-@pytest.mark.parametrize("doc_type", DOCUMENT_TYPES)
-def test_accuracy_with_different_document_types_under_load(ocr_service, document_datasets, doc_type):
-    """
-    Test that OCR accuracy remains above 99% for different document types under load.
+@pytest.mark.parametrize("document_type", DOCUMENT_TYPES)
+@pytest.mark.parametrize("typed_documents", QUALITY_LEVELS, indirect=True)
+def test_confidence_score_reliability_under_load(ocr_service, document_batch, document_type, typed_documents):
+    """Test reliability of confidence scores under load conditions.
+    
+    This test verifies that the OCR service's confidence scoring remains reliable
+    and correlates with actual accuracy even under load conditions.
     
     Args:
-        ocr_service: OCR service fixture
-        document_datasets: Document datasets fixture
-        doc_type: Document type to test
+        ocr_service: The OCR service fixture
+        document_batch: Batch of test documents
+        document_type: Type of documents to test (typed, handwritten, mixed)
+        typed_documents: Typed documents with specific quality level (parameterized)
     """
-    # Skip if this document type is not available
-    if doc_type not in document_datasets or not document_datasets[doc_type]:
-        pytest.skip(f"No {doc_type} documents available for testing")
+    # Skip if no documents of the specified type are available
+    documents = document_batch.get(document_type, [])
+    if not documents:
+        pytest.skip(f"No {document_type} documents available for testing")
     
-    # Get the dataset for this document type
-    dataset = document_datasets[doc_type]
+    # Process documents in parallel to simulate load
+    results = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        future_to_doc = {executor.submit(process_document, ocr_service, doc): doc for doc in documents}
+        for future in concurrent.futures.as_completed(future_to_doc):
+            doc = future_to_doc[future]
+            try:
+                extraction_results, accuracy = future.result()
+                results.append((extraction_results, accuracy))
+            except Exception as e:
+                print(f"Document processing failed: {e}")
     
-    # If we don't have enough documents, repeat them to create a larger dataset
-    test_documents = dataset
-    while len(test_documents) < 20:  # Ensure we have at least 20 documents for a meaningful test
-        test_documents.extend(test_documents[:min(len(test_documents), 20 - len(test_documents))])
+    # Skip if no results were obtained
+    if not results:
+        pytest.skip("No results obtained from document processing")
     
-    # Use a moderate concurrency level
-    concurrency = min(8, mp.cpu_count())
+    # Extract confidence scores and accuracy scores
+    confidence_scores = [float(calculate_document_confidence(res)) for res, _ in results]
+    accuracy_scores = [acc for _, acc in results]
     
-    # Prepare arguments for multiprocessing
-    args = [(ocr_service, doc_path, expected) for doc_path, expected in test_documents]
+    # Calculate correlation between confidence and accuracy
+    if len(confidence_scores) > 1 and len(accuracy_scores) > 1:
+        correlation = np.corrcoef(confidence_scores, accuracy_scores)[0, 1]
+    else:
+        correlation = 0.0
     
-    # Process documents concurrently
-    with ProcessPoolExecutor(max_workers=concurrency) as executor:
-        results = list(executor.map(process_document, args))
+    # Assert that confidence scores correlate with accuracy
+    assert correlation >= 0.7, (
+        f"Confidence scores do not reliably correlate with accuracy under load, "
+        f"document_type={document_type}, correlation={correlation:.4f}"
+    )
     
-    # Calculate overall accuracy
-    accuracy = calculate_batch_accuracy(results)
+    # Check that confidence scores are within reasonable bounds
+    for i, (res, acc) in enumerate(results):
+        confidence = float(calculate_document_confidence(res))
+        
+        # Confidence should not be too far from accuracy
+        assert abs(confidence - acc) <= 0.2, (
+            f"Confidence score significantly differs from accuracy for document {i}, "
+            f"confidence={confidence:.4f}, accuracy={acc:.4f}"
+        )
+        
+        # Confidence should be above minimum threshold
+        assert confidence >= CONFIDENCE_THRESHOLD, (
+            f"Confidence score below threshold for document {i}, "
+            f"confidence={confidence:.4f}"
+        )
     
-    # Assert that accuracy meets the requirement
-    assert accuracy >= MIN_REQUIRED_ACCURACY, \
-        f"Accuracy for {doc_type} documents under load was {accuracy:.4f}, which is below the required {MIN_REQUIRED_ACCURACY:.4f}"
+    # Print detailed metrics for debugging
+    print(f"\nConfidence reliability metrics for document_type={document_type}:")
+    print(f"Correlation coefficient: {correlation:.4f}")
+    print(f"Mean confidence: {np.mean(confidence_scores):.4f}")
+    print(f"Mean accuracy: {np.mean(accuracy_scores):.4f}")
+    print(f"Confidence-accuracy difference: {np.mean(np.abs(np.array(confidence_scores) - np.array(accuracy_scores))):.4f}")
 
 
-def test_confidence_score_reliability_under_load(ocr_service, document_datasets):
-    """
-    Test that confidence scores remain reliable under load conditions.
+def test_accuracy_with_mixed_document_batch(ocr_service, document_batch):
+    """Test OCR accuracy when processing a mixed batch of different document types.
+    
+    This test verifies that the OCR service maintains its accuracy requirements
+    even when processing a mixed batch of different document types and qualities
+    simultaneously, simulating a real-world scenario.
     
     Args:
-        ocr_service: OCR service fixture
-        document_datasets: Document datasets fixture
+        ocr_service: The OCR service fixture
+        document_batch: Batch of test documents
     """
-    # Skip if no datasets available
-    if not document_datasets:
-        pytest.skip("No document datasets available for testing")
+    # Create a mixed batch with documents of different types
+    mixed_batch = []
+    for doc_type, docs in document_batch.items():
+        if docs:
+            # Add up to 5 documents of each type
+            mixed_batch.extend(docs[:5])
     
-    # Flatten the datasets into a single list of (document_path, expected_results) tuples
+    # Skip if the mixed batch is empty
+    if not mixed_batch:
+        pytest.skip("No documents available for mixed batch testing")
+    
+    # Process documents in parallel
+    results = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(mixed_batch)) as executor:
+        future_to_doc = {executor.submit(process_document, ocr_service, doc): doc for doc in mixed_batch}
+        for future in concurrent.futures.as_completed(future_to_doc):
+            doc = future_to_doc[future]
+            try:
+                extraction_results, accuracy = future.result()
+                results.append((extraction_results, accuracy))
+            except Exception as e:
+                print(f"Document processing failed: {e}")
+    
+    # Calculate aggregate accuracy metrics
+    accuracy_metrics = calculate_batch_accuracy(results)
+    
+    # Assert that accuracy meets the threshold
+    assert accuracy_metrics["meets_threshold"], (
+        f"Accuracy below threshold with mixed document batch, "
+        f"mean_accuracy={accuracy_metrics['mean_accuracy']}"
+    )
+    
+    # Assert that minimum accuracy is acceptable
+    assert accuracy_metrics["min_accuracy"] >= 0.9, (
+        f"Minimum accuracy too low with mixed document batch, "
+        f"min_accuracy={accuracy_metrics['min_accuracy']}"
+    )
+    
+    # Print detailed metrics for debugging
+    print(f"\nAccuracy metrics for mixed document batch:")
+    print(f"Mean accuracy: {accuracy_metrics['mean_accuracy']:.4f}")
+    print(f"Min accuracy: {accuracy_metrics['min_accuracy']:.4f}")
+    print(f"Max accuracy: {accuracy_metrics['max_accuracy']:.4f}")
+    print(f"Standard deviation: {accuracy_metrics['std_dev']:.4f}")
+    print(f"Confidence correlation: {accuracy_metrics['confidence_correlation']:.4f}")
+    print(f"Processing count: {accuracy_metrics['processing_count']}")
+
+
+@pytest.mark.parametrize("typed_documents", ["low"], indirect=True)
+def test_accuracy_with_low_quality_documents_under_load(ocr_service, document_batch, typed_documents):
+    """Test OCR accuracy with low-quality documents under load conditions.
+    
+    This test verifies that the OCR service maintains acceptable accuracy even
+    when processing low-quality documents under load conditions.
+    
+    Args:
+        ocr_service: The OCR service fixture
+        document_batch: Batch of test documents
+        typed_documents: Low-quality typed documents (parameterized)
+    """
+    # Use only the typed documents for this test
+    documents = document_batch.get("typed", [])
+    if not documents:
+        pytest.skip("No typed documents available for testing")
+    
+    # Process documents in parallel with high concurrency
+    results = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+        # Process each document multiple times to increase load
+        future_to_doc = {}
+        for _ in range(3):  # Process each document 3 times
+            for doc in documents:
+                future = executor.submit(process_document, ocr_service, doc)
+                future_to_doc[future] = doc
+        
+        for future in concurrent.futures.as_completed(future_to_doc):
+            doc = future_to_doc[future]
+            try:
+                extraction_results, accuracy = future.result()
+                results.append((extraction_results, accuracy))
+            except Exception as e:
+                print(f"Document processing failed: {e}")
+    
+    # Calculate aggregate accuracy metrics
+    accuracy_metrics = calculate_batch_accuracy(results)
+    
+    # For low-quality documents, we accept a slightly lower accuracy threshold
+    low_quality_threshold = 0.95  # 95% accuracy for low-quality documents
+    
+    # Assert that accuracy meets the adjusted threshold
+    assert accuracy_metrics["mean_accuracy"] >= low_quality_threshold, (
+        f"Accuracy below adjusted threshold for low-quality documents under load, "
+        f"mean_accuracy={accuracy_metrics['mean_accuracy']}"
+    )
+    
+    # Assert that confidence scores correctly reflect the lower accuracy
+    confidence_scores = [float(calculate_document_confidence(res)) for res, _ in results]
+    mean_confidence = np.mean(confidence_scores)
+    
+    assert mean_confidence < 0.9, (
+        f"Confidence scores too high for low-quality documents, "
+        f"mean_confidence={mean_confidence:.4f}"
+    )
+    
+    # Print detailed metrics for debugging
+    print(f"\nAccuracy metrics for low-quality documents under load:")
+    print(f"Mean accuracy: {accuracy_metrics['mean_accuracy']:.4f}")
+    print(f"Min accuracy: {accuracy_metrics['min_accuracy']:.4f}")
+    print(f"Max accuracy: {accuracy_metrics['max_accuracy']:.4f}")
+    print(f"Standard deviation: {accuracy_metrics['std_dev']:.4f}")
+    print(f"Mean confidence: {mean_confidence:.4f}")
+    print(f"Processing count: {accuracy_metrics['processing_count']}")
+
+
+def test_accuracy_stability_with_increasing_load(ocr_service, document_batch):
+    """Test stability of OCR accuracy as load increases.
+    
+    This test verifies that the OCR service's accuracy remains stable as the
+    processing load increases, ensuring that performance doesn't degrade under
+    high load conditions.
+    
+    Args:
+        ocr_service: The OCR service fixture
+        document_batch: Batch of test documents
+    """
+    # Combine documents of all types
     all_documents = []
-    for doc_type, dataset in document_datasets.items():
-        all_documents.extend(dataset)
+    for docs in document_batch.values():
+        all_documents.extend(docs)
     
-    # Limit the number of documents to process
-    num_docs = min(len(all_documents), 50)  # Process up to 50 documents
-    test_documents = all_documents[:num_docs]
+    # Skip if no documents are available
+    if not all_documents:
+        pytest.skip("No documents available for testing")
     
-    # Use a high concurrency level to stress the system
-    concurrency = min(16, mp.cpu_count())
+    # Ensure we have enough documents by duplicating if necessary
+    while len(all_documents) < 50:
+        all_documents.extend(all_documents[:50 - len(all_documents)])
     
-    # Define a function to process a document and return both extraction results and confidence scores
-    def process_with_confidence(args):
-        service, doc_path, expected = args
-        result = service.process_document(doc_path)
-        return expected, result.extracted_data, result.confidence_scores
+    # Test with increasing concurrency levels
+    concurrency_levels = [1, 5, 10, 20, 30, 40, 50]
+    accuracy_results = []
     
-    # Prepare arguments for multiprocessing
-    args = [(ocr_service, doc_path, expected) for doc_path, expected in test_documents]
-    
-    # Process documents concurrently
-    with ProcessPoolExecutor(max_workers=concurrency) as executor:
-        results = list(executor.map(process_with_confidence, args))
-    
-    # Analyze confidence scores vs. actual accuracy
-    confidence_accuracy_pairs = []
-    for expected, actual, confidence_scores in results:
-        # Calculate actual accuracy for this document
-        actual_accuracy = calculate_accuracy(expected, actual)
+    for concurrency in concurrency_levels:
+        # Select documents for this concurrency level
+        selected_documents = all_documents[:concurrency]
         
-        # Get the average confidence score for this document
-        avg_confidence = sum(confidence_scores.values()) / len(confidence_scores) if confidence_scores else 0
+        # Process documents in parallel
+        results = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as executor:
+            future_to_doc = {executor.submit(process_document, ocr_service, doc): doc for doc in selected_documents}
+            for future in concurrent.futures.as_completed(future_to_doc):
+                doc = future_to_doc[future]
+                try:
+                    extraction_results, accuracy = future.result()
+                    results.append((extraction_results, accuracy))
+                except Exception as e:
+                    print(f"Document processing failed: {e}")
         
-        confidence_accuracy_pairs.append((avg_confidence, actual_accuracy))
+        # Calculate aggregate accuracy metrics
+        accuracy_metrics = calculate_batch_accuracy(results)
+        accuracy_results.append((concurrency, accuracy_metrics))
     
-    # Calculate correlation between confidence scores and actual accuracy
-    confidences = [pair[0] for pair in confidence_accuracy_pairs]
-    accuracies = [pair[1] for pair in confidence_accuracy_pairs]
-    
-    # Calculate correlation coefficient if we have enough data points
-    if len(confidences) >= 5:  # Need at least a few data points for meaningful correlation
-        correlation = np.corrcoef(confidences, accuracies)[0, 1]
+    # Check if accuracy remains stable across increasing load
+    baseline_accuracy = accuracy_results[0][1]["mean_accuracy"]
+    for concurrency, metrics in accuracy_results[1:]:
+        current_accuracy = metrics["mean_accuracy"]
         
-        # Assert that confidence scores are positively correlated with actual accuracy
-        assert correlation > 0.5, \
-            f"Confidence scores are not reliably correlated with actual accuracy (correlation: {correlation:.4f})"
+        # Accuracy should not drop by more than 2% as load increases
+        assert current_accuracy >= baseline_accuracy * 0.98, (
+            f"Accuracy degraded significantly at concurrency={concurrency}, "
+            f"baseline={baseline_accuracy:.4f}, current={current_accuracy:.4f}"
+        )
     
-    # Also verify that high confidence scores (>0.9) correspond to high accuracy
-    high_confidence_pairs = [(c, a) for c, a in confidence_accuracy_pairs if c > 0.9]
-    if high_confidence_pairs:
-        high_confidence_accuracies = [pair[1] for pair in high_confidence_pairs]
-        avg_high_confidence_accuracy = sum(high_confidence_accuracies) / len(high_confidence_accuracies)
-        
-        # Assert that high confidence scores correspond to high accuracy
-        assert avg_high_confidence_accuracy >= MIN_REQUIRED_ACCURACY, \
-            f"Documents with high confidence scores do not consistently achieve the required accuracy " \
-            f"(average accuracy: {avg_high_confidence_accuracy:.4f})"
-
-
-def test_accuracy_maintained_under_all_load_conditions(ocr_service, document_datasets):
-    """
-    Comprehensive test that verifies 99% accuracy is maintained under all load conditions.
-    
-    This test combines aspects of the other tests to provide a thorough validation of
-    accuracy under various challenging conditions.
-    
-    Args:
-        ocr_service: OCR service fixture
-        document_datasets: Document datasets fixture
-    """
-    # Skip if no datasets available
-    if not document_datasets:
-        pytest.skip("No document datasets available for testing")
-    
-    # Flatten the datasets into a single list of (document_path, expected_results) tuples
-    all_documents = []
-    for doc_type, dataset in document_datasets.items():
-        all_documents.extend(dataset)
-    
-    # If we don't have enough documents, repeat them to create a larger dataset
-    while len(all_documents) < 100:  # Ensure we have at least 100 documents
-        all_documents.extend(all_documents[:min(len(all_documents), 100 - len(all_documents))])
-    
-    # Test with varying concurrency levels
-    accuracies_by_concurrency = {}
-    for concurrency in CONCURRENCY_LEVELS:
-        # Skip concurrency levels that are too high for the available CPUs
-        if concurrency > mp.cpu_count() * 2:
-            continue
-        
-        # Limit the number of documents to process based on concurrency level
-        num_docs = min(len(all_documents), concurrency * 5)  # Process at least 5 docs per worker
-        test_documents = all_documents[:num_docs]
-        
-        # Prepare arguments for multiprocessing
-        args = [(ocr_service, doc_path, expected) for doc_path, expected in test_documents]
-        
-        # Process documents concurrently
-        with ProcessPoolExecutor(max_workers=concurrency) as executor:
-            results = list(executor.map(process_document, args))
-        
-        # Calculate overall accuracy
-        accuracy = calculate_batch_accuracy(results)
-        accuracies_by_concurrency[concurrency] = accuracy
-    
-    # Calculate minimum accuracy across all concurrency levels
-    min_accuracy = min(accuracies_by_concurrency.values()) if accuracies_by_concurrency else 0
-    
-    # Assert that accuracy meets the requirement across all concurrency levels
-    assert min_accuracy >= MIN_REQUIRED_ACCURACY, \
-        f"Minimum accuracy across all concurrency levels was {min_accuracy:.4f}, " \
-        f"which is below the required {MIN_REQUIRED_ACCURACY:.4f}"
-    
-    # Also test with mixed document types in a single batch
-    # Shuffle the documents to mix different types
-    import random
-    random.shuffle(all_documents)
-    
-    # Use a moderate concurrency level
-    concurrency = min(8, mp.cpu_count())
-    
-    # Limit the number of documents to process
-    num_docs = min(len(all_documents), 50)  # Process up to 50 documents
-    test_documents = all_documents[:num_docs]
-    
-    # Prepare arguments for multiprocessing
-    args = [(ocr_service, doc_path, expected) for doc_path, expected in test_documents]
-    
-    # Process documents concurrently
-    with ProcessPoolExecutor(max_workers=concurrency) as executor:
-        results = list(executor.map(process_document, args))
-    
-    # Calculate overall accuracy for mixed document types
-    mixed_accuracy = calculate_batch_accuracy(results)
-    
-    # Assert that accuracy meets the requirement for mixed document types
-    assert mixed_accuracy >= MIN_REQUIRED_ACCURACY, \
-        f"Accuracy for mixed document types was {mixed_accuracy:.4f}, " \
-        f"which is below the required {MIN_REQUIRED_ACCURACY:.4f}"
+    # Print detailed metrics for debugging
+    print("\nAccuracy stability with increasing load:")
+    for concurrency, metrics in accuracy_results:
+        print(f"Concurrency={concurrency}, Mean accuracy={metrics['mean_accuracy']:.4f}, "
+              f"Std dev={metrics['std_dev']:.4f}")
 
 
 if __name__ == "__main__":
