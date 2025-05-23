@@ -10,12 +10,20 @@
 # SERVER CONFIGURATION
 # ===============================
 server:
-  port: 8080
+  port: ${SERVER_PORT:8080}
   error:
     include-message: always
     include-binding-errors: always
     include-stacktrace: always
     include-exception: true
+  compression:
+    enabled: true
+    mime-types: application/json,application/xml,text/html,text/xml,text/plain
+    min-response-size: 1024
+  http2:
+    enabled: false
+  ssl:
+    enabled: false
 
 # ===============================
 # SPRING CONFIGURATION
@@ -25,7 +33,7 @@ spring:
   application:
     name: mca-data-service
   
-  # Database configuration
+  # Database configuration - Development with 1 read replica
   datasource:
     url: jdbc:postgresql://localhost:5432/mca_dev
     username: mca_dev_user
@@ -36,7 +44,12 @@ spring:
       maximum-pool-size: 10
       minimum-idle: 5
       idle-timeout: 300000
-      max-lifetime: 1200000
+      max-lifetime: 1800000
+      auto-commit: false
+      pool-name: MCAHikariCP-Dev
+      # Read replica configuration - single replica for development
+      read-only-replicas: true
+      replica-urls: jdbc:postgresql://localhost:5433/mca_dev
   
   # JPA/Hibernate configuration
   jpa:
@@ -49,6 +62,15 @@ spring:
         dialect: org.hibernate.dialect.PostgreSQLDialect
         jdbc:
           time_zone: UTC
+        # Development settings
+        jdbc.batch_size: 10
+        order_inserts: true
+        order_updates: true
+        connection.provider_disables_autocommit: true
+        query.in_clause_parameter_padding: true
+        cache:
+          use_second_level_cache: false
+          use_query_cache: false
   
   # Flyway migration configuration
   flyway:
@@ -56,94 +78,142 @@ spring:
     baseline-on-migrate: true
     locations: classpath:db/migrations
     table: flyway_schema_history
+    validate-on-migrate: true
+    out-of-order: true
   
-  # RabbitMQ configuration
+  # RabbitMQ configuration - Development without TLS
   rabbitmq:
     host: localhost
     port: 5672
-    username: mca_dev_user
-    password: mca_dev_password
-    virtual-host: mca_dev
+    username: guest
+    password: guest
+    virtual-host: /
+    ssl:
+      enabled: false
+    connection-timeout: 10000
+    requested-heartbeat: 30
+    template:
+      retry:
+        enabled: true
+        initial-interval: 1000
+        max-attempts: 3
+        max-interval: 5000
+        multiplier: 2.0
     listener:
       simple:
+        concurrency: 3
+        max-concurrency: 5
+        prefetch: 1
+        default-requeue-rejected: true
         retry:
           enabled: true
           initial-interval: 1000
           max-attempts: 3
-          max-interval: 10000
+          max-interval: 5000
           multiplier: 2.0
-    exchange:
-      name: mca.documents
-      type: fanout
-      durable: true
-    queues:
-      document-processing: document-processing
-      data-extraction: data-extraction
-      notification: notification
   
-  # Redis configuration
+  # Redis configuration - Development standalone
   redis:
     host: localhost
     port: 6379
-    password: mca_dev_password
-    database: 0
-    timeout: 60000
-    connect-timeout: 10000
-    client-name: mca-data-service-dev
+    password: 
+    ssl: false
+    timeout: 2000
+    cluster:
+      enabled: false
+    lettuce:
+      pool:
+        max-active: 8
+        max-idle: 8
+        min-idle: 2
+        max-wait: -1ms
+      shutdown-timeout: 100ms
 
 # ===============================
-# CACHE CONFIGURATION
+# APPLICATION-SPECIFIC CONFIGURATION
 # ===============================
-cache:
-  redis:
-    time-to-live:
-      application-data: 900  # 15 minutes in seconds
-      user-sessions: 86400  # 24 hours in seconds
-
-# ===============================
-# S3 STORAGE CONFIGURATION
-# ===============================
-storage:
-  s3:
-    endpoint: http://localhost:9000
-    region: us-east-1
-    bucket-name: mca-documents-staging
-    access-key: mca_dev_access_key
-    secret-key: mca_dev_secret_key
+application:
+  # Security Configuration
+  security:
+    jwt:
+      algorithm: RS256
+      public-key-path: classpath:keys/public_key.pem
+      # Shorter token expiry for development testing
+      token-expiry-minutes: 30
+      refresh-token-expiry-days: 1
     encryption:
+      # Field-level encryption for PII
       enabled: true
-      type: AES256
-
-# ===============================
-# SECURITY CONFIGURATION
-# ===============================
-security:
-  jwt:
-    token:
-      secret-key: dev_secret_key_for_signing_jwt_tokens_this_should_be_very_long_and_secure
-      # Using shorter expiration times for development to facilitate testing
-      expiration: 1800  # 30 minutes in seconds (shorter for development)
-      refresh-expiration: 86400  # 24 hours in seconds (shorter for development)
-    public-key: classpath:jwt/public_key.pem
-    private-key: classpath:jwt/private_key.pem
-  cors:
-    allowed-origins: http://localhost:3000,http://localhost:5173
-    allowed-methods: GET,POST,PUT,DELETE,OPTIONS
-    allowed-headers: Authorization,Content-Type,X-Requested-With
-    exposed-headers: X-Total-Count
-    allow-credentials: true
-    max-age: 3600
-
-# ===============================
-# FIELD-LEVEL ENCRYPTION CONFIGURATION
-# ===============================
-encryption:
-  enabled: true
-  algorithm: AES/GCM/NoPadding
-  secret-key: dev_encryption_key_for_pii_fields_this_should_be_very_secure
-  fields:
-    - entity: com.dollarfunding.mca.entity.MerchantDetails
-      properties: [legalName, dbaName, ein, address]
+      algorithm: AES/GCM/NoPadding
+      secret-key: devOnlySecretKeyForTestingPurposesOnly12345
+      pii-fields:
+        - legalName
+        - dbaName
+        - ein
+        - address
+        - contactName
+        - contactEmail
+        - contactPhone
+        - bankAccountNumber
+        - routingNumber
+        - ssn
+    cors:
+      allowed-origins: http://localhost:3000,http://localhost:3001
+      allowed-methods: GET,POST,PUT,DELETE,OPTIONS,PATCH
+      allowed-headers: Authorization,Content-Type,X-Requested-With,Cache-Control
+      exposed-headers: X-Total-Count
+      allow-credentials: true
+      max-age: 3600
+  
+  # S3 Storage Configuration - Development bucket
+  storage:
+    s3:
+      endpoint: http://localhost:9000
+      region: us-east-1
+      access-key: minioadmin
+      secret-key: minioadmin
+      bucket-name: mca-documents-development
+      encryption:
+        enabled: true
+        type: AES256
+      expiration:
+        presigned-url-seconds: 3600  # Longer expiration for development
+  
+  # Cache Configuration
+  cache:
+    redis:
+      enabled: true
+      ttl:
+        application-data: 300  # 5 minutes in seconds for development
+        user-sessions: 3600   # 1 hour in seconds for development
+  
+  # RabbitMQ Exchange and Queue Configuration
+  messaging:
+    exchanges:
+      documents:
+        name: mca.documents
+        type: fanout
+        durable: true
+    queues:
+      document-processing:
+        name: document-processing
+        durable: true
+      data-extraction:
+        name: data-extraction
+        durable: true
+      notification:
+        name: notification
+        durable: true
+    bindings:
+      - exchange: mca.documents
+        queue: document-processing
+        routing-key: ''
+      - exchange: mca.documents
+        queue: data-extraction
+        routing-key: ''
+      - exchange: mca.documents
+        queue: notification
+        routing-key: ''
 
 # ===============================
 # LOGGING CONFIGURATION
@@ -152,23 +222,46 @@ logging:
   level:
     root: INFO
     com.dollarfunding.mca: DEBUG
-    org.springframework.web: DEBUG
-    org.springframework.security: DEBUG
-    org.springframework.data: DEBUG
+    org.springframework: INFO
+    org.springframework.transaction: DEBUG
+    org.springframework.orm.jpa: DEBUG
+    org.hibernate: INFO
     org.hibernate.SQL: DEBUG
     org.hibernate.type.descriptor.sql.BasicBinder: TRACE
+  pattern:
+    console: '%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n'
+    file: '%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n'
+  file:
+    name: logs/mca-data-service-dev.log
+    max-size: 10MB
+    max-history: 7
 
 # ===============================
-# ACTUATOR CONFIGURATION
+# MANAGEMENT AND MONITORING
 # ===============================
 management:
   endpoints:
     web:
       exposure:
-        include: health,info,metrics,env,loggers,flyway,caches,configprops,mappings,beans
+        include: '*'
+      base-path: /actuator
   endpoint:
     health:
       show-details: always
+      probes:
+        enabled: true
+      group:
+        readiness:
+          include: db,redis,rabbitmq,diskSpace
+  health:
+    livenessState:
+      enabled: true
+    readinessState:
+      enabled: true
+  metrics:
+    export:
+      prometheus:
+        enabled: true
   info:
     git:
       mode: full
@@ -178,25 +271,24 @@ management:
       enabled: true
 
 # ===============================
-# APPLICATION-SPECIFIC CONFIGURATION
+# PERFORMANCE TUNING
 # ===============================
-app:
-  # Feature flags for development
-  features:
-    document-processing-automation: true
-    webhook-delivery: true
-    field-level-encryption: true
+performance:
+  # Thread pool configuration - smaller for development
+  thread-pool:
+    core-size: 5
+    max-size: 10
+    queue-capacity: 25
+    keep-alive-seconds: 60
   
-  # Development-specific application settings
-  processing:
-    max-concurrent-applications: 10
-    max-document-size-mb: 20
-    supported-document-types: pdf,jpg,jpeg,png,tiff
+  # Connection timeouts - longer for development debugging
+  timeouts:
+    connect-ms: 10000
+    read-ms: 20000
+    write-ms: 20000
   
-  # Notification settings
-  notification:
-    retry:
-      max-attempts: 5
-      initial-delay: 1000
-      multiplier: 2.0
-      max-delay: 60000
+  # Rate limiting - disabled for development
+  rate-limiting:
+    enabled: false
+    default-limit: 1000
+    default-duration: 60
