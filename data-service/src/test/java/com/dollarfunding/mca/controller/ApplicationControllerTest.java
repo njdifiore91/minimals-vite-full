@@ -1,15 +1,13 @@
 package com.dollarfunding.mca.controller;
 
-import com.dollarfunding.mca.dto.ApplicationDto;
 import com.dollarfunding.mca.dto.ApplicationFilterDTO;
 import com.dollarfunding.mca.dto.ApplicationRequestDTO;
 import com.dollarfunding.mca.dto.ApplicationResponseDTO;
-import com.dollarfunding.mca.dto.PageResponseDTO;
-import com.dollarfunding.mca.entity.Application;
 import com.dollarfunding.mca.entity.ApplicationStatus;
 import com.dollarfunding.mca.entity.ReviewStatus;
-import com.dollarfunding.mca.exception.ResourceNotFoundException;
-import com.dollarfunding.mca.security.RoleConstants;
+import com.dollarfunding.mca.exception.ApplicationNotFoundException;
+import com.dollarfunding.mca.exception.InvalidApplicationStateException;
+import com.dollarfunding.mca.exception.ValidationException;
 import com.dollarfunding.mca.service.ApplicationService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -25,39 +23,28 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.http.MediaType;
 import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MockMvc;
-import org.springframework.test.web.servlet.ResultActions;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.UUID;
 
-import static org.hamcrest.CoreMatchers.is;
-import static org.hamcrest.Matchers.hasSize;
+import static org.hamcrest.Matchers.*;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.BDDMockito.given;
-import static org.mockito.Mockito.doNothing;
-import static org.mockito.Mockito.doThrow;
-import static org.mockito.Mockito.times;
-import static org.mockito.Mockito.verify;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
+import static org.mockito.Mockito.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
-import static org.springframework.test.web.servlet.result.MockMvcResultHandlers.print;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 /**
  * Unit and integration tests for the ApplicationController class.
- * <p>
- * This test class verifies the functionality of the ApplicationController, which manages
- * MCA application data through the /api/v1/applications endpoint. It tests CRUD operations,
- * role-based access control, pagination, filtering, and error handling.
- * </p>
+ * 
+ * These tests verify CRUD operations, role-based access control (Operations Staff and System Admin roles),
+ * request validation, pagination, filtering, and error handling. Uses Spring's MockMvc to simulate
+ * HTTP requests and verify responses without requiring a full HTTP server.
  */
 @WebMvcTest(ApplicationController.class)
 public class ApplicationControllerTest {
@@ -71,494 +58,428 @@ public class ApplicationControllerTest {
     @MockBean
     private ApplicationService applicationService;
 
-    private ApplicationDto applicationDto;
-    private ApplicationRequestDTO applicationRequestDTO;
-    private ApplicationResponseDTO applicationResponseDTO;
-    private Application application;
-    private UUID applicationId;
+    private UUID testId;
+    private ApplicationRequestDTO validRequestDTO;
+    private ApplicationResponseDTO responseDTO;
 
     @BeforeEach
     void setUp() {
         // Initialize test data
-        applicationId = UUID.randomUUID();
+        testId = UUID.randomUUID();
         
-        // Setup ApplicationDto
-        applicationDto = new ApplicationDto();
-        applicationDto.setId(1L);
-        applicationDto.setStatus("PENDING");
-        applicationDto.setReviewStatus("NOT_REVIEWED");
-        applicationDto.setMerchantName("Test Merchant Inc.");
-        applicationDto.setMerchantDba("Test Merchant");
-        applicationDto.setEin("12-3456789");
-        applicationDto.setCreatedAt(LocalDateTime.now());
-        applicationDto.setUpdatedAt(LocalDateTime.now());
-        
-        // Setup ApplicationRequestDTO
-        applicationRequestDTO = new ApplicationRequestDTO();
-        applicationRequestDTO.setStatus(ApplicationStatus.PENDING);
-        applicationRequestDTO.setReviewStatus(ReviewStatus.NOT_REVIEWED);
+        // Create a valid request DTO
         Map<String, Object> metadata = new HashMap<>();
-        metadata.put("requestedAmount", 50000);
-        metadata.put("industry", "Retail");
-        applicationRequestDTO.setMetadata(metadata);
+        metadata.put("source", "email");
+        metadata.put("confidence", 0.95);
         
-        // Setup Application entity
-        application = new Application();
-        application.setId(applicationId);
-        application.setStatus(ApplicationStatus.PENDING);
-        application.setReviewStatus(ReviewStatus.NOT_REVIEWED);
-        application.setMetadata(metadata);
-        application.setCreatedAt(LocalDateTime.now());
-        application.setUpdatedAt(LocalDateTime.now());
-        
-        // Setup ApplicationResponseDTO
-        applicationResponseDTO = new ApplicationResponseDTO();
-        applicationResponseDTO.setId(applicationId);
-        applicationResponseDTO.setStatus(ApplicationStatus.PENDING);
-        applicationResponseDTO.setReviewStatus(ReviewStatus.NOT_REVIEWED);
-        applicationResponseDTO.setMetadata(metadata);
-        applicationResponseDTO.setCreatedAt(LocalDateTime.now());
-        applicationResponseDTO.setUpdatedAt(LocalDateTime.now());
-    }
-
-    @Test
-    @DisplayName("Test get all applications - success")
-    @WithMockUser(username = "testuser", authorities = {RoleConstants.ROLE_OPERATIONS_STAFF})
-    void testGetAllApplications() throws Exception {
-        // Given
-        List<ApplicationResponseDTO> applications = Arrays.asList(
-                applicationResponseDTO,
-                new ApplicationResponseDTO()
-        );
-        
-        Page<ApplicationResponseDTO> page = new PageImpl<>(applications);
-        PageResponseDTO<ApplicationResponseDTO> pageResponse = PageResponseDTO.fromPage(page, "/api/v1/applications");
-        
-        given(applicationService.findAll(any(Pageable.class))).willReturn(pageResponse);
-
-        // When
-        ResultActions response = mockMvc.perform(get("/api/v1/applications")
-                .with(csrf())
-                .contentType(MediaType.APPLICATION_JSON));
-
-        // Then
-        response.andExpect(status().isOk())
-                .andExpect(jsonPath("$.content", hasSize(2)))
-                .andExpect(jsonPath("$.page_metadata.total_elements", is(2)))
-                .andDo(print());
-    }
-
-    @Test
-    @DisplayName("Test get application by ID - success")
-    @WithMockUser(username = "testuser", authorities = {RoleConstants.ROLE_OPERATIONS_STAFF})
-    void testGetApplicationById() throws Exception {
-        // Given
-        given(applicationService.findById(applicationId)).willReturn(Optional.of(applicationResponseDTO));
-
-        // When
-        ResultActions response = mockMvc.perform(get("/api/v1/applications/{id}", applicationId)
-                .with(csrf())
-                .contentType(MediaType.APPLICATION_JSON));
-
-        // Then
-        response.andExpect(status().isOk())
-                .andExpect(jsonPath("$.id", is(applicationId.toString())))
-                .andExpect(jsonPath("$.status", is("PENDING")))
-                .andExpect(jsonPath("$.review_status", is("NOT_REVIEWED")))
-                .andDo(print());
-    }
-
-    @Test
-    @DisplayName("Test get application by ID - not found")
-    @WithMockUser(username = "testuser", authorities = {RoleConstants.ROLE_OPERATIONS_STAFF})
-    void testGetApplicationByIdNotFound() throws Exception {
-        // Given
-        given(applicationService.findById(applicationId))
-                .willThrow(new ResourceNotFoundException("Application not found with id: " + applicationId));
-
-        // When
-        ResultActions response = mockMvc.perform(get("/api/v1/applications/{id}", applicationId)
-                .with(csrf())
-                .contentType(MediaType.APPLICATION_JSON));
-
-        // Then
-        response.andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.message", is("Application not found with id: " + applicationId)))
-                .andDo(print());
-    }
-
-    @Test
-    @DisplayName("Test create application - success")
-    @WithMockUser(username = "testuser", authorities = {RoleConstants.ROLE_OPERATIONS_STAFF})
-    void testCreateApplication() throws Exception {
-        // Given
-        given(applicationService.create(any(ApplicationRequestDTO.class))).willReturn(applicationResponseDTO);
-
-        // When
-        ResultActions response = mockMvc.perform(post("/api/v1/applications")
-                .with(csrf())
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(applicationRequestDTO)));
-
-        // Then
-        response.andExpect(status().isCreated())
-                .andExpect(jsonPath("$.id", is(applicationId.toString())))
-                .andExpect(jsonPath("$.status", is("PENDING")))
-                .andExpect(jsonPath("$.review_status", is("NOT_REVIEWED")))
-                .andDo(print());
-    }
-
-    @Test
-    @DisplayName("Test create application - validation error")
-    @WithMockUser(username = "testuser", authorities = {RoleConstants.ROLE_OPERATIONS_STAFF})
-    void testCreateApplicationValidationError() throws Exception {
-        // Given
-        ApplicationRequestDTO invalidRequest = new ApplicationRequestDTO();
-        // Status is required but not set
-
-        // When
-        ResultActions response = mockMvc.perform(post("/api/v1/applications")
-                .with(csrf())
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(invalidRequest)));
-
-        // Then
-        response.andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.message", is("Validation failed")))
-                .andExpect(jsonPath("$.validationErrors.status", is("Application status is required")))
-                .andDo(print());
-    }
-
-    @Test
-    @DisplayName("Test update application - success")
-    @WithMockUser(username = "testuser", authorities = {RoleConstants.ROLE_OPERATIONS_STAFF})
-    void testUpdateApplication() throws Exception {
-        // Given
-        applicationRequestDTO.setStatus(ApplicationStatus.PROCESSING);
-        applicationResponseDTO.setStatus(ApplicationStatus.PROCESSING);
-        
-        given(applicationService.update(eq(applicationId), any(ApplicationRequestDTO.class)))
-                .willReturn(applicationResponseDTO);
-
-        // When
-        ResultActions response = mockMvc.perform(put("/api/v1/applications/{id}", applicationId)
-                .with(csrf())
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(applicationRequestDTO)));
-
-        // Then
-        response.andExpect(status().isOk())
-                .andExpect(jsonPath("$.id", is(applicationId.toString())))
-                .andExpect(jsonPath("$.status", is("PROCESSING")))
-                .andDo(print());
-    }
-
-    @Test
-    @DisplayName("Test update application - not found")
-    @WithMockUser(username = "testuser", authorities = {RoleConstants.ROLE_OPERATIONS_STAFF})
-    void testUpdateApplicationNotFound() throws Exception {
-        // Given
-        given(applicationService.update(eq(applicationId), any(ApplicationRequestDTO.class)))
-                .willThrow(new ResourceNotFoundException("Application not found with id: " + applicationId));
-
-        // When
-        ResultActions response = mockMvc.perform(put("/api/v1/applications/{id}", applicationId)
-                .with(csrf())
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(applicationRequestDTO)));
-
-        // Then
-        response.andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.message", is("Application not found with id: " + applicationId)))
-                .andDo(print());
-    }
-
-    @Test
-    @DisplayName("Test delete application - success")
-    @WithMockUser(username = "testuser", authorities = {RoleConstants.ROLE_SYSTEM_ADMIN})
-    void testDeleteApplication() throws Exception {
-        // Given
-        doNothing().when(applicationService).delete(applicationId);
-
-        // When
-        ResultActions response = mockMvc.perform(delete("/api/v1/applications/{id}", applicationId)
-                .with(csrf())
-                .contentType(MediaType.APPLICATION_JSON));
-
-        // Then
-        response.andExpect(status().isOk())
-                .andDo(print());
-        
-        verify(applicationService, times(1)).delete(applicationId);
-    }
-
-    @Test
-    @DisplayName("Test delete application - not found")
-    @WithMockUser(username = "testuser", authorities = {RoleConstants.ROLE_SYSTEM_ADMIN})
-    void testDeleteApplicationNotFound() throws Exception {
-        // Given
-        doThrow(new ResourceNotFoundException("Application not found with id: " + applicationId))
-                .when(applicationService).delete(applicationId);
-
-        // When
-        ResultActions response = mockMvc.perform(delete("/api/v1/applications/{id}", applicationId)
-                .with(csrf())
-                .contentType(MediaType.APPLICATION_JSON));
-
-        // Then
-        response.andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.message", is("Application not found with id: " + applicationId)))
-                .andDo(print());
-    }
-
-    @Test
-    @DisplayName("Test delete application - access denied for Operations Staff")
-    @WithMockUser(username = "testuser", authorities = {RoleConstants.ROLE_OPERATIONS_STAFF})
-    void testDeleteApplicationAccessDenied() throws Exception {
-        // When
-        ResultActions response = mockMvc.perform(delete("/api/v1/applications/{id}", applicationId)
-                .with(csrf())
-                .contentType(MediaType.APPLICATION_JSON));
-
-        // Then
-        response.andExpect(status().isForbidden())
-                .andDo(print());
-    }
-
-    @Test
-    @DisplayName("Test filter applications - success")
-    @WithMockUser(username = "testuser", authorities = {RoleConstants.ROLE_OPERATIONS_STAFF})
-    void testFilterApplications() throws Exception {
-        // Given
-        ApplicationFilterDTO filterDTO = ApplicationFilterDTO.builder()
-                .status(ApplicationStatus.PENDING)
-                .merchantName("Test Merchant")
-                .createdFrom(LocalDateTime.now().minusDays(30).toLocalDate())
-                .page(0)
-                .size(10)
+        validRequestDTO = ApplicationRequestDTO.builder()
+                .status(ApplicationStatus.NEW.name())
+                .reviewStatus(ReviewStatus.NOT_REVIEWED.name())
+                .metadata(metadata)
                 .build();
         
-        List<ApplicationResponseDTO> applications = Arrays.asList(applicationResponseDTO);
+        // Create a response DTO
+        responseDTO = new ApplicationResponseDTO.Builder()
+                .withId(testId)
+                .withStatus(ApplicationStatus.NEW.name())
+                .withReviewStatus(ReviewStatus.NOT_REVIEWED.name())
+                .withMetadata(metadata)
+                .withCreatedAt(LocalDateTime.now())
+                .withUpdatedAt(LocalDateTime.now())
+                .withProcessingTimeMinutes(0L)
+                .withProcessedWithinTargetTime(true)
+                .withHasAllRequiredDocuments(false)
+                .withIsCompleted(false)
+                .withIsActive(true)
+                .withIsDecided(false)
+                .withRequiresReview(true)
+                .build();
+    }
+
+    @Test
+    @DisplayName("Create application - success")
+    @WithMockUser(roles = {"OPERATIONS_STAFF"})
+    void createApplication_Success() throws Exception {
+        // Arrange
+        when(applicationService.createApplication(any(ApplicationRequestDTO.class)))
+                .thenReturn(responseDTO);
+
+        // Act & Assert
+        mockMvc.perform(post("/api/v1/applications")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(validRequestDTO)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.id", is(testId.toString())))
+                .andExpect(jsonPath("$.status", is(ApplicationStatus.NEW.name())))
+                .andExpect(jsonPath("$.review_status", is(ReviewStatus.NOT_REVIEWED.name())))
+                .andExpect(jsonPath("$.metadata.source", is("email")))
+                .andExpect(jsonPath("$.metadata.confidence", is(0.95)));
+
+        // Verify
+        verify(applicationService, times(1)).createApplication(any(ApplicationRequestDTO.class));
+    }
+
+    @Test
+    @DisplayName("Create application - validation error")
+    @WithMockUser(roles = {"OPERATIONS_STAFF"})
+    void createApplication_ValidationError() throws Exception {
+        // Arrange
+        String errorMessage = "Application status is required";
+        when(applicationService.createApplication(any(ApplicationRequestDTO.class)))
+                .thenThrow(new ValidationException(errorMessage));
+
+        // Act & Assert
+        mockMvc.perform(post("/api/v1/applications")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(validRequestDTO)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message", containsString(errorMessage)));
+
+        // Verify
+        verify(applicationService, times(1)).createApplication(any(ApplicationRequestDTO.class));
+    }
+
+    @Test
+    @DisplayName("Create application - unauthorized")
+    void createApplication_Unauthorized() throws Exception {
+        // Act & Assert - No user role provided
+        mockMvc.perform(post("/api/v1/applications")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(validRequestDTO)))
+                .andExpect(status().isUnauthorized());
+
+        // Verify
+        verify(applicationService, never()).createApplication(any(ApplicationRequestDTO.class));
+    }
+
+    @Test
+    @DisplayName("Get application by ID - success")
+    @WithMockUser(roles = {"OPERATIONS_STAFF"})
+    void getApplicationById_Success() throws Exception {
+        // Arrange
+        when(applicationService.getApplicationById(any(UUID.class)))
+                .thenReturn(responseDTO);
+
+        // Act & Assert
+        mockMvc.perform(get("/api/v1/applications/{id}", testId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id", is(testId.toString())))
+                .andExpect(jsonPath("$.status", is(ApplicationStatus.NEW.name())))
+                .andExpect(jsonPath("$.review_status", is(ReviewStatus.NOT_REVIEWED.name())));
+
+        // Verify
+        verify(applicationService, times(1)).getApplicationById(eq(testId));
+    }
+
+    @Test
+    @DisplayName("Get application by ID - not found")
+    @WithMockUser(roles = {"OPERATIONS_STAFF"})
+    void getApplicationById_NotFound() throws Exception {
+        // Arrange
+        when(applicationService.getApplicationById(any(UUID.class)))
+                .thenThrow(new ApplicationNotFoundException("Application not found with ID: " + testId));
+
+        // Act & Assert
+        mockMvc.perform(get("/api/v1/applications/{id}", testId))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.message", containsString("Application not found")));
+
+        // Verify
+        verify(applicationService, times(1)).getApplicationById(eq(testId));
+    }
+
+    @Test
+    @DisplayName("Update application - success")
+    @WithMockUser(roles = {"OPERATIONS_STAFF"})
+    void updateApplication_Success() throws Exception {
+        // Arrange
+        ApplicationResponseDTO updatedResponseDTO = new ApplicationResponseDTO.Builder()
+                .withId(testId)
+                .withStatus(ApplicationStatus.PENDING.name())
+                .withReviewStatus(ReviewStatus.IN_REVIEW.name())
+                .withCreatedAt(LocalDateTime.now())
+                .withUpdatedAt(LocalDateTime.now())
+                .build();
+
+        when(applicationService.updateApplication(any(UUID.class), any(ApplicationRequestDTO.class)))
+                .thenReturn(updatedResponseDTO);
+
+        // Update request DTO
+        ApplicationRequestDTO updateRequestDTO = ApplicationRequestDTO.builder()
+                .status(ApplicationStatus.PENDING.name())
+                .reviewStatus(ReviewStatus.IN_REVIEW.name())
+                .build();
+
+        // Act & Assert
+        mockMvc.perform(put("/api/v1/applications/{id}", testId)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(updateRequestDTO)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id", is(testId.toString())))
+                .andExpect(jsonPath("$.status", is(ApplicationStatus.PENDING.name())))
+                .andExpect(jsonPath("$.review_status", is(ReviewStatus.IN_REVIEW.name())));
+
+        // Verify
+        verify(applicationService, times(1)).updateApplication(eq(testId), any(ApplicationRequestDTO.class));
+    }
+
+    @Test
+    @DisplayName("Update application - invalid state")
+    @WithMockUser(roles = {"OPERATIONS_STAFF"})
+    void updateApplication_InvalidState() throws Exception {
+        // Arrange
+        String errorMessage = "Invalid status transition from NEW to COMPLETED";
+        when(applicationService.updateApplication(any(UUID.class), any(ApplicationRequestDTO.class)))
+                .thenThrow(new InvalidApplicationStateException(errorMessage));
+
+        // Update request DTO with invalid state transition
+        ApplicationRequestDTO updateRequestDTO = ApplicationRequestDTO.builder()
+                .status(ApplicationStatus.COMPLETED.name())
+                .reviewStatus(ReviewStatus.NOT_REVIEWED.name())
+                .build();
+
+        // Act & Assert
+        mockMvc.perform(put("/api/v1/applications/{id}", testId)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(updateRequestDTO)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message", containsString(errorMessage)));
+
+        // Verify
+        verify(applicationService, times(1)).updateApplication(eq(testId), any(ApplicationRequestDTO.class));
+    }
+
+    @Test
+    @DisplayName("Delete application - success")
+    @WithMockUser(roles = {"SYSTEM_ADMIN"})
+    void deleteApplication_Success() throws Exception {
+        // Arrange
+        doNothing().when(applicationService).deleteApplication(any(UUID.class));
+
+        // Act & Assert
+        mockMvc.perform(delete("/api/v1/applications/{id}", testId))
+                .andExpect(status().isNoContent());
+
+        // Verify
+        verify(applicationService, times(1)).deleteApplication(eq(testId));
+    }
+
+    @Test
+    @DisplayName("Delete application - forbidden for operations staff")
+    @WithMockUser(roles = {"OPERATIONS_STAFF"})
+    void deleteApplication_Forbidden() throws Exception {
+        // Act & Assert - Operations staff should not be able to delete
+        mockMvc.perform(delete("/api/v1/applications/{id}", testId))
+                .andExpect(status().isForbidden());
+
+        // Verify
+        verify(applicationService, never()).deleteApplication(any(UUID.class));
+    }
+
+    @Test
+    @DisplayName("Get applications with filtering - success")
+    @WithMockUser(roles = {"OPERATIONS_STAFF"})
+    void getApplications_WithFiltering_Success() throws Exception {
+        // Arrange
+        List<ApplicationResponseDTO> applications = new ArrayList<>();
+        applications.add(responseDTO);
         Page<ApplicationResponseDTO> page = new PageImpl<>(applications);
-        PageResponseDTO<ApplicationResponseDTO> pageResponse = PageResponseDTO.fromPage(page, "/api/v1/applications/filter");
-        
-        given(applicationService.filter(any(ApplicationFilterDTO.class))).willReturn(pageResponse);
 
-        // When
-        ResultActions response = mockMvc.perform(post("/api/v1/applications/filter")
-                .with(csrf())
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(filterDTO)));
+        when(applicationService.getApplications(any(ApplicationFilterDTO.class), any(Pageable.class)))
+                .thenReturn(page);
 
-        // Then
-        response.andExpect(status().isOk())
+        // Act & Assert
+        mockMvc.perform(get("/api/v1/applications")
+                .param("status", ApplicationStatus.NEW.name())
+                .param("reviewStatus", ReviewStatus.NOT_REVIEWED.name())
+                .param("merchantName", "Test Merchant")
+                .param("startDate", LocalDate.now().minusDays(7).toString())
+                .param("endDate", LocalDate.now().toString())
+                .param("searchTerm", "test")
+                .param("page", "0")
+                .param("size", "10")
+                .param("sortBy", "createdAt")
+                .param("sortDirection", "desc"))
+                .andExpect(status().isOk())
                 .andExpect(jsonPath("$.content", hasSize(1)))
-                .andExpect(jsonPath("$.page_metadata.total_elements", is(1)))
-                .andExpect(jsonPath("$.content[0].id", is(applicationId.toString())))
-                .andDo(print());
+                .andExpect(jsonPath("$.content[0].id", is(testId.toString())));
+
+        // Verify
+        verify(applicationService, times(1)).getApplications(any(ApplicationFilterDTO.class), any(Pageable.class));
     }
 
     @Test
-    @DisplayName("Test update application status - success")
-    @WithMockUser(username = "testuser", authorities = {RoleConstants.ROLE_OPERATIONS_STAFF})
-    void testUpdateApplicationStatus() throws Exception {
-        // Given
-        ApplicationStatus newStatus = ApplicationStatus.APPROVED;
-        applicationResponseDTO.setStatus(newStatus);
-        
-        given(applicationService.updateStatus(eq(applicationId), eq(newStatus)))
-                .willReturn(applicationResponseDTO);
+    @DisplayName("Update application status - success")
+    @WithMockUser(roles = {"OPERATIONS_STAFF"})
+    void updateApplicationStatus_Success() throws Exception {
+        // Arrange
+        ApplicationResponseDTO updatedResponseDTO = new ApplicationResponseDTO.Builder()
+                .withId(testId)
+                .withStatus(ApplicationStatus.PROCESSING.name())
+                .withReviewStatus(ReviewStatus.NOT_REVIEWED.name())
+                .withCreatedAt(LocalDateTime.now())
+                .withUpdatedAt(LocalDateTime.now())
+                .build();
 
-        // When
-        ResultActions response = mockMvc.perform(patch("/api/v1/applications/{id}/status", applicationId)
-                .with(csrf())
+        when(applicationService.updateApplicationStatus(any(UUID.class), any(ApplicationStatus.class)))
+                .thenReturn(updatedResponseDTO);
+
+        // Act & Assert
+        mockMvc.perform(patch("/api/v1/applications/{id}/status", testId)
+                .param("status", ApplicationStatus.PROCESSING.name()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id", is(testId.toString())))
+                .andExpect(jsonPath("$.status", is(ApplicationStatus.PROCESSING.name())));
+
+        // Verify
+        verify(applicationService, times(1)).updateApplicationStatus(eq(testId), eq(ApplicationStatus.PROCESSING));
+    }
+
+    @Test
+    @DisplayName("Update application review status - success")
+    @WithMockUser(roles = {"OPERATIONS_STAFF"})
+    void updateApplicationReviewStatus_Success() throws Exception {
+        // Arrange
+        ApplicationResponseDTO updatedResponseDTO = new ApplicationResponseDTO.Builder()
+                .withId(testId)
+                .withStatus(ApplicationStatus.NEW.name())
+                .withReviewStatus(ReviewStatus.IN_REVIEW.name())
+                .withCreatedAt(LocalDateTime.now())
+                .withUpdatedAt(LocalDateTime.now())
+                .build();
+
+        when(applicationService.updateApplicationReviewStatus(any(UUID.class), any(ReviewStatus.class)))
+                .thenReturn(updatedResponseDTO);
+
+        // Act & Assert
+        mockMvc.perform(patch("/api/v1/applications/{id}/review-status", testId)
+                .param("reviewStatus", ReviewStatus.IN_REVIEW.name()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id", is(testId.toString())))
+                .andExpect(jsonPath("$.review_status", is(ReviewStatus.IN_REVIEW.name())));
+
+        // Verify
+        verify(applicationService, times(1)).updateApplicationReviewStatus(eq(testId), eq(ReviewStatus.IN_REVIEW));
+    }
+
+    @Test
+    @DisplayName("Process application - success")
+    @WithMockUser(roles = {"OPERATIONS_STAFF"})
+    void processApplication_Success() throws Exception {
+        // Arrange
+        ApplicationResponseDTO processedResponseDTO = new ApplicationResponseDTO.Builder()
+                .withId(testId)
+                .withStatus(ApplicationStatus.PROCESSING.name())
+                .withReviewStatus(ReviewStatus.NOT_REVIEWED.name())
+                .withCreatedAt(LocalDateTime.now())
+                .withUpdatedAt(LocalDateTime.now())
+                .withProcessingTimeMinutes(2L)
+                .withProcessedWithinTargetTime(true)
+                .build();
+
+        when(applicationService.processApplication(any(UUID.class)))
+                .thenReturn(processedResponseDTO);
+
+        // Act & Assert
+        mockMvc.perform(post("/api/v1/applications/{id}/process", testId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id", is(testId.toString())))
+                .andExpect(jsonPath("$.status", is(ApplicationStatus.PROCESSING.name())))
+                .andExpect(jsonPath("$.processing_time_minutes", is(2)));
+
+        // Verify
+        verify(applicationService, times(1)).processApplication(eq(testId));
+    }
+
+    @Test
+    @DisplayName("Process application - invalid state")
+    @WithMockUser(roles = {"OPERATIONS_STAFF"})
+    void processApplication_InvalidState() throws Exception {
+        // Arrange
+        String errorMessage = "Application cannot be processed in its current state: COMPLETED";
+        when(applicationService.processApplication(any(UUID.class)))
+                .thenThrow(new InvalidApplicationStateException(errorMessage));
+
+        // Act & Assert
+        mockMvc.perform(post("/api/v1/applications/{id}/process", testId))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message", containsString(errorMessage)));
+
+        // Verify
+        verify(applicationService, times(1)).processApplication(eq(testId));
+    }
+
+    @Test
+    @DisplayName("Check if application is complete - success")
+    @WithMockUser(roles = {"OPERATIONS_STAFF"})
+    void isApplicationComplete_Success() throws Exception {
+        // Arrange
+        when(applicationService.isApplicationComplete(any(UUID.class)))
+                .thenReturn(true);
+
+        // Act & Assert
+        mockMvc.perform(get("/api/v1/applications/{id}/is-complete", testId))
+                .andExpect(status().isOk())
+                .andExpect(content().string("true"));
+
+        // Verify
+        verify(applicationService, times(1)).isApplicationComplete(eq(testId));
+    }
+
+    @Test
+    @DisplayName("Check if application is complete - not found")
+    @WithMockUser(roles = {"OPERATIONS_STAFF"})
+    void isApplicationComplete_NotFound() throws Exception {
+        // Arrange
+        when(applicationService.isApplicationComplete(any(UUID.class)))
+                .thenThrow(new ApplicationNotFoundException("Application not found with ID: " + testId));
+
+        // Act & Assert
+        mockMvc.perform(get("/api/v1/applications/{id}/is-complete", testId))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.message", containsString("Application not found")));
+
+        // Verify
+        verify(applicationService, times(1)).isApplicationComplete(eq(testId));
+    }
+
+    @Test
+    @DisplayName("System admin can access all endpoints")
+    @WithMockUser(roles = {"SYSTEM_ADMIN"})
+    void systemAdmin_CanAccessAllEndpoints() throws Exception {
+        // Arrange
+        when(applicationService.getApplicationById(any(UUID.class)))
+                .thenReturn(responseDTO);
+        when(applicationService.createApplication(any(ApplicationRequestDTO.class)))
+                .thenReturn(responseDTO);
+        when(applicationService.updateApplication(any(UUID.class), any(ApplicationRequestDTO.class)))
+                .thenReturn(responseDTO);
+        doNothing().when(applicationService).deleteApplication(any(UUID.class));
+
+        // Act & Assert - Get
+        mockMvc.perform(get("/api/v1/applications/{id}", testId))
+                .andExpect(status().isOk());
+
+        // Act & Assert - Create
+        mockMvc.perform(post("/api/v1/applications")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(Map.of("status", newStatus))));
+                .content(objectMapper.writeValueAsString(validRequestDTO)))
+                .andExpect(status().isCreated());
 
-        // Then
-        response.andExpect(status().isOk())
-                .andExpect(jsonPath("$.id", is(applicationId.toString())))
-                .andExpect(jsonPath("$.status", is("APPROVED")))
-                .andDo(print());
-    }
-
-    @Test
-    @DisplayName("Test update application review status - success")
-    @WithMockUser(username = "testuser", authorities = {RoleConstants.ROLE_OPERATIONS_STAFF})
-    void testUpdateApplicationReviewStatus() throws Exception {
-        // Given
-        ReviewStatus newReviewStatus = ReviewStatus.IN_REVIEW;
-        applicationResponseDTO.setReviewStatus(newReviewStatus);
-        
-        given(applicationService.updateReviewStatus(eq(applicationId), eq(newReviewStatus)))
-                .willReturn(applicationResponseDTO);
-
-        // When
-        ResultActions response = mockMvc.perform(patch("/api/v1/applications/{id}/review-status", applicationId)
-                .with(csrf())
+        // Act & Assert - Update
+        mockMvc.perform(put("/api/v1/applications/{id}", testId)
                 .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(Map.of("reviewStatus", newReviewStatus))));
+                .content(objectMapper.writeValueAsString(validRequestDTO)))
+                .andExpect(status().isOk());
 
-        // Then
-        response.andExpect(status().isOk())
-                .andExpect(jsonPath("$.id", is(applicationId.toString())))
-                .andExpect(jsonPath("$.review_status", is("IN_REVIEW")))
-                .andDo(print());
-    }
+        // Act & Assert - Delete
+        mockMvc.perform(delete("/api/v1/applications/{id}", testId))
+                .andExpect(status().isNoContent());
 
-    @Test
-    @DisplayName("Test process application - success")
-    @WithMockUser(username = "testuser", authorities = {RoleConstants.ROLE_OPERATIONS_STAFF})
-    void testProcessApplication() throws Exception {
-        // Given
-        applicationResponseDTO.setStatus(ApplicationStatus.PROCESSING);
-        
-        given(applicationService.processApplication(applicationId))
-                .willReturn(applicationResponseDTO);
-
-        // When
-        ResultActions response = mockMvc.perform(post("/api/v1/applications/{id}/process", applicationId)
-                .with(csrf())
-                .contentType(MediaType.APPLICATION_JSON));
-
-        // Then
-        response.andExpect(status().isOk())
-                .andExpect(jsonPath("$.id", is(applicationId.toString())))
-                .andExpect(jsonPath("$.status", is("PROCESSING")))
-                .andDo(print());
-    }
-
-    @Test
-    @DisplayName("Test generate application reports - success")
-    @WithMockUser(username = "testuser", authorities = {RoleConstants.ROLE_OPERATIONS_STAFF})
-    void testGenerateReports() throws Exception {
-        // Given
-        given(applicationService.generateReports()).willReturn("Reports generated successfully");
-
-        // When
-        ResultActions response = mockMvc.perform(get("/api/v1/applications/reports")
-                .with(csrf())
-                .contentType(MediaType.APPLICATION_JSON));
-
-        // Then
-        response.andExpect(status().isOk())
-                .andExpect(jsonPath("$", is("Reports generated successfully")))
-                .andDo(print());
-    }
-
-    @Test
-    @DisplayName("Test get applications without authentication - unauthorized")
-    void testGetApplicationsUnauthorized() throws Exception {
-        // When
-        ResultActions response = mockMvc.perform(get("/api/v1/applications")
-                .with(csrf())
-                .contentType(MediaType.APPLICATION_JSON));
-
-        // Then
-        response.andExpect(status().isUnauthorized())
-                .andDo(print());
-    }
-
-    @Test
-    @DisplayName("Test get application statistics - success")
-    @WithMockUser(username = "testuser", authorities = {RoleConstants.ROLE_OPERATIONS_STAFF})
-    void testGetApplicationStatistics() throws Exception {
-        // Given
-        Map<String, Object> statistics = new HashMap<>();
-        statistics.put("totalApplications", 100);
-        statistics.put("pendingApplications", 25);
-        statistics.put("approvedApplications", 50);
-        statistics.put("rejectedApplications", 25);
-        statistics.put("averageProcessingTime", "2.5 days");
-        
-        given(applicationService.getStatistics()).willReturn(statistics);
-
-        // When
-        ResultActions response = mockMvc.perform(get("/api/v1/applications/statistics")
-                .with(csrf())
-                .contentType(MediaType.APPLICATION_JSON));
-
-        // Then
-        response.andExpect(status().isOk())
-                .andExpect(jsonPath("$.totalApplications", is(100)))
-                .andExpect(jsonPath("$.pendingApplications", is(25)))
-                .andExpect(jsonPath("$.approvedApplications", is(50)))
-                .andExpect(jsonPath("$.rejectedApplications", is(25)))
-                .andExpect(jsonPath("$.averageProcessingTime", is("2.5 days")))
-                .andDo(print());
-    }
-
-    @Test
-    @DisplayName("Test assign application to user - success")
-    @WithMockUser(username = "testuser", authorities = {RoleConstants.ROLE_OPERATIONS_STAFF})
-    void testAssignApplicationToUser() throws Exception {
-        // Given
-        String userId = "user123";
-        Map<String, Object> metadata = new HashMap<>(applicationResponseDTO.getMetadata());
-        metadata.put("assignedTo", userId);
-        applicationResponseDTO.setMetadata(metadata);
-        
-        given(applicationService.assignToUser(eq(applicationId), eq(userId)))
-                .willReturn(applicationResponseDTO);
-
-        // When
-        ResultActions response = mockMvc.perform(patch("/api/v1/applications/{id}/assign", applicationId)
-                .with(csrf())
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(Map.of("userId", userId))));
-
-        // Then
-        response.andExpect(status().isOk())
-                .andExpect(jsonPath("$.id", is(applicationId.toString())))
-                .andExpect(jsonPath("$.metadata.assignedTo", is(userId)))
-                .andDo(print());
-    }
-
-    @Test
-    @DisplayName("Test get applications by status - success")
-    @WithMockUser(username = "testuser", authorities = {RoleConstants.ROLE_OPERATIONS_STAFF})
-    void testGetApplicationsByStatus() throws Exception {
-        // Given
-        List<ApplicationResponseDTO> applications = Arrays.asList(applicationResponseDTO);
-        Page<ApplicationResponseDTO> page = new PageImpl<>(applications);
-        PageResponseDTO<ApplicationResponseDTO> pageResponse = PageResponseDTO.fromPage(page, "/api/v1/applications/status/PENDING");
-        
-        given(applicationService.findByStatus(eq(ApplicationStatus.PENDING), any(Pageable.class)))
-                .willReturn(pageResponse);
-
-        // When
-        ResultActions response = mockMvc.perform(get("/api/v1/applications/status/{status}", "PENDING")
-                .with(csrf())
-                .contentType(MediaType.APPLICATION_JSON));
-
-        // Then
-        response.andExpect(status().isOk())
-                .andExpect(jsonPath("$.content", hasSize(1)))
-                .andExpect(jsonPath("$.content[0].status", is("PENDING")))
-                .andDo(print());
-    }
-
-    @Test
-    @DisplayName("Test get applications by review status - success")
-    @WithMockUser(username = "testuser", authorities = {RoleConstants.ROLE_OPERATIONS_STAFF})
-    void testGetApplicationsByReviewStatus() throws Exception {
-        // Given
-        List<ApplicationResponseDTO> applications = Arrays.asList(applicationResponseDTO);
-        Page<ApplicationResponseDTO> page = new PageImpl<>(applications);
-        PageResponseDTO<ApplicationResponseDTO> pageResponse = PageResponseDTO.fromPage(page, "/api/v1/applications/review-status/NOT_REVIEWED");
-        
-        given(applicationService.findByReviewStatus(eq(ReviewStatus.NOT_REVIEWED), any(Pageable.class)))
-                .willReturn(pageResponse);
-
-        // When
-        ResultActions response = mockMvc.perform(get("/api/v1/applications/review-status/{status}", "NOT_REVIEWED")
-                .with(csrf())
-                .contentType(MediaType.APPLICATION_JSON));
-
-        // Then
-        response.andExpect(status().isOk())
-                .andExpect(jsonPath("$.content", hasSize(1)))
-                .andExpect(jsonPath("$.content[0].review_status", is("NOT_REVIEWED")))
-                .andDo(print());
+        // Verify
+        verify(applicationService, times(1)).getApplicationById(any(UUID.class));
+        verify(applicationService, times(1)).createApplication(any(ApplicationRequestDTO.class));
+        verify(applicationService, times(1)).updateApplication(any(UUID.class), any(ApplicationRequestDTO.class));
+        verify(applicationService, times(1)).deleteApplication(any(UUID.class));
     }
 }
