@@ -1,30 +1,35 @@
 package com.dollarfunding.mca.exception;
 
 import com.dollarfunding.mca.dto.ErrorResponseDTO;
-import jakarta.servlet.http.HttpServletRequest;
-import jakarta.validation.ConstraintViolation;
-import jakarta.validation.ConstraintViolationException;
+import com.dollarfunding.mca.util.Constants;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.dao.DataAccessException;
-import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.beans.TypeMismatchException;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
-import org.springframework.security.access.AccessDeniedException;
 import org.springframework.validation.BindException;
 import org.springframework.validation.FieldError;
+import org.springframework.validation.ObjectError;
 import org.springframework.web.HttpMediaTypeNotSupportedException;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ControllerAdvice;
 import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.context.request.ServletWebRequest;
+import org.springframework.web.context.request.WebRequest;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.servlet.NoHandlerFoundException;
+import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler;
 
+import javax.validation.ConstraintViolation;
+import javax.validation.ConstraintViolationException;
+import java.util.ArrayList;
 import java.util.List;
-import java.util.Set;
 
 /**
  * Global exception handler that catches and processes all exceptions thrown by the application.
@@ -36,533 +41,586 @@ import java.util.Set;
  * </p>
  */
 @ControllerAdvice
-public class GlobalExceptionHandler {
+public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
     /**
-     * Handles all BaseException subclasses with their specific HTTP status codes.
+     * Handle all custom exceptions that extend BaseException.
      *
-     * @param ex      The exception that was thrown
-     * @param request The current HTTP request
-     * @return ResponseEntity containing standardized error response
+     * @param ex      the exception to handle
+     * @param request the current request
+     * @return a ResponseEntity with appropriate status and error details
      */
     @ExceptionHandler(BaseException.class)
-    public ResponseEntity<ErrorResponseDTO> handleBaseException(BaseException ex, HttpServletRequest request) {
+    public ResponseEntity<Object> handleBaseException(BaseException ex, WebRequest request) {
         log.error("Base exception occurred: {}", ex.getMessage(), ex);
         
         ErrorResponseDTO errorResponse = ErrorResponseDTO.builder()
-                .status(ex.getHttpStatus().value())
-                .code(ex.getErrorCode())
+                .errorCode(ex.getErrorCode())
                 .message(ex.getMessage())
-                .path(request.getRequestURI())
-                .timestamp(java.time.LocalDateTime.now())
+                .status(ex.getStatusCode())
+                .path(getRequestPath(request))
                 .build();
         
-        return new ResponseEntity<>(errorResponse, ex.getHttpStatus());
+        return new ResponseEntity<>(errorResponse, HttpStatus.valueOf(ex.getStatusCode()));
     }
 
     /**
-     * Handles ResourceNotFoundException with 404 Not Found status.
+     * Handle ResourceNotFoundException specifically for more detailed logging.
      *
-     * @param ex      The exception that was thrown
-     * @param request The current HTTP request
-     * @return ResponseEntity containing standardized error response
+     * @param ex      the exception to handle
+     * @param request the current request
+     * @return a ResponseEntity with 404 status and error details
      */
     @ExceptionHandler(ResourceNotFoundException.class)
-    public ResponseEntity<ErrorResponseDTO> handleResourceNotFoundException(
-            ResourceNotFoundException ex, HttpServletRequest request) {
+    public ResponseEntity<Object> handleResourceNotFoundException(ResourceNotFoundException ex, WebRequest request) {
         log.warn("Resource not found: {}", ex.getMessage());
         
-        ErrorResponseDTO errorResponse = ErrorResponseDTO.of(
-                HttpStatus.NOT_FOUND,
-                ex.getErrorCode(),
-                ex.getMessage(),
-                ex.getMessage(),
-                request.getRequestURI()
-        );
+        ErrorResponseDTO errorResponse = ErrorResponseDTO.builder()
+                .errorCode(ex.getErrorCode())
+                .message(ex.getMessage())
+                .status(ex.getStatusCode())
+                .path(getRequestPath(request))
+                .build();
         
         return new ResponseEntity<>(errorResponse, HttpStatus.NOT_FOUND);
     }
 
     /**
-     * Handles ValidationException with 400 Bad Request status.
+     * Handle ValidationException specifically to include validation error details.
      *
-     * @param ex      The exception that was thrown
-     * @param request The current HTTP request
-     * @return ResponseEntity containing standardized error response with validation errors
+     * @param ex      the exception to handle
+     * @param request the current request
+     * @return a ResponseEntity with 400 status and validation error details
      */
     @ExceptionHandler(ValidationException.class)
-    public ResponseEntity<ErrorResponseDTO> handleValidationException(
-            ValidationException ex, HttpServletRequest request) {
-        log.warn("Validation error: {}", ex.getMessage());
+    public ResponseEntity<Object> handleValidationException(ValidationException ex, WebRequest request) {
+        log.warn("Validation exception: {}", ex.getMessage());
         
-        ErrorResponseDTO errorResponse = ErrorResponseDTO.of(
-                HttpStatus.BAD_REQUEST,
-                ex.getErrorCode(),
-                "Validation error",
-                ex.getMessage(),
-                request.getRequestURI()
-        );
+        ErrorResponseDTO.Builder builder = ErrorResponseDTO.builder()
+                .errorCode(ex.getErrorCode())
+                .message(ex.getMessage())
+                .status(ex.getStatusCode())
+                .path(getRequestPath(request));
         
-        // Add field-level validation errors if available
-        if (ex.getValidationErrors() != null && !ex.getValidationErrors().isEmpty()) {
+        // Add validation error details if available
+        if (ex.getValidationErrors() != null) {
             ex.getValidationErrors().forEach(error -> 
-                errorResponse.addValidationError(error.getField(), error.getMessage())
-            );
+                builder.addValidationError(error.getField(), error.getMessage(), error.getRejectedValue()));
         }
         
-        return new ResponseEntity<>(errorResponse, HttpStatus.BAD_REQUEST);
+        return new ResponseEntity<>(builder.build(), HttpStatus.BAD_REQUEST);
     }
 
     /**
-     * Handles BusinessRuleException with 422 Unprocessable Entity status.
+     * Handle BusinessRuleException specifically for business rule violations.
      *
-     * @param ex      The exception that was thrown
-     * @param request The current HTTP request
-     * @return ResponseEntity containing standardized error response
+     * @param ex      the exception to handle
+     * @param request the current request
+     * @return a ResponseEntity with 422 status and error details
      */
     @ExceptionHandler(BusinessRuleException.class)
-    public ResponseEntity<ErrorResponseDTO> handleBusinessRuleException(
-            BusinessRuleException ex, HttpServletRequest request) {
+    public ResponseEntity<Object> handleBusinessRuleException(BusinessRuleException ex, WebRequest request) {
         log.warn("Business rule violation: {}", ex.getMessage());
         
-        ErrorResponseDTO errorResponse = ErrorResponseDTO.of(
-                HttpStatus.UNPROCESSABLE_ENTITY,
-                ex.getErrorCode(),
-                "Business rule violation",
-                ex.getMessage(),
-                request.getRequestURI()
-        );
+        ErrorResponseDTO errorResponse = ErrorResponseDTO.builder()
+                .errorCode(ex.getErrorCode())
+                .message(ex.getMessage())
+                .status(ex.getStatusCode())
+                .path(getRequestPath(request))
+                .build();
         
         return new ResponseEntity<>(errorResponse, HttpStatus.UNPROCESSABLE_ENTITY);
     }
 
     /**
-     * Handles AuthorizationException with 403 Forbidden status.
+     * Handle AuthorizationException specifically for authorization failures.
      *
-     * @param ex      The exception that was thrown
-     * @param request The current HTTP request
-     * @return ResponseEntity containing standardized error response
+     * @param ex      the exception to handle
+     * @param request the current request
+     * @return a ResponseEntity with 403 status and error details
      */
     @ExceptionHandler(AuthorizationException.class)
-    public ResponseEntity<ErrorResponseDTO> handleAuthorizationException(
-            AuthorizationException ex, HttpServletRequest request) {
-        log.warn("Authorization error: {}", ex.getMessage());
+    public ResponseEntity<Object> handleAuthorizationException(AuthorizationException ex, WebRequest request) {
+        log.warn("Authorization failure: {}", ex.getMessage());
         
-        ErrorResponseDTO errorResponse = ErrorResponseDTO.of(
-                HttpStatus.FORBIDDEN,
-                ex.getErrorCode(),
-                "Authorization error",
-                ex.getMessage(),
-                request.getRequestURI()
-        );
+        ErrorResponseDTO errorResponse = ErrorResponseDTO.builder()
+                .errorCode(ex.getErrorCode())
+                .message(ex.getMessage())
+                .status(ex.getStatusCode())
+                .path(getRequestPath(request))
+                .build();
         
         return new ResponseEntity<>(errorResponse, HttpStatus.FORBIDDEN);
     }
 
     /**
-     * Handles DocumentProcessingException with 500 Internal Server Error status.
+     * Handle DocumentProcessingException specifically for document processing errors.
      *
-     * @param ex      The exception that was thrown
-     * @param request The current HTTP request
-     * @return ResponseEntity containing standardized error response
+     * @param ex      the exception to handle
+     * @param request the current request
+     * @return a ResponseEntity with 500 status and error details
      */
     @ExceptionHandler(DocumentProcessingException.class)
-    public ResponseEntity<ErrorResponseDTO> handleDocumentProcessingException(
-            DocumentProcessingException ex, HttpServletRequest request) {
+    public ResponseEntity<Object> handleDocumentProcessingException(DocumentProcessingException ex, WebRequest request) {
         log.error("Document processing error: {}", ex.getMessage(), ex);
         
-        ErrorResponseDTO errorResponse = ErrorResponseDTO.of(
-                HttpStatus.INTERNAL_SERVER_ERROR,
-                ex.getErrorCode(),
-                "Document processing error",
-                ex.getMessage(),
-                request.getRequestURI()
-        );
+        ErrorResponseDTO errorResponse = ErrorResponseDTO.builder()
+                .errorCode(ex.getErrorCode())
+                .message(ex.getMessage())
+                .status(ex.getStatusCode())
+                .path(getRequestPath(request))
+                .build();
         
         return new ResponseEntity<>(errorResponse, HttpStatus.INTERNAL_SERVER_ERROR);
     }
 
     /**
-     * Handles WebhookDeliveryException with 500 Internal Server Error status.
+     * Handle WebhookDeliveryException specifically for webhook delivery errors.
      *
-     * @param ex      The exception that was thrown
-     * @param request The current HTTP request
-     * @return ResponseEntity containing standardized error response
+     * @param ex      the exception to handle
+     * @param request the current request
+     * @return a ResponseEntity with 500 status and error details
      */
     @ExceptionHandler(WebhookDeliveryException.class)
-    public ResponseEntity<ErrorResponseDTO> handleWebhookDeliveryException(
-            WebhookDeliveryException ex, HttpServletRequest request) {
+    public ResponseEntity<Object> handleWebhookDeliveryException(WebhookDeliveryException ex, WebRequest request) {
         log.error("Webhook delivery error: {}", ex.getMessage(), ex);
         
-        ErrorResponseDTO errorResponse = ErrorResponseDTO.of(
-                HttpStatus.INTERNAL_SERVER_ERROR,
-                ex.getErrorCode(),
-                "Webhook delivery error",
-                ex.getMessage(),
-                request.getRequestURI()
-        );
+        ErrorResponseDTO errorResponse = ErrorResponseDTO.builder()
+                .errorCode(ex.getErrorCode())
+                .message(ex.getMessage())
+                .status(ex.getStatusCode())
+                .path(getRequestPath(request))
+                .build();
         
         return new ResponseEntity<>(errorResponse, HttpStatus.INTERNAL_SERVER_ERROR);
     }
 
     /**
-     * Handles Spring's MethodArgumentNotValidException for @Valid annotation validation failures.
+     * Handle constraint violation exceptions from Bean Validation API.
      *
-     * @param ex      The exception that was thrown
-     * @param request The current HTTP request
-     * @return ResponseEntity containing standardized error response with validation errors
-     */
-    @ExceptionHandler(MethodArgumentNotValidException.class)
-    public ResponseEntity<ErrorResponseDTO> handleMethodArgumentNotValid(
-            MethodArgumentNotValidException ex, HttpServletRequest request) {
-        log.warn("Method argument validation failed: {}", ex.getMessage());
-        
-        ErrorResponseDTO errorResponse = ErrorResponseDTO.of(
-                HttpStatus.BAD_REQUEST,
-                "VALIDATION_ERROR",
-                "Validation error",
-                "Method argument validation failed",
-                request.getRequestURI()
-        );
-        
-        // Add all field errors to the response
-        ex.getBindingResult().getFieldErrors().forEach(fieldError -> 
-            errorResponse.addValidationError(fieldError.getField(), fieldError.getDefaultMessage())
-        );
-        
-        return new ResponseEntity<>(errorResponse, HttpStatus.BAD_REQUEST);
-    }
-
-    /**
-     * Handles BindException for form binding validation failures.
-     *
-     * @param ex      The exception that was thrown
-     * @param request The current HTTP request
-     * @return ResponseEntity containing standardized error response with validation errors
-     */
-    @ExceptionHandler(BindException.class)
-    public ResponseEntity<ErrorResponseDTO> handleBindException(
-            BindException ex, HttpServletRequest request) {
-        log.warn("Binding error: {}", ex.getMessage());
-        
-        ErrorResponseDTO errorResponse = ErrorResponseDTO.of(
-                HttpStatus.BAD_REQUEST,
-                "BINDING_ERROR",
-                "Binding error",
-                "Form binding failed",
-                request.getRequestURI()
-        );
-        
-        // Add all field errors to the response
-        List<FieldError> fieldErrors = ex.getBindingResult().getFieldErrors();
-        fieldErrors.forEach(fieldError -> 
-            errorResponse.addValidationError(fieldError.getField(), fieldError.getDefaultMessage())
-        );
-        
-        return new ResponseEntity<>(errorResponse, HttpStatus.BAD_REQUEST);
-    }
-
-    /**
-     * Handles ConstraintViolationException for bean validation failures.
-     *
-     * @param ex      The exception that was thrown
-     * @param request The current HTTP request
-     * @return ResponseEntity containing standardized error response with validation errors
+     * @param ex      the exception to handle
+     * @param request the current request
+     * @return a ResponseEntity with 400 status and validation error details
      */
     @ExceptionHandler(ConstraintViolationException.class)
-    public ResponseEntity<ErrorResponseDTO> handleConstraintViolation(
-            ConstraintViolationException ex, HttpServletRequest request) {
+    public ResponseEntity<Object> handleConstraintViolation(ConstraintViolationException ex, WebRequest request) {
         log.warn("Constraint violation: {}", ex.getMessage());
         
-        ErrorResponseDTO errorResponse = ErrorResponseDTO.of(
-                HttpStatus.BAD_REQUEST,
-                "CONSTRAINT_VIOLATION",
-                "Constraint violation",
-                "Validation constraint violation",
-                request.getRequestURI()
-        );
+        List<String> errors = new ArrayList<>();
+        ErrorResponseDTO.Builder builder = ErrorResponseDTO.builder()
+                .errorCode(Constants.ErrorCode.VALIDATION_ERROR)
+                .message("Validation failed")
+                .status(HttpStatus.BAD_REQUEST.value())
+                .path(getRequestPath(request));
         
-        // Add all constraint violations to the response
-        Set<ConstraintViolation<?>> violations = ex.getConstraintViolations();
-        violations.forEach(violation -> {
+        for (ConstraintViolation<?> violation : ex.getConstraintViolations()) {
             String propertyPath = violation.getPropertyPath().toString();
-            String field = propertyPath.substring(propertyPath.lastIndexOf('.') + 1);
-            errorResponse.addValidationError(field, violation.getMessage());
-        });
+            String field = propertyPath.contains(".") ? 
+                    propertyPath.substring(propertyPath.lastIndexOf(".") + 1) : propertyPath;
+            
+            builder.addValidationError(field, violation.getMessage(), violation.getInvalidValue());
+            errors.add(field + ": " + violation.getMessage());
+        }
         
-        return new ResponseEntity<>(errorResponse, HttpStatus.BAD_REQUEST);
+        log.debug("Constraint violations: {}", String.join(", ", errors));
+        return new ResponseEntity<>(builder.build(), HttpStatus.BAD_REQUEST);
     }
 
     /**
-     * Handles MissingServletRequestParameterException for missing required request parameters.
+     * Handle method argument type mismatch exceptions.
      *
-     * @param ex      The exception that was thrown
-     * @param request The current HTTP request
-     * @return ResponseEntity containing standardized error response
-     */
-    @ExceptionHandler(MissingServletRequestParameterException.class)
-    public ResponseEntity<ErrorResponseDTO> handleMissingServletRequestParameter(
-            MissingServletRequestParameterException ex, HttpServletRequest request) {
-        log.warn("Missing request parameter: {}", ex.getMessage());
-        
-        ErrorResponseDTO errorResponse = ErrorResponseDTO.of(
-                HttpStatus.BAD_REQUEST,
-                "MISSING_PARAMETER",
-                "Missing parameter",
-                ex.getMessage(),
-                request.getRequestURI()
-        );
-        
-        errorResponse.addValidationError(ex.getParameterName(), "Parameter is required");
-        
-        return new ResponseEntity<>(errorResponse, HttpStatus.BAD_REQUEST);
-    }
-
-    /**
-     * Handles MethodArgumentTypeMismatchException for type conversion errors in method arguments.
-     *
-     * @param ex      The exception that was thrown
-     * @param request The current HTTP request
-     * @return ResponseEntity containing standardized error response
+     * @param ex      the exception to handle
+     * @param request the current request
+     * @return a ResponseEntity with 400 status and error details
      */
     @ExceptionHandler(MethodArgumentTypeMismatchException.class)
-    public ResponseEntity<ErrorResponseDTO> handleMethodArgumentTypeMismatch(
-            MethodArgumentTypeMismatchException ex, HttpServletRequest request) {
+    public ResponseEntity<Object> handleMethodArgumentTypeMismatch(MethodArgumentTypeMismatchException ex, WebRequest request) {
         log.warn("Method argument type mismatch: {}", ex.getMessage());
         
         String message = String.format(
                 "Parameter '%s' should be of type '%s'", 
                 ex.getName(), 
-                ex.getRequiredType() != null ? ex.getRequiredType().getSimpleName() : "unknown"
-        );
+                ex.getRequiredType() != null ? ex.getRequiredType().getSimpleName() : "unknown");
         
-        ErrorResponseDTO errorResponse = ErrorResponseDTO.of(
-                HttpStatus.BAD_REQUEST,
-                "TYPE_MISMATCH",
-                "Type mismatch",
-                message,
-                request.getRequestURI()
-        );
-        
-        errorResponse.addValidationError(ex.getName(), message);
+        ErrorResponseDTO errorResponse = ErrorResponseDTO.builder()
+                .errorCode(Constants.ErrorCode.VALIDATION_ERROR)
+                .message(message)
+                .status(HttpStatus.BAD_REQUEST.value())
+                .path(getRequestPath(request))
+                .addValidationError(ex.getName(), message, ex.getValue())
+                .build();
         
         return new ResponseEntity<>(errorResponse, HttpStatus.BAD_REQUEST);
     }
 
     /**
-     * Handles HttpMessageNotReadableException for malformed request body.
+     * Handle max upload size exceeded exceptions.
      *
-     * @param ex      The exception that was thrown
-     * @param request The current HTTP request
-     * @return ResponseEntity containing standardized error response
-     */
-    @ExceptionHandler(HttpMessageNotReadableException.class)
-    public ResponseEntity<ErrorResponseDTO> handleHttpMessageNotReadable(
-            HttpMessageNotReadableException ex, HttpServletRequest request) {
-        log.warn("Message not readable: {}", ex.getMessage());
-        
-        ErrorResponseDTO errorResponse = ErrorResponseDTO.of(
-                HttpStatus.BAD_REQUEST,
-                "MALFORMED_JSON",
-                "Malformed request",
-                "Request body is malformed or invalid JSON",
-                request.getRequestURI()
-        );
-        
-        return new ResponseEntity<>(errorResponse, HttpStatus.BAD_REQUEST);
-    }
-
-    /**
-     * Handles HttpRequestMethodNotSupportedException for unsupported HTTP methods.
-     *
-     * @param ex      The exception that was thrown
-     * @param request The current HTTP request
-     * @return ResponseEntity containing standardized error response
-     */
-    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
-    public ResponseEntity<ErrorResponseDTO> handleHttpRequestMethodNotSupported(
-            HttpRequestMethodNotSupportedException ex, HttpServletRequest request) {
-        log.warn("Method not supported: {}", ex.getMessage());
-        
-        StringBuilder supportedMethods = new StringBuilder();
-        if (ex.getSupportedMethods() != null) {
-            supportedMethods.append("Supported methods are: ");
-            for (String method : ex.getSupportedMethods()) {
-                supportedMethods.append(method).append(" ");
-            }
-        }
-        
-        ErrorResponseDTO errorResponse = ErrorResponseDTO.of(
-                HttpStatus.METHOD_NOT_ALLOWED,
-                "METHOD_NOT_ALLOWED",
-                "Method not allowed",
-                ex.getMessage() + ". " + supportedMethods.toString().trim(),
-                request.getRequestURI()
-        );
-        
-        return new ResponseEntity<>(errorResponse, HttpStatus.METHOD_NOT_ALLOWED);
-    }
-
-    /**
-     * Handles HttpMediaTypeNotSupportedException for unsupported media types.
-     *
-     * @param ex      The exception that was thrown
-     * @param request The current HTTP request
-     * @return ResponseEntity containing standardized error response
-     */
-    @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
-    public ResponseEntity<ErrorResponseDTO> handleHttpMediaTypeNotSupported(
-            HttpMediaTypeNotSupportedException ex, HttpServletRequest request) {
-        log.warn("Media type not supported: {}", ex.getMessage());
-        
-        ErrorResponseDTO errorResponse = ErrorResponseDTO.of(
-                HttpStatus.UNSUPPORTED_MEDIA_TYPE,
-                "UNSUPPORTED_MEDIA_TYPE",
-                "Unsupported media type",
-                ex.getMessage(),
-                request.getRequestURI()
-        );
-        
-        return new ResponseEntity<>(errorResponse, HttpStatus.UNSUPPORTED_MEDIA_TYPE);
-    }
-
-    /**
-     * Handles MaxUploadSizeExceededException for file upload size limit exceeded.
-     *
-     * @param ex      The exception that was thrown
-     * @param request The current HTTP request
-     * @return ResponseEntity containing standardized error response
+     * @param ex      the exception to handle
+     * @param request the current request
+     * @return a ResponseEntity with 413 status and error details
      */
     @ExceptionHandler(MaxUploadSizeExceededException.class)
-    public ResponseEntity<ErrorResponseDTO> handleMaxUploadSizeExceeded(
-            MaxUploadSizeExceededException ex, HttpServletRequest request) {
+    public ResponseEntity<Object> handleMaxUploadSizeExceeded(MaxUploadSizeExceededException ex, WebRequest request) {
         log.warn("Max upload size exceeded: {}", ex.getMessage());
         
-        ErrorResponseDTO errorResponse = ErrorResponseDTO.of(
-                HttpStatus.PAYLOAD_TOO_LARGE,
-                "PAYLOAD_TOO_LARGE",
-                "File too large",
-                "The uploaded file exceeds the maximum allowed size",
-                request.getRequestURI()
-        );
+        ErrorResponseDTO errorResponse = ErrorResponseDTO.builder()
+                .errorCode(Constants.ErrorCode.VALIDATION_ERROR)
+                .message("File size exceeds the maximum allowed limit")
+                .status(HttpStatus.PAYLOAD_TOO_LARGE.value())
+                .path(getRequestPath(request))
+                .build();
         
         return new ResponseEntity<>(errorResponse, HttpStatus.PAYLOAD_TOO_LARGE);
     }
 
     /**
-     * Handles AccessDeniedException for Spring Security access denied errors.
+     * Handle standard Java exceptions.
      *
-     * @param ex      The exception that was thrown
-     * @param request The current HTTP request
-     * @return ResponseEntity containing standardized error response
+     * @param ex      the exception to handle
+     * @param request the current request
+     * @return a ResponseEntity with 400 status and error details
      */
-    @ExceptionHandler(AccessDeniedException.class)
-    public ResponseEntity<ErrorResponseDTO> handleAccessDeniedException(
-            AccessDeniedException ex, HttpServletRequest request) {
-        log.warn("Access denied: {}", ex.getMessage());
+    @ExceptionHandler({IllegalArgumentException.class, IllegalStateException.class})
+    public ResponseEntity<Object> handleBadRequest(RuntimeException ex, WebRequest request) {
+        log.warn("Bad request: {}", ex.getMessage(), ex);
         
-        ErrorResponseDTO errorResponse = ErrorResponseDTO.of(
-                HttpStatus.FORBIDDEN,
-                "ACCESS_DENIED",
-                "Access denied",
-                "You do not have permission to access this resource",
-                request.getRequestURI()
-        );
-        
-        return new ResponseEntity<>(errorResponse, HttpStatus.FORBIDDEN);
-    }
-
-    /**
-     * Handles DataIntegrityViolationException for database constraint violations.
-     *
-     * @param ex      The exception that was thrown
-     * @param request The current HTTP request
-     * @return ResponseEntity containing standardized error response
-     */
-    @ExceptionHandler(DataIntegrityViolationException.class)
-    public ResponseEntity<ErrorResponseDTO> handleDataIntegrityViolation(
-            DataIntegrityViolationException ex, HttpServletRequest request) {
-        log.error("Data integrity violation: {}", ex.getMessage(), ex);
-        
-        ErrorResponseDTO errorResponse = ErrorResponseDTO.of(
-                HttpStatus.CONFLICT,
-                "DATA_INTEGRITY_VIOLATION",
-                "Data integrity violation",
-                "The operation would violate data integrity constraints",
-                request.getRequestURI()
-        );
-        
-        return new ResponseEntity<>(errorResponse, HttpStatus.CONFLICT);
-    }
-
-    /**
-     * Handles DataAccessException for database access errors.
-     *
-     * @param ex      The exception that was thrown
-     * @param request The current HTTP request
-     * @return ResponseEntity containing standardized error response
-     */
-    @ExceptionHandler(DataAccessException.class)
-    public ResponseEntity<ErrorResponseDTO> handleDataAccessException(
-            DataAccessException ex, HttpServletRequest request) {
-        log.error("Database error: {}", ex.getMessage(), ex);
-        
-        ErrorResponseDTO errorResponse = ErrorResponseDTO.of(
-                HttpStatus.INTERNAL_SERVER_ERROR,
-                "DATABASE_ERROR",
-                "Database error",
-                "An error occurred while accessing the database",
-                request.getRequestURI()
-        );
-        
-        return new ResponseEntity<>(errorResponse, HttpStatus.INTERNAL_SERVER_ERROR);
-    }
-
-    /**
-     * Handles IllegalArgumentException for invalid method arguments.
-     *
-     * @param ex      The exception that was thrown
-     * @param request The current HTTP request
-     * @return ResponseEntity containing standardized error response
-     */
-    @ExceptionHandler(IllegalArgumentException.class)
-    public ResponseEntity<ErrorResponseDTO> handleIllegalArgument(
-            IllegalArgumentException ex, HttpServletRequest request) {
-        log.warn("Illegal argument: {}", ex.getMessage());
-        
-        ErrorResponseDTO errorResponse = ErrorResponseDTO.of(
-                HttpStatus.BAD_REQUEST,
-                "ILLEGAL_ARGUMENT",
-                "Invalid argument",
-                ex.getMessage(),
-                request.getRequestURI()
-        );
+        ErrorResponseDTO errorResponse = ErrorResponseDTO.builder()
+                .errorCode(Constants.ErrorCode.VALIDATION_ERROR)
+                .message(ex.getMessage())
+                .status(HttpStatus.BAD_REQUEST.value())
+                .path(getRequestPath(request))
+                .build();
         
         return new ResponseEntity<>(errorResponse, HttpStatus.BAD_REQUEST);
     }
 
     /**
-     * Handles all other exceptions not specifically handled above.
+     * Handle all other exceptions not specifically handled above.
      *
-     * @param ex      The exception that was thrown
-     * @param request The current HTTP request
-     * @return ResponseEntity containing standardized error response
+     * @param ex      the exception to handle
+     * @param request the current request
+     * @return a ResponseEntity with 500 status and error details
      */
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<ErrorResponseDTO> handleAllUncaughtException(
-            Exception ex, HttpServletRequest request) {
+    public ResponseEntity<Object> handleAllUncaughtException(Exception ex, WebRequest request) {
         log.error("Uncaught exception: {}", ex.getMessage(), ex);
         
-        ErrorResponseDTO errorResponse = ErrorResponseDTO.of(
-                HttpStatus.INTERNAL_SERVER_ERROR,
-                "INTERNAL_SERVER_ERROR",
-                "Internal server error",
-                "An unexpected error occurred",
-                request.getRequestURI()
-        );
+        ErrorResponseDTO errorResponse = ErrorResponseDTO.builder()
+                .errorCode(Constants.ErrorCode.GENERAL_ERROR)
+                .message("An unexpected error occurred")
+                .status(HttpStatus.INTERNAL_SERVER_ERROR.value())
+                .path(getRequestPath(request))
+                .build();
         
         return new ResponseEntity<>(errorResponse, HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+
+    /**
+     * Override to handle method argument not valid exceptions.
+     *
+     * @param ex      the exception to handle
+     * @param headers the headers to be written to the response
+     * @param status  the selected response status
+     * @param request the current request
+     * @return a ResponseEntity with 400 status and validation error details
+     */
+    @Override
+    protected ResponseEntity<Object> handleMethodArgumentNotValid(
+            MethodArgumentNotValidException ex,
+            HttpHeaders headers,
+            HttpStatus status,
+            WebRequest request) {
+        
+        log.warn("Method argument validation failed: {}", ex.getMessage());
+        
+        List<String> errors = new ArrayList<>();
+        ErrorResponseDTO.Builder builder = ErrorResponseDTO.builder()
+                .errorCode(Constants.ErrorCode.VALIDATION_ERROR)
+                .message("Validation failed")
+                .status(status.value())
+                .path(getRequestPath(request));
+        
+        // Process field errors
+        for (FieldError error : ex.getBindingResult().getFieldErrors()) {
+            builder.addValidationError(error.getField(), error.getDefaultMessage(), error.getRejectedValue());
+            errors.add(error.getField() + ": " + error.getDefaultMessage());
+        }
+        
+        // Process global errors
+        for (ObjectError error : ex.getBindingResult().getGlobalErrors()) {
+            builder.addValidationError(error.getObjectName(), error.getDefaultMessage());
+            errors.add(error.getObjectName() + ": " + error.getDefaultMessage());
+        }
+        
+        log.debug("Validation errors: {}", String.join(", ", errors));
+        return new ResponseEntity<>(builder.build(), headers, status);
+    }
+
+    /**
+     * Override to handle missing servlet request parameter exceptions.
+     *
+     * @param ex      the exception to handle
+     * @param headers the headers to be written to the response
+     * @param status  the selected response status
+     * @param request the current request
+     * @return a ResponseEntity with 400 status and error details
+     */
+    @Override
+    protected ResponseEntity<Object> handleMissingServletRequestParameter(
+            MissingServletRequestParameterException ex,
+            HttpHeaders headers,
+            HttpStatus status,
+            WebRequest request) {
+        
+        log.warn("Missing request parameter: {}", ex.getMessage());
+        
+        String message = String.format("Parameter '%s' of type '%s' is required", 
+                ex.getParameterName(), ex.getParameterType());
+        
+        ErrorResponseDTO errorResponse = ErrorResponseDTO.builder()
+                .errorCode(Constants.ErrorCode.VALIDATION_ERROR)
+                .message(message)
+                .status(status.value())
+                .path(getRequestPath(request))
+                .addValidationError(ex.getParameterName(), message)
+                .build();
+        
+        return new ResponseEntity<>(errorResponse, headers, status);
+    }
+
+    /**
+     * Override to handle bind exceptions.
+     *
+     * @param ex      the exception to handle
+     * @param headers the headers to be written to the response
+     * @param status  the selected response status
+     * @param request the current request
+     * @return a ResponseEntity with 400 status and validation error details
+     */
+    @Override
+    protected ResponseEntity<Object> handleBindException(
+            BindException ex,
+            HttpHeaders headers,
+            HttpStatus status,
+            WebRequest request) {
+        
+        log.warn("Bind exception: {}", ex.getMessage());
+        
+        List<String> errors = new ArrayList<>();
+        ErrorResponseDTO.Builder builder = ErrorResponseDTO.builder()
+                .errorCode(Constants.ErrorCode.VALIDATION_ERROR)
+                .message("Binding failed")
+                .status(status.value())
+                .path(getRequestPath(request));
+        
+        // Process field errors
+        for (FieldError error : ex.getBindingResult().getFieldErrors()) {
+            builder.addValidationError(error.getField(), error.getDefaultMessage(), error.getRejectedValue());
+            errors.add(error.getField() + ": " + error.getDefaultMessage());
+        }
+        
+        // Process global errors
+        for (ObjectError error : ex.getBindingResult().getGlobalErrors()) {
+            builder.addValidationError(error.getObjectName(), error.getDefaultMessage());
+            errors.add(error.getObjectName() + ": " + error.getDefaultMessage());
+        }
+        
+        log.debug("Binding errors: {}", String.join(", ", errors));
+        return new ResponseEntity<>(builder.build(), headers, status);
+    }
+
+    /**
+     * Override to handle type mismatch exceptions.
+     *
+     * @param ex      the exception to handle
+     * @param headers the headers to be written to the response
+     * @param status  the selected response status
+     * @param request the current request
+     * @return a ResponseEntity with 400 status and error details
+     */
+    @Override
+    protected ResponseEntity<Object> handleTypeMismatch(
+            TypeMismatchException ex,
+            HttpHeaders headers,
+            HttpStatus status,
+            WebRequest request) {
+        
+        log.warn("Type mismatch: {}", ex.getMessage());
+        
+        String message = String.format(
+                "Value '%s' for property '%s' should be of type '%s'", 
+                ex.getValue(), 
+                ex.getPropertyName(), 
+                ex.getRequiredType() != null ? ex.getRequiredType().getSimpleName() : "unknown");
+        
+        ErrorResponseDTO errorResponse = ErrorResponseDTO.builder()
+                .errorCode(Constants.ErrorCode.VALIDATION_ERROR)
+                .message(message)
+                .status(status.value())
+                .path(getRequestPath(request))
+                .addValidationError(ex.getPropertyName(), message, ex.getValue())
+                .build();
+        
+        return new ResponseEntity<>(errorResponse, headers, status);
+    }
+
+    /**
+     * Override to handle HTTP message not readable exceptions.
+     *
+     * @param ex      the exception to handle
+     * @param headers the headers to be written to the response
+     * @param status  the selected response status
+     * @param request the current request
+     * @return a ResponseEntity with 400 status and error details
+     */
+    @Override
+    protected ResponseEntity<Object> handleHttpMessageNotReadable(
+            HttpMessageNotReadableException ex,
+            HttpHeaders headers,
+            HttpStatus status,
+            WebRequest request) {
+        
+        log.warn("Message not readable: {}", ex.getMessage());
+        
+        String message = "Malformed JSON request";
+        Throwable cause = ex.getCause();
+        if (cause != null) {
+            message = cause.getMessage();
+        }
+        
+        ErrorResponseDTO errorResponse = ErrorResponseDTO.builder()
+                .errorCode(Constants.ErrorCode.VALIDATION_ERROR)
+                .message(message)
+                .status(status.value())
+                .path(getRequestPath(request))
+                .build();
+        
+        return new ResponseEntity<>(errorResponse, headers, status);
+    }
+
+    /**
+     * Override to handle HTTP request method not supported exceptions.
+     *
+     * @param ex      the exception to handle
+     * @param headers the headers to be written to the response
+     * @param status  the selected response status
+     * @param request the current request
+     * @return a ResponseEntity with 405 status and error details
+     */
+    @Override
+    protected ResponseEntity<Object> handleHttpRequestMethodNotSupported(
+            HttpRequestMethodNotSupportedException ex,
+            HttpHeaders headers,
+            HttpStatus status,
+            WebRequest request) {
+        
+        log.warn("Method not supported: {}", ex.getMessage());
+        
+        StringBuilder builder = new StringBuilder();
+        builder.append(ex.getMethod());
+        builder.append(" method is not supported for this request. Supported methods are ");
+        
+        if (ex.getSupportedHttpMethods() != null) {
+            ex.getSupportedHttpMethods().forEach(method -> builder.append(method).append(", "));
+            // Remove trailing comma and space
+            if (builder.length() > 2) {
+                builder.setLength(builder.length() - 2);
+            }
+        }
+        
+        ErrorResponseDTO errorResponse = ErrorResponseDTO.builder()
+                .errorCode(Constants.ErrorCode.VALIDATION_ERROR)
+                .message(builder.toString())
+                .status(status.value())
+                .path(getRequestPath(request))
+                .build();
+        
+        return new ResponseEntity<>(errorResponse, headers, status);
+    }
+
+    /**
+     * Override to handle HTTP media type not supported exceptions.
+     *
+     * @param ex      the exception to handle
+     * @param headers the headers to be written to the response
+     * @param status  the selected response status
+     * @param request the current request
+     * @return a ResponseEntity with 415 status and error details
+     */
+    @Override
+    protected ResponseEntity<Object> handleHttpMediaTypeNotSupported(
+            HttpMediaTypeNotSupportedException ex,
+            HttpHeaders headers,
+            HttpStatus status,
+            WebRequest request) {
+        
+        log.warn("Media type not supported: {}", ex.getMessage());
+        
+        StringBuilder builder = new StringBuilder();
+        builder.append(ex.getContentType());
+        builder.append(" media type is not supported. Supported media types are ");
+        
+        if (ex.getSupportedMediaTypes() != null) {
+            ex.getSupportedMediaTypes().forEach(mediaType -> builder.append(mediaType).append(", "));
+            // Remove trailing comma and space
+            if (builder.length() > 2) {
+                builder.setLength(builder.length() - 2);
+            }
+        }
+        
+        ErrorResponseDTO errorResponse = ErrorResponseDTO.builder()
+                .errorCode(Constants.ErrorCode.VALIDATION_ERROR)
+                .message(builder.toString())
+                .status(status.value())
+                .path(getRequestPath(request))
+                .build();
+        
+        return new ResponseEntity<>(errorResponse, headers, status);
+    }
+
+    /**
+     * Override to handle no handler found exceptions.
+     *
+     * @param ex      the exception to handle
+     * @param headers the headers to be written to the response
+     * @param status  the selected response status
+     * @param request the current request
+     * @return a ResponseEntity with 404 status and error details
+     */
+    @Override
+    protected ResponseEntity<Object> handleNoHandlerFoundException(
+            NoHandlerFoundException ex,
+            HttpHeaders headers,
+            HttpStatus status,
+            WebRequest request) {
+        
+        log.warn("No handler found: {}", ex.getMessage());
+        
+        String message = String.format("No handler found for %s %s", ex.getHttpMethod(), ex.getRequestURL());
+        
+        ErrorResponseDTO errorResponse = ErrorResponseDTO.builder()
+                .errorCode(Constants.ErrorCode.NOT_FOUND)
+                .message(message)
+                .status(status.value())
+                .path(getRequestPath(request))
+                .build();
+        
+        return new ResponseEntity<>(errorResponse, headers, status);
+    }
+
+    /**
+     * Extract the request path from the WebRequest.
+     *
+     * @param request the current request
+     * @return the request path or "unknown" if not available
+     */
+    private String getRequestPath(WebRequest request) {
+        if (request instanceof ServletWebRequest) {
+            return ((ServletWebRequest) request).getRequest().getRequestURI();
+        }
+        return "unknown";
     }
 }
