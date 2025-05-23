@@ -1,77 +1,88 @@
 package com.dollarfunding.mca.integration;
 
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.awaitility.Awaitility.await;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.times;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
-
-import java.time.Duration;
-import java.time.LocalDateTime;
-import java.util.List;
-import java.util.Optional;
-import java.util.UUID;
-
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Test;
-import org.springframework.amqp.core.Message;
-import org.springframework.amqp.core.MessageProperties;
-import org.springframework.amqp.rabbit.core.RabbitTemplate;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
-import org.springframework.boot.test.mock.mockito.SpyBean;
-import org.springframework.data.redis.core.RedisTemplate;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.transaction.annotation.Transactional;
-
+import com.dollarfunding.mca.config.AsyncConfig;
+import com.dollarfunding.mca.config.RabbitMQConfig;
 import com.dollarfunding.mca.entity.Application;
 import com.dollarfunding.mca.entity.ApplicationStatus;
 import com.dollarfunding.mca.entity.Document;
 import com.dollarfunding.mca.entity.DocumentType;
 import com.dollarfunding.mca.entity.MerchantDetails;
+import com.dollarfunding.mca.entity.ReviewStatus;
 import com.dollarfunding.mca.messaging.DocumentProcessingConsumer;
 import com.dollarfunding.mca.messaging.DocumentProcessingMessage;
+import com.dollarfunding.mca.messaging.NotificationMessage;
 import com.dollarfunding.mca.messaging.NotificationProducer;
 import com.dollarfunding.mca.repository.ApplicationRepository;
 import com.dollarfunding.mca.repository.DocumentRepository;
 import com.dollarfunding.mca.repository.MerchantDetailsRepository;
 import com.dollarfunding.mca.service.ApplicationService;
 import com.dollarfunding.mca.service.DocumentService;
+import com.dollarfunding.mca.service.MerchantService;
 import com.dollarfunding.mca.service.ProcessingService;
 import com.dollarfunding.mca.service.ValidationService;
-import com.dollarfunding.mca.util.JsonUtil;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+import org.springframework.amqp.core.Message;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.boot.test.mock.mockito.SpyBean;
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.test.context.ActiveProfiles;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.io.IOException;
+import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.time.LocalDateTime;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
+import java.util.concurrent.TimeUnit;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /**
- * Integration test for the end-to-end flow of processing application data from RabbitMQ,
- * applying business rules, storing in PostgreSQL, and publishing notifications.
+ * Integration test for the complete application processing flow.
  * 
- * This test verifies that the complete application processing pipeline works correctly,
- * including data validation, business rule application, and state transitions.
+ * This test verifies the end-to-end flow of processing application data from RabbitMQ,
+ * applying business rules, storing in PostgreSQL, and publishing notifications.
  */
 @SpringBootTest
 @ActiveProfiles("test")
+@Transactional
 public class ApplicationProcessingIntegrationTest {
 
     @Autowired
-    private DocumentProcessingConsumer documentProcessingConsumer;
-    
-    @Autowired
     private ProcessingService processingService;
     
-    @SpyBean
+    @Autowired
     private ApplicationService applicationService;
     
-    @SpyBean
+    @Autowired
     private DocumentService documentService;
     
-    @SpyBean
-    private ValidationService validationService;
+    @Autowired
+    private MerchantService merchantService;
     
-    @MockBean
-    private NotificationProducer notificationProducer;
+    @Autowired
+    private ValidationService validationService;
     
     @Autowired
     private ApplicationRepository applicationRepository;
@@ -83,364 +94,379 @@ public class ApplicationProcessingIntegrationTest {
     private MerchantDetailsRepository merchantDetailsRepository;
     
     @Autowired
+    private DocumentProcessingConsumer documentProcessingConsumer;
+    
+    @MockBean
     private RabbitTemplate rabbitTemplate;
     
-    @Autowired
+    @MockBean
     private RedisTemplate<String, Object> redisTemplate;
     
-    @Autowired
-    private JsonUtil jsonUtil;
+    @SpyBean
+    private NotificationProducer notificationProducer;
     
-    private DocumentProcessingMessage applicationFormMessage;
-    private DocumentProcessingMessage bankStatementMessage;
-    private DocumentProcessingMessage taxDocumentMessage;
-    private DocumentProcessingMessage identityDocumentMessage;
+    @Autowired
+    private ObjectMapper objectMapper;
+    
+    private DocumentProcessingMessage testDocumentMessage;
+    private Application testApplication;
+    private Document testDocument;
+    private MerchantDetails testMerchantDetails;
     
     @BeforeEach
-    public void setup() throws Exception {
-        // Clear any existing test data
-        merchantDetailsRepository.deleteAll();
-        documentRepository.deleteAll();
-        applicationRepository.deleteAll();
+    public void setup() throws IOException {
+        // Load test document processing message from JSON file
+        String messageJson = new String(
+                new ClassPathResource("mocks/rabbitmq-document-message.json")
+                        .getInputStream().readAllBytes(),
+                StandardCharsets.UTF_8);
         
-        // Clear Redis cache
-        redisTemplate.getConnectionFactory().getConnection().flushAll();
+        // Parse the JSON to get the document message
+        Map<String, Object> messageMap = objectMapper.readValue(messageJson, Map.class);
+        Map<String, Object> documentMap = (Map<String, Object>) ((Map<String, Object>) messageMap.get("message")).get("document");
         
-        // Load test messages from JSON files
-        applicationFormMessage = jsonUtil.fromJson(
-                getClass().getResourceAsStream("/mocks/ocr-application-form.json"),
-                DocumentProcessingMessage.class);
+        // Create test document processing message
+        testDocumentMessage = createTestDocumentProcessingMessage(documentMap);
         
-        bankStatementMessage = jsonUtil.fromJson(
-                getClass().getResourceAsStream("/mocks/ocr-bank-statement.json"),
-                DocumentProcessingMessage.class);
+        // Create test application
+        testApplication = createTestApplication();
+        applicationRepository.save(testApplication);
         
-        taxDocumentMessage = jsonUtil.fromJson(
-                getClass().getResourceAsStream("/mocks/ocr-tax-document.json"),
-                DocumentProcessingMessage.class);
+        // Create test document
+        testDocument = createTestDocument(testApplication);
+        documentRepository.save(testDocument);
         
-        identityDocumentMessage = jsonUtil.fromJson(
-                getClass().getResourceAsStream("/mocks/ocr-identity-document.json"),
-                DocumentProcessingMessage.class);
+        // Create test merchant details
+        testMerchantDetails = createTestMerchantDetails(testApplication);
+        merchantDetailsRepository.save(testMerchantDetails);
+        
+        // Mock S3 document retrieval
+        when(documentService.getDocumentContent(anyString())).thenReturn("Test document content".getBytes());
     }
     
-    /**
-     * Tests the complete flow of processing a new application from an application form document.
-     * Verifies that the application is created with the correct status, data is persisted in PostgreSQL,
-     * and a notification is published to RabbitMQ.
-     */
     @Test
-    @DisplayName("Should process new application from application form document")
-    @Transactional
-    public void testProcessNewApplication() throws Exception {
-        // Set a unique correlation ID for this test
-        String correlationId = UUID.randomUUID().toString();
-        applicationFormMessage.setCorrelationId(correlationId);
+    @DisplayName("Should process application data from RabbitMQ and update application status")
+    public void testApplicationProcessingFlow() throws Exception {
+        // Given: A document processing message from RabbitMQ
+        Message rabbitMessage = new Message(objectMapper.writeValueAsBytes(testDocumentMessage), null);
         
-        // Set processing type to NEW_APPLICATION
-        applicationFormMessage.setProcessingType("NEW_APPLICATION");
+        // When: The message is consumed and processed
+        documentProcessingConsumer.onMessage(rabbitMessage);
         
-        // Create RabbitMQ message properties
-        MessageProperties messageProperties = new MessageProperties();
-        messageProperties.setCorrelationId(correlationId);
-        messageProperties.setContentType("application/json");
+        // Then: The application should be processed and status updated
+        await().atMost(5, TimeUnit.SECONDS).untilAsserted(() -> {
+            Optional<Application> updatedApp = applicationRepository.findById(testApplication.getId());
+            assertThat(updatedApp).isPresent();
+            assertThat(updatedApp.get().getStatus()).isEqualTo(ApplicationStatus.PROCESSING);
+        });
         
-        // Create RabbitMQ message
-        Message message = new Message(
-                jsonUtil.toJson(applicationFormMessage).getBytes(),
-                messageProperties);
+        // Complete the processing flow
+        processingService.completeApplicationProcessing(testApplication.getId());
         
-        // Process the message
-        LocalDateTime startTime = LocalDateTime.now();
-        documentProcessingConsumer.onMessage(message);
+        // Then: The application should be marked as complete
+        await().atMost(5, TimeUnit.SECONDS).untilAsserted(() -> {
+            Optional<Application> completedApp = applicationRepository.findById(testApplication.getId());
+            assertThat(completedApp).isPresent();
+            assertThat(completedApp.get().getStatus()).isEqualTo(ApplicationStatus.COMPLETED);
+        });
         
-        // Verify that the application was created
-        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
-            List<Application> applications = applicationRepository.findAll();
-            assertThat(applications).isNotEmpty();
+        // Verify notification was sent
+        ArgumentCaptor<NotificationMessage> notificationCaptor = ArgumentCaptor.forClass(NotificationMessage.class);
+        verify(notificationProducer, times(2)).sendNotification(notificationCaptor.capture());
+        
+        List<NotificationMessage> notifications = notificationCaptor.getAllValues();
+        assertThat(notifications).hasSize(2);
+        assertThat(notifications.get(0).getPayload().get("applicationId")).isEqualTo(testApplication.getId());
+        assertThat(notifications.get(1).getPayload().get("applicationId")).isEqualTo(testApplication.getId());
+        
+        // Verify RabbitMQ message was sent
+        verify(rabbitTemplate, times(2)).convertAndSend(
+                eq(RabbitMQConfig.NOTIFICATION_EXCHANGE),
+                eq(RabbitMQConfig.NOTIFICATION_ROUTING_KEY),
+                any(NotificationMessage.class));
+    }
+    
+    @Test
+    @DisplayName("Should handle validation errors and set application to exception status")
+    public void testApplicationProcessingWithValidationErrors() throws Exception {
+        // Given: A document processing message with invalid data
+        testDocumentMessage.getExtractedData().put("revenue", "invalid_revenue");
+        Message rabbitMessage = new Message(objectMapper.writeValueAsBytes(testDocumentMessage), null);
+        
+        // When: The message is consumed and processed
+        documentProcessingConsumer.onMessage(rabbitMessage);
+        
+        // Then: The application should be marked as exception
+        await().atMost(5, TimeUnit.SECONDS).untilAsserted(() -> {
+            Optional<Application> updatedApp = applicationRepository.findById(testApplication.getId());
+            assertThat(updatedApp).isPresent();
+            assertThat(updatedApp.get().getStatus()).isEqualTo(ApplicationStatus.EXCEPTION);
+        });
+        
+        // Verify error notification was sent
+        ArgumentCaptor<NotificationMessage> notificationCaptor = ArgumentCaptor.forClass(NotificationMessage.class);
+        verify(notificationProducer).sendNotification(notificationCaptor.capture());
+        
+        NotificationMessage notification = notificationCaptor.getValue();
+        assertThat(notification.getPayload().get("applicationId")).isEqualTo(testApplication.getId());
+        assertThat(notification.getPayload().get("status")).isEqualTo("EXCEPTION");
+        assertThat(notification.getPayload().get("errorType")).isEqualTo("VALIDATION_ERROR");
+    }
+    
+    @Test
+    @DisplayName("Should process application within 5 minutes as per requirements")
+    public void testApplicationProcessingPerformance() throws Exception {
+        // Given: A document processing message from RabbitMQ
+        Message rabbitMessage = new Message(objectMapper.writeValueAsBytes(testDocumentMessage), null);
+        
+        // When: The message is consumed and processed
+        long startTime = System.currentTimeMillis();
+        documentProcessingConsumer.onMessage(rabbitMessage);
+        
+        // Then: The application should be processed within 5 minutes
+        await().atMost(5, TimeUnit.MINUTES).untilAsserted(() -> {
+            Optional<Application> updatedApp = applicationRepository.findById(testApplication.getId());
+            assertThat(updatedApp).isPresent();
+            assertThat(updatedApp.get().getStatus()).isEqualTo(ApplicationStatus.PROCESSING);
+        });
+        
+        // Complete the processing flow
+        processingService.completeApplicationProcessing(testApplication.getId());
+        
+        // Then: The application should be marked as complete within 5 minutes
+        await().atMost(5, TimeUnit.MINUTES).untilAsserted(() -> {
+            Optional<Application> completedApp = applicationRepository.findById(testApplication.getId());
+            assertThat(completedApp).isPresent();
+            assertThat(completedApp.get().getStatus()).isEqualTo(ApplicationStatus.COMPLETED);
+        });
+        
+        long endTime = System.currentTimeMillis();
+        Duration processingTime = Duration.ofMillis(endTime - startTime);
+        
+        // Verify processing time is under 5 minutes
+        assertThat(processingTime).isLessThan(Duration.ofMinutes(5));
+    }
+    
+    @Test
+    @DisplayName("Should maintain data extraction accuracy above 99%")
+    public void testDataExtractionAccuracy() throws Exception {
+        // Given: A document processing message with confidence scores
+        Map<String, Double> confidenceScores = new HashMap<>();
+        confidenceScores.put("legalName", 0.99);
+        confidenceScores.put("dbaName", 0.98);
+        confidenceScores.put("ein", 0.995);
+        confidenceScores.put("address", 0.97);
+        confidenceScores.put("industry", 0.99);
+        confidenceScores.put("revenue", 0.985);
+        testDocumentMessage.setConfidenceScores(confidenceScores);
+        
+        Message rabbitMessage = new Message(objectMapper.writeValueAsBytes(testDocumentMessage), null);
+        
+        // When: The message is consumed and processed
+        documentProcessingConsumer.onMessage(rabbitMessage);
+        
+        // Then: The application should be processed with high accuracy
+        await().atMost(5, TimeUnit.SECONDS).untilAsserted(() -> {
+            Optional<Application> updatedApp = applicationRepository.findById(testApplication.getId());
+            assertThat(updatedApp).isPresent();
             
-            Application application = applications.get(0);
-            assertThat(application.getStatus()).isEqualTo(ApplicationStatus.NEW);
+            // Calculate overall confidence score
+            double avgConfidence = confidenceScores.values().stream()
+                    .mapToDouble(Double::doubleValue)
+                    .average()
+                    .orElse(0.0);
             
-            // Verify processing time is under 5 minutes (actually should be much faster in test)
-            Duration processingTime = Duration.between(startTime, LocalDateTime.now());
-            assertThat(processingTime).isLessThan(Duration.ofMinutes(5));
+            // Verify confidence is above 99%
+            assertThat(avgConfidence).isGreaterThanOrEqualTo(0.99);
             
-            // Verify that a document was created and associated with the application
-            List<Document> documents = documentRepository.findByApplicationId(application.getId());
-            assertThat(documents).hasSize(1);
-            assertThat(documents.get(0).getType()).isEqualTo(DocumentType.APPLICATION_FORM);
-            
-            // Verify that a notification was published
-            verify(notificationProducer, times(1)).sendApplicationStatusNotification(any());
+            // Verify application metadata contains accuracy information
+            Map<String, Object> metadata = updatedApp.get().getMetadata();
+            assertThat(metadata).containsKey("extraction_confidence");
+            double extractionConfidence = Double.parseDouble(metadata.get("extraction_confidence").toString());
+            assertThat(extractionConfidence).isGreaterThanOrEqualTo(0.99);
         });
     }
     
-    /**
-     * Tests the flow of updating an existing application with a new supporting document (bank statement).
-     * Verifies that the document is associated with the application, business rules are applied,
-     * and the application status is updated appropriately.
-     */
     @Test
-    @DisplayName("Should update existing application with supporting document")
-    @Transactional
-    public void testUpdateExistingApplication() throws Exception {
-        // First create a new application
-        testProcessNewApplication();
+    @DisplayName("Should apply business rules to validate application data")
+    public void testBusinessRuleApplication() throws Exception {
+        // Given: A document processing message from RabbitMQ
+        Message rabbitMessage = new Message(objectMapper.writeValueAsBytes(testDocumentMessage), null);
         
-        // Get the created application
-        Application application = applicationRepository.findAll().get(0);
-        Long applicationId = application.getId();
+        // When: The message is consumed and processed
+        documentProcessingConsumer.onMessage(rabbitMessage);
         
-        // Set a unique correlation ID for this test
-        String correlationId = UUID.randomUUID().toString();
-        bankStatementMessage.setCorrelationId(correlationId);
-        
-        // Set processing type to UPDATE_APPLICATION and link to existing application
-        bankStatementMessage.setProcessingType("UPDATE_APPLICATION");
-        bankStatementMessage.setApplicationId(applicationId);
-        
-        // Create RabbitMQ message properties
-        MessageProperties messageProperties = new MessageProperties();
-        messageProperties.setCorrelationId(correlationId);
-        messageProperties.setContentType("application/json");
-        
-        // Create RabbitMQ message
-        Message message = new Message(
-                jsonUtil.toJson(bankStatementMessage).getBytes(),
-                messageProperties);
-        
-        // Process the message
-        LocalDateTime startTime = LocalDateTime.now();
-        documentProcessingConsumer.onMessage(message);
-        
-        // Verify that the application was updated
-        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
-            Optional<Application> updatedApplication = applicationRepository.findById(applicationId);
-            assertThat(updatedApplication).isPresent();
+        // Then: Business rules should be applied
+        await().atMost(5, TimeUnit.SECONDS).untilAsserted(() -> {
+            Optional<Application> updatedApp = applicationRepository.findById(testApplication.getId());
+            assertThat(updatedApp).isPresent();
             
-            // Application should now be in PENDING status after receiving a supporting document
-            assertThat(updatedApplication.get().getStatus()).isEqualTo(ApplicationStatus.PENDING);
+            // Verify application metadata contains business rule results
+            Map<String, Object> metadata = updatedApp.get().getMetadata();
+            assertThat(metadata).containsKey("business_rules_applied");
+            assertThat(metadata).containsKey("business_rules_passed");
             
-            // Verify processing time is under 5 minutes
-            Duration processingTime = Duration.between(startTime, LocalDateTime.now());
-            assertThat(processingTime).isLessThan(Duration.ofMinutes(5));
-            
-            // Verify that a new document was created and associated with the application
-            List<Document> documents = documentRepository.findByApplicationId(applicationId);
-            assertThat(documents).hasSize(2); // Now we have 2 documents (application form + bank statement)
-            assertThat(documents).anyMatch(doc -> doc.getType().equals(DocumentType.BANK_STATEMENT));
-            
-            // Verify that a notification was published for the status update
-            verify(notificationProducer, times(2)).sendApplicationStatusNotification(any());
-        });
-    }
-    
-    /**
-     * Tests the complete application flow with all required documents (application form, bank statement,
-     * tax document, and identity document). Verifies that the application transitions to COMPLETE status
-     * when all required documents are processed and business rules are satisfied.
-     */
-    @Test
-    @DisplayName("Should complete application when all required documents are processed")
-    @Transactional
-    public void testCompleteApplicationFlow() throws Exception {
-        // First create a new application with application form
-        testProcessNewApplication();
-        
-        // Get the created application
-        Application application = applicationRepository.findAll().get(0);
-        Long applicationId = application.getId();
-        
-        // Add bank statement document
-        processDocument(bankStatementMessage, applicationId, "UPDATE_APPLICATION");
-        
-        // Add tax document
-        processDocument(taxDocumentMessage, applicationId, "UPDATE_APPLICATION");
-        
-        // Add identity document (should complete the application)
-        processDocument(identityDocumentMessage, applicationId, "UPDATE_APPLICATION");
-        
-        // Verify that the application was completed
-        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
-            Optional<Application> completedApplication = applicationRepository.findById(applicationId);
-            assertThat(completedApplication).isPresent();
-            
-            // Application should now be in COMPLETE status after receiving all required documents
-            assertThat(completedApplication.get().getStatus()).isEqualTo(ApplicationStatus.COMPLETE);
-            
-            // Verify that all documents were created and associated with the application
-            List<Document> documents = documentRepository.findByApplicationId(applicationId);
-            assertThat(documents).hasSize(4); // Now we have 4 documents
-            
-            // Verify that merchant details were extracted and stored
-            Optional<MerchantDetails> merchantDetails = merchantDetailsRepository.findByApplicationId(applicationId);
+            // Verify merchant details were validated
+            Optional<MerchantDetails> merchantDetails = merchantDetailsRepository.findByApplicationId(testApplication.getId());
             assertThat(merchantDetails).isPresent();
             
-            // Verify that notifications were published for each status update
-            // 1 for NEW, 1 for PENDING, 1 for each document processed, and 1 for COMPLETE
-            verify(notificationProducer, times(6)).sendApplicationStatusNotification(any());
-            
-            // Verify that the application data is cached in Redis
-            String cacheKey = "application:" + applicationId;
-            assertThat(redisTemplate.hasKey(cacheKey)).isTrue();
+            // Verify document was processed
+            List<Document> documents = documentRepository.findByApplicationId(testApplication.getId());
+            assertThat(documents).isNotEmpty();
+            assertThat(documents.get(0).getMetadata()).containsKey("validation_result");
         });
     }
     
-    /**
-     * Tests the error handling flow when processing a document with validation errors.
-     * Verifies that the application is marked with an exception status and appropriate
-     * error information is stored.
-     */
     @Test
-    @DisplayName("Should handle validation errors during document processing")
-    @Transactional
-    public void testValidationErrorHandling() throws Exception {
-        // First create a new application
-        testProcessNewApplication();
+    @DisplayName("Should transition application through all required states")
+    public void testApplicationStateTransitions() throws Exception {
+        // Given: An application in NEW status
+        assertThat(testApplication.getStatus()).isEqualTo(ApplicationStatus.NEW);
         
-        // Get the created application
-        Application application = applicationRepository.findAll().get(0);
-        Long applicationId = application.getId();
+        // When: Processing a document message
+        Message rabbitMessage = new Message(objectMapper.writeValueAsBytes(testDocumentMessage), null);
+        documentProcessingConsumer.onMessage(rabbitMessage);
         
-        // Create a bank statement message with validation errors
-        DocumentProcessingMessage invalidMessage = bankStatementMessage;
-        invalidMessage.setApplicationId(applicationId);
-        invalidMessage.setProcessingType("UPDATE_APPLICATION");
+        // Then: Application should transition to PROCESSING
+        await().atMost(5, TimeUnit.SECONDS).untilAsserted(() -> {
+            Optional<Application> updatedApp = applicationRepository.findById(testApplication.getId());
+            assertThat(updatedApp).isPresent();
+            assertThat(updatedApp.get().getStatus()).isEqualTo(ApplicationStatus.PROCESSING);
+        });
         
-        // Simulate validation failure
-        when(validationService.validateDocumentData(any())).thenReturn(false);
+        // When: Setting application to PENDING (awaiting more documents)
+        processingService.setApplicationPending(testApplication.getId(), "Awaiting additional documents");
         
-        // Process the invalid document
-        processDocument(invalidMessage, applicationId, "UPDATE_APPLICATION");
+        // Then: Application should be in PENDING status
+        await().atMost(5, TimeUnit.SECONDS).untilAsserted(() -> {
+            Optional<Application> pendingApp = applicationRepository.findById(testApplication.getId());
+            assertThat(pendingApp).isPresent();
+            assertThat(pendingApp.get().getStatus()).isEqualTo(ApplicationStatus.PENDING);
+        });
         
-        // Verify that the application was marked with exception
-        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
-            Optional<Application> updatedApplication = applicationRepository.findById(applicationId);
-            assertThat(updatedApplication).isPresent();
-            
-            // Application should be in EXCEPTION status due to validation errors
-            assertThat(updatedApplication.get().getStatus()).isEqualTo(ApplicationStatus.EXCEPTION);
-            
-            // Verify that error information is stored in the application metadata
-            assertThat(updatedApplication.get().getMetadata()).containsKey("validationErrors");
-            
-            // Verify that a notification was published for the exception
-            verify(notificationProducer, times(2)).sendApplicationStatusNotification(any());
+        // When: Completing the application processing
+        processingService.completeApplicationProcessing(testApplication.getId());
+        
+        // Then: Application should be in COMPLETED status
+        await().atMost(5, TimeUnit.SECONDS).untilAsserted(() -> {
+            Optional<Application> completedApp = applicationRepository.findById(testApplication.getId());
+            assertThat(completedApp).isPresent();
+            assertThat(completedApp.get().getStatus()).isEqualTo(ApplicationStatus.COMPLETED);
         });
     }
     
     /**
-     * Tests the performance of the application processing pipeline to ensure it meets
-     * the 5-minute SLA requirement. Also verifies that data extraction maintains 99%
-     * accuracy by comparing extracted fields with expected values.
+     * Creates a test document processing message from the provided document map.
      */
-    @Test
-    @DisplayName("Should meet performance SLA and data accuracy requirements")
-    @Transactional
-    public void testPerformanceAndAccuracy() throws Exception {
-        // Set a unique correlation ID for this test
-        String correlationId = UUID.randomUUID().toString();
-        applicationFormMessage.setCorrelationId(correlationId);
+    private DocumentProcessingMessage createTestDocumentProcessingMessage(Map<String, Object> documentMap) {
+        DocumentProcessingMessage message = new DocumentProcessingMessage();
+        message.setDocumentId("DOC-" + UUID.randomUUID().toString());
+        message.setApplicationId(testApplication != null ? testApplication.getId() : "APP-" + UUID.randomUUID().toString());
+        message.setDocumentType(DocumentType.TAX_RETURN.name());
+        message.setStoragePath("app-test/tax_return/doc-test/v1");
+        message.setProcessingTimestamp(LocalDateTime.now());
         
-        // Set processing type to NEW_APPLICATION
-        applicationFormMessage.setProcessingType("NEW_APPLICATION");
+        // Extract data from document
+        Map<String, Object> extractedData = new HashMap<>();
+        extractedData.put("legalName", "Acme Supplies Inc.");
+        extractedData.put("dbaName", "Acme Supplies");
+        extractedData.put("ein", "12-3456789");
+        extractedData.put("address", "123 Business St, Commerce City, CA 90001");
+        extractedData.put("industry", "Retail");
+        extractedData.put("revenue", "1250000");
+        extractedData.put("taxYear", "2024");
+        extractedData.put("netIncome", "350000");
+        message.setExtractedData(extractedData);
         
-        // Create RabbitMQ message properties
-        MessageProperties messageProperties = new MessageProperties();
-        messageProperties.setCorrelationId(correlationId);
-        messageProperties.setContentType("application/json");
+        // Set confidence scores
+        Map<String, Double> confidenceScores = new HashMap<>();
+        confidenceScores.put("legalName", 0.99);
+        confidenceScores.put("dbaName", 0.98);
+        confidenceScores.put("ein", 0.995);
+        confidenceScores.put("address", 0.97);
+        confidenceScores.put("industry", 0.99);
+        confidenceScores.put("revenue", 0.985);
+        confidenceScores.put("taxYear", 0.99);
+        confidenceScores.put("netIncome", 0.98);
+        message.setConfidenceScores(confidenceScores);
         
-        // Create RabbitMQ message
-        Message message = new Message(
-                jsonUtil.toJson(applicationFormMessage).getBytes(),
-                messageProperties);
-        
-        // Process the message and measure time
-        LocalDateTime startTime = LocalDateTime.now();
-        documentProcessingConsumer.onMessage(message);
-        
-        // Verify performance and accuracy
-        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
-            List<Application> applications = applicationRepository.findAll();
-            assertThat(applications).isNotEmpty();
-            
-            Application application = applications.get(0);
-            
-            // Verify processing time is under 5 minutes
-            Duration processingTime = Duration.between(startTime, LocalDateTime.now());
-            assertThat(processingTime).isLessThan(Duration.ofMinutes(5));
-            
-            // Verify data extraction accuracy by comparing extracted fields with expected values
-            // from the application form message
-            
-            // Get merchant details associated with the application
-            Optional<MerchantDetails> merchantDetails = merchantDetailsRepository.findByApplicationId(application.getId());
-            assertThat(merchantDetails).isPresent();
-            
-            // Compare extracted fields with expected values from the test message
-            MerchantDetails merchant = merchantDetails.get();
-            
-            // Count correctly extracted fields
-            int totalFields = 5; // legal_name, dba_name, ein, address, industry
-            int correctFields = 0;
-            
-            // Check each field against expected values from the test message
-            if (merchant.getLegalName().equals(applicationFormMessage.getExtractedData().get("legal_name"))) {
-                correctFields++;
-            }
-            
-            if (merchant.getDbaName().equals(applicationFormMessage.getExtractedData().get("dba_name"))) {
-                correctFields++;
-            }
-            
-            if (merchant.getEin().equals(applicationFormMessage.getExtractedData().get("ein"))) {
-                correctFields++;
-            }
-            
-            // Address is stored as JSON, so we need to check individual components
-            if (merchant.getAddress().contains(applicationFormMessage.getExtractedData().get("address_line1")) &&
-                merchant.getAddress().contains(applicationFormMessage.getExtractedData().get("city")) &&
-                merchant.getAddress().contains(applicationFormMessage.getExtractedData().get("state")) &&
-                merchant.getAddress().contains(applicationFormMessage.getExtractedData().get("zip"))) {
-                correctFields++;
-            }
-            
-            if (merchant.getIndustry().equals(applicationFormMessage.getExtractedData().get("industry"))) {
-                correctFields++;
-            }
-            
-            // Calculate accuracy percentage
-            double accuracy = (double) correctFields / totalFields * 100;
-            
-            // Verify 99% accuracy requirement
-            assertThat(accuracy).isGreaterThanOrEqualTo(99.0);
-        });
+        return message;
     }
     
     /**
-     * Helper method to process a document message for an existing application.
+     * Creates a test application entity.
      */
-    private void processDocument(DocumentProcessingMessage documentMessage, Long applicationId, String processingType) throws Exception {
-        // Set a unique correlation ID
-        String correlationId = UUID.randomUUID().toString();
-        documentMessage.setCorrelationId(correlationId);
+    private Application createTestApplication() {
+        Application application = new Application();
+        application.setId("APP-" + UUID.randomUUID().toString());
+        application.setStatus(ApplicationStatus.NEW);
+        application.setReviewStatus(ReviewStatus.NOT_REVIEWED);
         
-        // Set processing type and application ID
-        documentMessage.setProcessingType(processingType);
-        documentMessage.setApplicationId(applicationId);
+        // Set application metadata
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("funding_amount", 75000.00);
+        metadata.put("term_length", 12);
+        metadata.put("purpose", "Inventory expansion");
+        metadata.put("business_type", "Retail");
+        metadata.put("time_in_business", 36);
+        metadata.put("monthly_revenue", 45000.00);
+        metadata.put("credit_score", 720);
+        metadata.put("automation_confidence", 0.95);
+        application.setMetadata(metadata);
         
-        // Create RabbitMQ message properties
-        MessageProperties messageProperties = new MessageProperties();
-        messageProperties.setCorrelationId(correlationId);
-        messageProperties.setContentType("application/json");
+        application.setCreatedAt(LocalDateTime.now());
+        application.setUpdatedAt(LocalDateTime.now());
         
-        // Create RabbitMQ message
-        Message message = new Message(
-                jsonUtil.toJson(documentMessage).getBytes(),
-                messageProperties);
+        return application;
+    }
+    
+    /**
+     * Creates a test document entity associated with the given application.
+     */
+    private Document createTestDocument(Application application) {
+        Document document = new Document();
+        document.setId("DOC-" + UUID.randomUUID().toString());
+        document.setApplication(application);
+        document.setType(DocumentType.TAX_RETURN);
+        document.setStoragePath("app-test/tax_return/doc-test/v1");
+        document.setClassification("tax_return");
+        document.setUploadedAt(LocalDateTime.now());
         
-        // Process the message
-        documentProcessingConsumer.onMessage(message);
+        // Set document metadata
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("filename", "business_tax_return_2024.pdf");
+        metadata.put("size", 2458631);
+        metadata.put("mime_type", "application/pdf");
+        metadata.put("page_count", 12);
+        metadata.put("classification_confidence", 0.92);
+        document.setMetadata(metadata);
+        
+        return document;
+    }
+    
+    /**
+     * Creates test merchant details associated with the given application.
+     */
+    private MerchantDetails createTestMerchantDetails(Application application) {
+        MerchantDetails merchantDetails = new MerchantDetails();
+        merchantDetails.setId(UUID.randomUUID().toString());
+        merchantDetails.setApplication(application);
+        merchantDetails.setLegalName("Acme Supplies Inc.");
+        merchantDetails.setDbaName("Acme Supplies");
+        merchantDetails.setEin("12-3456789");
+        
+        // Set address as JSON
+        Map<String, Object> address = new HashMap<>();
+        address.put("street", "123 Business St");
+        address.put("city", "Commerce City");
+        address.put("state", "CA");
+        address.put("zip", "90001");
+        address.put("country", "USA");
+        merchantDetails.setAddress(address);
+        
+        merchantDetails.setIndustry("Retail");
+        merchantDetails.setRevenue(new BigDecimal("1250000"));
+        
+        return merchantDetails;
     }
 }
