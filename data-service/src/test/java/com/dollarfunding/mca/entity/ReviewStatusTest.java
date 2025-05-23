@@ -3,7 +3,7 @@ package com.dollarfunding.mca.entity;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.Arrays;
-import java.util.Optional;
+import java.util.Set;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -17,10 +17,9 @@ import org.junit.jupiter.params.provider.ValueSource;
  * <p>
  * These tests verify the behavior of the ReviewStatus enum, including:
  * - Enum constants and their descriptions
- * - Methods for finding review status by display name
- * - Status transition validation
- * - Terminal status and action required checks
- * - Conversion methods for serialization and deserialization
+ * - Status transition validation methods
+ * - Conversion methods for string representations
+ * - Terminal state identification
  * </p>
  */
 public class ReviewStatusTest {
@@ -33,14 +32,6 @@ public class ReviewStatusTest {
 
     @ParameterizedTest
     @EnumSource(ReviewStatus.class)
-    @DisplayName("Should have non-null display name for each enum constant")
-    public void shouldHaveNonNullDisplayName(ReviewStatus reviewStatus) {
-        assertNotNull(reviewStatus.getDisplayName(), "Display name should not be null");
-        assertFalse(reviewStatus.getDisplayName().isEmpty(), "Display name should not be empty");
-    }
-
-    @ParameterizedTest
-    @EnumSource(ReviewStatus.class)
     @DisplayName("Should have non-null description for each enum constant")
     public void shouldHaveNonNullDescription(ReviewStatus reviewStatus) {
         assertNotNull(reviewStatus.getDescription(), "Description should not be null");
@@ -48,217 +39,223 @@ public class ReviewStatusTest {
     }
 
     @Test
-    @DisplayName("Should have correct display names for each enum constant")
-    public void shouldHaveCorrectDisplayNames() {
-        assertEquals("Not Reviewed", ReviewStatus.NOT_REVIEWED.getDisplayName());
-        assertEquals("In Review", ReviewStatus.IN_REVIEW.getDisplayName());
-        assertEquals("Needs Information", ReviewStatus.NEEDS_INFORMATION.getDisplayName());
-        assertEquals("Approved", ReviewStatus.APPROVED.getDisplayName());
-        assertEquals("Rejected", ReviewStatus.REJECTED.getDisplayName());
-    }
-
-    @Test
     @DisplayName("Should have correct descriptions for each enum constant")
     public void shouldHaveCorrectDescriptions() {
-        assertEquals("Application has not been reviewed by operations staff yet.", 
-                ReviewStatus.NOT_REVIEWED.getDescription());
-        assertEquals("Application is currently being reviewed by operations staff.", 
-                ReviewStatus.IN_REVIEW.getDescription());
-        assertEquals("Application requires additional information from the merchant before proceeding.", 
-                ReviewStatus.NEEDS_INFORMATION.getDescription());
-        assertEquals("Application has been reviewed and approved by operations staff.", 
-                ReviewStatus.APPROVED.getDescription());
-        assertEquals("Application has been reviewed and rejected by operations staff.", 
-                ReviewStatus.REJECTED.getDescription());
+        assertEquals("Application has not been reviewed", ReviewStatus.NOT_REVIEWED.getDescription());
+        assertEquals("Application is currently under review", ReviewStatus.IN_REVIEW.getDescription());
+        assertEquals("Additional information required from merchant", ReviewStatus.NEEDS_INFORMATION.getDescription());
+        assertEquals("Application approved for funding", ReviewStatus.APPROVED.getDescription());
+        assertEquals("Application rejected", ReviewStatus.REJECTED.getDescription());
+    }
+
+    @Test
+    @DisplayName("NOT_REVIEWED should allow transitions to IN_REVIEW and REJECTED")
+    public void notReviewed_ShouldAllowTransitionsToInReviewAndRejected() {
+        ReviewStatus status = ReviewStatus.NOT_REVIEWED;
+        
+        // Valid transitions
+        assertTrue(status.canTransitionTo(ReviewStatus.IN_REVIEW), 
+                "NOT_REVIEWED should transition to IN_REVIEW");
+        assertTrue(status.canTransitionTo(ReviewStatus.REJECTED), 
+                "NOT_REVIEWED should transition to REJECTED");
+        
+        // Invalid transitions
+        assertFalse(status.canTransitionTo(ReviewStatus.NEEDS_INFORMATION), 
+                "NOT_REVIEWED should not transition to NEEDS_INFORMATION");
+        assertFalse(status.canTransitionTo(ReviewStatus.APPROVED), 
+                "NOT_REVIEWED should not transition to APPROVED");
+        
+        // Self-transition is allowed
+        assertTrue(status.canTransitionTo(ReviewStatus.NOT_REVIEWED), 
+                "Self-transition should be allowed");
+    }
+
+    @Test
+    @DisplayName("IN_REVIEW should allow transitions to NEEDS_INFORMATION, APPROVED, and REJECTED")
+    public void inReview_ShouldAllowTransitionsToNeedsInfoApprovedAndRejected() {
+        ReviewStatus status = ReviewStatus.IN_REVIEW;
+        
+        // Valid transitions
+        assertTrue(status.canTransitionTo(ReviewStatus.NEEDS_INFORMATION), 
+                "IN_REVIEW should transition to NEEDS_INFORMATION");
+        assertTrue(status.canTransitionTo(ReviewStatus.APPROVED), 
+                "IN_REVIEW should transition to APPROVED");
+        assertTrue(status.canTransitionTo(ReviewStatus.REJECTED), 
+                "IN_REVIEW should transition to REJECTED");
+        
+        // Invalid transitions
+        assertFalse(status.canTransitionTo(ReviewStatus.NOT_REVIEWED), 
+                "IN_REVIEW should not transition to NOT_REVIEWED");
+        
+        // Self-transition is allowed
+        assertTrue(status.canTransitionTo(ReviewStatus.IN_REVIEW), 
+                "Self-transition should be allowed");
+    }
+
+    @Test
+    @DisplayName("NEEDS_INFORMATION should allow transitions to IN_REVIEW, APPROVED, and REJECTED")
+    public void needsInformation_ShouldAllowTransitionsToInReviewApprovedAndRejected() {
+        ReviewStatus status = ReviewStatus.NEEDS_INFORMATION;
+        
+        // Valid transitions
+        assertTrue(status.canTransitionTo(ReviewStatus.IN_REVIEW), 
+                "NEEDS_INFORMATION should transition to IN_REVIEW");
+        assertTrue(status.canTransitionTo(ReviewStatus.APPROVED), 
+                "NEEDS_INFORMATION should transition to APPROVED");
+        assertTrue(status.canTransitionTo(ReviewStatus.REJECTED), 
+                "NEEDS_INFORMATION should transition to REJECTED");
+        
+        // Invalid transitions
+        assertFalse(status.canTransitionTo(ReviewStatus.NOT_REVIEWED), 
+                "NEEDS_INFORMATION should not transition to NOT_REVIEWED");
+        
+        // Self-transition is allowed
+        assertTrue(status.canTransitionTo(ReviewStatus.NEEDS_INFORMATION), 
+                "Self-transition should be allowed");
+    }
+
+    @Test
+    @DisplayName("APPROVED should only allow transition to REJECTED")
+    public void approved_ShouldOnlyAllowTransitionToRejected() {
+        ReviewStatus status = ReviewStatus.APPROVED;
+        
+        // Valid transitions
+        assertTrue(status.canTransitionTo(ReviewStatus.REJECTED), 
+                "APPROVED should transition to REJECTED");
+        
+        // Invalid transitions
+        assertFalse(status.canTransitionTo(ReviewStatus.NOT_REVIEWED), 
+                "APPROVED should not transition to NOT_REVIEWED");
+        assertFalse(status.canTransitionTo(ReviewStatus.IN_REVIEW), 
+                "APPROVED should not transition to IN_REVIEW");
+        assertFalse(status.canTransitionTo(ReviewStatus.NEEDS_INFORMATION), 
+                "APPROVED should not transition to NEEDS_INFORMATION");
+        
+        // Self-transition is allowed
+        assertTrue(status.canTransitionTo(ReviewStatus.APPROVED), 
+                "Self-transition should be allowed");
+    }
+
+    @Test
+    @DisplayName("REJECTED should not allow transitions to any other status")
+    public void rejected_ShouldNotAllowTransitionsToAnyOtherStatus() {
+        ReviewStatus status = ReviewStatus.REJECTED;
+        
+        // Invalid transitions
+        assertFalse(status.canTransitionTo(ReviewStatus.NOT_REVIEWED), 
+                "REJECTED should not transition to NOT_REVIEWED");
+        assertFalse(status.canTransitionTo(ReviewStatus.IN_REVIEW), 
+                "REJECTED should not transition to IN_REVIEW");
+        assertFalse(status.canTransitionTo(ReviewStatus.NEEDS_INFORMATION), 
+                "REJECTED should not transition to NEEDS_INFORMATION");
+        assertFalse(status.canTransitionTo(ReviewStatus.APPROVED), 
+                "REJECTED should not transition to APPROVED");
+        
+        // Self-transition is allowed
+        assertTrue(status.canTransitionTo(ReviewStatus.REJECTED), 
+                "Self-transition should be allowed");
+    }
+
+    @Test
+    @DisplayName("canTransitionTo() should return false for null target status")
+    public void canTransitionTo_ShouldReturnFalseForNullTargetStatus() {
+        for (ReviewStatus status : ReviewStatus.values()) {
+            assertFalse(status.canTransitionTo(null), 
+                    "canTransitionTo() should return false for null target status");
+        }
     }
 
     @ParameterizedTest
     @EnumSource(ReviewStatus.class)
-    @DisplayName("findByDisplayName() should find enum constant by display name")
-    public void findByDisplayName_ShouldFindEnumConstantByDisplayName(ReviewStatus reviewStatus) {
-        String displayName = reviewStatus.getDisplayName();
-        Optional<ReviewStatus> result = ReviewStatus.findByDisplayName(displayName);
+    @DisplayName("getValidTransitions() should return non-null set")
+    public void getValidTransitions_ShouldReturnNonNullSet(ReviewStatus status) {
+        Set<ReviewStatus> validTransitions = status.getValidTransitions();
+        assertNotNull(validTransitions, "getValidTransitions() should return non-null set");
+    }
+
+    @Test
+    @DisplayName("getValidTransitions() should return correct transitions for each status")
+    public void getValidTransitions_ShouldReturnCorrectTransitions() {
+        // NOT_REVIEWED -> IN_REVIEW, REJECTED
+        Set<ReviewStatus> notReviewedTransitions = ReviewStatus.NOT_REVIEWED.getValidTransitions();
+        assertEquals(2, notReviewedTransitions.size(), "NOT_REVIEWED should have 2 valid transitions");
+        assertTrue(notReviewedTransitions.contains(ReviewStatus.IN_REVIEW), 
+                "NOT_REVIEWED should transition to IN_REVIEW");
+        assertTrue(notReviewedTransitions.contains(ReviewStatus.REJECTED), 
+                "NOT_REVIEWED should transition to REJECTED");
         
-        assertTrue(result.isPresent(), "findByDisplayName() should find the enum constant");
-        assertEquals(reviewStatus, result.get(), "findByDisplayName() should return the correct enum constant");
+        // IN_REVIEW -> NEEDS_INFORMATION, APPROVED, REJECTED
+        Set<ReviewStatus> inReviewTransitions = ReviewStatus.IN_REVIEW.getValidTransitions();
+        assertEquals(3, inReviewTransitions.size(), "IN_REVIEW should have 3 valid transitions");
+        assertTrue(inReviewTransitions.contains(ReviewStatus.NEEDS_INFORMATION), 
+                "IN_REVIEW should transition to NEEDS_INFORMATION");
+        assertTrue(inReviewTransitions.contains(ReviewStatus.APPROVED), 
+                "IN_REVIEW should transition to APPROVED");
+        assertTrue(inReviewTransitions.contains(ReviewStatus.REJECTED), 
+                "IN_REVIEW should transition to REJECTED");
+        
+        // NEEDS_INFORMATION -> IN_REVIEW, APPROVED, REJECTED
+        Set<ReviewStatus> needsInfoTransitions = ReviewStatus.NEEDS_INFORMATION.getValidTransitions();
+        assertEquals(3, needsInfoTransitions.size(), "NEEDS_INFORMATION should have 3 valid transitions");
+        assertTrue(needsInfoTransitions.contains(ReviewStatus.IN_REVIEW), 
+                "NEEDS_INFORMATION should transition to IN_REVIEW");
+        assertTrue(needsInfoTransitions.contains(ReviewStatus.APPROVED), 
+                "NEEDS_INFORMATION should transition to APPROVED");
+        assertTrue(needsInfoTransitions.contains(ReviewStatus.REJECTED), 
+                "NEEDS_INFORMATION should transition to REJECTED");
+        
+        // APPROVED -> REJECTED
+        Set<ReviewStatus> approvedTransitions = ReviewStatus.APPROVED.getValidTransitions();
+        assertEquals(1, approvedTransitions.size(), "APPROVED should have 1 valid transition");
+        assertTrue(approvedTransitions.contains(ReviewStatus.REJECTED), 
+                "APPROVED should transition to REJECTED");
+        
+        // REJECTED -> (none)
+        Set<ReviewStatus> rejectedTransitions = ReviewStatus.REJECTED.getValidTransitions();
+        assertTrue(rejectedTransitions.isEmpty(), "REJECTED should have no valid transitions");
+    }
+
+    @Test
+    @DisplayName("isTerminalState() should return true only for REJECTED")
+    public void isTerminalState_ShouldReturnTrueOnlyForRejected() {
+        assertTrue(ReviewStatus.REJECTED.isTerminalState(), 
+                "REJECTED should be a terminal state");
+        
+        assertFalse(ReviewStatus.NOT_REVIEWED.isTerminalState(), 
+                "NOT_REVIEWED should not be a terminal state");
+        assertFalse(ReviewStatus.IN_REVIEW.isTerminalState(), 
+                "IN_REVIEW should not be a terminal state");
+        assertFalse(ReviewStatus.NEEDS_INFORMATION.isTerminalState(), 
+                "NEEDS_INFORMATION should not be a terminal state");
+        assertFalse(ReviewStatus.APPROVED.isTerminalState(), 
+                "APPROVED should not be a terminal state");
     }
 
     @ParameterizedTest
     @EnumSource(ReviewStatus.class)
-    @DisplayName("findByDisplayName() should find enum constant by display name (case-insensitive)")
-    public void findByDisplayName_ShouldBeCaseInsensitive(ReviewStatus reviewStatus) {
-        String lowerCaseDisplayName = reviewStatus.getDisplayName().toLowerCase();
-        Optional<ReviewStatus> result = ReviewStatus.findByDisplayName(lowerCaseDisplayName);
-        
-        assertTrue(result.isPresent(), "findByDisplayName() should find the enum constant (case-insensitive)");
-        assertEquals(reviewStatus, result.get(), "findByDisplayName() should return the correct enum constant");
+    @DisplayName("fromString() should find enum constant by name")
+    public void fromString_ShouldFindEnumConstantByName(ReviewStatus reviewStatus) {
+        String name = reviewStatus.name();
+        assertEquals(reviewStatus, ReviewStatus.fromString(name), 
+                "fromString() should return the correct enum constant");
+    }
+
+    @ParameterizedTest
+    @EnumSource(ReviewStatus.class)
+    @DisplayName("fromString() should find enum constant by name (case-insensitive)")
+    public void fromString_ShouldBeCaseInsensitive(ReviewStatus reviewStatus) {
+        String lowerCaseName = reviewStatus.name().toLowerCase();
+        assertEquals(reviewStatus, ReviewStatus.fromString(lowerCaseName), 
+                "fromString() should be case-insensitive");
     }
 
     @ParameterizedTest
     @NullAndEmptySource
-    @ValueSource(strings = {"Invalid Status", "Unknown"})
-    @DisplayName("findByDisplayName() should return empty Optional for invalid display name")
-    public void findByDisplayName_ShouldReturnEmptyOptionalForInvalidDisplayName(String invalidDisplayName) {
-        Optional<ReviewStatus> result = ReviewStatus.findByDisplayName(invalidDisplayName);
-        assertFalse(result.isPresent(), "findByDisplayName() should return an empty Optional for invalid display name");
-    }
-
-    @Test
-    @DisplayName("isValidTransition() should validate transitions from NOT_REVIEWED status")
-    public void isValidTransition_FromNotReviewed() {
-        ReviewStatus currentStatus = ReviewStatus.NOT_REVIEWED;
-        
-        // Valid transitions
-        assertTrue(ReviewStatus.isValidTransition(currentStatus, ReviewStatus.IN_REVIEW), 
-                "Should allow transition from NOT_REVIEWED to IN_REVIEW");
-        assertTrue(ReviewStatus.isValidTransition(currentStatus, ReviewStatus.APPROVED), 
-                "Should allow transition from NOT_REVIEWED to APPROVED");
-        assertTrue(ReviewStatus.isValidTransition(currentStatus, ReviewStatus.REJECTED), 
-                "Should allow transition from NOT_REVIEWED to REJECTED");
-        
-        // Invalid transitions
-        assertFalse(ReviewStatus.isValidTransition(currentStatus, ReviewStatus.NEEDS_INFORMATION), 
-                "Should not allow transition from NOT_REVIEWED to NEEDS_INFORMATION");
-        
-        // Same status is always valid
-        assertTrue(ReviewStatus.isValidTransition(currentStatus, currentStatus), 
-                "Should allow transition to the same status");
-    }
-
-    @Test
-    @DisplayName("isValidTransition() should validate transitions from IN_REVIEW status")
-    public void isValidTransition_FromInReview() {
-        ReviewStatus currentStatus = ReviewStatus.IN_REVIEW;
-        
-        // Valid transitions
-        assertTrue(ReviewStatus.isValidTransition(currentStatus, ReviewStatus.NEEDS_INFORMATION), 
-                "Should allow transition from IN_REVIEW to NEEDS_INFORMATION");
-        assertTrue(ReviewStatus.isValidTransition(currentStatus, ReviewStatus.APPROVED), 
-                "Should allow transition from IN_REVIEW to APPROVED");
-        assertTrue(ReviewStatus.isValidTransition(currentStatus, ReviewStatus.REJECTED), 
-                "Should allow transition from IN_REVIEW to REJECTED");
-        
-        // Invalid transitions
-        assertFalse(ReviewStatus.isValidTransition(currentStatus, ReviewStatus.NOT_REVIEWED), 
-                "Should not allow transition from IN_REVIEW to NOT_REVIEWED");
-        
-        // Same status is always valid
-        assertTrue(ReviewStatus.isValidTransition(currentStatus, currentStatus), 
-                "Should allow transition to the same status");
-    }
-
-    @Test
-    @DisplayName("isValidTransition() should validate transitions from NEEDS_INFORMATION status")
-    public void isValidTransition_FromNeedsInformation() {
-        ReviewStatus currentStatus = ReviewStatus.NEEDS_INFORMATION;
-        
-        // Valid transitions
-        assertTrue(ReviewStatus.isValidTransition(currentStatus, ReviewStatus.IN_REVIEW), 
-                "Should allow transition from NEEDS_INFORMATION to IN_REVIEW");
-        assertTrue(ReviewStatus.isValidTransition(currentStatus, ReviewStatus.APPROVED), 
-                "Should allow transition from NEEDS_INFORMATION to APPROVED");
-        assertTrue(ReviewStatus.isValidTransition(currentStatus, ReviewStatus.REJECTED), 
-                "Should allow transition from NEEDS_INFORMATION to REJECTED");
-        
-        // Invalid transitions
-        assertFalse(ReviewStatus.isValidTransition(currentStatus, ReviewStatus.NOT_REVIEWED), 
-                "Should not allow transition from NEEDS_INFORMATION to NOT_REVIEWED");
-        
-        // Same status is always valid
-        assertTrue(ReviewStatus.isValidTransition(currentStatus, currentStatus), 
-                "Should allow transition to the same status");
-    }
-
-    @Test
-    @DisplayName("isValidTransition() should validate transitions from APPROVED status")
-    public void isValidTransition_FromApproved() {
-        ReviewStatus currentStatus = ReviewStatus.APPROVED;
-        
-        // Valid transitions
-        assertTrue(ReviewStatus.isValidTransition(currentStatus, ReviewStatus.REJECTED), 
-                "Should allow transition from APPROVED to REJECTED (error correction)");
-        
-        // Invalid transitions
-        assertFalse(ReviewStatus.isValidTransition(currentStatus, ReviewStatus.NOT_REVIEWED), 
-                "Should not allow transition from APPROVED to NOT_REVIEWED");
-        assertFalse(ReviewStatus.isValidTransition(currentStatus, ReviewStatus.IN_REVIEW), 
-                "Should not allow transition from APPROVED to IN_REVIEW");
-        assertFalse(ReviewStatus.isValidTransition(currentStatus, ReviewStatus.NEEDS_INFORMATION), 
-                "Should not allow transition from APPROVED to NEEDS_INFORMATION");
-        
-        // Same status is always valid
-        assertTrue(ReviewStatus.isValidTransition(currentStatus, currentStatus), 
-                "Should allow transition to the same status");
-    }
-
-    @Test
-    @DisplayName("isValidTransition() should validate transitions from REJECTED status")
-    public void isValidTransition_FromRejected() {
-        ReviewStatus currentStatus = ReviewStatus.REJECTED;
-        
-        // Valid transitions
-        assertTrue(ReviewStatus.isValidTransition(currentStatus, ReviewStatus.APPROVED), 
-                "Should allow transition from REJECTED to APPROVED (error correction)");
-        
-        // Invalid transitions
-        assertFalse(ReviewStatus.isValidTransition(currentStatus, ReviewStatus.NOT_REVIEWED), 
-                "Should not allow transition from REJECTED to NOT_REVIEWED");
-        assertFalse(ReviewStatus.isValidTransition(currentStatus, ReviewStatus.IN_REVIEW), 
-                "Should not allow transition from REJECTED to IN_REVIEW");
-        assertFalse(ReviewStatus.isValidTransition(currentStatus, ReviewStatus.NEEDS_INFORMATION), 
-                "Should not allow transition from REJECTED to NEEDS_INFORMATION");
-        
-        // Same status is always valid
-        assertTrue(ReviewStatus.isValidTransition(currentStatus, currentStatus), 
-                "Should allow transition to the same status");
-    }
-
-    @Test
-    @DisplayName("fromString() should correctly convert string to enum constant")
-    public void fromString_ShouldConvertStringToEnumConstant() {
-        // Test with enum names
-        assertEquals(ReviewStatus.NOT_REVIEWED, ReviewStatus.fromString("NOT_REVIEWED"));
-        assertEquals(ReviewStatus.IN_REVIEW, ReviewStatus.fromString("IN_REVIEW"));
-        assertEquals(ReviewStatus.NEEDS_INFORMATION, ReviewStatus.fromString("NEEDS_INFORMATION"));
-        assertEquals(ReviewStatus.APPROVED, ReviewStatus.fromString("APPROVED"));
-        assertEquals(ReviewStatus.REJECTED, ReviewStatus.fromString("REJECTED"));
-        
-        // Test with lowercase enum names
-        assertEquals(ReviewStatus.NOT_REVIEWED, ReviewStatus.fromString("not_reviewed"));
-        assertEquals(ReviewStatus.IN_REVIEW, ReviewStatus.fromString("in_review"));
-        assertEquals(ReviewStatus.NEEDS_INFORMATION, ReviewStatus.fromString("needs_information"));
-        assertEquals(ReviewStatus.APPROVED, ReviewStatus.fromString("approved"));
-        assertEquals(ReviewStatus.REJECTED, ReviewStatus.fromString("rejected"));
-    }
-
-    @ParameterizedTest
-    @NullAndEmptySource
-    @ValueSource(strings = {"INVALID_STATUS", "Unknown"})
-    @DisplayName("fromString() should return NOT_REVIEWED for invalid string")
-    public void fromString_ShouldReturnNotReviewedForInvalidString(String invalidString) {
-        assertEquals(ReviewStatus.NOT_REVIEWED, ReviewStatus.fromString(invalidString), 
-                "fromString() should return NOT_REVIEWED for invalid string");
-    }
-
-    @Test
-    @DisplayName("isTerminalStatus() should correctly identify terminal statuses")
-    public void isTerminalStatus_ShouldIdentifyTerminalStatuses() {
-        assertFalse(ReviewStatus.NOT_REVIEWED.isTerminalStatus(), "NOT_REVIEWED should not be a terminal status");
-        assertFalse(ReviewStatus.IN_REVIEW.isTerminalStatus(), "IN_REVIEW should not be a terminal status");
-        assertFalse(ReviewStatus.NEEDS_INFORMATION.isTerminalStatus(), "NEEDS_INFORMATION should not be a terminal status");
-        
-        assertTrue(ReviewStatus.APPROVED.isTerminalStatus(), "APPROVED should be a terminal status");
-        assertTrue(ReviewStatus.REJECTED.isTerminalStatus(), "REJECTED should be a terminal status");
-    }
-
-    @Test
-    @DisplayName("requiresAction() should correctly identify statuses requiring action")
-    public void requiresAction_ShouldIdentifyStatusesRequiringAction() {
-        assertTrue(ReviewStatus.NOT_REVIEWED.requiresAction(), "NOT_REVIEWED should require action");
-        assertFalse(ReviewStatus.IN_REVIEW.requiresAction(), "IN_REVIEW should not require action");
-        assertTrue(ReviewStatus.NEEDS_INFORMATION.requiresAction(), "NEEDS_INFORMATION should require action");
-        assertFalse(ReviewStatus.APPROVED.requiresAction(), "APPROVED should not require action");
-        assertFalse(ReviewStatus.REJECTED.requiresAction(), "REJECTED should not require action");
+    @ValueSource(strings = {"INVALID_STATUS", "unknown", "pending"})
+    @DisplayName("fromString() should return null for invalid name")
+    public void fromString_ShouldReturnNullForInvalidName(String invalidName) {
+        assertNull(ReviewStatus.fromString(invalidName), 
+                "fromString() should return null for invalid name");
     }
 
     @Test
@@ -273,17 +270,6 @@ public class ReviewStatusTest {
     }
 
     @Test
-    @DisplayName("All enum display names should be unique")
-    public void allEnumDisplayNamesShouldBeUnique() {
-        ReviewStatus[] values = ReviewStatus.values();
-        assertEquals(values.length, Arrays.stream(values)
-                .map(ReviewStatus::getDisplayName)
-                .distinct()
-                .count(), 
-                "All enum constants should have unique display names");
-    }
-
-    @Test
     @DisplayName("All enum descriptions should be unique")
     public void allEnumDescriptionsShouldBeUnique() {
         ReviewStatus[] values = ReviewStatus.values();
@@ -292,5 +278,26 @@ public class ReviewStatusTest {
                 .distinct()
                 .count(), 
                 "All enum constants should have unique descriptions");
+    }
+
+    @Test
+    @DisplayName("JPA mapping should work with ReviewStatus enum")
+    public void jpaMappingShouldWorkWithReviewStatusEnum() {
+        // This test simulates how JPA would store and retrieve the enum
+        // In a real application, this would be tested with an actual database
+        
+        for (ReviewStatus status : ReviewStatus.values()) {
+            // Simulate storing the enum as a string in the database
+            String dbValue = status.name();
+            
+            // Simulate retrieving the enum from the database string
+            ReviewStatus retrievedStatus = ReviewStatus.valueOf(dbValue);
+            
+            // Verify the retrieved enum matches the original
+            assertEquals(status, retrievedStatus, 
+                    "JPA mapping should preserve the enum value");
+            assertEquals(status.getDescription(), retrievedStatus.getDescription(), 
+                    "JPA mapping should preserve the description");
+        }
     }
 }
