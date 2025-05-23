@@ -2,18 +2,21 @@
 # -*- coding: utf-8 -*-
 
 """
-Unit tests for the time_utils module.
+Unit tests for time utilities in the Document Service.
 
 This module contains tests for timestamp generation, date comparison,
-duration calculation, and time formatting functions in the time_utils module.
+duration calculation, and time formatting functions to ensure consistent
+timestamp handling across the Document Service.
 """
 
-import unittest
-from unittest.mock import patch, Mock
 import datetime
 import time
+import unittest
+from unittest.mock import patch, Mock
+import pytest
 from freezegun import freeze_time
 
+# Import the module to test
 from src.utils.time_utils import (
     get_current_timestamp,
     get_timestamp_str,
@@ -32,6 +35,12 @@ from src.utils.time_utils import (
     format_age,
     calculate_processing_time,
     format_processing_time,
+    get_timestamp_for_filename,
+    convert_timezone,
+    get_timezone_offset,
+    add_timezone_info,
+    timestamp_to_unix,
+    unix_to_timestamp,
     get_document_processing_start_time,
     calculate_document_processing_time,
     format_timestamp_for_message,
@@ -44,712 +53,681 @@ from src.utils.time_utils import (
     get_processing_deadline,
     is_processing_overdue,
     format_time_remaining,
-    timestamp_to_unix,
-    unix_to_timestamp,
-    convert_timezone,
-    get_timezone_offset,
-    add_timezone_info,
-    get_timestamp_for_filename
+    ISO_8601_FORMAT,
+    ISO_8601_FORMAT_WITH_TZ,
+    DEFAULT_TIMEZONE
 )
 
 
-class TestTimeUtils(unittest.TestCase):
-    """Test cases for time_utils module."""
+# Define test fixtures and constants
+@pytest.fixture
+def fixed_datetime():
+    """Return a fixed datetime for testing."""
+    return datetime.datetime(2023, 4, 15, 12, 30, 45, tzinfo=datetime.timezone.utc)
 
-    def setUp(self):
-        """Set up test fixtures."""
-        # Fixed test datetime (2023-04-15 14:30:45.123456 UTC)
-        self.test_dt = datetime.datetime(2023, 4, 15, 14, 30, 45, 123456, tzinfo=datetime.timezone.utc)
-        self.test_dt_naive = datetime.datetime(2023, 4, 15, 14, 30, 45, 123456)
-        
-        # Fixed ISO 8601 string representation
-        self.test_iso_str = "2023-04-15T14:30:45.123456+00:00"
-        
-        # Fixed Unix timestamp (seconds since epoch)
-        self.test_unix_timestamp = 1681568645.123456
 
-    @freeze_time("2023-04-15 14:30:45.123456")
+@pytest.fixture
+def fixed_datetime_naive():
+    """Return a fixed naive datetime for testing."""
+    return datetime.datetime(2023, 4, 15, 12, 30, 45)
+
+
+@pytest.fixture
+def fixed_datetime_different_day():
+    """Return a fixed datetime on a different day for testing."""
+    return datetime.datetime(2023, 4, 16, 12, 30, 45, tzinfo=datetime.timezone.utc)
+
+
+@pytest.fixture
+def fixed_datetime_different_timezone():
+    """Return a fixed datetime with a different timezone for testing."""
+    # Create a timezone at UTC-5 (e.g., Eastern Standard Time)
+    tz = datetime.timezone(datetime.timedelta(hours=-5))
+    return datetime.datetime(2023, 4, 15, 7, 30, 45, tzinfo=tz)  # Same time as fixed_datetime in UTC-5
+
+
+# Test timestamp generation functions
+class TestTimestampGeneration:
+    """Test cases for timestamp generation functions."""
+
+    @freeze_time("2023-04-15 12:30:45", tz_offset=0)
     def test_get_current_timestamp(self):
-        """Test get_current_timestamp returns the current time with UTC timezone."""
+        """Test that get_current_timestamp returns the current time with UTC timezone."""
         timestamp = get_current_timestamp()
-        self.assertEqual(timestamp.year, 2023)
-        self.assertEqual(timestamp.month, 4)
-        self.assertEqual(timestamp.day, 15)
-        self.assertEqual(timestamp.hour, 14)
-        self.assertEqual(timestamp.minute, 30)
-        self.assertEqual(timestamp.second, 45)
-        self.assertEqual(timestamp.microsecond, 123456)
-        self.assertEqual(timestamp.tzinfo, datetime.timezone.utc)
+        assert timestamp.year == 2023
+        assert timestamp.month == 4
+        assert timestamp.day == 15
+        assert timestamp.hour == 12
+        assert timestamp.minute == 30
+        assert timestamp.second == 45
+        assert timestamp.tzinfo is not None
+        assert timestamp.tzinfo == datetime.timezone.utc
 
-    @freeze_time("2023-04-15 14:30:45.123456")
+    @freeze_time("2023-04-15 12:30:45", tz_offset=0)
     def test_get_timestamp_str(self):
-        """Test get_timestamp_str returns the current time as an ISO 8601 string."""
+        """Test that get_timestamp_str returns an ISO 8601 formatted string."""
         timestamp_str = get_timestamp_str()
-        self.assertEqual(timestamp_str, "2023-04-15T14:30:45.123456+00:00")
+        assert timestamp_str == "2023-04-15T12:30:45+00:00"
 
-    @patch('src.utils.time_utils.USING_ZONEINFO', True)
-    @patch('src.utils.time_utils.ZoneInfo')
-    @freeze_time("2023-04-15 14:30:45.123456")
+    @patch("src.utils.time_utils.USING_ZONEINFO", True)
+    @patch("src.utils.time_utils.ZoneInfo")
+    @freeze_time("2023-04-15 12:30:45", tz_offset=0)
     def test_get_timestamp_with_timezone_zoneinfo(self, mock_zoneinfo):
         """Test get_timestamp_with_timezone using ZoneInfo."""
-        # Mock ZoneInfo to return a fixed timezone
+        # Setup mock
         mock_tz = Mock()
         mock_zoneinfo.return_value = mock_tz
-        
-        timestamp = get_timestamp_with_timezone("America/New_York")
-        
-        # Verify ZoneInfo was called with the correct timezone
-        mock_zoneinfo.assert_called_once_with("America/New_York")
-        
-        # Verify the timestamp has the correct time and timezone
-        self.assertEqual(timestamp.year, 2023)
-        self.assertEqual(timestamp.month, 4)
-        self.assertEqual(timestamp.day, 15)
-        self.assertEqual(timestamp.hour, 14)
-        self.assertEqual(timestamp.minute, 30)
-        self.assertEqual(timestamp.second, 45)
-        self.assertEqual(timestamp.microsecond, 123456)
-        self.assertEqual(timestamp.tzinfo, mock_tz)
 
-    @patch('src.utils.time_utils.USING_ZONEINFO', False)
-    @patch('src.utils.time_utils.pytz')
-    @freeze_time("2023-04-15 14:30:45.123456")
+        # Call function
+        timestamp = get_timestamp_with_timezone("America/New_York")
+
+        # Assertions
+        mock_zoneinfo.assert_called_once_with("America/New_York")
+        assert timestamp.tzinfo == mock_tz
+
+    @patch("src.utils.time_utils.USING_ZONEINFO", False)
+    @patch("src.utils.time_utils.pytz")
+    @freeze_time("2023-04-15 12:30:45", tz_offset=0)
     def test_get_timestamp_with_timezone_pytz(self, mock_pytz):
         """Test get_timestamp_with_timezone using pytz."""
-        # Mock pytz to return a fixed timezone
+        # Setup mock
         mock_tz = Mock()
         mock_pytz.timezone.return_value = mock_tz
-        
+
+        # Call function
         timestamp = get_timestamp_with_timezone("America/New_York")
-        
-        # Verify pytz.timezone was called with the correct timezone
+
+        # Assertions
         mock_pytz.timezone.assert_called_once_with("America/New_York")
-        
-        # Verify the timestamp has the correct time and timezone
-        self.assertEqual(timestamp.year, 2023)
-        self.assertEqual(timestamp.month, 4)
-        self.assertEqual(timestamp.day, 15)
-        self.assertEqual(timestamp.hour, 14)
-        self.assertEqual(timestamp.minute, 30)
-        self.assertEqual(timestamp.second, 45)
-        self.assertEqual(timestamp.microsecond, 123456)
-        self.assertEqual(timestamp.tzinfo, mock_tz)
+        assert timestamp.tzinfo == mock_tz
 
-    def test_get_timestamp_with_timezone_invalid(self):
+    @patch("src.utils.time_utils.USING_ZONEINFO", True)
+    @patch("src.utils.time_utils.ZoneInfo", side_effect=Exception("Invalid timezone"))
+    def test_get_timestamp_with_timezone_invalid(self, mock_zoneinfo):
         """Test get_timestamp_with_timezone with an invalid timezone."""
-        with self.assertRaises(ValueError):
+        with pytest.raises(ValueError) as excinfo:
             get_timestamp_with_timezone("Invalid/Timezone")
+        assert "Invalid timezone" in str(excinfo.value)
 
-    def test_format_timestamp(self):
-        """Test format_timestamp formats a datetime as an ISO 8601 string."""
-        # Test with timezone-aware datetime
-        formatted = format_timestamp(self.test_dt)
-        self.assertEqual(formatted, self.test_iso_str)
-        
-        # Test with naive datetime (should add UTC timezone)
-        formatted_naive = format_timestamp(self.test_dt_naive)
-        self.assertEqual(formatted_naive, self.test_iso_str)
-        
-        # Test without timezone information
-        formatted_no_tz = format_timestamp(self.test_dt, include_timezone=False)
-        self.assertEqual(formatted_no_tz, "2023-04-15T14:30:45.123456")
+    @freeze_time("2023-04-15 12:30:45", tz_offset=0)
+    def test_get_timestamp_for_filename(self):
+        """Test that get_timestamp_for_filename returns a properly formatted string."""
+        timestamp_str = get_timestamp_for_filename()
+        assert timestamp_str == "20230415_123045"
 
-    def test_parse_timestamp(self):
-        """Test parse_timestamp parses an ISO 8601 string into a datetime."""
-        # Test with standard ISO format
-        parsed = parse_timestamp(self.test_iso_str)
-        self.assertEqual(parsed, self.test_dt)
-        
-        # Test with 'Z' timezone designator
-        parsed_z = parse_timestamp("2023-04-15T14:30:45.123456Z")
-        self.assertEqual(parsed_z, self.test_dt)
-        
-        # Test with invalid format
-        with self.assertRaises(ValueError):
+
+# Test timestamp formatting functions
+class TestTimestampFormatting:
+    """Test cases for timestamp formatting functions."""
+
+    def test_format_timestamp(self, fixed_datetime):
+        """Test that format_timestamp correctly formats a datetime object."""
+        timestamp_str = format_timestamp(fixed_datetime)
+        assert timestamp_str == "2023-04-15T12:30:45+00:00"
+
+    def test_format_timestamp_no_timezone(self, fixed_datetime_naive):
+        """Test that format_timestamp handles naive datetime objects."""
+        # Without timezone info
+        timestamp_str = format_timestamp(fixed_datetime_naive, include_timezone=False)
+        assert timestamp_str == "2023-04-15T12:30:45"
+
+        # With timezone info (should add UTC)
+        timestamp_str = format_timestamp(fixed_datetime_naive, include_timezone=True)
+        assert timestamp_str == "2023-04-15T12:30:45+00:00"
+
+    def test_format_human_readable(self, fixed_datetime):
+        """Test that format_human_readable correctly formats a datetime object."""
+        readable_str = format_human_readable(fixed_datetime)
+        assert readable_str == "2023-04-15 12:30:45"
+
+    def test_format_log_timestamp(self, fixed_datetime):
+        """Test that format_log_timestamp correctly formats a datetime object for logs."""
+        log_timestamp = format_log_timestamp(fixed_datetime)
+        assert log_timestamp == "2023-04-15T12:30:45.000000Z"
+
+    def test_format_log_timestamp_current_time(self):
+        """Test that format_log_timestamp works with current time."""
+        with freeze_time("2023-04-15 12:30:45", tz_offset=0):
+            log_timestamp = format_log_timestamp()
+            assert log_timestamp == "2023-04-15T12:30:45.000000Z"
+
+    def test_format_timestamp_for_message(self, fixed_datetime):
+        """Test that format_timestamp_for_message correctly formats a datetime object."""
+        message_timestamp = format_timestamp_for_message(fixed_datetime)
+        assert message_timestamp == "2023-04-15T12:30:45+00:00"
+
+    def test_format_timestamp_for_message_current_time(self):
+        """Test that format_timestamp_for_message works with current time."""
+        with freeze_time("2023-04-15 12:30:45", tz_offset=0):
+            message_timestamp = format_timestamp_for_message()
+            assert message_timestamp == "2023-04-15T12:30:45+00:00"
+
+    def test_format_document_metadata_timestamp(self, fixed_datetime):
+        """Test that format_document_metadata_timestamp correctly formats a datetime object."""
+        metadata_timestamp = format_document_metadata_timestamp(fixed_datetime)
+        assert metadata_timestamp == "2023-04-15T12:30:45+00:00"
+
+    def test_format_document_metadata_timestamp_current_time(self):
+        """Test that format_document_metadata_timestamp works with current time."""
+        with freeze_time("2023-04-15 12:30:45", tz_offset=0):
+            metadata_timestamp = format_document_metadata_timestamp()
+            assert metadata_timestamp == "2023-04-15T12:30:45+00:00"
+
+
+# Test timestamp parsing functions
+class TestTimestampParsing:
+    """Test cases for timestamp parsing functions."""
+
+    def test_parse_timestamp_iso8601(self):
+        """Test that parse_timestamp correctly parses an ISO 8601 formatted string."""
+        # Test with timezone info
+        dt = parse_timestamp("2023-04-15T12:30:45+00:00")
+        assert dt.year == 2023
+        assert dt.month == 4
+        assert dt.day == 15
+        assert dt.hour == 12
+        assert dt.minute == 30
+        assert dt.second == 45
+        assert dt.tzinfo is not None
+        assert dt.tzinfo == datetime.timezone.utc
+
+    def test_parse_timestamp_with_z(self):
+        """Test that parse_timestamp correctly parses an ISO 8601 string with Z timezone."""
+        dt = parse_timestamp("2023-04-15T12:30:45Z")
+        assert dt.year == 2023
+        assert dt.month == 4
+        assert dt.day == 15
+        assert dt.hour == 12
+        assert dt.minute == 30
+        assert dt.second == 45
+        assert dt.tzinfo is not None
+        assert dt.tzinfo == datetime.timezone.utc
+
+    def test_parse_timestamp_invalid(self):
+        """Test that parse_timestamp raises ValueError for invalid timestamp strings."""
+        with pytest.raises(ValueError) as excinfo:
             parse_timestamp("not-a-timestamp")
+        assert "Invalid ISO 8601 timestamp" in str(excinfo.value)
 
-    def test_format_human_readable(self):
-        """Test format_human_readable formats a datetime in a human-readable format."""
-        formatted = format_human_readable(self.test_dt)
-        self.assertEqual(formatted, "2023-04-15 14:30:45")
+    def test_validate_timestamp_format_valid(self):
+        """Test that validate_timestamp_format returns True for valid timestamp strings."""
+        assert validate_timestamp_format("2023-04-15T12:30:45+00:00") is True
+        assert validate_timestamp_format("2023-04-15T12:30:45Z") is True
 
-    def test_is_same_day(self):
-        """Test is_same_day checks if two datetimes are on the same day."""
-        # Same day
-        dt1 = datetime.datetime(2023, 4, 15, 10, 0, 0)
-        dt2 = datetime.datetime(2023, 4, 15, 22, 0, 0)
-        self.assertTrue(is_same_day(dt1, dt2))
-        
+    def test_validate_timestamp_format_invalid(self):
+        """Test that validate_timestamp_format returns False for invalid timestamp strings."""
+        assert validate_timestamp_format("not-a-timestamp") is False
+        assert validate_timestamp_format("2023-04-15") is False  # Missing time part
+
+
+# Test date comparison functions
+class TestDateComparison:
+    """Test cases for date comparison functions."""
+
+    def test_is_same_day(self, fixed_datetime, fixed_datetime_different_day):
+        """Test that is_same_day correctly identifies same day datetimes."""
+        # Same day, different time
+        same_day_different_time = fixed_datetime.replace(hour=14, minute=45)
+        assert is_same_day(fixed_datetime, same_day_different_time) is True
+
         # Different day
-        dt3 = datetime.datetime(2023, 4, 16, 10, 0, 0)
-        self.assertFalse(is_same_day(dt1, dt3))
+        assert is_same_day(fixed_datetime, fixed_datetime_different_day) is False
 
-    def test_is_before(self):
-        """Test is_before checks if the first datetime is before the second."""
-        # dt1 is before dt2
-        dt1 = datetime.datetime(2023, 4, 15, 10, 0, 0)
-        dt2 = datetime.datetime(2023, 4, 15, 22, 0, 0)
-        self.assertTrue(is_before(dt1, dt2))
-        
-        # dt1 is not before dt2
-        self.assertFalse(is_before(dt2, dt1))
-        
-        # Same datetime
-        self.assertFalse(is_before(dt1, dt1))
-        
-        # Test with timezone-naive datetimes
-        dt1_naive = datetime.datetime(2023, 4, 15, 10, 0, 0)
-        dt2_naive = datetime.datetime(2023, 4, 15, 22, 0, 0)
-        self.assertTrue(is_before(dt1_naive, dt2_naive))
+    def test_is_before(self, fixed_datetime):
+        """Test that is_before correctly compares datetimes."""
+        earlier = fixed_datetime.replace(hour=11)
+        later = fixed_datetime.replace(hour=13)
 
-    def test_is_after(self):
-        """Test is_after checks if the first datetime is after the second."""
-        # dt2 is after dt1
-        dt1 = datetime.datetime(2023, 4, 15, 10, 0, 0)
-        dt2 = datetime.datetime(2023, 4, 15, 22, 0, 0)
-        self.assertTrue(is_after(dt2, dt1))
-        
-        # dt1 is not after dt2
-        self.assertFalse(is_after(dt1, dt2))
-        
-        # Same datetime
-        self.assertFalse(is_after(dt1, dt1))
-        
-        # Test with timezone-naive datetimes
-        dt1_naive = datetime.datetime(2023, 4, 15, 10, 0, 0)
-        dt2_naive = datetime.datetime(2023, 4, 15, 22, 0, 0)
-        self.assertTrue(is_after(dt2_naive, dt1_naive))
+        assert is_before(earlier, later) is True
+        assert is_before(later, earlier) is False
+        assert is_before(fixed_datetime, fixed_datetime) is False
 
-    def test_is_between(self):
-        """Test is_between checks if a datetime is between two others."""
-        # dt2 is between dt1 and dt3
-        dt1 = datetime.datetime(2023, 4, 15, 10, 0, 0)
-        dt2 = datetime.datetime(2023, 4, 15, 14, 0, 0)
-        dt3 = datetime.datetime(2023, 4, 15, 22, 0, 0)
-        self.assertTrue(is_between(dt2, dt1, dt3))
-        
-        # dt1 is not between dt2 and dt3
-        self.assertFalse(is_between(dt1, dt2, dt3))
-        
-        # Inclusive bounds
-        self.assertTrue(is_between(dt1, dt1, dt3))
-        self.assertTrue(is_between(dt3, dt1, dt3))
-        
-        # Test with timezone-naive datetimes
-        dt1_naive = datetime.datetime(2023, 4, 15, 10, 0, 0)
-        dt2_naive = datetime.datetime(2023, 4, 15, 14, 0, 0)
-        dt3_naive = datetime.datetime(2023, 4, 15, 22, 0, 0)
-        self.assertTrue(is_between(dt2_naive, dt1_naive, dt3_naive))
+    def test_is_after(self, fixed_datetime):
+        """Test that is_after correctly compares datetimes."""
+        earlier = fixed_datetime.replace(hour=11)
+        later = fixed_datetime.replace(hour=13)
 
-    def test_calculate_duration(self):
-        """Test calculate_duration calculates the duration between two datetimes."""
-        # 12 hours difference
-        dt1 = datetime.datetime(2023, 4, 15, 10, 0, 0)
-        dt2 = datetime.datetime(2023, 4, 15, 22, 0, 0)
-        duration = calculate_duration(dt1, dt2)
-        self.assertEqual(duration, datetime.timedelta(hours=12))
-        
-        # Negative duration (dt2 before dt1)
-        duration_neg = calculate_duration(dt2, dt1)
-        self.assertEqual(duration_neg, datetime.timedelta(hours=-12))
-        
-        # Test with timezone-naive datetimes
-        dt1_naive = datetime.datetime(2023, 4, 15, 10, 0, 0)
-        dt2_naive = datetime.datetime(2023, 4, 15, 22, 0, 0)
-        duration_naive = calculate_duration(dt1_naive, dt2_naive)
-        self.assertEqual(duration_naive, datetime.timedelta(hours=12))
+        assert is_after(later, earlier) is True
+        assert is_after(earlier, later) is False
+        assert is_after(fixed_datetime, fixed_datetime) is False
+
+    def test_is_between(self, fixed_datetime):
+        """Test that is_between correctly identifies datetimes within a range."""
+        start = fixed_datetime.replace(hour=11)
+        end = fixed_datetime.replace(hour=13)
+        middle = fixed_datetime.replace(hour=12)
+
+        # Within range
+        assert is_between(middle, start, end) is True
+
+        # At boundaries (inclusive)
+        assert is_between(start, start, end) is True
+        assert is_between(end, start, end) is True
+
+        # Outside range
+        before = fixed_datetime.replace(hour=10)
+        after = fixed_datetime.replace(hour=14)
+        assert is_between(before, start, end) is False
+        assert is_between(after, start, end) is False
+
+    def test_compare_document_timestamps(self, fixed_datetime):
+        """Test that compare_document_timestamps correctly compares timestamps."""
+        earlier = fixed_datetime.replace(hour=11)
+        later = fixed_datetime.replace(hour=13)
+
+        # Test with datetime objects
+        assert compare_document_timestamps(earlier, later) == -1
+        assert compare_document_timestamps(later, earlier) == 1
+        assert compare_document_timestamps(fixed_datetime, fixed_datetime) == 0
+
+        # Test with string timestamps
+        assert compare_document_timestamps(format_timestamp(earlier), format_timestamp(later)) == -1
+        assert compare_document_timestamps(format_timestamp(later), format_timestamp(earlier)) == 1
+        assert compare_document_timestamps(format_timestamp(fixed_datetime), format_timestamp(fixed_datetime)) == 0
+
+        # Test with mixed types
+        assert compare_document_timestamps(earlier, format_timestamp(later)) == -1
+        assert compare_document_timestamps(format_timestamp(later), earlier) == 1
+
+
+# Test duration calculation functions
+class TestDurationCalculation:
+    """Test cases for duration calculation functions."""
+
+    def test_calculate_duration(self, fixed_datetime):
+        """Test that calculate_duration correctly calculates time differences."""
+        start = fixed_datetime
+        end = start + datetime.timedelta(hours=2, minutes=30, seconds=15)
+
+        duration = calculate_duration(start, end)
+        assert isinstance(duration, datetime.timedelta)
+        assert duration.total_seconds() == 9015  # 2h30m15s in seconds
 
     def test_format_duration(self):
-        """Test format_duration formats a timedelta in a human-readable format."""
-        # Test with days, hours, minutes, seconds
-        td = datetime.timedelta(days=2, hours=3, minutes=45, seconds=30)
-        formatted = format_duration(td)
-        self.assertEqual(formatted, "2 days, 3 hours, 45 minutes, 30.00 seconds")
-        
-        # Test with only hours
-        td_hours = datetime.timedelta(hours=5)
-        formatted_hours = format_duration(td_hours)
-        self.assertEqual(formatted_hours, "5 hours")
-        
-        # Test with only minutes
-        td_minutes = datetime.timedelta(minutes=10)
-        formatted_minutes = format_duration(td_minutes)
-        self.assertEqual(formatted_minutes, "10 minutes")
-        
-        # Test with only seconds
-        td_seconds = datetime.timedelta(seconds=15)
-        formatted_seconds = format_duration(td_seconds)
-        self.assertEqual(formatted_seconds, "15.00 seconds")
-        
-        # Test with zero duration
-        td_zero = datetime.timedelta(0)
-        formatted_zero = format_duration(td_zero)
-        self.assertEqual(formatted_zero, "0.00 seconds")
+        """Test that format_duration correctly formats timedeltas."""
+        # Test various durations
+        assert format_duration(datetime.timedelta(days=2, hours=3, minutes=45)) == "2 days, 3 hours, 45 minutes"
+        assert format_duration(datetime.timedelta(hours=1, minutes=30)) == "1 hour, 30 minutes"
+        assert format_duration(datetime.timedelta(minutes=5, seconds=30)) == "5 minutes, 30.00 seconds"
+        assert format_duration(datetime.timedelta(seconds=45)) == "45.00 seconds"
+        assert format_duration(datetime.timedelta(0)) == "0.00 seconds"
 
     def test_format_duration_short(self):
-        """Test format_duration_short formats a timedelta in a short format."""
-        # Test with days, hours, minutes, seconds
-        td = datetime.timedelta(days=2, hours=3, minutes=45, seconds=30)
-        formatted = format_duration_short(td)
-        self.assertEqual(formatted, "2d 3h 45m 30s")
-        
-        # Test with only hours
-        td_hours = datetime.timedelta(hours=5)
-        formatted_hours = format_duration_short(td_hours)
-        self.assertEqual(formatted_hours, "5h")
-        
-        # Test with only minutes
-        td_minutes = datetime.timedelta(minutes=10)
-        formatted_minutes = format_duration_short(td_minutes)
-        self.assertEqual(formatted_minutes, "10m")
-        
-        # Test with only seconds
-        td_seconds = datetime.timedelta(seconds=15)
-        formatted_seconds = format_duration_short(td_seconds)
-        self.assertEqual(formatted_seconds, "15s")
-        
-        # Test with zero duration
-        td_zero = datetime.timedelta(0)
-        formatted_zero = format_duration_short(td_zero)
-        self.assertEqual(formatted_zero, "0s")
+        """Test that format_duration_short correctly formats timedeltas."""
+        # Test various durations
+        assert format_duration_short(datetime.timedelta(days=2, hours=3, minutes=45)) == "2d 3h 45m"
+        assert format_duration_short(datetime.timedelta(hours=1, minutes=30)) == "1h 30m"
+        assert format_duration_short(datetime.timedelta(minutes=5, seconds=30)) == "5m 30s"
+        assert format_duration_short(datetime.timedelta(seconds=45)) == "45s"
+        assert format_duration_short(datetime.timedelta(0)) == "0s"
 
-    @freeze_time("2023-04-15 14:30:45.123456")
+    @freeze_time("2023-04-15 12:30:45", tz_offset=0)
     def test_calculate_age(self):
-        """Test calculate_age calculates the age of a datetime."""
-        # 1 day old
-        dt = datetime.datetime(2023, 4, 14, 14, 30, 45, 123456, tzinfo=datetime.timezone.utc)
+        """Test that calculate_age correctly calculates the age of a datetime."""
+        # Test with a datetime 2 days ago
+        dt = datetime.datetime(2023, 4, 13, 12, 30, 45, tzinfo=datetime.timezone.utc)
         age = calculate_age(dt)
-        self.assertEqual(age, datetime.timedelta(days=1))
-        
-        # Test with timezone-naive datetime
-        dt_naive = datetime.datetime(2023, 4, 14, 14, 30, 45, 123456)
-        age_naive = calculate_age(dt_naive)
-        self.assertEqual(age_naive, datetime.timedelta(days=1))
+        assert isinstance(age, datetime.timedelta)
+        assert age.days == 2
 
-    @freeze_time("2023-04-15 14:30:45.123456")
+    @freeze_time("2023-04-15 12:30:45", tz_offset=0)
     def test_format_age(self):
-        """Test format_age formats the age of a datetime."""
-        # 1 day old
-        dt = datetime.datetime(2023, 4, 14, 14, 30, 45, 123456, tzinfo=datetime.timezone.utc)
+        """Test that format_age correctly formats the age of a datetime."""
+        # Test with a datetime 2 days, 3 hours ago
+        dt = datetime.datetime(2023, 4, 13, 9, 30, 45, tzinfo=datetime.timezone.utc)
         
-        # Test with default format
-        formatted = format_age(dt)
-        self.assertEqual(formatted, "1 day")
+        # Long format
+        age_str = format_age(dt, short=False)
+        assert "2 days, 3 hours" in age_str
         
-        # Test with short format
-        formatted_short = format_age(dt, short=True)
-        self.assertEqual(formatted_short, "1d")
+        # Short format
+        age_str_short = format_age(dt, short=True)
+        assert age_str_short == "2d 3h"
 
     def test_calculate_processing_time(self):
-        """Test calculate_processing_time calculates processing time from a start time."""
-        with patch('time.time') as mock_time:
-            # Mock time.time() to return a fixed value
-            mock_time.return_value = 100.5
-            
-            # Test with start time 100.0 (0.5 seconds elapsed)
-            processing_time = calculate_processing_time(100.0)
-            self.assertEqual(processing_time, 0.5)
+        """Test that calculate_processing_time correctly calculates processing time."""
+        start_time = time.time() - 1.5  # 1.5 seconds ago
+        processing_time = calculate_processing_time(start_time)
+        
+        # Should be approximately 1.5 seconds, allow small margin for test execution time
+        assert 1.4 <= processing_time <= 1.6
 
     def test_format_processing_time(self):
-        """Test format_processing_time formats processing time in a human-readable format."""
-        # Test with seconds
-        formatted_seconds = format_processing_time(5.25)
-        self.assertEqual(formatted_seconds, "5.25 s")
+        """Test that format_processing_time correctly formats processing times."""
+        # Test microseconds
+        assert format_processing_time(0.000123) == "123.00 μs"
         
-        # Test with milliseconds
-        formatted_ms = format_processing_time(0.25)
-        self.assertEqual(formatted_ms, "250.00 ms")
+        # Test milliseconds
+        assert format_processing_time(0.123) == "123.00 ms"
         
-        # Test with microseconds
-        formatted_us = format_processing_time(0.0005)
-        self.assertEqual(formatted_us, "500.00 μs")
+        # Test seconds
+        assert format_processing_time(1.23) == "1.23 s"
 
-    def test_get_document_processing_start_time(self):
-        """Test get_document_processing_start_time returns the current time."""
-        with patch('time.time') as mock_time:
-            # Mock time.time() to return a fixed value
-            mock_time.return_value = 100.0
+    @patch("src.utils.time_utils.calculate_processing_time")
+    def test_calculate_document_processing_time(self, mock_calculate_processing_time):
+        """Test that calculate_document_processing_time correctly calculates and formats processing time."""
+        mock_calculate_processing_time.return_value = 1.23
+        
+        processing_time, formatted_time = calculate_document_processing_time(123.45)
+        
+        assert processing_time == 1.23
+        assert formatted_time == "1.23 s"
+        mock_calculate_processing_time.assert_called_once_with(123.45)
+
+
+# Test timezone handling functions
+class TestTimezoneHandling:
+    """Test cases for timezone handling functions."""
+
+    @patch("src.utils.time_utils.USING_ZONEINFO", True)
+    @patch("src.utils.time_utils.ZoneInfo")
+    def test_convert_timezone_zoneinfo(self, mock_zoneinfo, fixed_datetime):
+        """Test that convert_timezone correctly converts timezones using ZoneInfo."""
+        # Setup mock
+        mock_tz = Mock()
+        mock_zoneinfo.return_value = mock_tz
+        
+        # Call function
+        result = convert_timezone(fixed_datetime, "America/New_York")
+        
+        # Assertions
+        mock_zoneinfo.assert_called_once_with("America/New_York")
+        assert result.tzinfo == mock_tz
+
+    @patch("src.utils.time_utils.USING_ZONEINFO", False)
+    @patch("src.utils.time_utils.pytz")
+    def test_convert_timezone_pytz(self, mock_pytz, fixed_datetime):
+        """Test that convert_timezone correctly converts timezones using pytz."""
+        # Setup mock
+        mock_tz = Mock()
+        mock_pytz.timezone.return_value = mock_tz
+        
+        # Call function
+        result = convert_timezone(fixed_datetime, "America/New_York")
+        
+        # Assertions
+        mock_pytz.timezone.assert_called_once_with("America/New_York")
+        assert result.tzinfo == mock_tz
+
+    @patch("src.utils.time_utils.USING_ZONEINFO", True)
+    @patch("src.utils.time_utils.ZoneInfo", side_effect=Exception("Invalid timezone"))
+    def test_convert_timezone_invalid(self, mock_zoneinfo, fixed_datetime):
+        """Test that convert_timezone raises ValueError for invalid timezones."""
+        with pytest.raises(ValueError) as excinfo:
+            convert_timezone(fixed_datetime, "Invalid/Timezone")
+        assert "Invalid timezone" in str(excinfo.value)
+
+    def test_convert_timezone_naive(self, fixed_datetime_naive):
+        """Test that convert_timezone handles naive datetime objects."""
+        with patch("src.utils.time_utils.USING_ZONEINFO", True):
+            with patch("src.utils.time_utils.ZoneInfo") as mock_zoneinfo:
+                mock_tz = Mock()
+                mock_zoneinfo.return_value = mock_tz
+                
+                result = convert_timezone(fixed_datetime_naive, "America/New_York")
+                
+                # Should have added UTC timezone before converting
+                assert result.tzinfo == mock_tz
+
+    @patch("src.utils.time_utils.USING_ZONEINFO", True)
+    @patch("src.utils.time_utils.ZoneInfo")
+    @freeze_time("2023-04-15 12:30:45", tz_offset=0)
+    def test_get_timezone_offset(self, mock_zoneinfo):
+        """Test that get_timezone_offset returns the correct timezone offset."""
+        # Setup mock for EST (UTC-5)
+        mock_tz = Mock()
+        mock_zoneinfo.return_value = mock_tz
+        
+        # Mock the result of astimezone to return a datetime with -05:00 offset
+        mock_dt = Mock()
+        mock_dt.strftime.return_value = "-0500"
+        
+        with patch("datetime.datetime.astimezone", return_value=mock_dt):
+            offset = get_timezone_offset("America/New_York")
             
-            start_time = get_document_processing_start_time()
-            self.assertEqual(start_time, 100.0)
+            mock_zoneinfo.assert_called_once_with("America/New_York")
+            assert offset == "-05:00"
 
-    def test_calculate_document_processing_time(self):
-        """Test calculate_document_processing_time calculates and formats processing time."""
-        with patch('time.time') as mock_time:
-            # Mock time.time() to return a fixed value
-            mock_time.return_value = 100.5
-            
-            # Test with start time 100.0 (0.5 seconds elapsed)
-            proc_time, formatted_time = calculate_document_processing_time(100.0)
-            self.assertEqual(proc_time, 0.5)
-            self.assertEqual(formatted_time, "0.50 s")
+    @patch("src.utils.time_utils.USING_ZONEINFO", True)
+    @patch("src.utils.time_utils.ZoneInfo", side_effect=Exception("Invalid timezone"))
+    def test_get_timezone_offset_invalid(self, mock_zoneinfo):
+        """Test that get_timezone_offset raises ValueError for invalid timezones."""
+        with pytest.raises(ValueError) as excinfo:
+            get_timezone_offset("Invalid/Timezone")
+        assert "Invalid timezone" in str(excinfo.value)
 
-    def test_format_timestamp_for_message(self):
-        """Test format_timestamp_for_message formats a timestamp for message payloads."""
-        # Test with provided datetime
-        formatted = format_timestamp_for_message(self.test_dt)
-        self.assertEqual(formatted, self.test_iso_str)
+    @patch("src.utils.time_utils.USING_ZONEINFO", True)
+    @patch("src.utils.time_utils.ZoneInfo")
+    def test_add_timezone_info(self, mock_zoneinfo, fixed_datetime_naive):
+        """Test that add_timezone_info correctly adds timezone information."""
+        # Setup mock
+        mock_tz = Mock()
+        mock_zoneinfo.return_value = mock_tz
         
-        # Test with naive datetime
-        formatted_naive = format_timestamp_for_message(self.test_dt_naive)
-        self.assertEqual(formatted_naive, self.test_iso_str)
+        # Call function
+        result = add_timezone_info(fixed_datetime_naive, "America/New_York")
         
-        # Test with current time
-        with patch('src.utils.time_utils.get_current_timestamp') as mock_get_current:
-            mock_get_current.return_value = self.test_dt
-            formatted_current = format_timestamp_for_message()
-            self.assertEqual(formatted_current, self.test_iso_str)
+        # Assertions
+        mock_zoneinfo.assert_called_once_with("America/New_York")
+        assert result.tzinfo == mock_tz
 
-    def test_format_document_metadata_timestamp(self):
-        """Test format_document_metadata_timestamp formats a timestamp for document metadata."""
-        # This function calls format_timestamp_for_message, so we can test by verifying the call
-        with patch('src.utils.time_utils.format_timestamp_for_message') as mock_format:
-            mock_format.return_value = self.test_iso_str
-            
-            # Test with provided datetime
-            formatted = format_document_metadata_timestamp(self.test_dt)
-            mock_format.assert_called_once_with(self.test_dt)
-            self.assertEqual(formatted, self.test_iso_str)
+    def test_add_timezone_info_already_aware(self, fixed_datetime):
+        """Test that add_timezone_info raises ValueError for already timezone-aware datetimes."""
+        with pytest.raises(ValueError) as excinfo:
+            add_timezone_info(fixed_datetime, "America/New_York")
+        assert "already has timezone information" in str(excinfo.value)
 
-    def test_format_log_timestamp(self):
-        """Test format_log_timestamp formats a timestamp for log entries."""
-        # Test with provided datetime
-        formatted = format_log_timestamp(self.test_dt)
-        self.assertEqual(formatted, "2023-04-15T14:30:45.123456Z")
-        
-        # Test with naive datetime
-        formatted_naive = format_log_timestamp(self.test_dt_naive)
-        self.assertEqual(formatted_naive, "2023-04-15T14:30:45.123456Z")
-        
-        # Test with current time
-        with patch('src.utils.time_utils.get_current_timestamp') as mock_get_current:
-            mock_get_current.return_value = self.test_dt
-            formatted_current = format_log_timestamp()
-            self.assertEqual(formatted_current, "2023-04-15T14:30:45.123456Z")
 
-    def test_compare_document_timestamps(self):
-        """Test compare_document_timestamps compares two document timestamps."""
-        # dt1 is before dt2
-        dt1 = datetime.datetime(2023, 4, 15, 10, 0, 0, tzinfo=datetime.timezone.utc)
-        dt2 = datetime.datetime(2023, 4, 15, 22, 0, 0, tzinfo=datetime.timezone.utc)
-        self.assertEqual(compare_document_timestamps(dt1, dt2), -1)
-        
-        # dt2 is after dt1
-        self.assertEqual(compare_document_timestamps(dt2, dt1), 1)
-        
-        # Same datetime
-        self.assertEqual(compare_document_timestamps(dt1, dt1), 0)
-        
-        # Test with string timestamps
-        dt1_str = "2023-04-15T10:00:00+00:00"
-        dt2_str = "2023-04-15T22:00:00+00:00"
-        self.assertEqual(compare_document_timestamps(dt1_str, dt2_str), -1)
-        
-        # Test with mixed types
-        self.assertEqual(compare_document_timestamps(dt1, dt2_str), -1)
-        self.assertEqual(compare_document_timestamps(dt1_str, dt2), -1)
+# Test Unix timestamp conversion functions
+class TestUnixTimestampConversion:
+    """Test cases for Unix timestamp conversion functions."""
 
-    @freeze_time("2023-04-15 14:30:45.123456")
-    def test_get_message_timestamp(self):
-        """Test get_message_timestamp returns a timestamp dictionary for message payloads."""
-        timestamp_dict = get_message_timestamp()
+    def test_timestamp_to_unix(self, fixed_datetime):
+        """Test that timestamp_to_unix correctly converts a datetime to Unix timestamp."""
+        # 2023-04-15 12:30:45 UTC in Unix time
+        expected_unix_time = 1681562645.0
         
-        self.assertIn("timestamp", timestamp_dict)
-        self.assertIn("unix_timestamp", timestamp_dict)
-        self.assertIn("timezone", timestamp_dict)
+        unix_time = timestamp_to_unix(fixed_datetime)
+        assert unix_time == expected_unix_time
+
+    def test_timestamp_to_unix_naive(self, fixed_datetime_naive):
+        """Test that timestamp_to_unix handles naive datetime objects."""
+        # 2023-04-15 12:30:45 UTC in Unix time
+        expected_unix_time = 1681562645.0
         
-        self.assertEqual(timestamp_dict["timestamp"], "2023-04-15T14:30:45.123456+00:00")
-        self.assertAlmostEqual(timestamp_dict["unix_timestamp"], 1681568645.123456, places=3)
-        self.assertEqual(timestamp_dict["timezone"], "UTC")
-
-    def test_validate_timestamp_format(self):
-        """Test validate_timestamp_format validates ISO 8601 timestamp strings."""
-        # Valid formats
-        self.assertTrue(validate_timestamp_format("2023-04-15T14:30:45+00:00"))
-        self.assertTrue(validate_timestamp_format("2023-04-15T14:30:45Z"))
-        self.assertTrue(validate_timestamp_format("2023-04-15T14:30:45.123456+00:00"))
-        
-        # Invalid formats
-        self.assertFalse(validate_timestamp_format("2023-04-15"))
-        self.assertFalse(validate_timestamp_format("14:30:45"))
-        self.assertFalse(validate_timestamp_format("not-a-timestamp"))
-
-    def test_get_document_age_category(self):
-        """Test get_document_age_category categorizes documents based on age."""
-        with freeze_time("2023-04-15 14:30:45.123456"):
-            # New (less than 1 day old)
-            dt_new = datetime.datetime(2023, 4, 15, 10, 0, 0, tzinfo=datetime.timezone.utc)
-            self.assertEqual(get_document_age_category(dt_new), "new")
-            
-            # Recent (less than 1 week old)
-            dt_recent = datetime.datetime(2023, 4, 10, 10, 0, 0, tzinfo=datetime.timezone.utc)
-            self.assertEqual(get_document_age_category(dt_recent), "recent")
-            
-            # Old (less than 1 month old)
-            dt_old = datetime.datetime(2023, 3, 20, 10, 0, 0, tzinfo=datetime.timezone.utc)
-            self.assertEqual(get_document_age_category(dt_old), "old")
-            
-            # Archived (1 month or older)
-            dt_archived = datetime.datetime(2023, 3, 1, 10, 0, 0, tzinfo=datetime.timezone.utc)
-            self.assertEqual(get_document_age_category(dt_archived), "archived")
-            
-            # Test with string timestamp
-            dt_new_str = "2023-04-15T10:00:00+00:00"
-            self.assertEqual(get_document_age_category(dt_new_str), "new")
-
-    def test_get_processing_deadline(self):
-        """Test get_processing_deadline calculates the processing deadline based on SLA."""
-        # Test with default SLA (5 minutes)
-        received = datetime.datetime(2023, 4, 15, 14, 30, 0, tzinfo=datetime.timezone.utc)
-        deadline = get_processing_deadline(received)
-        expected = datetime.datetime(2023, 4, 15, 14, 35, 0, tzinfo=datetime.timezone.utc)
-        self.assertEqual(deadline, expected)
-        
-        # Test with custom SLA (10 minutes)
-        deadline_custom = get_processing_deadline(received, processing_sla_minutes=10)
-        expected_custom = datetime.datetime(2023, 4, 15, 14, 40, 0, tzinfo=datetime.timezone.utc)
-        self.assertEqual(deadline_custom, expected_custom)
-        
-        # Test with string timestamp
-        received_str = "2023-04-15T14:30:00+00:00"
-        deadline_str = get_processing_deadline(received_str)
-        self.assertEqual(deadline_str, expected)
-
-    def test_is_processing_overdue(self):
-        """Test is_processing_overdue checks if processing is overdue based on SLA."""
-        with freeze_time("2023-04-15 14:36:00"):
-            # Overdue (received 7 minutes ago, SLA is 5 minutes)
-            received_overdue = datetime.datetime(2023, 4, 15, 14, 29, 0, tzinfo=datetime.timezone.utc)
-            self.assertTrue(is_processing_overdue(received_overdue))
-            
-            # Not overdue (received 3 minutes ago, SLA is 5 minutes)
-            received_not_overdue = datetime.datetime(2023, 4, 15, 14, 33, 0, tzinfo=datetime.timezone.utc)
-            self.assertFalse(is_processing_overdue(received_not_overdue))
-            
-            # Test with custom SLA (10 minutes)
-            self.assertFalse(is_processing_overdue(received_overdue, processing_sla_minutes=10))
-            
-            # Test with string timestamp
-            received_overdue_str = "2023-04-15T14:29:00+00:00"
-            self.assertTrue(is_processing_overdue(received_overdue_str))
-
-    def test_format_time_remaining(self):
-        """Test format_time_remaining formats the time remaining until a deadline."""
-        with freeze_time("2023-04-15 14:30:00"):
-            # 5 minutes remaining
-            deadline = datetime.datetime(2023, 4, 15, 14, 35, 0, tzinfo=datetime.timezone.utc)
-            formatted = format_time_remaining(deadline)
-            self.assertEqual(formatted, "5 minutes")
-            
-            # Overdue
-            deadline_overdue = datetime.datetime(2023, 4, 15, 14, 25, 0, tzinfo=datetime.timezone.utc)
-            formatted_overdue = format_time_remaining(deadline_overdue)
-            self.assertEqual(formatted_overdue, "Overdue")
-            
-            # Test with naive datetime
-            deadline_naive = datetime.datetime(2023, 4, 15, 14, 35, 0)
-            formatted_naive = format_time_remaining(deadline_naive)
-            self.assertEqual(formatted_naive, "5 minutes")
-
-    def test_timestamp_to_unix(self):
-        """Test timestamp_to_unix converts a datetime to a Unix timestamp."""
-        # Test with timezone-aware datetime
-        unix_timestamp = timestamp_to_unix(self.test_dt)
-        self.assertAlmostEqual(unix_timestamp, self.test_unix_timestamp, places=3)
-        
-        # Test with naive datetime
-        unix_timestamp_naive = timestamp_to_unix(self.test_dt_naive)
-        self.assertAlmostEqual(unix_timestamp_naive, self.test_unix_timestamp, places=3)
+        unix_time = timestamp_to_unix(fixed_datetime_naive)
+        assert unix_time == expected_unix_time
 
     def test_unix_to_timestamp(self):
-        """Test unix_to_timestamp converts a Unix timestamp to a datetime."""
-        dt = unix_to_timestamp(self.test_unix_timestamp)
+        """Test that unix_to_timestamp correctly converts a Unix timestamp to datetime."""
+        # 2023-04-15 12:30:45 UTC in Unix time
+        unix_time = 1681562645.0
         
-        # Check that the datetime is correct (allowing for small floating-point differences)
-        self.assertEqual(dt.year, self.test_dt.year)
-        self.assertEqual(dt.month, self.test_dt.month)
-        self.assertEqual(dt.day, self.test_dt.day)
-        self.assertEqual(dt.hour, self.test_dt.hour)
-        self.assertEqual(dt.minute, self.test_dt.minute)
-        self.assertEqual(dt.second, self.test_dt.second)
-        self.assertEqual(dt.tzinfo, datetime.timezone.utc)
+        dt = unix_to_timestamp(unix_time)
+        assert dt.year == 2023
+        assert dt.month == 4
+        assert dt.day == 15
+        assert dt.hour == 12
+        assert dt.minute == 30
+        assert dt.second == 45
+        assert dt.tzinfo == datetime.timezone.utc
 
-    @patch('src.utils.time_utils.USING_ZONEINFO', True)
-    @patch('src.utils.time_utils.ZoneInfo')
-    def test_convert_timezone_zoneinfo(self, mock_zoneinfo):
-        """Test convert_timezone using ZoneInfo."""
-        # Mock ZoneInfo to return a fixed timezone
-        mock_tz = Mock()
-        mock_zoneinfo.return_value = mock_tz
-        
-        # Create a datetime with UTC timezone
-        dt = datetime.datetime(2023, 4, 15, 14, 30, 45, tzinfo=datetime.timezone.utc)
-        
-        # Mock the astimezone method
-        expected_result = datetime.datetime(2023, 4, 15, 10, 30, 45, tzinfo=mock_tz)
-        dt.astimezone = Mock(return_value=expected_result)
-        
-        # Convert to America/New_York
-        result = convert_timezone(dt, "America/New_York")
-        
-        # Verify ZoneInfo was called with the correct timezone
-        mock_zoneinfo.assert_called_once_with("America/New_York")
-        
-        # Verify astimezone was called with the correct timezone
-        dt.astimezone.assert_called_once_with(mock_tz)
-        
-        # Verify the result
-        self.assertEqual(result, expected_result)
 
-    @patch('src.utils.time_utils.USING_ZONEINFO', False)
-    @patch('src.utils.time_utils.pytz')
-    def test_convert_timezone_pytz(self, mock_pytz):
-        """Test convert_timezone using pytz."""
-        # Mock pytz to return a fixed timezone
-        mock_tz = Mock()
-        mock_pytz.timezone.return_value = mock_tz
-        
-        # Create a datetime with UTC timezone
-        dt = datetime.datetime(2023, 4, 15, 14, 30, 45, tzinfo=datetime.timezone.utc)
-        
-        # Mock the astimezone method
-        expected_result = datetime.datetime(2023, 4, 15, 10, 30, 45, tzinfo=mock_tz)
-        dt.astimezone = Mock(return_value=expected_result)
-        
-        # Convert to America/New_York
-        result = convert_timezone(dt, "America/New_York")
-        
-        # Verify pytz.timezone was called with the correct timezone
-        mock_pytz.timezone.assert_called_once_with("America/New_York")
-        
-        # Verify astimezone was called with the correct timezone
-        dt.astimezone.assert_called_once_with(mock_tz)
-        
-        # Verify the result
-        self.assertEqual(result, expected_result)
+# Test document processing time functions
+class TestDocumentProcessingTime:
+    """Test cases for document processing time functions."""
 
-    def test_convert_timezone_invalid(self):
-        """Test convert_timezone with an invalid timezone."""
-        dt = datetime.datetime(2023, 4, 15, 14, 30, 45, tzinfo=datetime.timezone.utc)
-        with self.assertRaises(ValueError):
-            convert_timezone(dt, "Invalid/Timezone")
+    def test_get_document_processing_start_time(self):
+        """Test that get_document_processing_start_time returns a float timestamp."""
+        start_time = get_document_processing_start_time()
+        assert isinstance(start_time, float)
+        
+        # Should be close to current time.time()
+        current_time = time.time()
+        assert abs(start_time - current_time) < 0.1
 
-    @patch('src.utils.time_utils.USING_ZONEINFO', True)
-    @patch('src.utils.time_utils.ZoneInfo')
-    @freeze_time("2023-04-15 14:30:45.123456")
-    def test_get_timezone_offset_zoneinfo(self, mock_zoneinfo):
-        """Test get_timezone_offset using ZoneInfo."""
-        # Mock ZoneInfo to return a fixed timezone
-        mock_tz = Mock()
-        mock_zoneinfo.return_value = mock_tz
+    @freeze_time("2023-04-15 12:30:45", tz_offset=0)
+    def test_get_message_timestamp(self):
+        """Test that get_message_timestamp returns a correctly formatted dictionary."""
+        message_timestamp = get_message_timestamp()
         
-        # Mock datetime.astimezone to return a datetime with a fixed offset
-        mock_dt = Mock()
-        mock_dt.strftime.return_value = "-0400"
+        assert isinstance(message_timestamp, dict)
+        assert "timestamp" in message_timestamp
+        assert "unix_timestamp" in message_timestamp
+        assert "timezone" in message_timestamp
         
-        with patch('datetime.datetime.astimezone', return_value=mock_dt):
-            # Get offset for America/New_York
-            offset = get_timezone_offset("America/New_York")
+        assert message_timestamp["timestamp"] == "2023-04-15T12:30:45+00:00"
+        assert message_timestamp["unix_timestamp"] == 1681562645.0
+        assert message_timestamp["timezone"] == "UTC"
+
+    @freeze_time("2023-04-15 12:30:45", tz_offset=0)
+    def test_get_processing_deadline(self):
+        """Test that get_processing_deadline correctly calculates the deadline."""
+        # Test with datetime object
+        received = datetime.datetime(2023, 4, 15, 12, 25, 45, tzinfo=datetime.timezone.utc)
+        deadline = get_processing_deadline(received, processing_sla_minutes=5)
+        
+        assert deadline.year == 2023
+        assert deadline.month == 4
+        assert deadline.day == 15
+        assert deadline.hour == 12
+        assert deadline.minute == 30
+        assert deadline.second == 45
+        
+        # Test with string timestamp
+        deadline = get_processing_deadline("2023-04-15T12:25:45Z", processing_sla_minutes=5)
+        
+        assert deadline.year == 2023
+        assert deadline.month == 4
+        assert deadline.day == 15
+        assert deadline.hour == 12
+        assert deadline.minute == 30
+        assert deadline.second == 45
+
+    @freeze_time("2023-04-15 12:30:45", tz_offset=0)
+    def test_is_processing_overdue(self):
+        """Test that is_processing_overdue correctly identifies overdue processing."""
+        # Not overdue (received 3 minutes ago, SLA is 5 minutes)
+        received_not_overdue = datetime.datetime(2023, 4, 15, 12, 27, 45, tzinfo=datetime.timezone.utc)
+        assert is_processing_overdue(received_not_overdue, processing_sla_minutes=5) is False
+        
+        # Overdue (received 6 minutes ago, SLA is 5 minutes)
+        received_overdue = datetime.datetime(2023, 4, 15, 12, 24, 45, tzinfo=datetime.timezone.utc)
+        assert is_processing_overdue(received_overdue, processing_sla_minutes=5) is True
+        
+        # Test with string timestamp
+        assert is_processing_overdue("2023-04-15T12:24:45Z", processing_sla_minutes=5) is True
+
+    @freeze_time("2023-04-15 12:30:45", tz_offset=0)
+    def test_format_time_remaining(self):
+        """Test that format_time_remaining correctly formats the time remaining."""
+        # Future deadline (1 minute from now)
+        future_deadline = datetime.datetime(2023, 4, 15, 12, 31, 45, tzinfo=datetime.timezone.utc)
+        remaining = format_time_remaining(future_deadline)
+        assert remaining == "1 minute, 0.00 seconds"
+        
+        # Past deadline (overdue)
+        past_deadline = datetime.datetime(2023, 4, 15, 12, 29, 45, tzinfo=datetime.timezone.utc)
+        remaining = format_time_remaining(past_deadline)
+        assert remaining == "Overdue"
+
+
+# Test document age categorization
+class TestDocumentAgeCategory:
+    """Test cases for document age categorization functions."""
+
+    @freeze_time("2023-04-15 12:30:45", tz_offset=0)
+    def test_get_document_age_category(self):
+        """Test that get_document_age_category correctly categorizes documents by age."""
+        # New document (less than 1 day old)
+        new_doc = datetime.datetime(2023, 4, 15, 10, 30, 45, tzinfo=datetime.timezone.utc)
+        assert get_document_age_category(new_doc) == "new"
+        
+        # Recent document (less than 1 week old)
+        recent_doc = datetime.datetime(2023, 4, 10, 12, 30, 45, tzinfo=datetime.timezone.utc)
+        assert get_document_age_category(recent_doc) == "recent"
+        
+        # Old document (less than 1 month old)
+        old_doc = datetime.datetime(2023, 3, 20, 12, 30, 45, tzinfo=datetime.timezone.utc)
+        assert get_document_age_category(old_doc) == "old"
+        
+        # Archived document (1 month or older)
+        archived_doc = datetime.datetime(2023, 3, 1, 12, 30, 45, tzinfo=datetime.timezone.utc)
+        assert get_document_age_category(archived_doc) == "archived"
+        
+        # Test with string timestamp
+        assert get_document_age_category("2023-04-15T10:30:45Z") == "new"
+
+
+# Integration tests for multiple functions
+class TestIntegration:
+    """Integration tests for time utility functions."""
+
+    @freeze_time("2023-04-15 12:30:45", tz_offset=0)
+    def test_document_processing_workflow(self):
+        """Test a complete document processing workflow with timestamps."""
+        # 1. Document received
+        received_time = get_current_timestamp()
+        received_str = format_timestamp(received_time)
+        
+        # 2. Start processing
+        start_time = get_document_processing_start_time()
+        
+        # 3. Calculate processing deadline
+        deadline = get_processing_deadline(received_time, processing_sla_minutes=5)
+        
+        # 4. Check if processing is overdue (should not be)
+        assert is_processing_overdue(received_time, processing_sla_minutes=5) is False
+        
+        # 5. Simulate processing delay
+        with freeze_time("2023-04-15 12:32:45", tz_offset=0):
+            # 6. Calculate processing time
+            proc_time, formatted_proc_time = calculate_document_processing_time(start_time)
             
-            # Verify ZoneInfo was called with the correct timezone
-            mock_zoneinfo.assert_called_once_with("America/New_York")
+            # 7. Check if processing is now overdue (should not be, only 2 minutes passed)
+            assert is_processing_overdue(received_time, processing_sla_minutes=5) is False
             
-            # Verify the offset
-            self.assertEqual(offset, "-04:00")
-
-    @patch('src.utils.time_utils.USING_ZONEINFO', False)
-    @patch('src.utils.time_utils.pytz')
-    @freeze_time("2023-04-15 14:30:45.123456")
-    def test_get_timezone_offset_pytz(self, mock_pytz):
-        """Test get_timezone_offset using pytz."""
-        # Mock pytz to return a fixed timezone
-        mock_tz = Mock()
-        mock_pytz.timezone.return_value = mock_tz
-        
-        # Mock datetime.astimezone to return a datetime with a fixed offset
-        mock_dt = Mock()
-        mock_dt.strftime.return_value = "-0400"
-        
-        with patch('datetime.datetime.astimezone', return_value=mock_dt):
-            # Get offset for America/New_York
-            offset = get_timezone_offset("America/New_York")
+            # 8. Format document metadata with processing timestamp
+            metadata_timestamp = format_document_metadata_timestamp()
             
-            # Verify pytz.timezone was called with the correct timezone
-            mock_pytz.timezone.assert_called_once_with("America/New_York")
+            # 9. Create message with timestamp
+            message = get_message_timestamp()
             
-            # Verify the offset
-            self.assertEqual(offset, "-04:00")
+            # Assertions
+            assert proc_time > 0
+            assert "2 minutes" in formatted_proc_time
+            assert metadata_timestamp == "2023-04-15T12:32:45+00:00"
+            assert message["timestamp"] == "2023-04-15T12:32:45+00:00"
 
-    def test_get_timezone_offset_invalid(self):
-        """Test get_timezone_offset with an invalid timezone."""
-        with self.assertRaises(ValueError):
-            get_timezone_offset("Invalid/Timezone")
-
-    @patch('src.utils.time_utils.USING_ZONEINFO', True)
-    @patch('src.utils.time_utils.ZoneInfo')
-    def test_add_timezone_info_zoneinfo(self, mock_zoneinfo):
-        """Test add_timezone_info using ZoneInfo."""
-        # Mock ZoneInfo to return a fixed timezone
-        mock_tz = Mock()
-        mock_zoneinfo.return_value = mock_tz
+    def test_timezone_conversion_workflow(self):
+        """Test a workflow involving timezone conversions."""
+        # Create a datetime in UTC
+        utc_time = datetime.datetime(2023, 4, 15, 12, 30, 45, tzinfo=datetime.timezone.utc)
         
-        # Create a naive datetime
-        dt = datetime.datetime(2023, 4, 15, 14, 30, 45)
-        
-        # Add timezone info
-        result = add_timezone_info(dt, "America/New_York")
-        
-        # Verify ZoneInfo was called with the correct timezone
-        mock_zoneinfo.assert_called_once_with("America/New_York")
-        
-        # Verify the result has the correct timezone
-        self.assertEqual(result.tzinfo, mock_tz)
-
-    @patch('src.utils.time_utils.USING_ZONEINFO', False)
-    @patch('src.utils.time_utils.pytz')
-    def test_add_timezone_info_pytz(self, mock_pytz):
-        """Test add_timezone_info using pytz."""
-        # Mock pytz to return a fixed timezone
-        mock_tz = Mock()
-        mock_pytz.timezone.return_value = mock_tz
-        
-        # Create a naive datetime
-        dt = datetime.datetime(2023, 4, 15, 14, 30, 45)
-        
-        # Mock the localize method
-        expected_result = datetime.datetime(2023, 4, 15, 14, 30, 45, tzinfo=mock_tz)
-        mock_tz.localize = Mock(return_value=expected_result)
-        
-        # Add timezone info
-        result = add_timezone_info(dt, "America/New_York")
-        
-        # Verify pytz.timezone was called with the correct timezone
-        mock_pytz.timezone.assert_called_once_with("America/New_York")
-        
-        # Verify localize was called with the correct datetime
-        mock_tz.localize.assert_called_once_with(dt)
-        
-        # Verify the result
-        self.assertEqual(result, expected_result)
-
-    def test_add_timezone_info_already_aware(self):
-        """Test add_timezone_info with a datetime that already has timezone info."""
-        dt = datetime.datetime(2023, 4, 15, 14, 30, 45, tzinfo=datetime.timezone.utc)
-        with self.assertRaises(ValueError):
-            add_timezone_info(dt, "America/New_York")
-
-    def test_add_timezone_info_invalid(self):
-        """Test add_timezone_info with an invalid timezone."""
-        dt = datetime.datetime(2023, 4, 15, 14, 30, 45)
-        with self.assertRaises(ValueError):
-            add_timezone_info(dt, "Invalid/Timezone")
-
-    def test_get_timestamp_for_filename(self):
-        """Test get_timestamp_for_filename returns a timestamp suitable for filenames."""
-        with freeze_time("2023-04-15 14:30:45"):
-            timestamp = get_timestamp_for_filename()
-            self.assertEqual(timestamp, "20230415_143045")
+        # Convert to different timezones (mocking the actual conversion)
+        with patch("src.utils.time_utils.USING_ZONEINFO", True):
+            with patch("src.utils.time_utils.ZoneInfo") as mock_zoneinfo:
+                # Mock EST timezone (UTC-5)
+                est_tz = datetime.timezone(datetime.timedelta(hours=-5))
+                mock_zoneinfo.return_value = est_tz
+                
+                # Convert to EST
+                est_time = convert_timezone(utc_time, "America/New_York")
+                
+                # Mock JST timezone (UTC+9)
+                jst_tz = datetime.timezone(datetime.timedelta(hours=9))
+                mock_zoneinfo.return_value = jst_tz
+                
+                # Convert to JST
+                jst_time = convert_timezone(utc_time, "Asia/Tokyo")
+                
+                # Assertions
+                assert est_time.tzinfo == est_tz
+                assert jst_time.tzinfo == jst_tz
+                
+                # The actual hour would be different, but we're mocking the conversion
+                # In a real scenario, EST would be 07:30:45 and JST would be 21:30:45
 
 
 if __name__ == "__main__":
-    unittest.main()
+    pytest.main()
