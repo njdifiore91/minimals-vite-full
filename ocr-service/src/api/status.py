@@ -1,14 +1,9 @@
-"""Status API endpoints for the OCR Service.
+"""Status endpoints for monitoring the OCR Service.
 
-This module provides endpoints for monitoring the OCR Service, including:
-- Overall service status
-- Prometheus-compatible metrics
-- OCR processing statistics
-- Queue depth monitoring
-- Resource usage metrics (CPU, GPU, memory)
-
-These endpoints are used by monitoring systems like Datadog to track service
-performance, accuracy metrics, and processing throughput over time.
+This module provides endpoints for checking service status, retrieving metrics,
+and monitoring OCR processing statistics. These endpoints are used by monitoring
+systems like Datadog to track service performance, accuracy metrics, and processing
+throughput over time.
 """
 
 import os
@@ -16,18 +11,15 @@ import time
 import psutil
 from typing import Dict, Any, Optional
 
-import GPUtil
-from fastapi import APIRouter, Depends, HTTPException, Response, Request
-from fastapi.security import APIKeyHeader
-from prometheus_client import (
-    Counter, Gauge, Histogram, Summary, 
-    generate_latest, REGISTRY, CONTENT_TYPE_LATEST
-)
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from prometheus_client import Counter, Gauge, Histogram, REGISTRY
+from prometheus_client.openmetrics.exposition import generate_latest, CONTENT_TYPE_LATEST
 
-from ..config import app_config
-from ..services import OCRService, QueueService
+from ..config import app_config, rabbitmq_config
+from ..services import ocr_service, queue_service
 from ..utils.logging_utils import get_logger
-from ..utils.error_utils import ServiceError
+from ..utils.tensorflow_utils import get_gpu_utilization
+from ..auth.jwt_auth import validate_api_key
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -35,258 +27,263 @@ logger = get_logger(__name__)
 # Create router
 status_router = APIRouter()
 
-# API Key security for sensitive endpoints
-API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
-
 # Define Prometheus metrics
-
-# OCR Processing metrics
-OCR_REQUESTS_TOTAL = Counter(
-    "ocr_requests_total", 
-    "Total number of OCR processing requests",
-    ["document_type", "status"]
+# OCR processing metrics
+OCR_PROCESSING_TOTAL = Counter(
+    'ocr_processing_total',
+    'Total number of documents processed by OCR',
+    ['document_type', 'status']
 )
 
-OCR_PROCESSING_TIME = Histogram(
-    "ocr_processing_time_seconds", 
-    "Time spent processing OCR requests",
-    ["document_type"],
-    buckets=(0.1, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0, float("inf"))
+OCR_PROCESSING_DURATION = Histogram(
+    'ocr_processing_duration_seconds',
+    'Time spent processing documents with OCR',
+    ['document_type'],
+    buckets=[0.1, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0]
 )
 
 OCR_ACCURACY = Gauge(
-    "ocr_accuracy_percent", 
-    "OCR extraction accuracy percentage",
-    ["document_type"]
+    'ocr_accuracy_percentage',
+    'OCR extraction accuracy percentage',
+    ['document_type']
 )
 
-OCR_CONFIDENCE_SCORES = Histogram(
-    "ocr_confidence_scores", 
-    "Distribution of OCR confidence scores",
-    ["document_type"],
-    buckets=(0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.99, 1.0)
+OCR_CONFIDENCE_SCORE = Histogram(
+    'ocr_confidence_score',
+    'Distribution of confidence scores for OCR extractions',
+    ['document_type', 'field_type'],
+    buckets=[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.99, 1.0]
 )
 
 # Queue metrics
 QUEUE_DEPTH = Gauge(
-    "rabbitmq_queue_depth", 
-    "Number of messages in RabbitMQ queue",
-    ["queue_name"]
+    'rabbitmq_queue_depth',
+    'Number of messages in RabbitMQ queue',
+    ['queue_name']
 )
 
-QUEUE_PROCESSING_RATE = Gauge(
-    "rabbitmq_processing_rate", 
-    "Rate of message processing per minute",
-    ["queue_name"]
+QUEUE_PROCESSING_TIME = Histogram(
+    'rabbitmq_processing_time_seconds',
+    'Time spent processing messages from RabbitMQ',
+    ['queue_name'],
+    buckets=[0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 10.0]
 )
 
 # Resource usage metrics
-CPU_USAGE = Gauge("cpu_usage_percent", "CPU usage percentage")
-MEMORY_USAGE = Gauge("memory_usage_bytes", "Memory usage in bytes")
-GPU_USAGE = Gauge("gpu_usage_percent", "GPU usage percentage", ["gpu_id"])
-GPU_MEMORY_USAGE = Gauge("gpu_memory_usage_bytes", "GPU memory usage in bytes", ["gpu_id"])
-
-# Service status metrics
-SERVICE_UPTIME = Gauge("service_uptime_seconds", "Service uptime in seconds")
-SERVICE_INFO = Gauge(
-    "service_info", 
-    "Service information",
-    ["version", "environment"]
-)
-
-# Record start time for uptime calculation
-START_TIME = time.time()
-
-# Set service info metric (constant)
-SERVICE_INFO.labels(
-    version=app_config.VERSION,
-    environment=app_config.ENVIRONMENT
-).set(1)
+CPU_USAGE = Gauge('cpu_usage_percentage', 'CPU usage percentage')
+MEMORY_USAGE = Gauge('memory_usage_bytes', 'Memory usage in bytes')
+GPU_USAGE = Gauge('gpu_usage_percentage', 'GPU usage percentage', ['gpu_id'])
+GPU_MEMORY_USAGE = Gauge('gpu_memory_usage_bytes', 'GPU memory usage in bytes', ['gpu_id'])
 
 
-def verify_api_key(api_key: Optional[str] = Depends(API_KEY_HEADER)) -> bool:
-    """Verify the API key for protected endpoints.
-    
-    Args:
-        api_key: The API key from the request header
-        
-    Returns:
-        bool: True if the API key is valid
-        
-    Raises:
-        HTTPException: If the API key is invalid or missing
-    """
-    if app_config.METRICS_API_KEY and (not api_key or api_key != app_config.METRICS_API_KEY):
-        logger.warning("Unauthorized access attempt to metrics endpoint")
-        raise HTTPException(status_code=401, detail="Invalid or missing API key")
-    return True
-
-
-def update_resource_metrics() -> None:
-    """Update resource usage metrics (CPU, memory, GPU)."""
-    # Update CPU and memory metrics
-    CPU_USAGE.set(psutil.cpu_percent())
-    MEMORY_USAGE.set(psutil.Process(os.getpid()).memory_info().rss)
-    
-    # Update GPU metrics if available
-    try:
-        gpus = GPUtil.getGPUs()
-        for i, gpu in enumerate(gpus):
-            GPU_USAGE.labels(gpu_id=str(i)).set(gpu.load * 100)
-            GPU_MEMORY_USAGE.labels(gpu_id=str(i)).set(gpu.memoryUsed * 1024 * 1024)
-    except Exception as e:
-        logger.warning(f"Failed to update GPU metrics: {str(e)}")
-
-
-def update_queue_metrics(queue_service: QueueService) -> None:
-    """Update RabbitMQ queue metrics.
-    
-    Args:
-        queue_service: The QueueService instance to get queue information
-    """
-    try:
-        # Get queue depths
-        queue_info = queue_service.get_queue_info()
-        for queue_name, info in queue_info.items():
-            QUEUE_DEPTH.labels(queue_name=queue_name).set(info.get("message_count", 0))
-            QUEUE_PROCESSING_RATE.labels(queue_name=queue_name).set(info.get("processing_rate", 0))
-    except Exception as e:
-        logger.warning(f"Failed to update queue metrics: {str(e)}")
-
-
-@status_router.get("/", summary="Get OCR Service status")
-async def get_status(request: Request, _: bool = Depends(verify_api_key)) -> Dict[str, Any]:
-    """Get the current status of the OCR Service.
+@status_router.get("/", summary="Get OCR service status")
+async def get_status(request: Request) -> Dict[str, Any]:
+    """Get the current status of the OCR service.
     
     Returns:
-        Dict containing service status information including:
-        - Service uptime
-        - Version information
-        - Resource usage (CPU, memory, GPU)
-        - Queue depths
-        - Processing statistics
+        Dict[str, Any]: A dictionary containing service status information.
     """
     try:
-        # Get service instances from app state
-        ocr_service = request.app.state.ocr_service
-        queue_service = request.app.state.queue_service
-        
-        # Update resource metrics
-        update_resource_metrics()
-        update_queue_metrics(queue_service)
-        
-        # Calculate uptime
-        uptime_seconds = time.time() - START_TIME
-        SERVICE_UPTIME.set(uptime_seconds)
-        
-        # Get OCR statistics
-        ocr_stats = ocr_service.get_statistics()
-        
-        # Prepare response
-        return {
-            "status": "healthy",
+        # Get basic service information
+        service_info = {
+            "service": "OCR Service",
             "version": app_config.VERSION,
             "environment": app_config.ENVIRONMENT,
-            "uptime_seconds": uptime_seconds,
-            "resource_usage": {
-                "cpu_percent": psutil.cpu_percent(),
-                "memory_bytes": psutil.Process(os.getpid()).memory_info().rss,
-                "gpu": [
-                    {
-                        "id": i,
-                        "name": gpu.name,
-                        "load_percent": gpu.load * 100,
-                        "memory_used_bytes": gpu.memoryUsed * 1024 * 1024,
-                        "memory_total_bytes": gpu.memoryTotal * 1024 * 1024,
-                    }
-                    for i, gpu in enumerate(GPUtil.getGPUs())
-                ] if GPUtil.getGPUs() else []
-            },
-            "queue_info": queue_service.get_queue_info(),
-            "ocr_statistics": ocr_stats
+            "status": "healthy",
+            "uptime_seconds": int(time.time() - psutil.Process(os.getpid()).create_time()),
         }
+        
+        # Add OCR processing statistics
+        service_info["ocr_stats"] = {
+            "processed_total": sum(OCR_PROCESSING_TOTAL.collect()[0].samples[0].value 
+                               for sample in OCR_PROCESSING_TOTAL.collect()[0].samples),
+            "average_accuracy": OCR_ACCURACY._value.get({"document_type": "all"}, 99.0),
+            "average_processing_time": OCR_PROCESSING_DURATION._sum.get({"document_type": "all"}, 0) / 
+                                      max(OCR_PROCESSING_DURATION._count.get({"document_type": "all"}, 1), 1)
+        }
+        
+        # Add queue information
+        service_info["queue_stats"] = {
+            "queue_depth": {
+                queue: QUEUE_DEPTH._value.get({"queue_name": queue}, 0)
+                for queue in rabbitmq_config.QUEUE_NAMES
+            },
+            "messages_processed": sum(QUEUE_PROCESSING_TIME._count.values())
+        }
+        
+        # Add resource usage
+        cpu_percent = psutil.cpu_percent(interval=0.1)
+        memory_info = psutil.Process(os.getpid()).memory_info()
+        
+        service_info["resource_usage"] = {
+            "cpu_percent": cpu_percent,
+            "memory_bytes": memory_info.rss,
+            "gpu": get_gpu_utilization()
+        }
+        
+        # Update metrics
+        CPU_USAGE.set(cpu_percent)
+        MEMORY_USAGE.set(memory_info.rss)
+        
+        # Update GPU metrics if available
+        gpu_stats = get_gpu_utilization()
+        if gpu_stats:
+            for gpu_id, stats in gpu_stats.items():
+                GPU_USAGE.labels(gpu_id=gpu_id).set(stats["utilization"])
+                GPU_MEMORY_USAGE.labels(gpu_id=gpu_id).set(stats["memory_used"])
+        
+        return service_info
+    
     except Exception as e:
         logger.error(f"Error getting service status: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error getting service status: {str(e)}")
-
-
-@status_router.get("/metrics", summary="Get Prometheus metrics")
-async def metrics(request: Request, _: bool = Depends(verify_api_key)) -> Response:
-    """Get Prometheus-compatible metrics.
-    
-    Returns:
-        Response with Prometheus metrics in the OpenMetrics format
-    """
-    try:
-        # Get service instances from app state
-        ocr_service = request.app.state.ocr_service
-        queue_service = request.app.state.queue_service
-        
-        # Update resource metrics
-        update_resource_metrics()
-        update_queue_metrics(queue_service)
-        
-        # Calculate uptime
-        uptime_seconds = time.time() - START_TIME
-        SERVICE_UPTIME.set(uptime_seconds)
-        
-        # Get OCR statistics and update metrics
-        ocr_stats = ocr_service.get_statistics()
-        
-        # Update OCR metrics based on statistics
-        for doc_type, stats in ocr_stats.get("by_document_type", {}).items():
-            # Update accuracy metrics
-            if "accuracy" in stats:
-                OCR_ACCURACY.labels(document_type=doc_type).set(stats["accuracy"] * 100)
-            
-            # Update confidence score distributions if available
-            if "confidence_distribution" in stats:
-                for confidence_range, count in stats["confidence_distribution"].items():
-                    # Convert range string to float for histogram bucket
-                    # Example: "0.9-1.0" -> use midpoint 0.95
-                    if "-" in confidence_range:
-                        low, high = map(float, confidence_range.split("-"))
-                        midpoint = (low + high) / 2
-                        # Add to histogram by observing the midpoint value 'count' times
-                        for _ in range(int(count)):
-                            OCR_CONFIDENCE_SCORES.labels(document_type=doc_type).observe(midpoint)
-        
-        # Generate and return metrics in Prometheus format
-        return Response(generate_latest(REGISTRY), media_type=CONTENT_TYPE_LATEST)
-    except Exception as e:
-        logger.error(f"Error generating metrics: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error generating metrics: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error getting service status: {str(e)}"
+        )
 
 
 @status_router.get("/health", summary="Health check endpoint")
 async def health_check() -> Dict[str, str]:
-    """Simple health check endpoint that doesn't require authentication.
-    
-    This endpoint is used by Kubernetes liveness probes.
+    """Simple health check endpoint for load balancers and monitoring systems.
     
     Returns:
-        Dict with status information
+        Dict[str, str]: A dictionary with status information.
     """
     return {"status": "healthy"}
 
 
-@status_router.get("/statistics", summary="Get detailed OCR statistics")
-async def get_statistics(request: Request, _: bool = Depends(verify_api_key)) -> Dict[str, Any]:
-    """Get detailed OCR processing statistics.
+@status_router.get("/metrics", summary="Get Prometheus metrics")
+async def metrics(request: Request, response: Response) -> Response:
+    """Get Prometheus metrics for the OCR service.
+    
+    This endpoint exposes all Prometheus metrics in the OpenMetrics format,
+    which can be scraped by Prometheus.
+    
+    Args:
+        request: The FastAPI request object.
+        response: The FastAPI response object.
     
     Returns:
-        Dict containing detailed OCR statistics including:
-        - Processing counts by document type
-        - Accuracy metrics
-        - Processing times
-        - Confidence score distributions
+        Response: A response containing Prometheus metrics.
+    """
+    # Update queue depth metrics
+    try:
+        queue_depths = await queue_service.get_queue_depths()
+        for queue_name, depth in queue_depths.items():
+            QUEUE_DEPTH.labels(queue_name=queue_name).set(depth)
+    except Exception as e:
+        logger.warning(f"Failed to update queue depth metrics: {str(e)}")
+    
+    # Generate metrics output
+    response.headers["Content-Type"] = CONTENT_TYPE_LATEST
+    return Response(content=generate_latest(REGISTRY), media_type=CONTENT_TYPE_LATEST)
+
+
+@status_router.get("/metrics/ocr", summary="Get OCR-specific metrics", dependencies=[Depends(validate_api_key)])
+async def ocr_metrics() -> Dict[str, Any]:
+    """Get detailed OCR-specific metrics.
+    
+    This endpoint requires authentication and provides detailed metrics about
+    OCR processing, including accuracy by document type, confidence scores,
+    and processing times.
+    
+    Returns:
+        Dict[str, Any]: A dictionary containing OCR metrics.
     """
     try:
-        # Get OCR service from app state
-        ocr_service = request.app.state.ocr_service
+        # Get OCR metrics from the OCR service
+        ocr_metrics = await ocr_service.get_metrics()
         
-        # Get detailed statistics
-        return ocr_service.get_statistics()
+        # Update Prometheus metrics based on the retrieved data
+        for doc_type, stats in ocr_metrics["accuracy"].items():
+            OCR_ACCURACY.labels(document_type=doc_type).set(stats["percentage"])
+        
+        # Return the detailed metrics
+        return ocr_metrics
+    
     except Exception as e:
-        logger.error(f"Error getting OCR statistics: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error getting OCR statistics: {str(e)}")
+        logger.error(f"Error getting OCR metrics: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error getting OCR metrics: {str(e)}"
+        )
+
+
+@status_router.get("/metrics/queue", summary="Get queue metrics", dependencies=[Depends(validate_api_key)])
+async def queue_metrics() -> Dict[str, Any]:
+    """Get detailed queue metrics.
+    
+    This endpoint requires authentication and provides detailed metrics about
+    RabbitMQ queues, including queue depths, processing times, and error rates.
+    
+    Returns:
+        Dict[str, Any]: A dictionary containing queue metrics.
+    """
+    try:
+        # Get queue metrics from the queue service
+        queue_metrics = await queue_service.get_metrics()
+        
+        # Update Prometheus metrics based on the retrieved data
+        for queue_name, depth in queue_metrics["queue_depths"].items():
+            QUEUE_DEPTH.labels(queue_name=queue_name).set(depth)
+        
+        # Return the detailed metrics
+        return queue_metrics
+    
+    except Exception as e:
+        logger.error(f"Error getting queue metrics: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error getting queue metrics: {str(e)}"
+        )
+
+
+@status_router.get("/metrics/resource", summary="Get resource usage metrics", dependencies=[Depends(validate_api_key)])
+async def resource_metrics() -> Dict[str, Any]:
+    """Get detailed resource usage metrics.
+    
+    This endpoint requires authentication and provides detailed metrics about
+    resource usage, including CPU, memory, and GPU utilization.
+    
+    Returns:
+        Dict[str, Any]: A dictionary containing resource usage metrics.
+    """
+    try:
+        # Get CPU and memory usage
+        cpu_percent = psutil.cpu_percent(interval=0.5)
+        memory_info = psutil.Process(os.getpid()).memory_info()
+        
+        # Get GPU utilization if available
+        gpu_stats = get_gpu_utilization()
+        
+        # Update Prometheus metrics
+        CPU_USAGE.set(cpu_percent)
+        MEMORY_USAGE.set(memory_info.rss)
+        
+        if gpu_stats:
+            for gpu_id, stats in gpu_stats.items():
+                GPU_USAGE.labels(gpu_id=gpu_id).set(stats["utilization"])
+                GPU_MEMORY_USAGE.labels(gpu_id=gpu_id).set(stats["memory_used"])
+        
+        # Return detailed resource metrics
+        return {
+            "cpu": {
+                "usage_percent": cpu_percent,
+                "core_count": psutil.cpu_count(),
+                "load_average": os.getloadavg(),
+            },
+            "memory": {
+                "total_bytes": psutil.virtual_memory().total,
+                "available_bytes": psutil.virtual_memory().available,
+                "used_bytes": memory_info.rss,
+                "percent": psutil.virtual_memory().percent,
+            },
+            "gpu": gpu_stats or {},
+        }
+    
+    except Exception as e:
+        logger.error(f"Error getting resource metrics: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error getting resource metrics: {str(e)}"
+        )
