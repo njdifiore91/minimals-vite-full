@@ -1,5 +1,8 @@
 package com.dollarfunding.mca.cache;
 
+import com.dollarfunding.mca.TestData;
+import com.dollarfunding.mca.entity.Application;
+import com.dollarfunding.mca.entity.Document;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -10,32 +13,35 @@ import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.redis.RedisConnectionFailureException;
+import org.springframework.data.redis.core.HashOperations;
+import org.springframework.data.redis.core.ListOperations;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.SetOperations;
 import org.springframework.data.redis.core.ValueOperations;
 
-import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
-import java.util.function.Supplier;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 /**
- * Unit tests for {@link RedisCacheService} that implements the {@link CacheService} interface using Redis.
+ * Unit tests for the RedisCacheService class that implements the CacheService interface using Redis.
  * 
  * These tests verify:
- * - Basic cache operations (get, set, delete, exists) with various data types
- * - TTL-based caching with configurable expiration times (15 minutes for application data, 24 hours for sessions)
- * - Error handling and logging for cache operation failures
- * - Serialization/deserialization of complex objects
- * - Performance optimization for high-throughput operations
+ * 1. Basic cache operations (get, set, delete, exists) with various data types
+ * 2. TTL-based caching with 15-minute expiration for application data and 24-hour expiration for sessions
+ * 3. Error handling and logging for cache operation failures
+ * 4. Serialization/deserialization of complex objects
+ * 5. Performance optimization for high-throughput cache operations
  */
 @ExtendWith(MockitoExtension.class)
 public class RedisCacheServiceTest {
@@ -47,26 +53,39 @@ public class RedisCacheServiceTest {
     private ValueOperations<String, Object> valueOperations;
 
     @Mock
-    private CacheMetricsCollector metricsCollector;
+    private ListOperations<String, Object> listOperations;
 
     @Mock
-    private CacheKeyGenerator keyGenerator;
+    private SetOperations<String, Object> setOperations;
+
+    @Mock
+    private HashOperations<String, Object, Object> hashOperations;
+
+    @Mock
+    private CacheMetricsCollector metricsCollector;
 
     @Captor
-    private ArgumentCaptor<Duration> durationCaptor;
+    private ArgumentCaptor<String> keyCaptor;
+
+    @Captor
+    private ArgumentCaptor<Object> valueCaptor;
+
+    @Captor
+    private ArgumentCaptor<Long> ttlCaptor;
+
+    @Captor
+    private ArgumentCaptor<TimeUnit> timeUnitCaptor;
 
     private RedisCacheService cacheService;
-
-    // Test data
-    private static final String TEST_KEY = "test:key";
-    private static final String TEST_VALUE = "test-value";
-    private static final Long TEST_NUMERIC_VALUE = 42L;
-    private static final Duration TEST_TTL = Duration.ofMinutes(15);
 
     @BeforeEach
     void setUp() {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
-        cacheService = new RedisCacheService(redisTemplate, metricsCollector, keyGenerator);
+        when(redisTemplate.opsForList()).thenReturn(listOperations);
+        when(redisTemplate.opsForSet()).thenReturn(setOperations);
+        when(redisTemplate.opsForHash()).thenReturn(hashOperations);
+
+        cacheService = new RedisCacheService(redisTemplate, metricsCollector);
     }
 
     @Nested
@@ -74,339 +93,485 @@ public class RedisCacheServiceTest {
     class BasicCacheOperationsTests {
 
         @Test
-        @DisplayName("get() should return cached value when key exists")
-        void getShouldReturnCachedValueWhenKeyExists() {
+        @DisplayName("get() should return value when key exists")
+        void getShouldReturnValueWhenKeyExists() {
             // Arrange
-            when(valueOperations.get(TEST_KEY)).thenReturn(TEST_VALUE);
+            String key = "test-key";
+            String value = "test-value";
+            when(valueOperations.get(key)).thenReturn(value);
 
             // Act
-            Object result = cacheService.get(TEST_KEY);
+            Optional<String> result = cacheService.get(key, String.class);
 
             // Assert
-            assertEquals(TEST_VALUE, result);
-            verify(metricsCollector).recordCacheHit(eq(TEST_KEY), anyLong());
+            assertTrue(result.isPresent());
+            assertEquals(value, result.get());
+            verify(metricsCollector).recordCacheHit(key);
         }
 
         @Test
-        @DisplayName("get() should return null when key does not exist")
-        void getShouldReturnNullWhenKeyDoesNotExist() {
+        @DisplayName("get() should return empty when key does not exist")
+        void getShouldReturnEmptyWhenKeyDoesNotExist() {
             // Arrange
-            when(valueOperations.get(TEST_KEY)).thenReturn(null);
+            String key = "non-existent-key";
+            when(valueOperations.get(key)).thenReturn(null);
 
             // Act
-            Object result = cacheService.get(TEST_KEY);
+            Optional<String> result = cacheService.get(key, String.class);
 
             // Assert
-            assertNull(result);
-            verify(metricsCollector).recordCacheMiss(TEST_KEY);
+            assertFalse(result.isPresent());
+            verify(metricsCollector).recordCacheMiss(key);
         }
 
         @Test
         @DisplayName("set() should store value with default TTL")
         void setShouldStoreValueWithDefaultTTL() {
+            // Arrange
+            String key = "test-key";
+            String value = "test-value";
+
             // Act
-            boolean result = cacheService.set(TEST_KEY, TEST_VALUE);
+            boolean result = cacheService.set(key, value);
 
             // Assert
             assertTrue(result);
-            verify(valueOperations).set(eq(TEST_KEY), eq(TEST_VALUE), any(Duration.class));
-            verify(metricsCollector).recordCacheWrite(eq(TEST_KEY), anyLong());
+            verify(valueOperations).set(keyCaptor.capture(), valueCaptor.capture(), ttlCaptor.capture(), timeUnitCaptor.capture());
+            assertEquals(key, keyCaptor.getValue());
+            assertEquals(value, valueCaptor.getValue());
+            assertEquals(CacheService.DEFAULT_DATA_TTL_SECONDS, ttlCaptor.getValue());
+            assertEquals(TimeUnit.SECONDS, timeUnitCaptor.getValue());
+            verify(metricsCollector).recordCacheWrite(key);
         }
 
         @Test
         @DisplayName("set() should store value with custom TTL")
         void setShouldStoreValueWithCustomTTL() {
+            // Arrange
+            String key = "test-key";
+            String value = "test-value";
+            long ttl = 3600L;
+            TimeUnit timeUnit = TimeUnit.SECONDS;
+
             // Act
-            boolean result = cacheService.set(TEST_KEY, TEST_VALUE, TEST_TTL);
+            boolean result = cacheService.set(key, value, ttl, timeUnit);
 
             // Assert
             assertTrue(result);
-            verify(valueOperations).set(eq(TEST_KEY), eq(TEST_VALUE), eq(TEST_TTL));
-            verify(metricsCollector).recordCacheWrite(eq(TEST_KEY), anyLong());
+            verify(valueOperations).set(keyCaptor.capture(), valueCaptor.capture(), ttlCaptor.capture(), timeUnitCaptor.capture());
+            assertEquals(key, keyCaptor.getValue());
+            assertEquals(value, valueCaptor.getValue());
+            assertEquals(ttl, ttlCaptor.getValue());
+            assertEquals(timeUnit, timeUnitCaptor.getValue());
+            verify(metricsCollector).recordCacheWrite(key);
         }
 
         @Test
-        @DisplayName("delete() should remove value from cache")
-        void deleteShouldRemoveValueFromCache() {
+        @DisplayName("delete() should remove value when key exists")
+        void deleteShouldRemoveValueWhenKeyExists() {
             // Arrange
-            when(redisTemplate.delete(TEST_KEY)).thenReturn(true);
+            String key = "test-key";
+            when(redisTemplate.delete(key)).thenReturn(true);
 
             // Act
-            boolean result = cacheService.delete(TEST_KEY);
+            boolean result = cacheService.delete(key);
 
             // Assert
             assertTrue(result);
-            verify(redisTemplate).delete(TEST_KEY);
-            verify(metricsCollector).recordCacheEviction(TEST_KEY);
+            verify(redisTemplate).delete(key);
+            verify(metricsCollector).recordCacheDelete(key);
         }
 
         @Test
         @DisplayName("delete() should return false when key does not exist")
         void deleteShouldReturnFalseWhenKeyDoesNotExist() {
             // Arrange
-            when(redisTemplate.delete(TEST_KEY)).thenReturn(false);
+            String key = "non-existent-key";
+            when(redisTemplate.delete(key)).thenReturn(false);
 
             // Act
-            boolean result = cacheService.delete(TEST_KEY);
+            boolean result = cacheService.delete(key);
 
             // Assert
             assertFalse(result);
-            verify(redisTemplate).delete(TEST_KEY);
-            verify(metricsCollector, never()).recordCacheEviction(any());
+            verify(redisTemplate).delete(key);
+            verify(metricsCollector, never()).recordCacheDelete(key);
         }
 
         @Test
         @DisplayName("exists() should return true when key exists")
         void existsShouldReturnTrueWhenKeyExists() {
             // Arrange
-            when(redisTemplate.hasKey(TEST_KEY)).thenReturn(true);
+            String key = "test-key";
+            when(redisTemplate.hasKey(key)).thenReturn(true);
 
             // Act
-            boolean result = cacheService.exists(TEST_KEY);
+            boolean result = cacheService.exists(key);
 
             // Assert
             assertTrue(result);
-            verify(redisTemplate).hasKey(TEST_KEY);
+            verify(redisTemplate).hasKey(key);
         }
 
         @Test
         @DisplayName("exists() should return false when key does not exist")
         void existsShouldReturnFalseWhenKeyDoesNotExist() {
             // Arrange
-            when(redisTemplate.hasKey(TEST_KEY)).thenReturn(false);
+            String key = "non-existent-key";
+            when(redisTemplate.hasKey(key)).thenReturn(false);
 
             // Act
-            boolean result = cacheService.exists(TEST_KEY);
+            boolean result = cacheService.exists(key);
 
             // Assert
             assertFalse(result);
-            verify(redisTemplate).hasKey(TEST_KEY);
+            verify(redisTemplate).hasKey(key);
         }
     }
 
     @Nested
-    @DisplayName("TTL-based Caching Tests")
-    class TTLBasedCachingTests {
+    @DisplayName("Complex Data Type Tests")
+    class ComplexDataTypeTests {
 
         @Test
-        @DisplayName("set() should use 15-minute TTL for application data by default")
-        void setShouldUse15MinuteTTLForApplicationDataByDefault() {
-            // Act
-            cacheService.set(TEST_KEY, TEST_VALUE);
+        @DisplayName("get() and set() should work with complex objects")
+        void getAndSetShouldWorkWithComplexObjects() {
+            // Arrange
+            String key = "application:123";
+            Application application = TestData.createApplication();
+            when(valueOperations.get(key)).thenReturn(application);
 
-            // Assert
-            verify(valueOperations).set(eq(TEST_KEY), eq(TEST_VALUE), durationCaptor.capture());
-            Duration capturedDuration = durationCaptor.getValue();
-            assertEquals(Duration.ofMinutes(CacheConstants.APPLICATION_DATA_TTL_MINUTES), capturedDuration);
+            // Act - Set the value
+            boolean setResult = cacheService.set(key, application);
+
+            // Assert - Set operation
+            assertTrue(setResult);
+            verify(valueOperations).set(eq(key), eq(application), anyLong(), any(TimeUnit.class));
+            verify(metricsCollector).recordCacheWrite(key);
+
+            // Act - Get the value
+            Optional<Application> getResult = cacheService.get(key, Application.class);
+
+            // Assert - Get operation
+            assertTrue(getResult.isPresent());
+            assertEquals(application, getResult.get());
+            verify(metricsCollector).recordCacheHit(key);
         }
 
         @Test
-        @DisplayName("getOrCompute() should use 15-minute TTL for application data by default")
-        void getOrComputeShouldUse15MinuteTTLForApplicationDataByDefault() {
+        @DisplayName("multiGet() should retrieve multiple values")
+        void multiGetShouldRetrieveMultipleValues() {
             // Arrange
-            when(valueOperations.get(TEST_KEY)).thenReturn(null);
-            Supplier<String> supplier = () -> TEST_VALUE;
+            List<String> keys = Arrays.asList("key1", "key2", "key3");
+            List<Object> values = Arrays.asList("value1", "value2", "value3");
+            when(valueOperations.multiGet(keys)).thenReturn(values);
 
             // Act
-            String result = cacheService.getOrCompute(TEST_KEY, supplier);
+            Map<String, String> result = cacheService.multiGet(keys, String.class);
 
             // Assert
-            assertEquals(TEST_VALUE, result);
-            verify(valueOperations).set(eq(TEST_KEY), eq(TEST_VALUE), durationCaptor.capture());
-            Duration capturedDuration = durationCaptor.getValue();
-            assertEquals(Duration.ofMinutes(CacheConstants.APPLICATION_DATA_TTL_MINUTES), capturedDuration);
+            assertEquals(3, result.size());
+            assertEquals("value1", result.get("key1"));
+            assertEquals("value2", result.get("key2"));
+            assertEquals("value3", result.get("key3"));
+            verify(metricsCollector, times(3)).recordCacheHit(anyString());
         }
 
         @Test
-        @DisplayName("getOrCompute() should use custom TTL when specified")
-        void getOrComputeShouldUseCustomTTLWhenSpecified() {
+        @DisplayName("multiSet() should store multiple values with default TTL")
+        void multiSetShouldStoreMultipleValuesWithDefaultTTL() {
             // Arrange
-            when(valueOperations.get(TEST_KEY)).thenReturn(null);
-            Supplier<String> supplier = () -> TEST_VALUE;
-            Duration customTTL = Duration.ofHours(24);
+            Map<String, String> map = new HashMap<>();
+            map.put("key1", "value1");
+            map.put("key2", "value2");
+            map.put("key3", "value3");
 
             // Act
-            String result = cacheService.getOrCompute(TEST_KEY, supplier, customTTL);
-
-            // Assert
-            assertEquals(TEST_VALUE, result);
-            verify(valueOperations).set(eq(TEST_KEY), eq(TEST_VALUE), eq(customTTL));
-        }
-
-        @Test
-        @DisplayName("getTimeToLive() should return remaining TTL for a key")
-        void getTimeToLiveShouldReturnRemainingTTLForKey() {
-            // Arrange
-            long ttlMillis = 3600000; // 1 hour in milliseconds
-            when(redisTemplate.getExpire(TEST_KEY, TimeUnit.MILLISECONDS)).thenReturn(ttlMillis);
-
-            // Act
-            long result = cacheService.getTimeToLive(TEST_KEY);
-
-            // Assert
-            assertEquals(ttlMillis, result);
-            verify(redisTemplate).getExpire(TEST_KEY, TimeUnit.MILLISECONDS);
-        }
-
-        @Test
-        @DisplayName("updateTimeToLive() should update TTL for a key")
-        void updateTimeToLiveShouldUpdateTTLForKey() {
-            // Arrange
-            Duration newTTL = Duration.ofHours(2);
-            when(redisTemplate.expire(TEST_KEY, newTTL.toMillis(), TimeUnit.MILLISECONDS)).thenReturn(true);
-
-            // Act
-            boolean result = cacheService.updateTimeToLive(TEST_KEY, newTTL);
+            boolean result = cacheService.multiSet(map);
 
             // Assert
             assertTrue(result);
-            verify(redisTemplate).expire(TEST_KEY, newTTL.toMillis(), TimeUnit.MILLISECONDS);
+            verify(valueOperations).multiSet(anyMap());
+            verify(redisTemplate, times(3)).expire(anyString(), eq(CacheService.DEFAULT_DATA_TTL_SECONDS), eq(TimeUnit.SECONDS));
+            verify(metricsCollector, times(3)).recordCacheWrite(anyString());
+        }
+
+        @Test
+        @DisplayName("listOperations should work correctly")
+        void listOperationsShouldWorkCorrectly() {
+            // Arrange
+            String key = "list:test";
+            String value = "list-item";
+            when(listOperations.rightPush(key, value)).thenReturn(1L);
+            when(listOperations.size(key)).thenReturn(1L);
+            when(listOperations.range(key, 0, 0)).thenReturn(Collections.singletonList(value));
+
+            // Act - Add to list
+            long addResult = cacheService.listAdd(key, value);
+
+            // Assert - Add operation
+            assertEquals(1L, addResult);
+            verify(listOperations).rightPush(key, value);
+            verify(metricsCollector).recordCacheWrite(key);
+
+            // Act - Get all from list
+            List<String> getAllResult = cacheService.listGetAll(key, String.class);
+
+            // Assert - Get all operation
+            assertEquals(1, getAllResult.size());
+            assertEquals(value, getAllResult.get(0));
+            verify(listOperations).size(key);
+            verify(listOperations).range(key, 0, 0);
+            verify(metricsCollector).recordCacheHit(key);
+        }
+
+        @Test
+        @DisplayName("setOperations should work correctly")
+        void setOperationsShouldWorkCorrectly() {
+            // Arrange
+            String key = "set:test";
+            String value = "set-item";
+            when(setOperations.add(key, value)).thenReturn(1L);
+            when(setOperations.members(key)).thenReturn(Collections.singleton(value));
+
+            // Act - Add to set
+            boolean addResult = cacheService.setAdd(key, value);
+
+            // Assert - Add operation
+            assertTrue(addResult);
+            verify(setOperations).add(key, value);
+            verify(metricsCollector).recordCacheWrite(key);
+
+            // Act - Get all from set
+            Set<String> getAllResult = cacheService.setGetAll(key, String.class);
+
+            // Assert - Get all operation
+            assertEquals(1, getAllResult.size());
+            assertTrue(getAllResult.contains(value));
+            verify(setOperations).members(key);
+            verify(metricsCollector).recordCacheHit(key);
+        }
+
+        @Test
+        @DisplayName("hashOperations should work correctly")
+        void hashOperationsShouldWorkCorrectly() {
+            // Arrange
+            String key = "hash:test";
+            String field = "field1";
+            String value = "hash-value";
+            Map<Object, Object> entries = new HashMap<>();
+            entries.put(field, value);
+
+            when(hashOperations.get(key, field)).thenReturn(value);
+            when(hashOperations.entries(key)).thenReturn(entries);
+
+            // Act - Set hash field
+            boolean setResult = cacheService.hashSet(key, field, value);
+
+            // Assert - Set operation
+            assertTrue(setResult);
+            verify(hashOperations).put(key, field, value);
+            verify(metricsCollector).recordCacheWrite(key + ":" + field);
+
+            // Act - Get hash field
+            Optional<String> getResult = cacheService.hashGet(key, field, String.class);
+
+            // Assert - Get operation
+            assertTrue(getResult.isPresent());
+            assertEquals(value, getResult.get());
+            verify(hashOperations).get(key, field);
+            verify(metricsCollector).recordCacheHit(key + ":" + field);
+
+            // Act - Get all hash fields
+            Map<String, String> getAllResult = cacheService.hashGetAll(key, String.class);
+
+            // Assert - Get all operation
+            assertEquals(1, getAllResult.size());
+            assertEquals(value, getAllResult.get(field));
+            verify(hashOperations).entries(key);
+            verify(metricsCollector).recordCacheHit(key);
         }
     }
 
     @Nested
-    @DisplayName("Error Handling and Logging Tests")
-    class ErrorHandlingAndLoggingTests {
+    @DisplayName("TTL-Based Caching Tests")
+    class TTLBasedCachingTests {
 
         @Test
-        @DisplayName("get() should handle Redis connection failure")
-        void getShouldHandleRedisConnectionFailure() {
+        @DisplayName("set() should use default application data TTL (15 minutes)")
+        void setShouldUseDefaultApplicationDataTTL() {
             // Arrange
-            when(valueOperations.get(TEST_KEY)).thenThrow(new RedisConnectionFailureException("Connection failed"));
+            String key = "application:data";
+            String value = "application-data";
 
             // Act
-            Object result = cacheService.get(TEST_KEY);
+            cacheService.set(key, value);
 
             // Assert
-            assertNull(result);
-            verify(metricsCollector).recordCacheError(eq(TEST_KEY), eq("connection_failure"));
+            verify(valueOperations).set(eq(key), eq(value), eq(CacheService.DEFAULT_DATA_TTL_SECONDS), eq(TimeUnit.SECONDS));
         }
 
         @Test
-        @DisplayName("set() should handle Redis connection failure")
-        void setShouldHandleRedisConnectionFailure() {
+        @DisplayName("set() should use custom session TTL (24 hours)")
+        void setShouldUseCustomSessionTTL() {
             // Arrange
+            String key = "session:data";
+            String value = "session-data";
+
+            // Act
+            cacheService.set(key, value, CacheService.DEFAULT_SESSION_TTL_SECONDS, TimeUnit.SECONDS);
+
+            // Assert
+            verify(valueOperations).set(eq(key), eq(value), eq(CacheService.DEFAULT_SESSION_TTL_SECONDS), eq(TimeUnit.SECONDS));
+        }
+
+        @Test
+        @DisplayName("expire() should set TTL for existing key")
+        void expireShouldSetTTLForExistingKey() {
+            // Arrange
+            String key = "test-key";
+            long ttl = 3600L;
+            TimeUnit timeUnit = TimeUnit.SECONDS;
+            when(redisTemplate.expire(key, ttl, timeUnit)).thenReturn(true);
+
+            // Act
+            boolean result = cacheService.expire(key, ttl, timeUnit);
+
+            // Assert
+            assertTrue(result);
+            verify(redisTemplate).expire(key, ttl, timeUnit);
+        }
+
+        @Test
+        @DisplayName("getExpire() should return TTL for existing key")
+        void getExpireShouldReturnTTLForExistingKey() {
+            // Arrange
+            String key = "test-key";
+            long ttl = 3600L;
+            TimeUnit timeUnit = TimeUnit.SECONDS;
+            when(redisTemplate.getExpire(key, timeUnit)).thenReturn(ttl);
+
+            // Act
+            long result = cacheService.getExpire(key, timeUnit);
+
+            // Assert
+            assertEquals(ttl, result);
+            verify(redisTemplate).getExpire(key, timeUnit);
+        }
+
+        @Test
+        @DisplayName("persist() should remove TTL for existing key")
+        void persistShouldRemoveTTLForExistingKey() {
+            // Arrange
+            String key = "test-key";
+            when(redisTemplate.persist(key)).thenReturn(true);
+
+            // Act
+            boolean result = cacheService.persist(key);
+
+            // Assert
+            assertTrue(result);
+            verify(redisTemplate).persist(key);
+        }
+    }
+
+    @Nested
+    @DisplayName("Error Handling Tests")
+    class ErrorHandlingTests {
+
+        @Test
+        @DisplayName("get() should handle RedisConnectionFailureException")
+        void getShouldHandleRedisConnectionFailureException() {
+            // Arrange
+            String key = "test-key";
+            when(valueOperations.get(key)).thenThrow(new RedisConnectionFailureException("Connection failed"));
+
+            // Act
+            Optional<String> result = cacheService.get(key, String.class);
+
+            // Assert
+            assertFalse(result.isPresent());
+            verify(metricsCollector).recordCacheError(eq(key), eq("connection_failure"));
+        }
+
+        @Test
+        @DisplayName("get() should handle ClassCastException")
+        void getShouldHandleClassCastException() {
+            // Arrange
+            String key = "test-key";
+            Integer value = 123; // Return Integer when String is expected
+            when(valueOperations.get(key)).thenReturn(value);
+
+            // Act
+            Optional<String> result = cacheService.get(key, String.class);
+
+            // Assert
+            assertFalse(result.isPresent());
+            verify(metricsCollector).recordCacheError(eq(key), eq("type_mismatch"));
+        }
+
+        @Test
+        @DisplayName("set() should handle RedisConnectionFailureException")
+        void setShouldHandleRedisConnectionFailureException() {
+            // Arrange
+            String key = "test-key";
+            String value = "test-value";
             doThrow(new RedisConnectionFailureException("Connection failed"))
-                    .when(valueOperations).set(eq(TEST_KEY), eq(TEST_VALUE), any(Duration.class));
+                    .when(valueOperations).set(eq(key), eq(value), anyLong(), any(TimeUnit.class));
 
             // Act
-            boolean result = cacheService.set(TEST_KEY, TEST_VALUE);
+            boolean result = cacheService.set(key, value);
 
             // Assert
             assertFalse(result);
-            verify(metricsCollector).recordCacheError(eq(TEST_KEY), eq("connection_failure"));
+            verify(metricsCollector).recordCacheError(eq(key), eq("connection_failure"));
         }
 
         @Test
-        @DisplayName("delete() should handle Redis connection failure")
-        void deleteShouldHandleRedisConnectionFailure() {
+        @DisplayName("delete() should handle RedisConnectionFailureException")
+        void deleteShouldHandleRedisConnectionFailureException() {
             // Arrange
-            when(redisTemplate.delete(TEST_KEY)).thenThrow(new RedisConnectionFailureException("Connection failed"));
+            String key = "test-key";
+            when(redisTemplate.delete(key)).thenThrow(new RedisConnectionFailureException("Connection failed"));
 
             // Act
-            boolean result = cacheService.delete(TEST_KEY);
+            boolean result = cacheService.delete(key);
 
             // Assert
             assertFalse(result);
-            verify(metricsCollector).recordCacheError(eq(TEST_KEY), eq("connection_failure"));
+            verify(metricsCollector).recordCacheError(eq(key), eq("connection_failure"));
         }
 
         @Test
-        @DisplayName("executeWithFallback() should use fallback when cache operation fails")
-        void executeWithFallbackShouldUseFallbackWhenCacheOperationFails() {
+        @DisplayName("multiGet() should handle null values")
+        void multiGetShouldHandleNullValues() {
             // Arrange
-            Supplier<String> cacheOperation = () -> {
-                throw new RuntimeException("Cache operation failed");
-            };
-            Supplier<String> fallback = () -> "fallback-value";
+            List<String> keys = Arrays.asList("key1", "key2", "key3");
+            when(valueOperations.multiGet(keys)).thenReturn(null);
 
             // Act
-            String result = cacheService.executeWithFallback(cacheOperation, fallback);
+            Map<String, String> result = cacheService.multiGet(keys, String.class);
 
             // Assert
-            assertEquals("fallback-value", result);
-            verify(metricsCollector).recordCacheError(eq("fallback"), eq("operation_failure"));
-        }
-    }
-
-    @Nested
-    @DisplayName("Serialization and Deserialization Tests")
-    class SerializationAndDeserializationTests {
-
-        // Test complex object for serialization/deserialization
-        static class TestComplexObject {
-            private String name;
-            private int age;
-            private List<String> tags;
-
-            public TestComplexObject(String name, int age, List<String> tags) {
-                this.name = name;
-                this.age = age;
-                this.tags = tags;
-            }
-
-            // Getters and setters omitted for brevity
-
-            @Override
-            public boolean equals(Object o) {
-                if (this == o) return true;
-                if (o == null || getClass() != o.getClass()) return false;
-                TestComplexObject that = (TestComplexObject) o;
-                return age == that.age && 
-                       name.equals(that.name) && 
-                       tags.equals(that.tags);
-            }
-        }
-
-        private TestComplexObject testObject;
-
-        @BeforeEach
-        void setUpComplexObject() {
-            testObject = new TestComplexObject("Test Name", 30, Arrays.asList("tag1", "tag2"));
+            assertTrue(result.isEmpty());
         }
 
         @Test
-        @DisplayName("set() and get() should handle complex objects correctly")
-        void setAndGetShouldHandleComplexObjectsCorrectly() {
+        @DisplayName("multiGet() should handle type mismatches")
+        void multiGetShouldHandleTypeMismatches() {
             // Arrange
-            String complexObjectKey = "test:complex-object";
-            when(valueOperations.get(complexObjectKey)).thenReturn(testObject);
-
-            // Act - Set the complex object
-            boolean setResult = cacheService.set(complexObjectKey, testObject);
-            
-            // Act - Get the complex object
-            Object getResult = cacheService.get(complexObjectKey);
-
-            // Assert
-            assertTrue(setResult);
-            assertEquals(testObject, getResult);
-            verify(valueOperations).set(eq(complexObjectKey), eq(testObject), any(Duration.class));
-            verify(valueOperations).get(complexObjectKey);
-        }
-
-        @Test
-        @DisplayName("setAll() and multiGet() should handle maps of complex objects")
-        void setAllAndMultiGetShouldHandleComplexObjects() {
-            // Arrange
-            Map<String, TestComplexObject> objectMap = new HashMap<>();
-            objectMap.put("test:obj1", testObject);
-            objectMap.put("test:obj2", new TestComplexObject("Another Name", 25, Collections.singletonList("tag3")));
-            
-            List<String> keys = Arrays.asList("test:obj1", "test:obj2");
-            List<Object> values = Arrays.asList(objectMap.get("test:obj1"), objectMap.get("test:obj2"));
-            
-            when(redisTemplate.opsForValue().multiGet(keys)).thenReturn(values);
+            List<String> keys = Arrays.asList("key1", "key2");
+            List<Object> values = Arrays.asList("value1", 123); // Second value is Integer, not String
+            when(valueOperations.multiGet(keys)).thenReturn(values);
 
             // Act
-            boolean setResult = cacheService.setAll(objectMap);
-            List<Object> getResult = cacheService.multiGet(keys);
+            Map<String, String> result = cacheService.multiGet(keys, String.class);
 
             // Assert
-            assertTrue(setResult);
-            assertEquals(values, getResult);
-            verify(redisTemplate.opsForValue()).multiSet(objectMap);
-            verify(redisTemplate.opsForValue()).multiGet(keys);
+            assertEquals(1, result.size());
+            assertEquals("value1", result.get("key1"));
+            assertFalse(result.containsKey("key2"));
+            verify(metricsCollector).recordCacheError(eq("key2"), eq("type_mismatch"));
         }
     }
 
@@ -415,73 +580,131 @@ public class RedisCacheServiceTest {
     class PerformanceOptimizationTests {
 
         @Test
-        @DisplayName("multiGet() should optimize batch retrieval of cache entries")
-        void multiGetShouldOptimizeBatchRetrievalOfCacheEntries() {
+        @DisplayName("multiSet() should use pipelined operations for better performance")
+        void multiSetShouldUsePipelinedOperationsForBetterPerformance() {
             // Arrange
-            List<String> keys = Arrays.asList("test:key1", "test:key2", "test:key3");
-            List<Object> values = Arrays.asList("value1", "value2", null);
-            when(redisTemplate.opsForValue().multiGet(keys)).thenReturn(values);
+            Map<String, String> map = new HashMap<>();
+            map.put("key1", "value1");
+            map.put("key2", "value2");
+            map.put("key3", "value3");
 
             // Act
-            List<Object> result = cacheService.multiGet(keys);
-
-            // Assert
-            assertEquals(values, result);
-            verify(redisTemplate.opsForValue(), times(1)).multiGet(keys); // Only one Redis call for multiple keys
-            verify(metricsCollector).recordCacheBatchHit(eq(2), eq(1), anyLong()); // 2 hits, 1 miss
-        }
-
-        @Test
-        @DisplayName("setAll() should optimize batch storage of cache entries")
-        void setAllShouldOptimizeBatchStorageOfCacheEntries() {
-            // Arrange
-            Map<String, String> entries = new HashMap<>();
-            entries.put("test:key1", "value1");
-            entries.put("test:key2", "value2");
-            entries.put("test:key3", "value3");
-
-            // Act
-            boolean result = cacheService.setAll(entries);
+            boolean result = cacheService.multiSet(map);
 
             // Assert
             assertTrue(result);
-            verify(redisTemplate.opsForValue(), times(1)).multiSet(entries); // Only one Redis call for multiple entries
-            verify(metricsCollector).recordCacheBatchWrite(eq(entries.size()), anyLong());
+            verify(valueOperations).multiSet(anyMap()); // Should use multiSet for better performance
+            verify(redisTemplate, times(3)).expire(anyString(), anyLong(), any(TimeUnit.class));
         }
 
         @Test
-        @DisplayName("deleteAll() should optimize batch deletion of cache entries")
-        void deleteAllShouldOptimizeBatchDeletionOfCacheEntries() {
+        @DisplayName("multiDelete() should use batch delete for better performance")
+        void multiDeleteShouldUseBatchDeleteForBetterPerformance() {
             // Arrange
-            List<String> keys = Arrays.asList("test:key1", "test:key2", "test:key3");
+            List<String> keys = Arrays.asList("key1", "key2", "key3");
             when(redisTemplate.delete(keys)).thenReturn(3L);
 
             // Act
-            long result = cacheService.deleteAll(keys);
+            long result = cacheService.multiDelete(keys);
 
             // Assert
             assertEquals(3L, result);
-            verify(redisTemplate, times(1)).delete(keys); // Only one Redis call for multiple deletions
-            verify(metricsCollector).recordCacheBatchEviction(3);
+            verify(redisTemplate).delete(keys); // Should use batch delete for better performance
+            verify(metricsCollector, times(3)).recordCacheDelete(anyString());
         }
 
         @Test
-        @DisplayName("deleteByPattern() should optimize deletion of multiple related cache entries")
-        void deleteByPatternShouldOptimizeDeletionOfMultipleRelatedCacheEntries() {
+        @DisplayName("multiExists() should optimize key existence checks")
+        void multiExistsShouldOptimizeKeyExistenceChecks() {
             // Arrange
-            String pattern = "test:*";
-            Set<String> matchingKeys = Set.of("test:key1", "test:key2", "test:key3");
-            when(redisTemplate.keys(pattern)).thenReturn(matchingKeys);
-            when(redisTemplate.delete(matchingKeys)).thenReturn(3L);
+            List<String> keys = Arrays.asList("key1", "key2", "key3");
+            when(redisTemplate.hasKey("key1")).thenReturn(true);
+            when(redisTemplate.hasKey("key2")).thenReturn(false);
+            when(redisTemplate.hasKey("key3")).thenReturn(true);
 
             // Act
-            long result = cacheService.deleteByPattern(pattern);
+            Set<String> result = cacheService.multiExists(keys);
 
             // Assert
-            assertEquals(3L, result);
-            verify(redisTemplate).keys(pattern);
-            verify(redisTemplate).delete(matchingKeys);
-            verify(metricsCollector).recordCacheBatchEviction(3);
+            assertEquals(2, result.size());
+            assertTrue(result.contains("key1"));
+            assertTrue(result.contains("key3"));
+            assertFalse(result.contains("key2"));
+            verify(redisTemplate, times(3)).hasKey(anyString());
+        }
+
+        @Test
+        @DisplayName("clear() should efficiently clear all keys")
+        void clearShouldEfficientlyClearAllKeys() {
+            // Arrange
+            Set<String> allKeys = new HashSet<>(Arrays.asList("key1", "key2", "key3"));
+            when(redisTemplate.keys("*")).thenReturn(allKeys);
+            when(redisTemplate.delete(allKeys)).thenReturn(3L);
+
+            // Act
+            boolean result = cacheService.clear();
+
+            // Assert
+            assertTrue(result);
+            verify(redisTemplate).keys("*");
+            verify(redisTemplate).delete(allKeys);
+            verify(metricsCollector).recordCacheClear();
+        }
+    }
+
+    @Nested
+    @DisplayName("Counter Operations Tests")
+    class CounterOperationsTests {
+
+        @Test
+        @DisplayName("increment() should atomically increase counter")
+        void incrementShouldAtomicallyIncreaseCounter() {
+            // Arrange
+            String key = "counter:test";
+            long delta = 5L;
+            when(valueOperations.increment(key, delta)).thenReturn(5L);
+
+            // Act
+            long result = cacheService.increment(key, delta);
+
+            // Assert
+            assertEquals(5L, result);
+            verify(valueOperations).increment(key, delta);
+            verify(metricsCollector).recordCacheWrite(key);
+        }
+
+        @Test
+        @DisplayName("decrement() should atomically decrease counter")
+        void decrementShouldAtomicallyDecreaseCounter() {
+            // Arrange
+            String key = "counter:test";
+            long delta = 3L;
+            when(valueOperations.decrement(key, delta)).thenReturn(7L);
+
+            // Act
+            long result = cacheService.decrement(key, delta);
+
+            // Assert
+            assertEquals(7L, result);
+            verify(valueOperations).decrement(key, delta);
+            verify(metricsCollector).recordCacheWrite(key);
+        }
+
+        @Test
+        @DisplayName("increment() should handle RedisConnectionFailureException")
+        void incrementShouldHandleRedisConnectionFailureException() {
+            // Arrange
+            String key = "counter:test";
+            long delta = 5L;
+            when(valueOperations.increment(key, delta))
+                    .thenThrow(new RedisConnectionFailureException("Connection failed"));
+
+            // Act
+            long result = cacheService.increment(key, delta);
+
+            // Assert
+            assertEquals(0L, result);
+            verify(metricsCollector).recordCacheError(eq(key), eq("connection_failure"));
         }
     }
 }
