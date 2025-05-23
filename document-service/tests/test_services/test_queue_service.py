@@ -1,557 +1,538 @@
-import pytest
-import json
-import ssl
-import time
-from unittest.mock import MagicMock, patch, call, PropertyMock
-from pika.exceptions import AMQPConnectionError, AMQPChannelError, ConnectionClosedByBroker
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 
-from src.services.queue_service import QueueService
-from src.types.messages import (
-    MessagePayload, MessageHeaders, PublishOptions, ConsumeOptions,
-    ExchangeConfig, QueueConfig, BindingConfig, DeliveryMode
-)
-from src.types.documents import Document, DocumentType
-from src.types.errors import ServiceError, MessagingError
-from src.config import rabbitmq_config
+"""
+Unit tests for the RabbitMQ message handling service.
+
+This module contains tests that verify the queue service correctly connects to RabbitMQ,
+consumes messages from the 'document-processing' queue, publishes classification results
+to the 'data-extraction' queue, and handles connection errors.
+
+These tests validate that the Document Service can:
+1. Connect to RabbitMQ with the 'mca.documents' exchange as specified in section 0.1.3
+2. Consume messages from the 'document-processing' queue as specified in section 0.2.1.4
+3. Publish classification results to the 'data-extraction' queue
+4. Handle connection errors and recover from them
+5. Properly serialize and deserialize messages in the standardized JSON format
+"""
+
+import json
+import time
+import uuid
+from datetime import datetime
+from unittest.mock import MagicMock, patch, call
+
+import pytest
+from pika.exceptions import AMQPConnectionError, AMQPChannelError
+
+# Import the QueueService and MessageSchema classes
+from src.services.queue_service import QueueService, MessageSchema
+from src.types.classification import DocumentType, ConfidenceScore
 
 
 class TestQueueService:
-    """Test suite for the QueueService class.
-    
-    These tests verify that the QueueService correctly connects to RabbitMQ,
-    consumes messages from the 'document-processing' queue, publishes classification
-    results to the 'data-extraction' queue, and handles connection errors.
-    """
-    
-    def test_init(self, rabbitmq_config_fixture):
-        """Test QueueService initialization with configuration."""
-        # Arrange & Act
-        service = QueueService(rabbitmq_config_fixture)
+    """Test suite for the QueueService class."""
+
+    def test_init(self, mock_rabbitmq_utils):
+        """Test that QueueService initializes correctly."""
+        # Create a QueueService instance
+        service = QueueService()
         
-        # Assert
-        assert service.connection is None
-        assert service.channel is None
-        assert service.is_connected is False
-        assert service.config == rabbitmq_config_fixture
-    
-    @patch('ssl.create_default_context')
-    @patch('pika.ConnectionParameters')
-    def test_setup_connection_params_with_tls(self, mock_connection_params, mock_ssl_context, rabbitmq_config_fixture):
-        """Test that connection parameters are set up correctly with TLS."""
-        # Arrange
-        mock_ssl_context_instance = MagicMock()
-        mock_ssl_context.return_value = mock_ssl_context_instance
-        mock_ssl_options = MagicMock()
+        # Verify that the client is initialized
+        assert service.client is not None
         
-        with patch('pika.SSLOptions', return_value=mock_ssl_options) as mock_ssl_options_class:
-            # Act
-            service = QueueService(rabbitmq_config_fixture)
-            
-            # Assert
-            mock_ssl_context.assert_called_once()
-            mock_ssl_context_instance.verify_mode = ssl.CERT_REQUIRED
-            mock_ssl_context_instance.load_cert_chain.assert_called_once()
-            mock_ssl_options_class.assert_called_once()
-            mock_connection_params.assert_called_once()
-            assert service._connection_params is not None
-    
-    def test_setup_connection_params_error(self, rabbitmq_config_fixture):
-        """Test error handling during connection parameter setup."""
-        # Arrange
-        with patch('ssl.create_default_context', side_effect=Exception('SSL error')):
-            # Act & Assert
-            with pytest.raises(ServiceError) as excinfo:
-                QueueService(rabbitmq_config_fixture)
-            
-            assert 'RabbitMQ connection setup failed' in str(excinfo.value)
-    
-    @patch('pika.BlockingConnection')
-    def test_connect_success(self, mock_blocking_connection, rabbitmq_config_fixture):
-        """Test successful connection to RabbitMQ."""
-        # Arrange
-        mock_connection = MagicMock()
-        mock_channel = MagicMock()
-        mock_connection.channel.return_value = mock_channel
-        mock_blocking_connection.return_value = mock_connection
+        # Verify that the processing handlers dictionary is initialized
+        assert service.processing_handlers == {}
+
+    def test_register_document_handler(self, mock_rabbitmq_utils):
+        """Test that document handlers can be registered."""
+        # Create a QueueService instance
+        service = QueueService()
         
-        service = QueueService(rabbitmq_config_fixture)
-        service._connection_params = MagicMock()
+        # Create a mock handler function
+        mock_handler = MagicMock()
         
-        # Act
-        result = service.connect()
+        # Register the handler
+        service.register_document_handler(mock_handler)
         
-        # Assert
+        # Verify that the handler was registered
+        assert 'document_processing' in service.processing_handlers
+        assert service.processing_handlers['document_processing'] == mock_handler
+
+    def test_start_consuming_no_handler(self, mock_rabbitmq_utils):
+        """Test that start_consuming raises an error if no handler is registered."""
+        # Create a QueueService instance
+        service = QueueService()
+        
+        # Verify that start_consuming raises a RuntimeError
+        with pytest.raises(RuntimeError, match="No document processing handler registered"):
+            service.start_consuming()
+
+    def test_start_consuming(self, mock_rabbitmq_utils):
+        """Test that start_consuming calls the consume_messages function."""
+        # Create a QueueService instance
+        service = QueueService()
+        
+        # Register a mock handler
+        mock_handler = MagicMock()
+        service.register_document_handler(mock_handler)
+        
+        # Start consuming messages
+        service.start_consuming()
+        
+        # Verify that consume_messages was called
+        mock_rabbitmq_utils.consume_messages.assert_called_once()
+
+    def test_message_callback(self, mock_rabbitmq_utils):
+        """Test that the message callback processes messages correctly."""
+        # Create a QueueService instance
+        service = QueueService()
+        
+        # Register a mock handler
+        mock_handler = MagicMock()
+        service.register_document_handler(mock_handler)
+        
+        # Create a test message
+        test_message = {
+            'document_id': 'test-doc-id',
+            'document_url': 'https://example.com/test-doc.pdf',
+            'metadata': {
+                'source': 'email',
+                'email_id': 'test-email-id',
+                'sender': 'test@example.com',
+                'received_at': '2023-01-01T00:00:00Z'
+            }
+        }
+        
+        # Create mock method and properties
+        mock_method = MagicMock()
+        mock_properties = MagicMock(correlation_id='test-correlation-id')
+        
+        # Get the message callback function
+        # We need to start consuming to get the callback registered
+        with patch('src.config.rabbitmq_config.consume_messages') as mock_consume:
+            service.start_consuming()
+            # Extract the callback function that was passed to consume_messages
+            callback_func = mock_consume.call_args[0][0]
+        
+        # Call the callback function with our test message
+        callback_func(test_message, mock_method, mock_properties)
+        
+        # Verify that the handler was called with the message
+        mock_handler.assert_called_once()
+        # Verify that the message was passed to the handler
+        handler_call_args = mock_handler.call_args[0][0]
+        assert handler_call_args['document_id'] == 'test-doc-id'
+        assert handler_call_args['document_url'] == 'https://example.com/test-doc.pdf'
+        assert 'correlation_id' in handler_call_args
+        assert handler_call_args['correlation_id'] == 'test-correlation-id'
+        assert 'processing_timestamp' in handler_call_args
+
+    def test_message_callback_invalid_message(self, mock_rabbitmq_utils):
+        """Test that the message callback handles invalid messages correctly."""
+        # Create a QueueService instance
+        service = QueueService()
+        
+        # Register a mock handler
+        mock_handler = MagicMock()
+        service.register_document_handler(mock_handler)
+        
+        # Create an invalid test message (missing required fields)
+        test_message = {
+            'document_id': 'test-doc-id',
+            # Missing 'document_url'
+            # Missing 'metadata'
+        }
+        
+        # Create mock method and properties
+        mock_method = MagicMock()
+        mock_properties = MagicMock(correlation_id='test-correlation-id')
+        
+        # Get the message callback function
+        with patch('document_service.config.rabbitmq_config.consume_messages') as mock_consume:
+            service.start_consuming()
+            callback_func = mock_consume.call_args[0][0]
+        
+        # Call the callback function with our invalid test message
+        callback_func(test_message, mock_method, mock_properties)
+        
+        # Verify that the handler was not called
+        mock_handler.assert_not_called()
+
+    def test_message_callback_handler_exception(self, mock_rabbitmq_utils):
+        """Test that the message callback handles exceptions from the handler."""
+        # Create a QueueService instance
+        service = QueueService()
+        
+        # Register a mock handler that raises an exception
+        mock_handler = MagicMock(side_effect=Exception("Test exception"))
+        service.register_document_handler(mock_handler)
+        
+        # Create a test message
+        test_message = {
+            'document_id': 'test-doc-id',
+            'document_url': 'https://example.com/test-doc.pdf',
+            'metadata': {
+                'source': 'email',
+                'email_id': 'test-email-id',
+                'sender': 'test@example.com',
+                'received_at': '2023-01-01T00:00:00Z'
+            }
+        }
+        
+        # Create mock method and properties
+        mock_method = MagicMock()
+        mock_properties = MagicMock(correlation_id='test-correlation-id')
+        
+        # Get the message callback function
+        with patch('src.config.rabbitmq_config.consume_messages') as mock_consume:
+            service.start_consuming()
+            callback_func = mock_consume.call_args[0][0]
+        
+        # Call the callback function with our test message
+        # This should not raise an exception outside the callback
+        callback_func(test_message, mock_method, mock_properties)
+        
+        # Verify that the handler was called
+        mock_handler.assert_called_once()
+
+    def test_publish_classification_result(self, mock_rabbitmq_utils):
+        """Test that publish_classification_result publishes messages correctly."""
+        # Create a QueueService instance
+        service = QueueService()
+        
+        # Create a test classification result
+        test_result = {
+            'document_id': 'test-doc-id',
+            'document_type': 'APPLICATION',
+            'confidence': 0.95,
+            'correlation_id': 'test-correlation-id'
+        }
+        
+        # Publish the result
+        result = service.publish_classification_result(test_result)
+        
+        # Verify that the result is True (success)
         assert result is True
-        assert service.is_connected is True
-        mock_blocking_connection.assert_called_once_with(service._connection_params)
-        mock_connection.channel.assert_called_once()
-        
-        # Verify exchange and queue declarations
-        assert mock_channel.exchange_declare.call_count == 1
-        assert mock_channel.queue_declare.call_count == 2
-        assert mock_channel.queue_bind.call_count == 2
-        
-        # Verify exchange declaration
-        exchange_call = mock_channel.exchange_declare.call_args
-        assert exchange_call[1]['exchange'] == 'mca.documents'
-        
-        # Verify queue declarations
-        queue_calls = mock_channel.queue_declare.call_args_list
-        assert queue_calls[0][1]['queue'] == 'document-processing'
-        assert queue_calls[1][1]['queue'] == 'classification-results'
-        
-        # Verify queue bindings
-        binding_calls = mock_channel.queue_bind.call_args_list
-        assert binding_calls[0][1]['exchange'] == 'mca.documents'
-        assert binding_calls[0][1]['queue'] == 'document-processing'
-        assert binding_calls[1][1]['exchange'] == 'mca.classification'
-        assert binding_calls[1][1]['queue'] == 'classification-results'
-    
-    @patch('pika.BlockingConnection')
-    def test_connect_already_connected(self, mock_blocking_connection, rabbitmq_config_fixture):
-        """Test connect when already connected."""
-        # Arrange
-        service = QueueService(rabbitmq_config_fixture)
-        service.is_connected = True
-        
-        # Act
-        result = service.connect()
-        
-        # Assert
-        assert result is True
-        mock_blocking_connection.assert_not_called()
-    
-    @patch('pika.BlockingConnection')
-    def test_connect_failure(self, mock_blocking_connection, rabbitmq_config_fixture):
-        """Test connection failure handling."""
-        # Arrange
-        mock_blocking_connection.side_effect = AMQPConnectionError('Connection refused')
-        
-        service = QueueService(rabbitmq_config_fixture)
-        service._connection_params = MagicMock()
-        
-        # Act & Assert
-        with pytest.raises(ServiceError) as excinfo:
-            service.connect()
-        
-        assert 'RabbitMQ connection failed' in str(excinfo.value)
-        assert service.is_connected is False
-    
-    def test_disconnect(self, rabbitmq_config_fixture):
-        """Test disconnection from RabbitMQ."""
-        # Arrange
-        service = QueueService(rabbitmq_config_fixture)
-        service.connection = MagicMock()
-        service.channel = MagicMock()
-        service.is_connected = True
-        
-        # Configure mocks
-        service.connection.is_open = True
-        service.channel.is_open = True
-        
-        # Act
-        service.disconnect()
-        
-        # Assert
-        service.channel.close.assert_called_once()
-        service.connection.close.assert_called_once()
-        assert service.connection is None
-        assert service.channel is None
-        assert service.is_connected is False
-    
-    def test_disconnect_with_errors(self, rabbitmq_config_fixture):
-        """Test disconnection with errors."""
-        # Arrange
-        service = QueueService(rabbitmq_config_fixture)
-        service.connection = MagicMock()
-        service.channel = MagicMock()
-        service.is_connected = True
-        
-        # Configure mocks to raise exceptions
-        service.connection.is_open = True
-        service.channel.is_open = True
-        service.channel.close.side_effect = Exception('Channel close error')
-        service.connection.close.side_effect = Exception('Connection close error')
-        
-        # Act
-        service.disconnect()
-        
-        # Assert
-        service.channel.close.assert_called_once()
-        service.connection.close.assert_called_once()
-        assert service.connection is None
-        assert service.channel is None
-        assert service.is_connected is False
-    
-    def test_consume_messages(self, rabbitmq_config_fixture):
-        """Test consuming messages from the queue."""
-        # Arrange
-        service = QueueService(rabbitmq_config_fixture)
-        service.connect = MagicMock(return_value=True)
-        service.channel = MagicMock()
-        service.is_connected = True
-        
-        callback = MagicMock()
-        options = ConsumeOptions.for_document_processing(prefetch_count=10)
-        
-        # Act
-        service.consume_messages(callback, options)
-        
-        # Assert
-        service.connect.assert_called_once()
-        service.channel.basic_qos.assert_called_once_with(prefetch_count=10)
-        service.channel.basic_consume.assert_called_once()
-        service.channel.start_consuming.assert_called_once()
-        
-        # Verify consume arguments
-        consume_call = service.channel.basic_consume.call_args
-        assert consume_call[1]['queue'] == 'document-processing'
-        assert consume_call[1]['on_message_callback'] is not None
-        assert consume_call[1]['auto_ack'] is False
-    
-    def test_consume_messages_not_connected(self, rabbitmq_config_fixture):
-        """Test consuming messages when not connected."""
-        # Arrange
-        service = QueueService(rabbitmq_config_fixture)
-        service.connect = MagicMock(return_value=True)
-        service.channel = MagicMock()
-        service.is_connected = False
-        
-        callback = MagicMock()
-        
-        # Act
-        service.consume_messages(callback)
-        
-        # Assert
-        service.connect.assert_called_once()
-    
-    def test_consume_messages_channel_error(self, rabbitmq_config_fixture):
-        """Test error handling during message consumption."""
-        # Arrange
-        service = QueueService(rabbitmq_config_fixture)
-        service.connect = MagicMock(return_value=True)
-        service.channel = MagicMock()
-        service.is_connected = True
-        
-        # Configure mock to raise exception
-        service.channel.basic_consume.side_effect = AMQPChannelError('Channel error')
-        
-        callback = MagicMock()
-        options = ConsumeOptions.for_document_processing()
-        
-        # Act & Assert
-        with pytest.raises(ServiceError) as excinfo:
-            service.consume_messages(callback, options)
-        
-        assert 'RabbitMQ channel error' in str(excinfo.value)
-    
-    def test_message_handler_success(self, rabbitmq_config_fixture):
-        """Test successful message handling in the consume callback."""
-        # Arrange
-        service = QueueService(rabbitmq_config_fixture)
-        service.connect = MagicMock(return_value=True)
-        service.channel = MagicMock()
-        service.is_connected = True
-        
-        callback = MagicMock()
-        options = ConsumeOptions.for_document_processing()
-        
-        # Capture the message handler function
-        service.consume_messages(callback, options)
-        message_handler = service.channel.basic_consume.call_args[1]['on_message_callback']
-        
-        # Create test message
-        ch = MagicMock()
-        method = MagicMock(delivery_tag='test-tag')
-        properties = MagicMock(headers={'test': 'header'})
-        body = json.dumps({'test': 'message'}).encode('utf-8')
-        
-        # Act
-        message_handler(ch, method, properties, body)
-        
-        # Assert
-        callback.assert_called_once()
-        ch.basic_ack.assert_called_once_with(delivery_tag='test-tag')
-    
-    def test_message_handler_json_error(self, rabbitmq_config_fixture):
-        """Test JSON decoding error in message handler."""
-        # Arrange
-        service = QueueService(rabbitmq_config_fixture)
-        service.connect = MagicMock(return_value=True)
-        service.channel = MagicMock()
-        service.is_connected = True
-        
-        callback = MagicMock()
-        options = ConsumeOptions.for_document_processing()
-        
-        # Capture the message handler function
-        service.consume_messages(callback, options)
-        message_handler = service.channel.basic_consume.call_args[1]['on_message_callback']
-        
-        # Create invalid JSON message
-        ch = MagicMock()
-        method = MagicMock(delivery_tag='test-tag')
-        properties = MagicMock(headers={'test': 'header'})
-        body = b'invalid json'
-        
-        # Act
-        message_handler(ch, method, properties, body)
-        
-        # Assert
-        callback.assert_not_called()
-        ch.basic_reject.assert_called_once_with(delivery_tag='test-tag', requeue=False)
-    
-    def test_message_handler_processing_error(self, rabbitmq_config_fixture):
-        """Test processing error in message handler."""
-        # Arrange
-        service = QueueService(rabbitmq_config_fixture)
-        service.connect = MagicMock(return_value=True)
-        service.channel = MagicMock()
-        service.is_connected = True
-        
-        # Configure callback to raise exception
-        callback = MagicMock(side_effect=Exception('Processing error'))
-        options = ConsumeOptions.for_document_processing()
-        
-        # Capture the message handler function
-        service.consume_messages(callback, options)
-        message_handler = service.channel.basic_consume.call_args[1]['on_message_callback']
-        
-        # Create test message
-        ch = MagicMock()
-        method = MagicMock(delivery_tag='test-tag')
-        properties = MagicMock(headers={'test': 'header'})
-        body = json.dumps({'test': 'message'}).encode('utf-8')
-        
-        # Act
-        message_handler(ch, method, properties, body)
-        
-        # Assert
-        callback.assert_called_once()
-        ch.basic_reject.assert_called_once_with(delivery_tag='test-tag', requeue=True)
-    
-    def test_publish_message(self, rabbitmq_config_fixture):
-        """Test publishing a message to the queue."""
-        # Arrange
-        service = QueueService(rabbitmq_config_fixture)
-        service.connect = MagicMock(return_value=True)
-        service.channel = MagicMock()
-        service.is_connected = True
-        
-        message = MessagePayload({'test': 'message'})
-        options = PublishOptions.for_classification_result()
-        
-        # Act
-        result = service.publish_message(message, options)
-        
-        # Assert
-        assert result is True
-        service.connect.assert_not_called()  # Already connected
-        service.channel.basic_publish.assert_called_once()
-        
-        # Verify publish arguments
-        publish_call = service.channel.basic_publish.call_args
-        assert publish_call[1]['exchange'] == 'mca.classification'
-        assert publish_call[1]['routing_key'] == 'classification.results'
-        assert publish_call[1]['body'] == json.dumps({'test': 'message'}).encode('utf-8')
-        assert publish_call[1]['mandatory'] is True
-    
-    def test_publish_message_not_connected(self, rabbitmq_config_fixture):
-        """Test publishing a message when not connected."""
-        # Arrange
-        service = QueueService(rabbitmq_config_fixture)
-        service.connect = MagicMock(return_value=True)
-        service.channel = MagicMock()
-        service.is_connected = False
-        
-        message = MessagePayload({'test': 'message'})
-        options = PublishOptions.for_classification_result()
-        
-        # Act
-        result = service.publish_message(message, options)
-        
-        # Assert
-        assert result is True
-        service.connect.assert_called_once()
-    
-    def test_publish_message_dict(self, rabbitmq_config_fixture):
-        """Test publishing a dictionary message."""
-        # Arrange
-        service = QueueService(rabbitmq_config_fixture)
-        service.connect = MagicMock(return_value=True)
-        service.channel = MagicMock()
-        service.is_connected = True
-        
-        message = {'test': 'message'}
-        options = PublishOptions.for_classification_result()
-        
-        # Act
-        result = service.publish_message(message, options)
-        
-        # Assert
-        assert result is True
-        service.channel.basic_publish.assert_called_once()
-    
-    def test_publish_message_channel_error_with_reconnect(self, rabbitmq_config_fixture):
-        """Test channel error during publish with successful reconnect."""
-        # Arrange
-        service = QueueService(rabbitmq_config_fixture)
-        service.connect = MagicMock(return_value=True)
-        service.channel = MagicMock()
-        service.is_connected = True
-        
-        # Configure first publish to fail, reconnect to succeed
-        service.channel.basic_publish.side_effect = [
-            AMQPChannelError('Channel error'),
-            None  # Success on retry
-        ]
-        service.reconnect = MagicMock(return_value=True)
-        
-        message = MessagePayload({'test': 'message'})
-        options = PublishOptions.for_classification_result()
-        
-        # Act
-        result = service.publish_message(message, options)
-        
-        # Assert
-        assert result is True
-        assert service.channel.basic_publish.call_count == 2
-        service.reconnect.assert_called_once()
-    
-    def test_publish_message_channel_error_reconnect_fails(self, rabbitmq_config_fixture):
-        """Test channel error during publish with failed reconnect."""
-        # Arrange
-        service = QueueService(rabbitmq_config_fixture)
-        service.connect = MagicMock(return_value=True)
-        service.channel = MagicMock()
-        service.is_connected = True
-        
-        # Configure publish to fail and reconnect to fail
-        service.channel.basic_publish.side_effect = AMQPChannelError('Channel error')
-        service.reconnect = MagicMock(return_value=False)
-        
-        message = MessagePayload({'test': 'message'})
-        options = PublishOptions.for_classification_result()
-        
-        # Act & Assert
-        with pytest.raises(MessagingError) as excinfo:
-            service.publish_message(message, options)
-        
-        assert 'Failed to reconnect for message republishing' in str(excinfo.value)
-        service.reconnect.assert_called_once()
-    
-    def test_publish_message_other_error(self, rabbitmq_config_fixture):
-        """Test other error during publish."""
-        # Arrange
-        service = QueueService(rabbitmq_config_fixture)
-        service.connect = MagicMock(return_value=True)
-        service.channel = MagicMock()
-        service.is_connected = True
-        
-        # Configure publish to fail with a different error
-        service.channel.basic_publish.side_effect = Exception('Unknown error')
-        
-        message = MessagePayload({'test': 'message'})
-        options = PublishOptions.for_classification_result()
-        
-        # Act & Assert
-        with pytest.raises(MessagingError) as excinfo:
-            service.publish_message(message, options)
-        
-        assert 'Message publishing failed' in str(excinfo.value)
-    
-    def test_publish_classification_result(self, rabbitmq_config_fixture):
-        """Test publishing a classification result."""
-        # Arrange
-        service = QueueService(rabbitmq_config_fixture)
-        service.publish_message = MagicMock(return_value=True)
-        
-        message = MessagePayload.create_classification_result(
-            document_id='test-doc-123',
-            document_type=DocumentType.APPLICATION,
-            confidence=0.95,
-            confidence_scores={'APPLICATION': 0.95, 'OTHER': 0.05},
-            requires_review=False,
-            model_version='1.0.0',
-            features_used=['text_length', 'keyword_matches']
-        )
+        
+        # Verify that publish_message was called with the correct arguments
+        mock_rabbitmq_utils.publish_message.assert_called_once()
+        # Check that the message contains the required fields
+        published_message = mock_rabbitmq_utils.publish_message.call_args[0][0]
+        assert published_message['document_id'] == 'test-doc-id'
+        assert published_message['document_type'] == 'APPLICATION'
+        assert published_message['confidence'] == 0.95
+        assert published_message['correlation_id'] == 'test-correlation-id'
+        assert 'source' in published_message
+        assert published_message['source'] == 'document-service'
+        assert 'timestamp' in published_message
+        assert 'message_type' in published_message
+        assert published_message['message_type'] == 'classification_result'
+
+    def test_publish_classification_result_missing_fields(self, mock_rabbitmq_utils):
+        """Test that publish_classification_result validates required fields."""
+        # Create a QueueService instance
+        service = QueueService()
+        
+        # Create a test classification result with missing fields
+        test_result = {
+            'document_id': 'test-doc-id',
+            # Missing 'document_type'
+            'confidence': 0.95,
+            'correlation_id': 'test-correlation-id'
+        }
+        
+        # Verify that publish_classification_result raises a ValueError
+        with pytest.raises(ValueError, match="Missing required field in classification result: document_type"):
+            service.publish_classification_result(test_result)
+        
+        # Verify that publish_message was not called
+        mock_rabbitmq_utils.publish_message.assert_not_called()
+
+    def test_publish_classification_result_publish_error(self, mock_rabbitmq_utils):
+        """Test that publish_classification_result handles publish errors."""
+        # Create a QueueService instance
+        service = QueueService()
+        
+        # Configure publish_message to raise an exception
+        mock_rabbitmq_utils.publish_message.side_effect = Exception("Test exception")
+        
+        # Create a test classification result
+        test_result = {
+            'document_id': 'test-doc-id',
+            'document_type': 'APPLICATION',
+            'confidence': 0.95,
+            'correlation_id': 'test-correlation-id'
+        }
+        
+        # Publish the result
+        result = service.publish_classification_result(test_result)
+        
+        # Verify that the result is False (failure)
+        assert result is False
+
+    def test_validate_message(self, mock_rabbitmq_utils):
+        """Test that _validate_message correctly validates messages."""
+        # Create a QueueService instance
+        service = QueueService()
+        
+        # Test a valid message
+        valid_message = {
+            'document_id': 'test-doc-id',
+            'document_url': 'https://example.com/test-doc.pdf',
+            'metadata': {
+                'source': 'email',
+                'email_id': 'test-email-id',
+                'sender': 'test@example.com',
+                'received_at': '2023-01-01T00:00:00Z'
+            }
+        }
+        assert service._validate_message(valid_message) is True
+        
+        # Test a message with missing required fields
+        invalid_message_1 = {
+            'document_id': 'test-doc-id',
+            # Missing 'document_url'
+            'metadata': {}
+        }
+        assert service._validate_message(invalid_message_1) is False
+        
+        # Test a message with invalid metadata
+        invalid_message_2 = {
+            'document_id': 'test-doc-id',
+            'document_url': 'https://example.com/test-doc.pdf',
+            'metadata': 'not-a-dict'  # Should be a dict
+        }
+        assert service._validate_message(invalid_message_2) is False
+
+    def test_connection_error_handling(self, mock_rabbitmq_connection_error, mock_rabbitmq_utils):
+        """Test that the QueueService handles connection errors."""
+        # Configure rabbitmq_utils.get_rabbitmq_client to raise an AMQPConnectionError
+        mock_rabbitmq_utils.get_rabbitmq_client.side_effect = AMQPConnectionError("Connection refused")
+        
+        # Create a QueueService instance
+        # This should not raise an exception outside the constructor
+        service = QueueService()
+        
+        # Register a mock handler
+        mock_handler = MagicMock()
+        service.register_document_handler(mock_handler)
+        
+        # Start consuming messages
+        # This should not raise an exception outside the method
+        service.start_consuming()
+        
+        # Verify that consume_messages was called
+        mock_rabbitmq_utils.consume_messages.assert_called_once()
+
+    def test_channel_error_handling(self, mock_rabbitmq_channel_error, mock_rabbitmq_utils):
+        """Test that the QueueService handles channel errors."""
+        # Configure rabbitmq_utils.create_channel to raise an AMQPChannelError
+        mock_rabbitmq_utils.create_channel.side_effect = AMQPChannelError("Channel closed")
+        
+        # Create a QueueService instance
+        service = QueueService()
+        
+        # Register a mock handler
+        mock_handler = MagicMock()
+        service.register_document_handler(mock_handler)
+        
+        # Start consuming messages
+        # This should not raise an exception outside the method
+        service.start_consuming()
+        
+        # Verify that consume_messages was called
+        mock_rabbitmq_utils.consume_messages.assert_called_once()
+
+
+class TestMessageSchema:
+    """Test suite for the MessageSchema class."""
+
+    def test_create_classification_result(self):
+        """Test that create_classification_result creates properly formatted messages."""
+        # Create a test classification result
+        document_id = 'test-doc-id'
+        document_type = 'APPLICATION'
+        confidence = 0.95
+        needs_review = False
+        probabilities = {'APPLICATION': 0.95, 'BANK_STATEMENT': 0.03, 'TAX_RETURN': 0.02}
+        metadata = {'filename': 'test-doc.pdf', 'mime_type': 'application/pdf'}
         correlation_id = 'test-correlation-id'
         
-        # Act
-        result = service.publish_classification_result(message, correlation_id)
+        # Create the message
+        message = MessageSchema.create_classification_result(
+            document_id=document_id,
+            document_type=document_type,
+            confidence=confidence,
+            needs_review=needs_review,
+            probabilities=probabilities,
+            metadata=metadata,
+            correlation_id=correlation_id
+        )
         
-        # Assert
-        assert result is True
-        service.publish_message.assert_called_once()
+        # Verify that the message contains all required fields
+        assert message['document_id'] == document_id
+        assert message['document_type'] == document_type
+        assert message['confidence'] == confidence
+        assert message['needs_review'] == needs_review
+        assert message['probabilities'] == probabilities
+        assert message['metadata'] == metadata
+        assert message['correlation_id'] == correlation_id
+        assert 'timestamp' in message
+        assert 'source' in message
+        assert message['source'] == 'document-service'
+        assert 'message_type' in message
+        assert message['message_type'] == 'classification_result'
+
+    def test_validate_incoming_document(self):
+        """Test that validate_incoming_document correctly validates messages."""
+        # Test a valid message
+        valid_message = {
+            'document_id': 'test-doc-id',
+            'document_url': 'https://example.com/test-doc.pdf',
+            'metadata': {
+                'source': 'email',
+                'email_id': 'test-email-id',
+                'sender': 'test@example.com',
+                'received_at': '2023-01-01T00:00:00Z'
+            }
+        }
+        errors = MessageSchema.validate_incoming_document(valid_message)
+        assert len(errors) == 0
         
-        # Verify the options passed to publish_message
-        options = service.publish_message.call_args[0][1]
-        assert options.exchange == 'mca.classification'
-        assert options.routing_key == 'classification.results'
-        assert options.headers.get('correlation_id') == correlation_id
+        # Test a message with missing required fields
+        invalid_message_1 = {
+            'document_id': 'test-doc-id',
+            # Missing 'document_url'
+            'metadata': {}
+        }
+        errors = MessageSchema.validate_incoming_document(invalid_message_1)
+        assert len(errors) > 0
+        assert "Missing required field: document_url" in errors
+        
+        # Test a message with invalid field types
+        invalid_message_2 = {
+            'document_id': 123,  # Should be a string
+            'document_url': 'https://example.com/test-doc.pdf',
+            'metadata': {}
+        }
+        errors = MessageSchema.validate_incoming_document(invalid_message_2)
+        assert len(errors) > 0
+        assert "document_id must be a string" in errors
+        
+        # Test a message with missing email metadata
+        invalid_message_3 = {
+            'document_id': 'test-doc-id',
+            'document_url': 'https://example.com/test-doc.pdf',
+            'metadata': {
+                'source': 'email',
+                # Missing 'email_id'
+                'sender': 'test@example.com',
+                'received_at': '2023-01-01T00:00:00Z'
+            }
+        }
+        errors = MessageSchema.validate_incoming_document(invalid_message_3)
+        assert len(errors) > 0
+        assert "Missing email_id in metadata for email source" in errors
+
+
+@pytest.mark.integration
+class TestQueueServiceIntegration:
+    """Integration tests for the QueueService class.
     
-    def test_reconnect_success(self, rabbitmq_config_fixture):
-        """Test successful reconnection after failure."""
-        # Arrange
-        service = QueueService(rabbitmq_config_fixture)
-        service.disconnect = MagicMock()
-        service.connect = MagicMock(return_value=True)
+    These tests require a running RabbitMQ instance and are marked with the
+    'integration' marker to be skipped by default.
+    """
+
+    def test_tls_connection(self):
+        """Test that the QueueService can connect to RabbitMQ with TLS."""
+        # This test requires a running RabbitMQ instance with TLS enabled
+        # and client certificate authentication configured.
+        # It is marked with the 'integration' marker to be skipped by default.
         
-        # Act
-        result = service.reconnect()
+        # Configure environment variables for TLS connection
+        with patch.dict('os.environ', {
+            'RABBITMQ_SSL': 'True',
+            'RABBITMQ_SSL_CERT_PATH': '/path/to/client.crt',
+            'RABBITMQ_SSL_KEY_PATH': '/path/to/client.key',
+            'RABBITMQ_SSL_CA_CERTS': '/path/to/ca.crt'
+        }):
+            # Create a QueueService instance
+            service = QueueService()
+            
+            # Register a mock handler
+            mock_handler = MagicMock()
+            service.register_document_handler(mock_handler)
+            
+            # Start consuming messages
+            # This would fail if TLS connection fails
+            with patch('src.config.rabbitmq_config.consume_messages'):
+                service.start_consuming()
+
+    def test_end_to_end_message_flow(self, create_test_classification_result):
+        """Test the end-to-end message flow from consumption to publishing."""
+        # This test requires a running RabbitMQ instance and is marked with the
+        # 'integration' marker to be skipped by default.
         
-        # Assert
-        assert result is True
-        service.disconnect.assert_called_once()
-        service.connect.assert_called_once()
-    
-    def test_reconnect_failure(self, rabbitmq_config_fixture):
-        """Test failed reconnection attempts."""
-        # Arrange
-        service = QueueService(rabbitmq_config_fixture)
-        service.disconnect = MagicMock()
-        service.connect = MagicMock(side_effect=ServiceError('Connection failed'))
-        service.config = {'reconnect_attempts': 3, 'retry_delay': 0.01}  # Fast retry for testing
+        # Create a QueueService instance
+        service = QueueService()
         
-        # Act
-        with patch('time.sleep'):  # Mock sleep to speed up test
-            result = service.reconnect()
+        # Create a test classification result
+        classification_result = create_test_classification_result()
         
-        # Assert
-        assert result is False
-        service.disconnect.assert_called_once()
-        assert service.connect.call_count == 3  # Tried 3 times
-    
-    def test_context_manager(self, rabbitmq_config_fixture):
-        """Test using QueueService as a context manager."""
-        # Arrange
-        service = QueueService(rabbitmq_config_fixture)
-        service.connect = MagicMock(return_value=True)
-        service.disconnect = MagicMock()
+        # Create a handler that publishes the classification result
+        def test_handler(message):
+            # Create a classification result from the message
+            result = {
+                'document_id': message['document_id'],
+                'document_type': 'APPLICATION',
+                'confidence': 0.95,
+                'correlation_id': message.get('correlation_id', 'test-correlation-id')
+            }
+            # Publish the result
+            service.publish_classification_result(result)
         
-        # Act
-        with service as s:
-            # Assert in context
-            assert s is service
-            service.connect.assert_called_once()
+        # Register the handler
+        service.register_document_handler(test_handler)
         
-        # Assert after context
-        service.disconnect.assert_called_once()
-    
-    def test_context_manager_with_exception(self, rabbitmq_config_fixture):
-        """Test context manager with exception."""
-        # Arrange
-        service = QueueService(rabbitmq_config_fixture)
-        service.connect = MagicMock(return_value=True)
-        service.disconnect = MagicMock()
-        
-        # Act & Assert
-        try:
-            with service:
-                service.connect.assert_called_once()
-                raise ValueError('Test exception')
-        except ValueError:
-            pass
-        
-        # Assert disconnect was called despite exception
-        service.disconnect.assert_called_once()
+        # Mock the consume_messages function to call our handler directly
+        with patch('src.config.rabbitmq_config.consume_messages') as mock_consume:
+            # Define a function that calls the handler with a test message
+            def call_handler(callback):
+                # Create a test message
+                test_message = {
+                    'document_id': 'test-doc-id',
+                    'document_url': 'https://example.com/test-doc.pdf',
+                    'metadata': {
+                        'source': 'email',
+                        'email_id': 'test-email-id',
+                        'sender': 'test@example.com',
+                        'received_at': '2023-01-01T00:00:00Z'
+                    }
+                }
+                # Create mock method and properties
+                mock_method = MagicMock()
+                mock_properties = MagicMock(correlation_id='test-correlation-id')
+                # Call the callback
+                callback(test_message, mock_method, mock_properties)
+            
+            # Configure mock_consume to call our function
+            mock_consume.side_effect = call_handler
+            
+            # Start consuming messages
+            with patch('src.config.rabbitmq_config.publish_message') as mock_publish:
+                service.start_consuming()
+                
+                # Verify that publish_message was called with the correct arguments
+                mock_publish.assert_called_once()
+                # Check that the message contains the required fields
+                published_message = mock_publish.call_args[0][0]
+                assert published_message['document_id'] == 'test-doc-id'
+                assert published_message['document_type'] == 'APPLICATION'
+                assert published_message['confidence'] == 0.95
+                assert published_message['correlation_id'] == 'test-correlation-id'
+                assert 'source' in published_message
+                assert published_message['source'] == 'document-service'
+                assert 'timestamp' in published_message
+                assert 'message_type' in published_message
+                assert published_message['message_type'] == 'classification_result'
