@@ -1,1014 +1,978 @@
-# RBAC (Role-Based Access Control) configuration for the MCA Application Processing System
-# This file defines service accounts, roles, role bindings, cluster roles, and cluster role bindings
-# to implement the principle of least privilege for all microservices and supporting systems.
+# Role-Based Access Control (RBAC) for Kubernetes
+# This file defines service accounts, roles, and role bindings for the MCA Application Processing System
+# It implements the principle of least privilege, ensuring services have only the permissions they need
 
 # ---------------------------------------------------------------------------------------------------------------------
-# VARIABLES
-# ---------------------------------------------------------------------------------------------------------------------
-
-variable "service_account_annotations" {
-  description = "Map of annotations to add to all service accounts"
-  type        = map(string)
-  default     = {}
-}
-
-variable "enable_pod_security_policies" {
-  description = "Whether to enable Pod Security Policies"
-  type        = bool
-  default     = true
-}
-
-variable "enable_ci_cd_rbac" {
-  description = "Whether to create RBAC resources for CI/CD systems"
-  type        = bool
-  default     = true
-}
-
-variable "ci_cd_namespace" {
-  description = "Namespace for CI/CD resources"
-  type        = string
-  default     = "ci-cd"
-}
-
-variable "monitoring_namespace" {
-  description = "Namespace for monitoring resources"
-  type        = string
-  default     = "monitoring"
-}
-
-variable "logging_namespace" {
-  description = "Namespace for logging resources"
-  type        = string
-  default     = "logging"
-}
-
-# ---------------------------------------------------------------------------------------------------------------------
-# SERVICE ACCOUNTS
+# Service Accounts for each microservice
 # ---------------------------------------------------------------------------------------------------------------------
 
 # Email Service Service Account
 resource "kubernetes_service_account" "email_service" {
+  for_each = toset(["development", "staging", "production"])
+
   metadata {
     name      = "email-service"
-    namespace = "email-service"
-    annotations = merge(
-      var.service_account_annotations,
-      {
-        "description" = "Service account for the Email Service"
-      }
-    )
+    namespace = each.key
     labels = {
-      "app.kubernetes.io/name"       = "email-service"
-      "app.kubernetes.io/component"  = "microservice"
-      "app.kubernetes.io/part-of"    = "mca-application-system"
-      "app.kubernetes.io/managed-by" = "terraform"
+      app         = "email-service"
+      environment = each.key
     }
+    annotations = var.cloud_provider == "aws" ? {
+      "eks.amazonaws.com/role-arn" = "arn:aws:iam::${var.aws_account_id}:role/${each.key}-email-service"
+    } : var.cloud_provider == "azure" ? {
+      "azure.workload.identity/client-id" = "${each.key}-email-service"
+    } : var.cloud_provider == "gcp" ? {
+      "iam.gke.io/gcp-service-account" = "${each.key}-email-service@${var.gcp_project_id}.iam.gserviceaccount.com"
+    } : {}
   }
+
   automount_service_account_token = true
 }
 
 # Document Service Service Account
 resource "kubernetes_service_account" "document_service" {
+  for_each = toset(["development", "staging", "production"])
+
   metadata {
     name      = "document-service"
-    namespace = "document-service"
-    annotations = merge(
-      var.service_account_annotations,
-      {
-        "description" = "Service account for the Document Service"
-      }
-    )
+    namespace = each.key
     labels = {
-      "app.kubernetes.io/name"       = "document-service"
-      "app.kubernetes.io/component"  = "microservice"
-      "app.kubernetes.io/part-of"    = "mca-application-system"
-      "app.kubernetes.io/managed-by" = "terraform"
+      app         = "document-service"
+      environment = each.key
     }
+    annotations = var.cloud_provider == "aws" ? {
+      "eks.amazonaws.com/role-arn" = "arn:aws:iam::${var.aws_account_id}:role/${each.key}-document-service"
+    } : var.cloud_provider == "azure" ? {
+      "azure.workload.identity/client-id" = "${each.key}-document-service"
+    } : var.cloud_provider == "gcp" ? {
+      "iam.gke.io/gcp-service-account" = "${each.key}-document-service@${var.gcp_project_id}.iam.gserviceaccount.com"
+    } : {}
   }
+
   automount_service_account_token = true
 }
 
 # OCR Service Service Account
 resource "kubernetes_service_account" "ocr_service" {
+  for_each = toset(["development", "staging", "production"])
+
   metadata {
     name      = "ocr-service"
-    namespace = "ocr-service"
-    annotations = merge(
-      var.service_account_annotations,
-      {
-        "description" = "Service account for the OCR Service"
-      }
-    )
+    namespace = each.key
     labels = {
-      "app.kubernetes.io/name"       = "ocr-service"
-      "app.kubernetes.io/component"  = "microservice"
-      "app.kubernetes.io/part-of"    = "mca-application-system"
-      "app.kubernetes.io/managed-by" = "terraform"
+      app         = "ocr-service"
+      environment = each.key
     }
+    annotations = var.cloud_provider == "aws" ? {
+      "eks.amazonaws.com/role-arn" = "arn:aws:iam::${var.aws_account_id}:role/${each.key}-ocr-service"
+    } : var.cloud_provider == "azure" ? {
+      "azure.workload.identity/client-id" = "${each.key}-ocr-service"
+    } : var.cloud_provider == "gcp" ? {
+      "iam.gke.io/gcp-service-account" = "${each.key}-ocr-service@${var.gcp_project_id}.iam.gserviceaccount.com"
+    } : {}
   }
+
   automount_service_account_token = true
 }
 
 # Data Service Service Account
 resource "kubernetes_service_account" "data_service" {
+  for_each = toset(["development", "staging", "production"])
+
   metadata {
     name      = "data-service"
-    namespace = "data-service"
-    annotations = merge(
-      var.service_account_annotations,
-      {
-        "description" = "Service account for the Data Service"
-      }
-    )
+    namespace = each.key
     labels = {
-      "app.kubernetes.io/name"       = "data-service"
-      "app.kubernetes.io/component"  = "microservice"
-      "app.kubernetes.io/part-of"    = "mca-application-system"
-      "app.kubernetes.io/managed-by" = "terraform"
+      app         = "data-service"
+      environment = each.key
     }
+    annotations = var.cloud_provider == "aws" ? {
+      "eks.amazonaws.com/role-arn" = "arn:aws:iam::${var.aws_account_id}:role/${each.key}-data-service"
+    } : var.cloud_provider == "azure" ? {
+      "azure.workload.identity/client-id" = "${each.key}-data-service"
+    } : var.cloud_provider == "gcp" ? {
+      "iam.gke.io/gcp-service-account" = "${each.key}-data-service@${var.gcp_project_id}.iam.gserviceaccount.com"
+    } : {}
   }
+
   automount_service_account_token = true
 }
 
 # Notification Service Service Account
 resource "kubernetes_service_account" "notification_service" {
+  for_each = toset(["development", "staging", "production"])
+
   metadata {
     name      = "notification-service"
-    namespace = "notification-service"
-    annotations = merge(
-      var.service_account_annotations,
-      {
-        "description" = "Service account for the Notification Service"
-      }
-    )
+    namespace = each.key
     labels = {
-      "app.kubernetes.io/name"       = "notification-service"
-      "app.kubernetes.io/component"  = "microservice"
-      "app.kubernetes.io/part-of"    = "mca-application-system"
-      "app.kubernetes.io/managed-by" = "terraform"
+      app         = "notification-service"
+      environment = each.key
     }
+    annotations = var.cloud_provider == "aws" ? {
+      "eks.amazonaws.com/role-arn" = "arn:aws:iam::${var.aws_account_id}:role/${each.key}-notification-service"
+    } : var.cloud_provider == "azure" ? {
+      "azure.workload.identity/client-id" = "${each.key}-notification-service"
+    } : var.cloud_provider == "gcp" ? {
+      "iam.gke.io/gcp-service-account" = "${each.key}-notification-service@${var.gcp_project_id}.iam.gserviceaccount.com"
+    } : {}
   }
+
   automount_service_account_token = true
 }
 
 # API Gateway Service Account
 resource "kubernetes_service_account" "api_gateway" {
+  for_each = toset(["development", "staging", "production"])
+
   metadata {
     name      = "api-gateway"
-    namespace = "api-gateway"
-    annotations = merge(
-      var.service_account_annotations,
-      {
-        "description" = "Service account for the API Gateway (Kong)"
-      }
-    )
+    namespace = each.key
     labels = {
-      "app.kubernetes.io/name"       = "api-gateway"
-      "app.kubernetes.io/component"  = "gateway"
-      "app.kubernetes.io/part-of"    = "mca-application-system"
-      "app.kubernetes.io/managed-by" = "terraform"
+      app         = "api-gateway"
+      environment = each.key
     }
+    annotations = var.cloud_provider == "aws" ? {
+      "eks.amazonaws.com/role-arn" = "arn:aws:iam::${var.aws_account_id}:role/${each.key}-api-gateway"
+    } : var.cloud_provider == "azure" ? {
+      "azure.workload.identity/client-id" = "${each.key}-api-gateway"
+    } : var.cloud_provider == "gcp" ? {
+      "iam.gke.io/gcp-service-account" = "${each.key}-api-gateway@${var.gcp_project_id}.iam.gserviceaccount.com"
+    } : {}
   }
+
+  automount_service_account_token = true
+}
+
+# CI/CD Service Account for deployments
+resource "kubernetes_service_account" "cicd" {
+  for_each = toset(["development", "staging", "production"])
+
+  metadata {
+    name      = "cicd-deployer"
+    namespace = each.key
+    labels = {
+      app         = "cicd"
+      environment = each.key
+    }
+    annotations = var.cloud_provider == "aws" ? {
+      "eks.amazonaws.com/role-arn" = "arn:aws:iam::${var.aws_account_id}:role/${each.key}-cicd-deployer"
+    } : var.cloud_provider == "azure" ? {
+      "azure.workload.identity/client-id" = "${each.key}-cicd-deployer"
+    } : var.cloud_provider == "gcp" ? {
+      "iam.gke.io/gcp-service-account" = "${each.key}-cicd-deployer@${var.gcp_project_id}.iam.gserviceaccount.com"
+    } : {}
+  }
+
   automount_service_account_token = true
 }
 
 # ---------------------------------------------------------------------------------------------------------------------
-# ROLES AND ROLE BINDINGS FOR MICROSERVICES
+# Roles for user access
 # ---------------------------------------------------------------------------------------------------------------------
 
-# Email Service Role
-resource "kubernetes_role" "email_service" {
+# Operations Staff Role
+resource "kubernetes_role" "operations_staff" {
+  for_each = toset(["development", "staging", "production"])
+
   metadata {
-    name      = "email-service-role"
-    namespace = "email-service"
+    name      = "operations-staff"
+    namespace = each.key
     labels = {
-      "app.kubernetes.io/name"       = "email-service"
-      "app.kubernetes.io/component"  = "microservice"
-      "app.kubernetes.io/part-of"    = "mca-application-system"
-      "app.kubernetes.io/managed-by" = "terraform"
+      role        = "operations-staff"
+      environment = each.key
     }
   }
 
-  # Allow reading ConfigMaps for configuration
+  # Read access to most resources
   rule {
     api_groups = [""]
-    resources  = ["configmaps"]
+    resources  = ["pods", "services", "configmaps"]
     verbs      = ["get", "list", "watch"]
   }
 
-  # Allow reading Secrets for credentials
+  # Access to pod logs
   rule {
     api_groups = [""]
-    resources  = ["secrets"]
-    verbs      = ["get", "list", "watch"]
+    resources  = ["pods/log"]
+    verbs      = ["get", "list"]
   }
 
-  # Allow managing pods for self-healing
-  rule {
-    api_groups = [""]
-    resources  = ["pods"]
-    verbs      = ["get", "list", "watch"]
-  }
-
-  # Allow creating events for logging
-  rule {
-    api_groups = [""]
-    resources  = ["events"]
-    verbs      = ["create", "patch", "update"]
-  }
-}
-
-# Email Service Role Binding
-resource "kubernetes_role_binding" "email_service" {
-  metadata {
-    name      = "email-service-rolebinding"
-    namespace = "email-service"
-    labels = {
-      "app.kubernetes.io/name"       = "email-service"
-      "app.kubernetes.io/component"  = "microservice"
-      "app.kubernetes.io/part-of"    = "mca-application-system"
-      "app.kubernetes.io/managed-by" = "terraform"
-    }
-  }
-  role_ref {
-    api_group = "rbac.authorization.k8s.io"
-    kind      = "Role"
-    name      = kubernetes_role.email_service.metadata[0].name
-  }
-  subject {
-    kind      = "ServiceAccount"
-    name      = kubernetes_service_account.email_service.metadata[0].name
-    namespace = "email-service"
-  }
-}
-
-# Document Service Role
-resource "kubernetes_role" "document_service" {
-  metadata {
-    name      = "document-service-role"
-    namespace = "document-service"
-    labels = {
-      "app.kubernetes.io/name"       = "document-service"
-      "app.kubernetes.io/component"  = "microservice"
-      "app.kubernetes.io/part-of"    = "mca-application-system"
-      "app.kubernetes.io/managed-by" = "terraform"
-    }
-  }
-
-  # Allow reading ConfigMaps for configuration
-  rule {
-    api_groups = [""]
-    resources  = ["configmaps"]
-    verbs      = ["get", "list", "watch"]
-  }
-
-  # Allow reading Secrets for credentials
-  rule {
-    api_groups = [""]
-    resources  = ["secrets"]
-    verbs      = ["get", "list", "watch"]
-  }
-
-  # Allow managing pods for self-healing
-  rule {
-    api_groups = [""]
-    resources  = ["pods"]
-    verbs      = ["get", "list", "watch"]
-  }
-
-  # Allow creating events for logging
-  rule {
-    api_groups = [""]
-    resources  = ["events"]
-    verbs      = ["create", "patch", "update"]
-  }
-}
-
-# Document Service Role Binding
-resource "kubernetes_role_binding" "document_service" {
-  metadata {
-    name      = "document-service-rolebinding"
-    namespace = "document-service"
-    labels = {
-      "app.kubernetes.io/name"       = "document-service"
-      "app.kubernetes.io/component"  = "microservice"
-      "app.kubernetes.io/part-of"    = "mca-application-system"
-      "app.kubernetes.io/managed-by" = "terraform"
-    }
-  }
-  role_ref {
-    api_group = "rbac.authorization.k8s.io"
-    kind      = "Role"
-    name      = kubernetes_role.document_service.metadata[0].name
-  }
-  subject {
-    kind      = "ServiceAccount"
-    name      = kubernetes_service_account.document_service.metadata[0].name
-    namespace = "document-service"
-  }
-}
-
-# OCR Service Role
-resource "kubernetes_role" "ocr_service" {
-  metadata {
-    name      = "ocr-service-role"
-    namespace = "ocr-service"
-    labels = {
-      "app.kubernetes.io/name"       = "ocr-service"
-      "app.kubernetes.io/component"  = "microservice"
-      "app.kubernetes.io/part-of"    = "mca-application-system"
-      "app.kubernetes.io/managed-by" = "terraform"
-    }
-  }
-
-  # Allow reading ConfigMaps for configuration
-  rule {
-    api_groups = [""]
-    resources  = ["configmaps"]
-    verbs      = ["get", "list", "watch"]
-  }
-
-  # Allow reading Secrets for credentials
-  rule {
-    api_groups = [""]
-    resources  = ["secrets"]
-    verbs      = ["get", "list", "watch"]
-  }
-
-  # Allow managing pods for self-healing
-  rule {
-    api_groups = [""]
-    resources  = ["pods"]
-    verbs      = ["get", "list", "watch"]
-  }
-
-  # Allow creating events for logging
-  rule {
-    api_groups = [""]
-    resources  = ["events"]
-    verbs      = ["create", "patch", "update"]
-  }
-
-  # Allow managing GPU resources
-  rule {
-    api_groups = [""]
-    resources  = ["pods/status"]
-    verbs      = ["get", "update", "patch"]
-  }
-}
-
-# OCR Service Role Binding
-resource "kubernetes_role_binding" "ocr_service" {
-  metadata {
-    name      = "ocr-service-rolebinding"
-    namespace = "ocr-service"
-    labels = {
-      "app.kubernetes.io/name"       = "ocr-service"
-      "app.kubernetes.io/component"  = "microservice"
-      "app.kubernetes.io/part-of"    = "mca-application-system"
-      "app.kubernetes.io/managed-by" = "terraform"
-    }
-  }
-  role_ref {
-    api_group = "rbac.authorization.k8s.io"
-    kind      = "Role"
-    name      = kubernetes_role.ocr_service.metadata[0].name
-  }
-  subject {
-    kind      = "ServiceAccount"
-    name      = kubernetes_service_account.ocr_service.metadata[0].name
-    namespace = "ocr-service"
-  }
-}
-
-# Data Service Role
-resource "kubernetes_role" "data_service" {
-  metadata {
-    name      = "data-service-role"
-    namespace = "data-service"
-    labels = {
-      "app.kubernetes.io/name"       = "data-service"
-      "app.kubernetes.io/component"  = "microservice"
-      "app.kubernetes.io/part-of"    = "mca-application-system"
-      "app.kubernetes.io/managed-by" = "terraform"
-    }
-  }
-
-  # Allow reading ConfigMaps for configuration
-  rule {
-    api_groups = [""]
-    resources  = ["configmaps"]
-    verbs      = ["get", "list", "watch"]
-  }
-
-  # Allow reading Secrets for credentials
-  rule {
-    api_groups = [""]
-    resources  = ["secrets"]
-    verbs      = ["get", "list", "watch"]
-  }
-
-  # Allow managing pods for self-healing
-  rule {
-    api_groups = [""]
-    resources  = ["pods"]
-    verbs      = ["get", "list", "watch"]
-  }
-
-  # Allow creating events for logging
-  rule {
-    api_groups = [""]
-    resources  = ["events"]
-    verbs      = ["create", "patch", "update"]
-  }
-}
-
-# Data Service Role Binding
-resource "kubernetes_role_binding" "data_service" {
-  metadata {
-    name      = "data-service-rolebinding"
-    namespace = "data-service"
-    labels = {
-      "app.kubernetes.io/name"       = "data-service"
-      "app.kubernetes.io/component"  = "microservice"
-      "app.kubernetes.io/part-of"    = "mca-application-system"
-      "app.kubernetes.io/managed-by" = "terraform"
-    }
-  }
-  role_ref {
-    api_group = "rbac.authorization.k8s.io"
-    kind      = "Role"
-    name      = kubernetes_role.data_service.metadata[0].name
-  }
-  subject {
-    kind      = "ServiceAccount"
-    name      = kubernetes_service_account.data_service.metadata[0].name
-    namespace = "data-service"
-  }
-}
-
-# Notification Service Role
-resource "kubernetes_role" "notification_service" {
-  metadata {
-    name      = "notification-service-role"
-    namespace = "notification-service"
-    labels = {
-      "app.kubernetes.io/name"       = "notification-service"
-      "app.kubernetes.io/component"  = "microservice"
-      "app.kubernetes.io/part-of"    = "mca-application-system"
-      "app.kubernetes.io/managed-by" = "terraform"
-    }
-  }
-
-  # Allow reading ConfigMaps for configuration
-  rule {
-    api_groups = [""]
-    resources  = ["configmaps"]
-    verbs      = ["get", "list", "watch"]
-  }
-
-  # Allow reading Secrets for credentials
-  rule {
-    api_groups = [""]
-    resources  = ["secrets"]
-    verbs      = ["get", "list", "watch"]
-  }
-
-  # Allow managing pods for self-healing
-  rule {
-    api_groups = [""]
-    resources  = ["pods"]
-    verbs      = ["get", "list", "watch"]
-  }
-
-  # Allow creating events for logging
-  rule {
-    api_groups = [""]
-    resources  = ["events"]
-    verbs      = ["create", "patch", "update"]
-  }
-}
-
-# Notification Service Role Binding
-resource "kubernetes_role_binding" "notification_service" {
-  metadata {
-    name      = "notification-service-rolebinding"
-    namespace = "notification-service"
-    labels = {
-      "app.kubernetes.io/name"       = "notification-service"
-      "app.kubernetes.io/component"  = "microservice"
-      "app.kubernetes.io/part-of"    = "mca-application-system"
-      "app.kubernetes.io/managed-by" = "terraform"
-    }
-  }
-  role_ref {
-    api_group = "rbac.authorization.k8s.io"
-    kind      = "Role"
-    name      = kubernetes_role.notification_service.metadata[0].name
-  }
-  subject {
-    kind      = "ServiceAccount"
-    name      = kubernetes_service_account.notification_service.metadata[0].name
-    namespace = "notification-service"
-  }
-}
-
-# API Gateway Role
-resource "kubernetes_role" "api_gateway" {
-  metadata {
-    name      = "api-gateway-role"
-    namespace = "api-gateway"
-    labels = {
-      "app.kubernetes.io/name"       = "api-gateway"
-      "app.kubernetes.io/component"  = "gateway"
-      "app.kubernetes.io/part-of"    = "mca-application-system"
-      "app.kubernetes.io/managed-by" = "terraform"
-    }
-  }
-
-  # Allow reading ConfigMaps for configuration
-  rule {
-    api_groups = [""]
-    resources  = ["configmaps"]
-    verbs      = ["get", "list", "watch"]
-  }
-
-  # Allow reading Secrets for credentials and certificates
-  rule {
-    api_groups = [""]
-    resources  = ["secrets"]
-    verbs      = ["get", "list", "watch"]
-  }
-
-  # Allow managing pods for self-healing
-  rule {
-    api_groups = [""]
-    resources  = ["pods"]
-    verbs      = ["get", "list", "watch"]
-  }
-
-  # Allow creating events for logging
-  rule {
-    api_groups = [""]
-    resources  = ["events"]
-    verbs      = ["create", "patch", "update"]
-  }
-
-  # Allow managing services for dynamic routing
-  rule {
-    api_groups = [""]
-    resources  = ["services"]
-    verbs      = ["get", "list", "watch"]
-  }
-
-  # Allow managing endpoints for service discovery
-  rule {
-    api_groups = [""]
-    resources  = ["endpoints"]
-    verbs      = ["get", "list", "watch"]
-  }
-}
-
-# API Gateway Role Binding
-resource "kubernetes_role_binding" "api_gateway" {
-  metadata {
-    name      = "api-gateway-rolebinding"
-    namespace = "api-gateway"
-    labels = {
-      "app.kubernetes.io/name"       = "api-gateway"
-      "app.kubernetes.io/component"  = "gateway"
-      "app.kubernetes.io/part-of"    = "mca-application-system"
-      "app.kubernetes.io/managed-by" = "terraform"
-    }
-  }
-  role_ref {
-    api_group = "rbac.authorization.k8s.io"
-    kind      = "Role"
-    name      = kubernetes_role.api_gateway.metadata[0].name
-  }
-  subject {
-    kind      = "ServiceAccount"
-    name      = kubernetes_service_account.api_gateway.metadata[0].name
-    namespace = "api-gateway"
-  }
-}
-
-# ---------------------------------------------------------------------------------------------------------------------
-# CLUSTER ROLES AND CLUSTER ROLE BINDINGS
-# ---------------------------------------------------------------------------------------------------------------------
-
-# API Gateway Cluster Role for cross-namespace service discovery
-resource "kubernetes_cluster_role" "api_gateway_discovery" {
-  metadata {
-    name = "api-gateway-discovery"
-    labels = {
-      "app.kubernetes.io/name"       = "api-gateway"
-      "app.kubernetes.io/component"  = "gateway"
-      "app.kubernetes.io/part-of"    = "mca-application-system"
-      "app.kubernetes.io/managed-by" = "terraform"
-    }
-  }
-
-  # Allow reading services across all namespaces
-  rule {
-    api_groups = [""]
-    resources  = ["services"]
-    verbs      = ["get", "list", "watch"]
-  }
-
-  # Allow reading endpoints across all namespaces
-  rule {
-    api_groups = [""]
-    resources  = ["endpoints"]
-    verbs      = ["get", "list", "watch"]
-  }
-}
-
-# API Gateway Cluster Role Binding
-resource "kubernetes_cluster_role_binding" "api_gateway_discovery" {
-  metadata {
-    name = "api-gateway-discovery-binding"
-    labels = {
-      "app.kubernetes.io/name"       = "api-gateway"
-      "app.kubernetes.io/component"  = "gateway"
-      "app.kubernetes.io/part-of"    = "mca-application-system"
-      "app.kubernetes.io/managed-by" = "terraform"
-    }
-  }
-  role_ref {
-    api_group = "rbac.authorization.k8s.io"
-    kind      = "ClusterRole"
-    name      = kubernetes_cluster_role.api_gateway_discovery.metadata[0].name
-  }
-  subject {
-    kind      = "ServiceAccount"
-    name      = kubernetes_service_account.api_gateway.metadata[0].name
-    namespace = "api-gateway"
-  }
-}
-
-# ---------------------------------------------------------------------------------------------------------------------
-# CI/CD RBAC CONFIGURATION
-# ---------------------------------------------------------------------------------------------------------------------
-
-# CI/CD Service Account
-resource "kubernetes_service_account" "ci_cd" {
-  count = var.enable_ci_cd_rbac ? 1 : 0
-  
-  metadata {
-    name      = "ci-cd-deployer"
-    namespace = var.ci_cd_namespace
-    annotations = merge(
-      var.service_account_annotations,
-      {
-        "description" = "Service account for CI/CD deployment pipelines"
-      }
-    )
-    labels = {
-      "app.kubernetes.io/name"       = "ci-cd"
-      "app.kubernetes.io/component"  = "deployment"
-      "app.kubernetes.io/part-of"    = "mca-application-system"
-      "app.kubernetes.io/managed-by" = "terraform"
-    }
-  }
-  automount_service_account_token = true
-}
-
-# CI/CD Cluster Role
-resource "kubernetes_cluster_role" "ci_cd" {
-  count = var.enable_ci_cd_rbac ? 1 : 0
-  
-  metadata {
-    name = "ci-cd-deployer-role"
-    labels = {
-      "app.kubernetes.io/name"       = "ci-cd"
-      "app.kubernetes.io/component"  = "deployment"
-      "app.kubernetes.io/part-of"    = "mca-application-system"
-      "app.kubernetes.io/managed-by" = "terraform"
-    }
-  }
-
-  # Allow managing deployments
+  # Read access to deployments and statefulsets
   rule {
     api_groups = ["apps"]
-    resources  = ["deployments"]
-    verbs      = ["get", "list", "watch", "create", "update", "patch", "delete"]
+    resources  = ["deployments", "statefulsets"]
+    verbs      = ["get", "list", "watch"]
   }
 
-  # Allow managing services
+  # Read access to jobs and cronjobs
+  rule {
+    api_groups = ["batch"]
+    resources  = ["jobs", "cronjobs"]
+    verbs      = ["get", "list", "watch"]
+  }
+
+  # Full access to application data secrets
+  rule {
+    api_groups     = [""]
+    resources      = ["secrets"]
+    resource_names = ["application-data-*"]
+    verbs          = ["get", "list", "watch", "create", "update", "patch", "delete"]
+  }
+}
+
+# System Admin Role
+resource "kubernetes_role" "system_admin" {
+  for_each = toset(["development", "staging", "production"])
+
+  metadata {
+    name      = "system-admin"
+    namespace = each.key
+    labels = {
+      role        = "system-admin"
+      environment = each.key
+    }
+  }
+
+  # Full access to most resources
   rule {
     api_groups = [""]
-    resources  = ["services"]
+    resources  = ["pods", "services", "configmaps", "secrets", "namespaces", "persistentvolumeclaims"]
     verbs      = ["get", "list", "watch", "create", "update", "patch", "delete"]
   }
 
-  # Allow managing configmaps
+  # Access to pod logs and exec
   rule {
     api_groups = [""]
-    resources  = ["configmaps"]
-    verbs      = ["get", "list", "watch", "create", "update", "patch", "delete"]
+    resources  = ["pods/log", "pods/exec"]
+    verbs      = ["get", "list", "create"]
   }
 
-  # Allow managing secrets
-  rule {
-    api_groups = [""]
-    resources  = ["secrets"]
-    verbs      = ["get", "list", "watch", "create", "update", "patch", "delete"]
-  }
-
-  # Allow managing pods
-  rule {
-    api_groups = [""]
-    resources  = ["pods"]
-    verbs      = ["get", "list", "watch", "create", "update", "patch", "delete"]
-  }
-
-  # Allow managing ingresses
-  rule {
-    api_groups = ["networking.k8s.io"]
-    resources  = ["ingresses"]
-    verbs      = ["get", "list", "watch", "create", "update", "patch", "delete"]
-  }
-
-  # Allow managing statefulsets
+  # Full access to deployments, statefulsets, daemonsets, replicasets
   rule {
     api_groups = ["apps"]
-    resources  = ["statefulsets"]
+    resources  = ["deployments", "statefulsets", "daemonsets", "replicasets"]
     verbs      = ["get", "list", "watch", "create", "update", "patch", "delete"]
   }
 
-  # Allow managing daemonsets
-  rule {
-    api_groups = ["apps"]
-    resources  = ["daemonsets"]
-    verbs      = ["get", "list", "watch", "create", "update", "patch", "delete"]
-  }
-
-  # Allow managing jobs and cronjobs
+  # Full access to jobs and cronjobs
   rule {
     api_groups = ["batch"]
     resources  = ["jobs", "cronjobs"]
     verbs      = ["get", "list", "watch", "create", "update", "patch", "delete"]
   }
 
-  # Allow managing horizontal pod autoscalers
+  # Full access to ingresses and network policies
   rule {
-    api_groups = ["autoscaling"]
-    resources  = ["horizontalpodautoscalers"]
+    api_groups = ["networking.k8s.io"]
+    resources  = ["ingresses", "networkpolicies"]
+    verbs      = ["get", "list", "watch", "create", "update", "patch", "delete"]
+  }
+
+  # Read access to roles and role bindings
+  rule {
+    api_groups = ["rbac.authorization.k8s.io"]
+    resources  = ["roles", "rolebindings"]
+    verbs      = ["get", "list", "watch"]
+  }
+}
+
+# CI/CD Deployer Role
+resource "kubernetes_role" "cicd_deployer" {
+  for_each = toset(["development", "staging", "production"])
+
+  metadata {
+    name      = "cicd-deployer"
+    namespace = each.key
+    labels = {
+      role        = "cicd-deployer"
+      environment = each.key
+    }
+  }
+
+  # Access to resources needed for deployments
+  rule {
+    api_groups = [""]
+    resources  = ["pods", "services", "configmaps", "secrets"]
+    verbs      = ["get", "list", "watch", "create", "update", "patch", "delete"]
+  }
+
+  # Access to deployments, statefulsets, daemonsets, replicasets
+  rule {
+    api_groups = ["apps"]
+    resources  = ["deployments", "statefulsets", "daemonsets", "replicasets"]
+    verbs      = ["get", "list", "watch", "create", "update", "patch", "delete"]
+  }
+
+  # Access to jobs and cronjobs
+  rule {
+    api_groups = ["batch"]
+    resources  = ["jobs", "cronjobs"]
+    verbs      = ["get", "list", "watch", "create", "update", "patch", "delete"]
+  }
+
+  # Access to ingresses
+  rule {
+    api_groups = ["networking.k8s.io"]
+    resources  = ["ingresses"]
     verbs      = ["get", "list", "watch", "create", "update", "patch", "delete"]
   }
 }
 
-# CI/CD Cluster Role Binding
-resource "kubernetes_cluster_role_binding" "ci_cd" {
-  count = var.enable_ci_cd_rbac ? 1 : 0
-  
+# ---------------------------------------------------------------------------------------------------------------------
+# Service-specific roles with least privilege principle
+# ---------------------------------------------------------------------------------------------------------------------
+
+# Email Service Role
+resource "kubernetes_role" "email_service_role" {
+  for_each = toset(["development", "staging", "production"])
+
   metadata {
-    name = "ci-cd-deployer-binding"
+    name      = "email-service-role"
+    namespace = each.key
     labels = {
-      "app.kubernetes.io/name"       = "ci-cd"
-      "app.kubernetes.io/component"  = "deployment"
-      "app.kubernetes.io/part-of"    = "mca-application-system"
-      "app.kubernetes.io/managed-by" = "terraform"
+      app         = "email-service"
+      environment = each.key
     }
   }
+
+  # Access to specific configmaps
+  rule {
+    api_groups     = [""]
+    resources      = ["configmaps"]
+    resource_names = ["email-service-config", "email-credentials"]
+    verbs          = ["get", "list", "watch"]
+  }
+
+  # Access to specific secrets
+  rule {
+    api_groups     = [""]
+    resources      = ["secrets"]
+    resource_names = ["email-service-secrets", "rabbitmq-credentials"]
+    verbs          = ["get", "list", "watch"]
+  }
+}
+
+# Document Service Role
+resource "kubernetes_role" "document_service_role" {
+  for_each = toset(["development", "staging", "production"])
+
+  metadata {
+    name      = "document-service-role"
+    namespace = each.key
+    labels = {
+      app         = "document-service"
+      environment = each.key
+    }
+  }
+
+  # Access to specific configmaps
+  rule {
+    api_groups     = [""]
+    resources      = ["configmaps"]
+    resource_names = ["document-service-config", "document-classification-config"]
+    verbs          = ["get", "list", "watch"]
+  }
+
+  # Access to specific secrets
+  rule {
+    api_groups     = [""]
+    resources      = ["secrets"]
+    resource_names = ["document-service-secrets", "rabbitmq-credentials", "s3-credentials"]
+    verbs          = ["get", "list", "watch"]
+  }
+}
+
+# OCR Service Role
+resource "kubernetes_role" "ocr_service_role" {
+  for_each = toset(["development", "staging", "production"])
+
+  metadata {
+    name      = "ocr-service-role"
+    namespace = each.key
+    labels = {
+      app         = "ocr-service"
+      environment = each.key
+    }
+  }
+
+  # Access to specific configmaps
+  rule {
+    api_groups     = [""]
+    resources      = ["configmaps"]
+    resource_names = ["ocr-service-config", "ocr-models-config"]
+    verbs          = ["get", "list", "watch"]
+  }
+
+  # Access to specific secrets
+  rule {
+    api_groups     = [""]
+    resources      = ["secrets"]
+    resource_names = ["ocr-service-secrets", "rabbitmq-credentials", "s3-credentials"]
+    verbs          = ["get", "list", "watch"]
+  }
+}
+
+# Data Service Role
+resource "kubernetes_role" "data_service_role" {
+  for_each = toset(["development", "staging", "production"])
+
+  metadata {
+    name      = "data-service-role"
+    namespace = each.key
+    labels = {
+      app         = "data-service"
+      environment = each.key
+    }
+  }
+
+  # Access to specific configmaps
+  rule {
+    api_groups     = [""]
+    resources      = ["configmaps"]
+    resource_names = ["data-service-config", "database-config"]
+    verbs          = ["get", "list", "watch"]
+  }
+
+  # Access to specific secrets
+  rule {
+    api_groups     = [""]
+    resources      = ["secrets"]
+    resource_names = ["data-service-secrets", "rabbitmq-credentials", "database-credentials", "redis-credentials"]
+    verbs          = ["get", "list", "watch"]
+  }
+}
+
+# Notification Service Role
+resource "kubernetes_role" "notification_service_role" {
+  for_each = toset(["development", "staging", "production"])
+
+  metadata {
+    name      = "notification-service-role"
+    namespace = each.key
+    labels = {
+      app         = "notification-service"
+      environment = each.key
+    }
+  }
+
+  # Access to specific configmaps
+  rule {
+    api_groups     = [""]
+    resources      = ["configmaps"]
+    resource_names = ["notification-service-config", "webhook-config"]
+    verbs          = ["get", "list", "watch"]
+  }
+
+  # Access to specific secrets
+  rule {
+    api_groups     = [""]
+    resources      = ["secrets"]
+    resource_names = ["notification-service-secrets", "rabbitmq-credentials", "webhook-credentials"]
+    verbs          = ["get", "list", "watch"]
+  }
+}
+
+# API Gateway Role
+resource "kubernetes_role" "api_gateway_role" {
+  for_each = toset(["development", "staging", "production"])
+
+  metadata {
+    name      = "api-gateway-role"
+    namespace = each.key
+    labels = {
+      app         = "api-gateway"
+      environment = each.key
+    }
+  }
+
+  # Access to specific configmaps
+  rule {
+    api_groups     = [""]
+    resources      = ["configmaps"]
+    resource_names = ["api-gateway-config", "jwt-config", "cors-config"]
+    verbs          = ["get", "list", "watch"]
+  }
+
+  # Access to specific secrets
+  rule {
+    api_groups     = [""]
+    resources      = ["secrets"]
+    resource_names = ["api-gateway-secrets", "jwt-keys"]
+    verbs          = ["get", "list", "watch"]
+  }
+}
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Role Bindings for service accounts
+# ---------------------------------------------------------------------------------------------------------------------
+
+# Email Service Role Bindings
+resource "kubernetes_role_binding" "email_service_binding" {
+  for_each = toset(["development", "staging", "production"])
+
+  metadata {
+    name      = "email-service-binding"
+    namespace = each.key
+    labels = {
+      app         = "email-service"
+      environment = each.key
+    }
+  }
+
   role_ref {
     api_group = "rbac.authorization.k8s.io"
-    kind      = "ClusterRole"
-    name      = kubernetes_cluster_role.ci_cd[0].metadata[0].name
+    kind      = "Role"
+    name      = "email-service-role"
   }
+
   subject {
     kind      = "ServiceAccount"
-    name      = kubernetes_service_account.ci_cd[0].metadata[0].name
-    namespace = var.ci_cd_namespace
+    name      = "email-service"
+    namespace = each.key
   }
+
+  depends_on = [
+    kubernetes_service_account.email_service,
+    kubernetes_role.email_service_role
+  ]
 }
 
-# ---------------------------------------------------------------------------------------------------------------------
-# MONITORING AND LOGGING RBAC CONFIGURATION
-# ---------------------------------------------------------------------------------------------------------------------
+# Document Service Role Bindings
+resource "kubernetes_role_binding" "document_service_binding" {
+  for_each = toset(["development", "staging", "production"])
 
-# Monitoring Service Account
-resource "kubernetes_service_account" "monitoring" {
   metadata {
-    name      = "monitoring"
-    namespace = var.monitoring_namespace
-    annotations = merge(
-      var.service_account_annotations,
-      {
-        "description" = "Service account for monitoring systems (Prometheus, Grafana, etc.)"
-      }
-    )
+    name      = "document-service-binding"
+    namespace = each.key
     labels = {
-      "app.kubernetes.io/name"       = "monitoring"
-      "app.kubernetes.io/component"  = "observability"
-      "app.kubernetes.io/part-of"    = "mca-application-system"
-      "app.kubernetes.io/managed-by" = "terraform"
+      app         = "document-service"
+      environment = each.key
     }
   }
-  automount_service_account_token = true
+
+  role_ref {
+    api_group = "rbac.authorization.k8s.io"
+    kind      = "Role"
+    name      = "document-service-role"
+  }
+
+  subject {
+    kind      = "ServiceAccount"
+    name      = "document-service"
+    namespace = each.key
+  }
+
+  depends_on = [
+    kubernetes_service_account.document_service,
+    kubernetes_role.document_service_role
+  ]
 }
 
-# Monitoring Cluster Role
+# OCR Service Role Bindings
+resource "kubernetes_role_binding" "ocr_service_binding" {
+  for_each = toset(["development", "staging", "production"])
+
+  metadata {
+    name      = "ocr-service-binding"
+    namespace = each.key
+    labels = {
+      app         = "ocr-service"
+      environment = each.key
+    }
+  }
+
+  role_ref {
+    api_group = "rbac.authorization.k8s.io"
+    kind      = "Role"
+    name      = "ocr-service-role"
+  }
+
+  subject {
+    kind      = "ServiceAccount"
+    name      = "ocr-service"
+    namespace = each.key
+  }
+
+  depends_on = [
+    kubernetes_service_account.ocr_service,
+    kubernetes_role.ocr_service_role
+  ]
+}
+
+# Data Service Role Bindings
+resource "kubernetes_role_binding" "data_service_binding" {
+  for_each = toset(["development", "staging", "production"])
+
+  metadata {
+    name      = "data-service-binding"
+    namespace = each.key
+    labels = {
+      app         = "data-service"
+      environment = each.key
+    }
+  }
+
+  role_ref {
+    api_group = "rbac.authorization.k8s.io"
+    kind      = "Role"
+    name      = "data-service-role"
+  }
+
+  subject {
+    kind      = "ServiceAccount"
+    name      = "data-service"
+    namespace = each.key
+  }
+
+  depends_on = [
+    kubernetes_service_account.data_service,
+    kubernetes_role.data_service_role
+  ]
+}
+
+# Notification Service Role Bindings
+resource "kubernetes_role_binding" "notification_service_binding" {
+  for_each = toset(["development", "staging", "production"])
+
+  metadata {
+    name      = "notification-service-binding"
+    namespace = each.key
+    labels = {
+      app         = "notification-service"
+      environment = each.key
+    }
+  }
+
+  role_ref {
+    api_group = "rbac.authorization.k8s.io"
+    kind      = "Role"
+    name      = "notification-service-role"
+  }
+
+  subject {
+    kind      = "ServiceAccount"
+    name      = "notification-service"
+    namespace = each.key
+  }
+
+  depends_on = [
+    kubernetes_service_account.notification_service,
+    kubernetes_role.notification_service_role
+  ]
+}
+
+# API Gateway Role Bindings
+resource "kubernetes_role_binding" "api_gateway_binding" {
+  for_each = toset(["development", "staging", "production"])
+
+  metadata {
+    name      = "api-gateway-binding"
+    namespace = each.key
+    labels = {
+      app         = "api-gateway"
+      environment = each.key
+    }
+  }
+
+  role_ref {
+    api_group = "rbac.authorization.k8s.io"
+    kind      = "Role"
+    name      = "api-gateway-role"
+  }
+
+  subject {
+    kind      = "ServiceAccount"
+    name      = "api-gateway"
+    namespace = each.key
+  }
+
+  depends_on = [
+    kubernetes_service_account.api_gateway,
+    kubernetes_role.api_gateway_role
+  ]
+}
+
+# CI/CD Deployer Role Bindings
+resource "kubernetes_role_binding" "cicd_deployer_binding" {
+  for_each = toset(["development", "staging", "production"])
+
+  metadata {
+    name      = "cicd-deployer-binding"
+    namespace = each.key
+    labels = {
+      role        = "cicd-deployer"
+      environment = each.key
+    }
+  }
+
+  role_ref {
+    api_group = "rbac.authorization.k8s.io"
+    kind      = "Role"
+    name      = "cicd-deployer"
+  }
+
+  subject {
+    kind      = "ServiceAccount"
+    name      = "cicd-deployer"
+    namespace = each.key
+  }
+
+  depends_on = [
+    kubernetes_service_account.cicd,
+    kubernetes_role.cicd_deployer
+  ]
+}
+
+# ---------------------------------------------------------------------------------------------------------------------
+# User Role Bindings
+# ---------------------------------------------------------------------------------------------------------------------
+
+# Operations Staff Role Bindings
+resource "kubernetes_role_binding" "operations_staff_binding" {
+  for_each = toset(["development", "staging", "production"])
+
+  metadata {
+    name      = "operations-staff-binding"
+    namespace = each.key
+    labels = {
+      role        = "operations-staff"
+      environment = each.key
+    }
+  }
+
+  role_ref {
+    api_group = "rbac.authorization.k8s.io"
+    kind      = "Role"
+    name      = "operations-staff"
+  }
+
+  subject {
+    kind     = "Group"
+    name     = "operations-staff"
+    api_group = "rbac.authorization.k8s.io"
+  }
+
+  depends_on = [
+    kubernetes_role.operations_staff
+  ]
+}
+
+# System Admin Role Bindings
+resource "kubernetes_role_binding" "system_admin_binding" {
+  for_each = toset(["development", "staging", "production"])
+
+  metadata {
+    name      = "system-admin-binding"
+    namespace = each.key
+    labels = {
+      role        = "system-admin"
+      environment = each.key
+    }
+  }
+
+  role_ref {
+    api_group = "rbac.authorization.k8s.io"
+    kind      = "Role"
+    name      = "system-admin"
+  }
+
+  subject {
+    kind     = "Group"
+    name     = "system-admin"
+    api_group = "rbac.authorization.k8s.io"
+  }
+
+  depends_on = [
+    kubernetes_role.system_admin
+  ]
+}
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Cluster-wide roles for monitoring and logging
+# ---------------------------------------------------------------------------------------------------------------------
+
+# Monitoring Role
 resource "kubernetes_cluster_role" "monitoring" {
   metadata {
     name = "monitoring-role"
     labels = {
-      "app.kubernetes.io/name"       = "monitoring"
-      "app.kubernetes.io/component"  = "observability"
-      "app.kubernetes.io/part-of"    = "mca-application-system"
-      "app.kubernetes.io/managed-by" = "terraform"
+      role = "monitoring"
     }
   }
 
-  # Allow reading pods for metrics collection
+  # Access to metrics and health endpoints
   rule {
     api_groups = [""]
-    resources  = ["pods"]
+    resources  = ["pods", "nodes", "services", "endpoints"]
     verbs      = ["get", "list", "watch"]
   }
 
-  # Allow reading services for service discovery
-  rule {
-    api_groups = [""]
-    resources  = ["services"]
-    verbs      = ["get", "list", "watch"]
-  }
-
-  # Allow reading endpoints for service discovery
-  rule {
-    api_groups = [""]
-    resources  = ["endpoints"]
-    verbs      = ["get", "list", "watch"]
-  }
-
-  # Allow reading nodes for cluster metrics
-  rule {
-    api_groups = [""]
-    resources  = ["nodes"]
-    verbs      = ["get", "list", "watch"]
-  }
-
-  # Allow reading namespaces for discovery
-  rule {
-    api_groups = [""]
-    resources  = ["namespaces"]
-    verbs      = ["get", "list", "watch"]
-  }
-
-  # Allow reading pod metrics
+  # Access to custom metrics
   rule {
     api_groups = ["metrics.k8s.io"]
     resources  = ["pods", "nodes"]
     verbs      = ["get", "list", "watch"]
   }
-}
 
-# Monitoring Cluster Role Binding
-resource "kubernetes_cluster_role_binding" "monitoring" {
-  metadata {
-    name = "monitoring-binding"
-    labels = {
-      "app.kubernetes.io/name"       = "monitoring"
-      "app.kubernetes.io/component"  = "observability"
-      "app.kubernetes.io/part-of"    = "mca-application-system"
-      "app.kubernetes.io/managed-by" = "terraform"
-    }
-  }
-  role_ref {
-    api_group = "rbac.authorization.k8s.io"
-    kind      = "ClusterRole"
-    name      = kubernetes_cluster_role.monitoring.metadata[0].name
-  }
-  subject {
-    kind      = "ServiceAccount"
-    name      = kubernetes_service_account.monitoring.metadata[0].name
-    namespace = var.monitoring_namespace
+  # Access to Prometheus resources if using Prometheus Operator
+  rule {
+    api_groups = ["monitoring.coreos.com"]
+    resources  = ["servicemonitors", "podmonitors", "prometheusrules"]
+    verbs      = ["get", "list", "watch"]
   }
 }
 
-# Logging Service Account
-resource "kubernetes_service_account" "logging" {
-  metadata {
-    name      = "logging"
-    namespace = var.logging_namespace
-    annotations = merge(
-      var.service_account_annotations,
-      {
-        "description" = "Service account for logging systems (Fluentd, Elasticsearch, etc.)"
-      }
-    )
-    labels = {
-      "app.kubernetes.io/name"       = "logging"
-      "app.kubernetes.io/component"  = "observability"
-      "app.kubernetes.io/part-of"    = "mca-application-system"
-      "app.kubernetes.io/managed-by" = "terraform"
-    }
-  }
-  automount_service_account_token = true
-}
-
-# Logging Cluster Role
+# Logging Role
 resource "kubernetes_cluster_role" "logging" {
   metadata {
     name = "logging-role"
     labels = {
-      "app.kubernetes.io/name"       = "logging"
-      "app.kubernetes.io/component"  = "observability"
-      "app.kubernetes.io/part-of"    = "mca-application-system"
-      "app.kubernetes.io/managed-by" = "terraform"
+      role = "logging"
     }
   }
 
-  # Allow reading pods for log collection
+  # Access to pod logs
   rule {
     api_groups = [""]
-    resources  = ["pods"]
+    resources  = ["pods", "pods/log"]
     verbs      = ["get", "list", "watch"]
   }
 
-  # Allow reading pod logs
-  rule {
-    api_groups = [""]
-    resources  = ["pods/log"]
-    verbs      = ["get", "list", "watch"]
-  }
-
-  # Allow reading namespaces for discovery
+  # Access to namespaces for discovery
   rule {
     api_groups = [""]
     resources  = ["namespaces"]
     verbs      = ["get", "list", "watch"]
   }
-
-  # Allow reading nodes for node-level logging
-  rule {
-    api_groups = [""]
-    resources  = ["nodes"]
-    verbs      = ["get", "list", "watch"]
-  }
 }
 
-# Logging Cluster Role Binding
-resource "kubernetes_cluster_role_binding" "logging" {
+# Monitoring Service Account
+resource "kubernetes_service_account" "monitoring" {
   metadata {
-    name = "logging-binding"
+    name      = "monitoring-account"
+    namespace = "monitoring"
     labels = {
-      "app.kubernetes.io/name"       = "logging"
-      "app.kubernetes.io/component"  = "observability"
-      "app.kubernetes.io/part-of"    = "mca-application-system"
-      "app.kubernetes.io/managed-by" = "terraform"
+      app = "monitoring"
     }
   }
+
+  automount_service_account_token = true
+}
+
+# Logging Service Account
+resource "kubernetes_service_account" "logging" {
+  metadata {
+    name      = "logging-account"
+    namespace = "logging"
+    labels = {
+      app = "logging"
+    }
+  }
+
+  automount_service_account_token = true
+}
+
+# Monitoring Cluster Role Binding
+resource "kubernetes_cluster_role_binding" "monitoring_binding" {
+  metadata {
+    name = "monitoring-binding"
+    labels = {
+      role = "monitoring"
+    }
+  }
+
   role_ref {
     api_group = "rbac.authorization.k8s.io"
     kind      = "ClusterRole"
-    name      = kubernetes_cluster_role.logging.metadata[0].name
+    name      = "monitoring-role"
   }
+
   subject {
     kind      = "ServiceAccount"
-    name      = kubernetes_service_account.logging.metadata[0].name
-    namespace = var.logging_namespace
+    name      = "monitoring-account"
+    namespace = "monitoring"
   }
+
+  depends_on = [
+    kubernetes_service_account.monitoring,
+    kubernetes_cluster_role.monitoring
+  ]
+}
+
+# Logging Cluster Role Binding
+resource "kubernetes_cluster_role_binding" "logging_binding" {
+  metadata {
+    name = "logging-binding"
+    labels = {
+      role = "logging"
+    }
+  }
+
+  role_ref {
+    api_group = "rbac.authorization.k8s.io"
+    kind      = "ClusterRole"
+    name      = "logging-role"
+  }
+
+  subject {
+    kind      = "ServiceAccount"
+    name      = "logging-account"
+    namespace = "logging"
+  }
+
+  depends_on = [
+    kubernetes_service_account.logging,
+    kubernetes_cluster_role.logging
+  ]
 }
 
 # ---------------------------------------------------------------------------------------------------------------------
-# OUTPUTS
+# Variables
+# ---------------------------------------------------------------------------------------------------------------------
+
+variable "cloud_provider" {
+  description = "Cloud provider where the Kubernetes cluster is running (aws, azure, gcp)"
+  type        = string
+  default     = "aws"
+}
+
+variable "aws_account_id" {
+  description = "AWS account ID for IAM role ARN construction"
+  type        = string
+  default     = ""
+}
+
+variable "gcp_project_id" {
+  description = "GCP project ID for service account email construction"
+  type        = string
+  default     = ""
+}
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Outputs
 # ---------------------------------------------------------------------------------------------------------------------
 
 output "service_account_names" {
   description = "Names of the service accounts created"
   value = {
-    email_service       = kubernetes_service_account.email_service.metadata[0].name
-    document_service    = kubernetes_service_account.document_service.metadata[0].name
-    ocr_service         = kubernetes_service_account.ocr_service.metadata[0].name
-    data_service        = kubernetes_service_account.data_service.metadata[0].name
-    notification_service = kubernetes_service_account.notification_service.metadata[0].name
-    api_gateway         = kubernetes_service_account.api_gateway.metadata[0].name
-    monitoring          = kubernetes_service_account.monitoring.metadata[0].name
-    logging             = kubernetes_service_account.logging.metadata[0].name
-    ci_cd               = var.enable_ci_cd_rbac ? kubernetes_service_account.ci_cd[0].metadata[0].name : null
+    email_service       = { for k, v in kubernetes_service_account.email_service : k => v.metadata[0].name }
+    document_service    = { for k, v in kubernetes_service_account.document_service : k => v.metadata[0].name }
+    ocr_service         = { for k, v in kubernetes_service_account.ocr_service : k => v.metadata[0].name }
+    data_service        = { for k, v in kubernetes_service_account.data_service : k => v.metadata[0].name }
+    notification_service = { for k, v in kubernetes_service_account.notification_service : k => v.metadata[0].name }
+    api_gateway         = { for k, v in kubernetes_service_account.api_gateway : k => v.metadata[0].name }
+    cicd                = { for k, v in kubernetes_service_account.cicd : k => v.metadata[0].name }
   }
 }
 
 output "role_names" {
   description = "Names of the roles created"
   value = {
-    email_service       = kubernetes_role.email_service.metadata[0].name
-    document_service    = kubernetes_role.document_service.metadata[0].name
-    ocr_service         = kubernetes_role.ocr_service.metadata[0].name
-    data_service        = kubernetes_role.data_service.metadata[0].name
-    notification_service = kubernetes_role.notification_service.metadata[0].name
-    api_gateway         = kubernetes_role.api_gateway.metadata[0].name
-  }
-}
-
-output "cluster_role_names" {
-  description = "Names of the cluster roles created"
-  value = {
-    api_gateway_discovery = kubernetes_cluster_role.api_gateway_discovery.metadata[0].name
-    monitoring           = kubernetes_cluster_role.monitoring.metadata[0].name
-    logging              = kubernetes_cluster_role.logging.metadata[0].name
-    ci_cd               = var.enable_ci_cd_rbac ? kubernetes_cluster_role.ci_cd[0].metadata[0].name : null
+    operations_staff    = { for k, v in kubernetes_role.operations_staff : k => v.metadata[0].name }
+    system_admin        = { for k, v in kubernetes_role.system_admin : k => v.metadata[0].name }
+    cicd_deployer       = { for k, v in kubernetes_role.cicd_deployer : k => v.metadata[0].name }
+    monitoring          = kubernetes_cluster_role.monitoring.metadata[0].name
+    logging             = kubernetes_cluster_role.logging.metadata[0].name
   }
 }
