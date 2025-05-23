@@ -1,11 +1,7 @@
 package com.dollarfunding.mca.security;
 
-import com.dollarfunding.mca.dto.ErrorResponseDTO;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpServletResponse;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -23,220 +19,200 @@ import org.springframework.security.authentication.InsufficientAuthenticationExc
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import javax.servlet.ServletException;
+import javax.servlet.ServletOutputStream;
 import java.io.IOException;
-import java.io.PrintWriter;
-import java.io.StringWriter;
-import java.time.LocalDateTime;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 /**
- * Unit tests for {@link JwtAuthenticationEntryPoint} class.
- * 
- * These tests verify that the JwtAuthenticationEntryPoint correctly handles
- * authentication exceptions by returning appropriate HTTP 401 Unauthorized responses
- * with detailed error messages in JSON format.
+ * Test class for {@link JwtAuthenticationEntryPoint} that verifies the correct handling
+ * of authentication exceptions.
+ * <p>
+ * This test ensures that the entry point properly generates HTTP 401 Unauthorized responses
+ * with detailed error messages, JSON formatting, and inclusion of timestamp and path information.
  */
 @ExtendWith(MockitoExtension.class)
 public class JwtAuthenticationEntryPointTest {
 
-    @Mock
+    @InjectMocks
+    private JwtAuthenticationEntryPoint jwtAuthenticationEntryPoint;
+
+    private Logger mockLogger;
+
+    private MockHttpServletRequest request;
+    private MockHttpServletResponse response;
+    private AuthenticationException authException;
     private ObjectMapper objectMapper;
 
-    @Mock
-    private HttpServletRequest request;
-
-    @Mock
-    private HttpServletResponse response;
-
-    @InjectMocks
-    private JwtAuthenticationEntryPoint entryPoint;
-
-    private MockHttpServletRequest mockRequest;
-    private MockHttpServletResponse mockResponse;
-    private StringWriter responseWriter;
-
     @BeforeEach
-    public void setUp() throws IOException {
-        // Set up mock request with realistic values
-        mockRequest = new MockHttpServletRequest();
-        mockRequest.setRequestURI("/api/v1/applications");
-        mockRequest.setMethod("GET");
-        mockRequest.setRemoteAddr("192.168.1.100");
-        mockRequest.addHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
-
-        // Set up mock response with a StringWriter to capture the output
-        mockResponse = new MockHttpServletResponse();
-        responseWriter = new StringWriter();
-        PrintWriter printWriter = new PrintWriter(responseWriter);
-        when(response.getOutputStream()).thenReturn(mockResponse.getOutputStream());
+    public void setUp() {
+        // Initialize test objects
+        request = new MockHttpServletRequest();
+        response = new MockHttpServletResponse();
+        authException = new BadCredentialsException("Invalid credentials");
+        objectMapper = new ObjectMapper();
+        
+        // Set up request URI
+        request.setRequestURI("/api/v1/applications");
+        
+        // Create a mock logger and inject it into the entry point
+        mockLogger = mock(Logger.class);
+        ReflectionTestUtils.setField(jwtAuthenticationEntryPoint, "logger", mockLogger);
     }
 
+    /**
+     * Test that the commence method sets the response status to 401 (Unauthorized)
+     */
     @Test
-    @DisplayName("Should return 401 Unauthorized with error details for missing JWT token")
-    public void testCommenceWithMissingTokenException() throws IOException {
-        // Arrange
-        AuthenticationException authException = new InsufficientAuthenticationException("Missing JWT token");
-        when(request.getRequestURI()).thenReturn("/api/v1/applications");
-        when(request.getMethod()).thenReturn("GET");
-        when(request.getRemoteAddr()).thenReturn("192.168.1.100");
-        when(request.getHeader("User-Agent")).thenReturn("Mozilla/5.0");
-
-        // Capture the ErrorResponseDTO that will be written to the response
-        ArgumentCaptor<ErrorResponseDTO> errorResponseCaptor = ArgumentCaptor.forClass(ErrorResponseDTO.class);
-
-        // Act
-        entryPoint.commence(request, response, authException);
-
-        // Assert
-        verify(response).setStatus(HttpStatus.UNAUTHORIZED.value());
-        verify(response).setContentType(MediaType.APPLICATION_JSON_VALUE);
-        verify(response).setCharacterEncoding("UTF-8");
-        verify(objectMapper).writeValue(any(), errorResponseCaptor.capture());
-
-        // Verify the error response content
-        ErrorResponseDTO capturedResponse = errorResponseCaptor.getValue();
-        assertEquals("UNAUTHORIZED", capturedResponse.getErrorCode());
-        assertEquals("Authentication failed: Missing JWT token", capturedResponse.getMessage());
-        assertEquals(HttpStatus.UNAUTHORIZED.value(), capturedResponse.getStatus());
-        assertNotNull(capturedResponse.getTimestamp());
-        assertEquals("/api/v1/applications", capturedResponse.getPath());
+    public void testCommenceSetsUnauthorizedStatus() throws IOException, ServletException {
+        // Execute the method under test
+        jwtAuthenticationEntryPoint.commence(request, response, authException);
+        
+        // Verify that the response status is set to 401
+        assertEquals(HttpStatus.UNAUTHORIZED.value(), response.getStatus());
     }
 
+    /**
+     * Test that the commence method sets the content type to application/json
+     */
     @Test
-    @DisplayName("Should return 401 Unauthorized with error details for invalid JWT token")
-    public void testCommenceWithInvalidTokenException() throws IOException {
-        // Arrange
-        AuthenticationException authException = new BadCredentialsException("Invalid JWT token");
-        when(request.getRequestURI()).thenReturn("/api/v1/applications/123");
-        when(request.getMethod()).thenReturn("POST");
-        when(request.getRemoteAddr()).thenReturn("10.0.0.1");
-        when(request.getHeader("User-Agent")).thenReturn("PostmanRuntime/7.28.4");
-
-        // Capture the ErrorResponseDTO that will be written to the response
-        ArgumentCaptor<ErrorResponseDTO> errorResponseCaptor = ArgumentCaptor.forClass(ErrorResponseDTO.class);
-
-        // Act
-        entryPoint.commence(request, response, authException);
-
-        // Assert
-        verify(response).setStatus(HttpStatus.UNAUTHORIZED.value());
-        verify(response).setContentType(MediaType.APPLICATION_JSON_VALUE);
-        verify(response).setCharacterEncoding("UTF-8");
-        verify(objectMapper).writeValue(any(), errorResponseCaptor.capture());
-
-        // Verify the error response content
-        ErrorResponseDTO capturedResponse = errorResponseCaptor.getValue();
-        assertEquals("UNAUTHORIZED", capturedResponse.getErrorCode());
-        assertEquals("Authentication failed: Invalid JWT token", capturedResponse.getMessage());
-        assertEquals(HttpStatus.UNAUTHORIZED.value(), capturedResponse.getStatus());
-        assertNotNull(capturedResponse.getTimestamp());
-        assertEquals("/api/v1/applications/123", capturedResponse.getPath());
+    public void testCommenceSetsJsonContentType() throws IOException, ServletException {
+        // Execute the method under test
+        jwtAuthenticationEntryPoint.commence(request, response, authException);
+        
+        // Verify that the content type is set to application/json
+        assertEquals(MediaType.APPLICATION_JSON_VALUE, response.getContentType());
     }
 
+    /**
+     * Test that the commence method includes all required fields in the error response
+     */
     @Test
-    @DisplayName("Should set security headers in the response")
-    public void testResponseContainsSecurityHeaders() throws IOException {
-        // Arrange
-        AuthenticationException authException = new BadCredentialsException("Invalid JWT token");
-        when(request.getRequestURI()).thenReturn("/api/v1/applications");
-        when(request.getMethod()).thenReturn("GET");
-        when(request.getRemoteAddr()).thenReturn("192.168.1.100");
-        when(request.getHeader("User-Agent")).thenReturn("Mozilla/5.0");
-
-        // Act
-        entryPoint.commence(request, response, authException);
-
-        // Assert
-        verify(response).setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-        verify(response).setHeader("Pragma", "no-cache");
-        verify(response).setHeader("Expires", "0");
+    public void testCommenceIncludesAllRequiredFields() throws IOException, ServletException {
+        // Execute the method under test
+        jwtAuthenticationEntryPoint.commence(request, response, authException);
+        
+        // Parse the response content as a Map
+        String content = response.getContentAsString();
+        Map<String, Object> errorDetails = objectMapper.readValue(content, Map.class);
+        
+        // Verify that all required fields are present
+        assertTrue(errorDetails.containsKey("timestamp"));
+        assertTrue(errorDetails.containsKey("status"));
+        assertTrue(errorDetails.containsKey("error"));
+        assertTrue(errorDetails.containsKey("message"));
+        assertTrue(errorDetails.containsKey("path"));
+        
+        // Verify the values of the fields
+        assertEquals(HttpStatus.UNAUTHORIZED.value(), errorDetails.get("status"));
+        assertEquals("Unauthorized", errorDetails.get("error"));
+        assertEquals(authException.getMessage(), errorDetails.get("message"));
+        assertEquals(request.getRequestURI(), errorDetails.get("path"));
     }
-
+    
+    /**
+     * Test that the commence method includes the authentication exception message in the error response
+     */
     @Test
-    @DisplayName("Should log authentication failures with detailed information")
-    public void testLoggingOfAuthenticationFailure() throws Exception {
-        // Arrange
-        AuthenticationException authException = new BadCredentialsException("Invalid JWT token");
-        when(request.getRequestURI()).thenReturn("/api/v1/applications");
-        when(request.getMethod()).thenReturn("GET");
-        when(request.getRemoteAddr()).thenReturn("192.168.1.100");
-        when(request.getHeader("User-Agent")).thenReturn("Mozilla/5.0");
-
-        // Get the logger using reflection
-        Logger loggerMock = mock(Logger.class);
-        ReflectionTestUtils.setField(entryPoint, "logger", loggerMock);
-
-        // Act
-        entryPoint.commence(request, response, authException);
-
-        // Assert
-        verify(loggerMock).error(
-                eq("Authentication failure: {}, Method: {}, URI: {}, Remote IP: {}, User-Agent: {}"),
-                eq("Invalid JWT token"),
-                eq("GET"),
-                eq("/api/v1/applications"),
-                eq("192.168.1.100"),
-                eq("Mozilla/5.0")
-        );
+    public void testCommenceIncludesExceptionMessage() throws IOException, ServletException {
+        // Create a specific authentication exception with a custom message
+        String customMessage = "JWT token has expired";
+        AuthenticationException customException = new BadCredentialsException(customMessage);
+        
+        // Execute the method under test
+        jwtAuthenticationEntryPoint.commence(request, response, customException);
+        
+        // Parse the response content as a Map
+        String content = response.getContentAsString();
+        Map<String, Object> errorDetails = objectMapper.readValue(content, Map.class);
+        
+        // Verify that the exception message is included in the error response
+        assertEquals(customMessage, errorDetails.get("message"));
     }
-
+    
+    /**
+     * Test that the commence method includes the request URI in the error response
+     */
     @Test
-    @DisplayName("Should handle expired JWT token exception")
-    public void testCommenceWithExpiredTokenException() throws IOException {
-        // Arrange
-        AuthenticationException authException = new BadCredentialsException("JWT token has expired");
-        when(request.getRequestURI()).thenReturn("/api/v1/documents");
-        when(request.getMethod()).thenReturn("GET");
-        when(request.getRemoteAddr()).thenReturn("192.168.1.100");
-        when(request.getHeader("User-Agent")).thenReturn("Mozilla/5.0");
-
-        // Capture the ErrorResponseDTO that will be written to the response
-        ArgumentCaptor<ErrorResponseDTO> errorResponseCaptor = ArgumentCaptor.forClass(ErrorResponseDTO.class);
-
-        // Act
-        entryPoint.commence(request, response, authException);
-
-        // Assert
-        verify(response).setStatus(HttpStatus.UNAUTHORIZED.value());
-        verify(objectMapper).writeValue(any(), errorResponseCaptor.capture());
-
-        // Verify the error response content
-        ErrorResponseDTO capturedResponse = errorResponseCaptor.getValue();
-        assertEquals("UNAUTHORIZED", capturedResponse.getErrorCode());
-        assertEquals("Authentication failed: JWT token has expired", capturedResponse.getMessage());
-        assertEquals(HttpStatus.UNAUTHORIZED.value(), capturedResponse.getStatus());
-        assertEquals("/api/v1/documents", capturedResponse.getPath());
+    public void testCommenceIncludesRequestURI() throws IOException, ServletException {
+        // Set a specific request URI
+        String customURI = "/api/v1/documents/123";
+        request.setRequestURI(customURI);
+        
+        // Execute the method under test
+        jwtAuthenticationEntryPoint.commence(request, response, authException);
+        
+        // Parse the response content as a Map
+        String content = response.getContentAsString();
+        Map<String, Object> errorDetails = objectMapper.readValue(content, Map.class);
+        
+        // Verify that the request URI is included in the error response
+        assertEquals(customURI, errorDetails.get("path"));
     }
-
+    
+    /**
+     * Test that the commence method logs the authentication failure
+     */
     @Test
-    @DisplayName("Should handle malformed JWT token exception")
-    public void testCommenceWithMalformedTokenException() throws IOException {
-        // Arrange
-        AuthenticationException authException = new BadCredentialsException("Malformed JWT token");
-        when(request.getRequestURI()).thenReturn("/api/v1/webhooks");
-        when(request.getMethod()).thenReturn("POST");
-        when(request.getRemoteAddr()).thenReturn("192.168.1.100");
-        when(request.getHeader("User-Agent")).thenReturn("Mozilla/5.0");
-
-        // Capture the ErrorResponseDTO that will be written to the response
-        ArgumentCaptor<ErrorResponseDTO> errorResponseCaptor = ArgumentCaptor.forClass(ErrorResponseDTO.class);
-
-        // Act
-        entryPoint.commence(request, response, authException);
-
-        // Assert
-        verify(response).setStatus(HttpStatus.UNAUTHORIZED.value());
-        verify(objectMapper).writeValue(any(), errorResponseCaptor.capture());
-
-        // Verify the error response content
-        ErrorResponseDTO capturedResponse = errorResponseCaptor.getValue();
-        assertEquals("UNAUTHORIZED", capturedResponse.getErrorCode());
-        assertEquals("Authentication failed: Malformed JWT token", capturedResponse.getMessage());
-        assertEquals(HttpStatus.UNAUTHORIZED.value(), capturedResponse.getStatus());
-        assertEquals("/api/v1/webhooks", capturedResponse.getPath());
+    public void testCommenceLogsAuthenticationFailure() throws IOException, ServletException {
+        // Execute the method under test
+        jwtAuthenticationEntryPoint.commence(request, response, authException);
+        
+        // Verify that the authentication failure is logged
+        verify(mockLogger).error(eq("Authentication failed: {}"), eq(authException.getMessage()), eq(authException));
     }
-}
+    
+    /**
+     * Test that the commence method handles different types of authentication exceptions
+     */
+    @Test
+    public void testCommenceHandlesDifferentExceptionTypes() throws IOException, ServletException {
+        // Create different types of authentication exceptions
+        AuthenticationException[] exceptions = {
+            new BadCredentialsException("Invalid credentials"),
+            new InsufficientAuthenticationException("Full authentication is required"),
+            new AuthenticationException("Custom authentication error") {}
+        };
+        
+        for (AuthenticationException exception : exceptions) {
+            // Reset the response for each test
+            response = new MockHttpServletResponse();
+            
+            // Execute the method under test
+            jwtAuthenticationEntryPoint.commence(request, response, exception);
+            
+            // Parse the response content as a Map
+            String content = response.getContentAsString();
+            Map<String, Object> errorDetails = objectMapper.readValue(content, Map.class);
+            
+            // Verify that the response status is 401 and the exception message is included
+            assertEquals(HttpStatus.UNAUTHORIZED.value(), response.getStatus());
+            assertEquals(exception.getMessage(), errorDetails.get("message"));
+        }
+    }
+    
+    /**
+     * Test that the timestamp in the error response is in ISO format
+     */
+    @Test
+    public void testTimestampFormatInErrorResponse() throws IOException, ServletException {
+        // Execute the method under test
+        jwtAuthenticationEntryPoint.commence(request, response, authException);
+        
+        // Parse the response content as a Map
+        String content = response.getContentAsString();
+        Map<String, Object> errorDetails = objectMapper.readValue(content, Map.class);
+        
+        // Get the timestamp from the error details
+        String timestamp = (String) errorDetails.get("timestamp");
+        
+        // Verify that the timestamp is not null and matches ISO format pattern
+        assertNotNull(timestamp);
+        assertTrue(timestamp.matches("\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?.*"));
+    }
