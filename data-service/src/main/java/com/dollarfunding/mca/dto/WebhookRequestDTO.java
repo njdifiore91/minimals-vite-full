@@ -5,232 +5,254 @@ import com.dollarfunding.mca.entity.Webhook;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
-import javax.validation.constraints.NotBlank;
-import javax.validation.constraints.NotNull;
-import javax.validation.constraints.Pattern;
-import javax.validation.constraints.Size;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Size;
 
 /**
- * DTO class for creating or updating webhook configurations.
- * This class defines the structure for incoming webhook data with validation annotations for required fields.
- * It serves as the contract for webhook configuration operations in the REST API.
+ * Data Transfer Object (DTO) for creating or updating webhook configurations.
+ * <p>
+ * This class defines the structure for incoming webhook data with validation annotations
+ * for required fields. It includes fields for webhook endpoint URL, event types, secret key,
+ * and active status. It serves as the contract for webhook configuration operations in the
+ * REST API.
+ * </p>
+ * <p>
+ * Used by the REST API for webhook configuration at /api/v1/webhooks, which is restricted
+ * to the System Admin role.
+ * </p>
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class WebhookRequestDTO {
 
     /**
-     * The URL where webhook notifications will be sent.
-     * Must be a valid URL starting with http:// or https://
+     * The URL of the webhook endpoint where notifications will be sent.
+     * Must be a valid HTTPS URL.
      */
     @NotBlank(message = "Endpoint URL is required")
+    @Pattern(regexp = "^https://.*", message = "Endpoint URL must use HTTPS protocol")
     @Size(max = 255, message = "Endpoint URL cannot exceed 255 characters")
-    @Pattern(regexp = "^(https?://)[a-zA-Z0-9\\-\\._~:/?#\\[\\]@!$&'()*+,;=]+$", 
-             message = "Endpoint URL must be a valid URL starting with http:// or https://")
     @JsonProperty("endpoint_url")
     private String endpointUrl;
 
     /**
-     * The type of event that triggers this webhook.
-     * Must be a valid event type from the EventType enum.
-     */
-    @NotBlank(message = "Event type is required")
-    @JsonProperty("event_type")
-    private String eventType;
-
-    /**
-     * The secret key used for HMAC signing of webhook payloads.
-     * This is used to verify the authenticity of webhook deliveries.
+     * Secret key used for HMAC signing of webhook payloads.
+     * This provides a way for the webhook receiver to verify the authenticity of the webhook.
      */
     @NotBlank(message = "Secret key is required")
-    @Size(min = 16, max = 64, message = "Secret key must be between 16 and 64 characters")
+    @Size(min = 32, max = 128, message = "Secret key must be between 32 and 128 characters")
     @JsonProperty("secret_key")
     private String secretKey;
 
     /**
-     * Whether the webhook is currently active.
-     * Inactive webhooks will not be triggered by events.
+     * Flag indicating whether this webhook is active and should receive notifications.
      */
     @NotNull(message = "Active status is required")
     @JsonProperty("active")
     private Boolean active;
 
     /**
-     * The name of the signature header used (e.g., "X-Webhook-Signature").
-     * This header will contain the HMAC signature in webhook deliveries.
+     * The type of event that triggers this webhook.
      */
-    @JsonProperty("signature_header")
-    @Size(max = 100, message = "Signature header name cannot exceed 100 characters")
-    private String signatureHeader = "X-Webhook-Signature";
+    @NotNull(message = "Event type is required")
+    @JsonProperty("event_type")
+    private EventType eventType;
 
     /**
-     * Default constructor.
+     * The maximum number of retry attempts for failed webhook deliveries.
+     * Optional, defaults to 3 if not specified.
+     */
+    @Min(value = 0, message = "Max retry attempts must be at least 0")
+    @Max(value = 10, message = "Max retry attempts cannot exceed 10")
+    @JsonProperty("max_retry_attempts")
+    private Integer maxRetryAttempts;
+
+    /**
+     * The name of the signature header used (e.g., "X-Webhook-Signature").
+     * Optional, defaults to "X-Webhook-Signature" if not specified.
+     */
+    @Size(max = 100, message = "Signature header cannot exceed 100 characters")
+    @JsonProperty("signature_header")
+    private String signatureHeader;
+
+    /**
+     * Default constructor for Jackson deserialization.
      */
     public WebhookRequestDTO() {
     }
 
     /**
-     * Constructor with all fields.
+     * Constructor with required fields.
      *
-     * @param endpointUrl     The endpoint URL
-     * @param eventType       The event type
-     * @param secretKey       The secret key
-     * @param active          Whether the webhook is active
-     * @param signatureHeader The signature header name
+     * @param endpointUrl The URL of the webhook endpoint
+     * @param secretKey The secret key for HMAC signing
+     * @param active Whether the webhook is active
+     * @param eventType The type of event that triggers this webhook
      */
-    public WebhookRequestDTO(String endpointUrl, String eventType, String secretKey, Boolean active, String signatureHeader) {
+    public WebhookRequestDTO(String endpointUrl, String secretKey, Boolean active, EventType eventType) {
         this.endpointUrl = endpointUrl;
-        this.eventType = eventType;
         this.secretKey = secretKey;
         this.active = active;
+        this.eventType = eventType;
+    }
+
+    /**
+     * Constructor with all fields.
+     *
+     * @param endpointUrl The URL of the webhook endpoint
+     * @param secretKey The secret key for HMAC signing
+     * @param active Whether the webhook is active
+     * @param eventType The type of event that triggers this webhook
+     * @param maxRetryAttempts The maximum number of retry attempts for failed webhook deliveries
+     * @param signatureHeader The name of the signature header used
+     */
+    public WebhookRequestDTO(String endpointUrl, String secretKey, Boolean active, EventType eventType,
+                             Integer maxRetryAttempts, String signatureHeader) {
+        this.endpointUrl = endpointUrl;
+        this.secretKey = secretKey;
+        this.active = active;
+        this.eventType = eventType;
+        this.maxRetryAttempts = maxRetryAttempts;
         this.signatureHeader = signatureHeader;
     }
 
     /**
-     * @return The endpoint URL
+     * Converts this DTO to a new Webhook entity.
+     *
+     * @return A new Webhook entity with data from this DTO
      */
+    public Webhook toEntity() {
+        Webhook webhook = new Webhook(endpointUrl, secretKey, active, eventType);
+        
+        if (maxRetryAttempts != null) {
+            webhook.setMaxRetryAttempts(maxRetryAttempts);
+        }
+        
+        if (signatureHeader != null) {
+            webhook.setSignatureHeader(signatureHeader);
+        }
+        
+        return webhook;
+    }
+
+    /**
+     * Updates an existing Webhook entity with data from this DTO.
+     *
+     * @param webhook The Webhook entity to update
+     * @return The updated Webhook entity
+     */
+    public Webhook updateEntity(Webhook webhook) {
+        if (webhook == null) {
+            return toEntity();
+        }
+        
+        webhook.setEndpointUrl(endpointUrl);
+        webhook.setSecretKey(secretKey);
+        webhook.setActive(active);
+        webhook.setEventType(eventType);
+        
+        if (maxRetryAttempts != null) {
+            webhook.setMaxRetryAttempts(maxRetryAttempts);
+        }
+        
+        if (signatureHeader != null) {
+            webhook.setSignatureHeader(signatureHeader);
+        }
+        
+        return webhook;
+    }
+
+    /**
+     * Creates a WebhookRequestDTO from an existing Webhook entity.
+     * This is useful for pre-filling forms for webhook updates.
+     *
+     * @param webhook The Webhook entity to convert
+     * @return A new WebhookRequestDTO with data from the Webhook entity
+     */
+    public static WebhookRequestDTO fromEntity(Webhook webhook) {
+        if (webhook == null) {
+            return null;
+        }
+        
+        return new WebhookRequestDTO(
+            webhook.getEndpointUrl(),
+            webhook.getSecretKey(),
+            webhook.getActive(),
+            webhook.getEventType(),
+            webhook.getMaxRetryAttempts(),
+            webhook.getSignatureHeader()
+        );
+    }
+
+    /**
+     * Validates that the event type is supported.
+     *
+     * @return true if the event type is valid, false otherwise
+     */
+    public boolean isValidEventType() {
+        return eventType != null;
+    }
+
+    // Getters and Setters
+
     public String getEndpointUrl() {
         return endpointUrl;
     }
 
-    /**
-     * @param endpointUrl The endpoint URL
-     */
     public void setEndpointUrl(String endpointUrl) {
         this.endpointUrl = endpointUrl;
     }
 
-    /**
-     * @return The event type
-     */
-    public String getEventType() {
-        return eventType;
-    }
-
-    /**
-     * @param eventType The event type
-     */
-    public void setEventType(String eventType) {
-        this.eventType = eventType;
-    }
-
-    /**
-     * @return The secret key
-     */
     public String getSecretKey() {
         return secretKey;
     }
 
-    /**
-     * @param secretKey The secret key
-     */
     public void setSecretKey(String secretKey) {
         this.secretKey = secretKey;
     }
 
-    /**
-     * @return Whether the webhook is active
-     */
     public Boolean getActive() {
         return active;
     }
 
-    /**
-     * @param active Whether the webhook is active
-     */
     public void setActive(Boolean active) {
         this.active = active;
     }
 
-    /**
-     * @return The signature header name
-     */
+    public EventType getEventType() {
+        return eventType;
+    }
+
+    public void setEventType(EventType eventType) {
+        this.eventType = eventType;
+    }
+
+    public Integer getMaxRetryAttempts() {
+        return maxRetryAttempts;
+    }
+
+    public void setMaxRetryAttempts(Integer maxRetryAttempts) {
+        this.maxRetryAttempts = maxRetryAttempts;
+    }
+
     public String getSignatureHeader() {
         return signatureHeader;
     }
 
-    /**
-     * @param signatureHeader The signature header name
-     */
     public void setSignatureHeader(String signatureHeader) {
         this.signatureHeader = signatureHeader;
-    }
-
-    /**
-     * Converts this DTO to a Webhook entity.
-     * This method is used when creating a new webhook.
-     *
-     * @return A new Webhook entity
-     * @throws IllegalArgumentException if the event type is invalid
-     */
-    public Webhook toEntity() {
-        Webhook webhook = new Webhook();
-        webhook.setEndpointUrl(this.endpointUrl);
-        webhook.setSecretKey(this.secretKey);
-        webhook.setActive(this.active);
-        webhook.setSignatureHeader(this.signatureHeader);
-        
-        // Convert string event type to enum
-        try {
-            webhook.setEventType(EventType.valueOf(this.eventType));
-        } catch (IllegalArgumentException e) {
-            throw new IllegalArgumentException("Invalid event type: " + this.eventType);
-        }
-        
-        return webhook;
-    }
-
-    /**
-     * Updates an existing Webhook entity with values from this DTO.
-     * This method is used when updating an existing webhook.
-     *
-     * @param webhook The webhook entity to update
-     * @return The updated webhook entity
-     * @throws IllegalArgumentException if the event type is invalid
-     */
-    public Webhook updateEntity(Webhook webhook) {
-        if (webhook == null) {
-            throw new IllegalArgumentException("Webhook entity cannot be null");
-        }
-        
-        webhook.setEndpointUrl(this.endpointUrl);
-        webhook.setSecretKey(this.secretKey);
-        webhook.setActive(this.active);
-        
-        if (this.signatureHeader != null) {
-            webhook.setSignatureHeader(this.signatureHeader);
-        }
-        
-        // Convert string event type to enum
-        try {
-            webhook.setEventType(EventType.valueOf(this.eventType));
-        } catch (IllegalArgumentException e) {
-            throw new IllegalArgumentException("Invalid event type: " + this.eventType);
-        }
-        
-        return webhook;
-    }
-
-    /**
-     * Validates that the event type is a valid enum value.
-     *
-     * @return true if valid, false otherwise
-     */
-    public boolean isValidEventType() {
-        try {
-            EventType.valueOf(this.eventType);
-            return true;
-        } catch (IllegalArgumentException e) {
-            return false;
-        }
     }
 
     @Override
     public String toString() {
         return "WebhookRequestDTO{" +
                 "endpointUrl='" + endpointUrl + '\'' +
-                ", eventType='" + eventType + '\'' +
-                ", secretKey='[REDACTED]'" +
                 ", active=" + active +
+                ", eventType=" + eventType +
+                ", maxRetryAttempts=" + maxRetryAttempts +
                 ", signatureHeader='" + signatureHeader + '\'' +
                 '}';
     }
