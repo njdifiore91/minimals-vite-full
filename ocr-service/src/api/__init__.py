@@ -4,51 +4,44 @@
 """
 OCR Service API Package
 
-This package provides a centralized API system for the OCR Service.
-It imports and re-exports all API routers to present a single,
-cohesive API surface, simplifying router imports throughout the application
-and ensuring consistent API usage.
+This package serves as the central entry point for the OCR Service API module.
+It imports and re-exports all API routers to present a single, cohesive API surface,
+simplifying router imports throughout the application and ensuring consistent API usage.
 
-The API is organized into several modules:
-
-- router: Main router that aggregates all API endpoints
-- health: Health check endpoints for Kubernetes probes
-- status: Status endpoints for monitoring
-- diagnostics: Diagnostic endpoints for troubleshooting
-- ocr: OCR processing endpoints
+The package exports the following routers:
+- router: The main API router that aggregates all endpoints
+- health_router: Router for health check endpoints (liveness and readiness probes)
+- status_router: Router for status and metrics endpoints
+- diagnostics_router: Router for diagnostic and troubleshooting endpoints
+- ocr_router: Router for OCR processing endpoints
 
 Example usage:
+    from fastapi import FastAPI
     from api import router
     
-    # In main FastAPI application
+    app = FastAPI()
     app.include_router(router)
-    
-    # Or import specific routers if needed
-    from api import health_router, ocr_router
 """
 
-# Import and re-export main router
+# Import the main router that aggregates all endpoints
 from .router import router
 
-# Import and re-export specific routers
-from .health import router as health_router
-from .status import router as status_router
+# Import individual routers for direct access if needed
+from .health import health_router
+from .status import status_router
 from .diagnostics import router as diagnostics_router
 from .ocr import router as ocr_router
 
-# Version of the API package
-__version__ = '1.0.0'
+# Re-export all routers with consistent naming
+__all__ = [
+    'router',           # Main aggregated router
+    'health_router',     # Health check endpoints
+    'status_router',     # Status and metrics endpoints
+    'diagnostics_router', # Diagnostic endpoints
+    'ocr_router'         # OCR processing endpoints
+]
 
 # Package metadata
-__author__ = 'Dollar Funding OCR Team'
-__email__ = 'ocr-team@dollarfunding.com'
-__description__ = 'API package for the OCR Service'
-
-# Define __all__ to explicitly specify exported names
-__all__ = [
-    'router',
-    'health_router',
-    'status_router',
-    'diagnostics_router',
-    'ocr_router',
-]
+__version__ = '1.0.0'
+__author__ = 'Dollar Funding'
+__description__ = 'OCR Service API for the Merchant Cash Advance Application Processing System'
