@@ -1,5 +1,7 @@
 package com.dollarfunding.mca.exception;
 
+import com.dollarfunding.mca.security.RoleConstants;
+import com.dollarfunding.mca.util.Constants;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
@@ -7,257 +9,199 @@ import org.springframework.http.HttpStatus;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Unit tests for the {@link AuthorizationException} class.
- * 
- * These tests verify that the AuthorizationException properly handles 403 Forbidden
- * authorization failure scenarios, including constructor variants with required role
- * or permission details, message formatting, and HTTP status code assignment.
+ * Unit tests for {@link AuthorizationException} class.
+ * <p>
+ * These tests verify the behavior of the AuthorizationException class for 403 Forbidden
+ * authorization failure scenarios. The tests cover constructor variants, message formatting,
+ * HTTP status code assignment, and error detail retrieval methods.
+ * </p>
  */
-@DisplayName("Authorization Exception Tests")
+@DisplayName("AuthorizationException Tests")
 public class AuthorizationExceptionTest {
 
+    private static final String TEST_MESSAGE = "Test authorization exception message";
+    private static final String TEST_ROLE = "SYSTEM_ADMIN";
+    private static final String TEST_PERMISSION = "MANAGE_WEBHOOKS";
+    private static final String TEST_RESOURCE = "webhook configuration";
+
     @Test
-    @DisplayName("Default constructor should set default message and 403 status")
-    void defaultConstructorShouldSetDefaultMessageAnd403Status() {
+    @DisplayName("Should create exception with default message")
+    void shouldCreateExceptionWithDefaultMessage() {
         // When
         AuthorizationException exception = new AuthorizationException();
-        
+
         // Then
-        assertEquals("You do not have permission to access this resource", exception.getMessage());
+        assertEquals("Access denied. You do not have permission to perform this action.", exception.getMessage());
         assertEquals(HttpStatus.FORBIDDEN, exception.getHttpStatus());
-        assertEquals(403, exception.getStatusCode());
+        assertEquals(HttpStatus.FORBIDDEN.value(), exception.getStatusCode());
+        assertEquals(Constants.ErrorCode.FORBIDDEN, exception.getErrorCode());
         assertNull(exception.getRequiredRole());
+        assertNull(exception.getRequiredPermission());
         assertNull(exception.getResource());
-        assertNull(exception.getAction());
     }
 
     @Test
-    @DisplayName("Constructor with message should set custom message and 403 status")
-    void constructorWithMessageShouldSetCustomMessageAnd403Status() {
-        // Given
-        String customMessage = "Custom authorization error message";
-        
+    @DisplayName("Should create exception with custom message")
+    void shouldCreateExceptionWithCustomMessage() {
         // When
-        AuthorizationException exception = new AuthorizationException(customMessage);
-        
+        AuthorizationException exception = new AuthorizationException(TEST_MESSAGE);
+
         // Then
-        assertEquals(customMessage, exception.getMessage());
+        assertEquals(TEST_MESSAGE, exception.getMessage());
         assertEquals(HttpStatus.FORBIDDEN, exception.getHttpStatus());
-        assertEquals(403, exception.getStatusCode());
+        assertEquals(Constants.ErrorCode.FORBIDDEN, exception.getErrorCode());
         assertNull(exception.getRequiredRole());
+        assertNull(exception.getRequiredPermission());
         assertNull(exception.getResource());
-        assertNull(exception.getAction());
     }
 
     @Test
-    @DisplayName("Constructor with required role should format message correctly")
-    void constructorWithRequiredRoleShouldFormatMessageCorrectly() {
-        // Given
-        String role = "System Admin";
-        
+    @DisplayName("Should create exception with required role and resource")
+    void shouldCreateExceptionWithRequiredRoleAndResource() {
         // When
-        AuthorizationException exception = new AuthorizationException(role);
-        
+        AuthorizationException exception = new AuthorizationException(TEST_ROLE, TEST_RESOURCE);
+
         // Then
-        assertEquals("Access denied. Required role: " + role, exception.getMessage());
+        assertEquals(String.format("Access denied. Role '%s' is required to access %s.", 
+                TEST_ROLE, TEST_RESOURCE), exception.getMessage());
         assertEquals(HttpStatus.FORBIDDEN, exception.getHttpStatus());
-        assertEquals(role, exception.getRequiredRole());
-        assertArrayEquals(new String[]{role}, exception.getRequiredRoles());
-        assertNull(exception.getResource());
-        assertNull(exception.getAction());
+        assertEquals(Constants.ErrorCode.FORBIDDEN, exception.getErrorCode());
+        assertEquals(TEST_ROLE, exception.getRequiredRole());
+        assertNull(exception.getRequiredPermission());
+        assertEquals(TEST_RESOURCE, exception.getResource());
     }
 
     @Test
-    @DisplayName("Constructor with required roles array should format message correctly")
-    void constructorWithRequiredRolesArrayShouldFormatMessageCorrectly() {
-        // Given
-        String[] roles = {"Operations Staff", "System Admin"};
-        
+    @DisplayName("Should create exception with required role, permission and resource")
+    void shouldCreateExceptionWithRequiredRolePermissionAndResource() {
         // When
-        AuthorizationException exception = new AuthorizationException(roles);
-        
+        AuthorizationException exception = new AuthorizationException(TEST_ROLE, TEST_PERMISSION, TEST_RESOURCE);
+
         // Then
-        assertEquals("Access denied. Required roles: [Operations Staff, System Admin]", exception.getMessage());
+        assertEquals(String.format("Access denied. Role '%s' with permission '%s' is required to access %s.",
+                TEST_ROLE, TEST_PERMISSION, TEST_RESOURCE), exception.getMessage());
         assertEquals(HttpStatus.FORBIDDEN, exception.getHttpStatus());
-        assertNull(exception.getRequiredRole());
-        assertArrayEquals(roles, exception.getRequiredRoles());
-        assertNull(exception.getResource());
-        assertNull(exception.getAction());
+        assertEquals(Constants.ErrorCode.FORBIDDEN, exception.getErrorCode());
+        assertEquals(TEST_ROLE, exception.getRequiredRole());
+        assertEquals(TEST_PERMISSION, exception.getRequiredPermission());
+        assertEquals(TEST_RESOURCE, exception.getResource());
     }
 
     @Test
-    @DisplayName("Constructor with resource and role should format message correctly")
-    void constructorWithResourceAndRoleShouldFormatMessageCorrectly() {
+    @DisplayName("Should create exception with message, cause, required role and resource")
+    void shouldCreateExceptionWithMessageCauseRequiredRoleAndResource() {
         // Given
-        String resource = "webhooks";
-        String role = "System Admin";
-        
+        Throwable cause = new RuntimeException("Root cause");
+
         // When
-        AuthorizationException exception = new AuthorizationException(resource, role);
-        
+        AuthorizationException exception = new AuthorizationException(TEST_MESSAGE, cause, TEST_ROLE, TEST_RESOURCE);
+
         // Then
-        assertEquals("Access denied to resource 'webhooks'. Required role: System Admin", exception.getMessage());
+        assertEquals(TEST_MESSAGE, exception.getMessage());
         assertEquals(HttpStatus.FORBIDDEN, exception.getHttpStatus());
-        assertEquals(role, exception.getRequiredRole());
-        assertArrayEquals(new String[]{role}, exception.getRequiredRoles());
-        assertEquals(resource, exception.getResource());
-        assertNull(exception.getAction());
+        assertEquals(Constants.ErrorCode.FORBIDDEN, exception.getErrorCode());
+        assertEquals(TEST_ROLE, exception.getRequiredRole());
+        assertNull(exception.getRequiredPermission());
+        assertEquals(TEST_RESOURCE, exception.getResource());
+        assertSame(cause, exception.getCause());
     }
 
     @Test
-    @DisplayName("Constructor with resource and roles array should format message correctly")
-    void constructorWithResourceAndRolesArrayShouldFormatMessageCorrectly() {
-        // Given
-        String resource = "applications";
-        String[] roles = {"Operations Staff", "System Admin"};
-        
-        // When
-        AuthorizationException exception = new AuthorizationException(resource, roles);
-        
-        // Then
-        assertEquals("Access denied to resource 'applications'. Required roles: [Operations Staff, System Admin]", 
-                exception.getMessage());
-        assertEquals(HttpStatus.FORBIDDEN, exception.getHttpStatus());
-        assertNull(exception.getRequiredRole());
-        assertArrayEquals(roles, exception.getRequiredRoles());
-        assertEquals(resource, exception.getResource());
-        assertNull(exception.getAction());
-    }
-
-    @Test
-    @DisplayName("Constructor with resource, action and role should format message correctly")
-    void constructorWithResourceActionAndRoleShouldFormatMessageCorrectly() {
-        // Given
-        String resource = "webhooks";
-        String action = "configure";
-        String role = "System Admin";
-        
-        // When
-        AuthorizationException exception = new AuthorizationException(resource, action, role);
-        
-        // Then
-        assertEquals("Access denied to perform 'configure' on resource 'webhooks'. Required role: System Admin", 
-                exception.getMessage());
-        assertEquals(HttpStatus.FORBIDDEN, exception.getHttpStatus());
-        assertEquals(role, exception.getRequiredRole());
-        assertArrayEquals(new String[]{role}, exception.getRequiredRoles());
-        assertEquals(resource, exception.getResource());
-        assertEquals(action, exception.getAction());
-    }
-
-    @Test
-    @DisplayName("Constructor with resource, action and roles array should format message correctly")
-    void constructorWithResourceActionAndRolesArrayShouldFormatMessageCorrectly() {
-        // Given
-        String resource = "documents";
-        String action = "view";
-        String[] roles = {"Operations Staff", "System Admin"};
-        
-        // When
-        AuthorizationException exception = new AuthorizationException(resource, action, roles);
-        
-        // Then
-        assertEquals("Access denied to perform 'view' on resource 'documents'. Required roles: [Operations Staff, System Admin]", 
-                exception.getMessage());
-        assertEquals(HttpStatus.FORBIDDEN, exception.getHttpStatus());
-        assertNull(exception.getRequiredRole());
-        assertArrayEquals(roles, exception.getRequiredRoles());
-        assertEquals(resource, exception.getResource());
-        assertEquals(action, exception.getAction());
-    }
-
-    @Test
-    @DisplayName("Constructor with custom message and role should set both correctly")
-    void constructorWithCustomMessageAndRoleShouldSetBothCorrectly() {
-        // Given
-        String message = "You need admin privileges for this operation";
-        String role = "System Admin";
-        
-        // When
-        AuthorizationException exception = new AuthorizationException(message, role);
-        
-        // Then
-        assertEquals(message, exception.getMessage());
-        assertEquals(HttpStatus.FORBIDDEN, exception.getHttpStatus());
-        assertEquals(role, exception.getRequiredRole());
-        assertArrayEquals(new String[]{role}, exception.getRequiredRoles());
-        assertNull(exception.getResource());
-        assertNull(exception.getAction());
-    }
-
-    @Test
-    @DisplayName("Constructor with custom message and roles array should set both correctly")
-    void constructorWithCustomMessageAndRolesArrayShouldSetBothCorrectly() {
-        // Given
-        String message = "You need operations or admin privileges for this operation";
-        String[] roles = {"Operations Staff", "System Admin"};
-        
-        // When
-        AuthorizationException exception = new AuthorizationException(message, roles);
-        
-        // Then
-        assertEquals(message, exception.getMessage());
-        assertEquals(HttpStatus.FORBIDDEN, exception.getHttpStatus());
-        assertNull(exception.getRequiredRole());
-        assertArrayEquals(roles, exception.getRequiredRoles());
-        assertNull(exception.getResource());
-        assertNull(exception.getAction());
-    }
-
-    @Test
-    @DisplayName("Factory method for webhook configuration should create correct exception")
-    void factoryMethodForWebhookConfigurationShouldCreateCorrectException() {
+    @DisplayName("Should create exception for webhook configuration access")
+    void shouldCreateExceptionForWebhookConfigurationAccess() {
         // When
         AuthorizationException exception = AuthorizationException.forWebhookConfiguration();
-        
-        // Then
-        assertEquals("Access denied to perform 'configure' on resource 'webhooks'. Required role: System Admin", 
-                exception.getMessage());
-        assertEquals(HttpStatus.FORBIDDEN, exception.getHttpStatus());
-        assertEquals("System Admin", exception.getRequiredRole());
-        assertEquals("webhooks", exception.getResource());
-        assertEquals("configure", exception.getAction());
-    }
 
-    @Test
-    @DisplayName("Factory method for application management should create correct exception")
-    void factoryMethodForApplicationManagementShouldCreateCorrectException() {
-        // When
-        AuthorizationException exception = AuthorizationException.forApplicationManagement();
-        
         // Then
-        assertEquals("Access denied to perform 'manage' on resource 'applications'. Required roles: [Operations Staff, System Admin]", 
-                exception.getMessage());
+        assertEquals(String.format("Access denied. Role '%s' is required to access %s.",
+                RoleConstants.SYSTEM_ADMIN, "webhook configuration"), exception.getMessage());
         assertEquals(HttpStatus.FORBIDDEN, exception.getHttpStatus());
-        assertNull(exception.getRequiredRole());
-        assertArrayEquals(new String[]{"Operations Staff", "System Admin"}, exception.getRequiredRoles());
-        assertEquals("applications", exception.getResource());
-        assertEquals("manage", exception.getAction());
-    }
-
-    @Test
-    @DisplayName("Factory method for document access should create correct exception")
-    void factoryMethodForDocumentAccessShouldCreateCorrectException() {
-        // When
-        AuthorizationException exception = AuthorizationException.forDocumentAccess();
-        
-        // Then
-        assertEquals("Access denied to perform 'view' on resource 'documents'. Required roles: [Operations Staff, System Admin]", 
-                exception.getMessage());
-        assertEquals(HttpStatus.FORBIDDEN, exception.getHttpStatus());
-        assertNull(exception.getRequiredRole());
-        assertArrayEquals(new String[]{"Operations Staff", "System Admin"}, exception.getRequiredRoles());
-        assertEquals("documents", exception.getResource());
-        assertEquals("view", exception.getAction());
-    }
-
-    @Test
-    @DisplayName("Error code should be set to FORBIDDEN")
-    void errorCodeShouldBeSetToForbidden() {
-        // When
-        AuthorizationException exception = new AuthorizationException();
-        
-        // Then
         assertEquals(Constants.ErrorCode.FORBIDDEN, exception.getErrorCode());
+        assertEquals(RoleConstants.SYSTEM_ADMIN, exception.getRequiredRole());
+        assertNull(exception.getRequiredPermission());
+        assertEquals("webhook configuration", exception.getResource());
+    }
+
+    @Test
+    @DisplayName("Should create exception for application modification")
+    void shouldCreateExceptionForApplicationModification() {
+        // Given
+        String applicationId = "APP123";
+
+        // When
+        AuthorizationException exception = AuthorizationException.forApplicationModification(applicationId);
+
+        // Then
+        assertEquals(String.format("Access denied. Role '%s' is required to access %s.",
+                RoleConstants.OPERATIONS_STAFF, String.format("application with ID %s", applicationId)), 
+                exception.getMessage());
+        assertEquals(HttpStatus.FORBIDDEN, exception.getHttpStatus());
+        assertEquals(Constants.ErrorCode.FORBIDDEN, exception.getErrorCode());
+        assertEquals(RoleConstants.OPERATIONS_STAFF, exception.getRequiredRole());
+        assertNull(exception.getRequiredPermission());
+        assertEquals(String.format("application with ID %s", applicationId), exception.getResource());
+    }
+
+    @Test
+    @DisplayName("Should create exception for system configuration access")
+    void shouldCreateExceptionForSystemConfigurationAccess() {
+        // When
+        AuthorizationException exception = AuthorizationException.forSystemConfiguration();
+
+        // Then
+        assertEquals(String.format("Access denied. Role '%s' is required to access %s.",
+                RoleConstants.SYSTEM_ADMIN, "system configuration"), exception.getMessage());
+        assertEquals(HttpStatus.FORBIDDEN, exception.getHttpStatus());
+        assertEquals(Constants.ErrorCode.FORBIDDEN, exception.getErrorCode());
+        assertEquals(RoleConstants.SYSTEM_ADMIN, exception.getRequiredRole());
+        assertNull(exception.getRequiredPermission());
+        assertEquals("system configuration", exception.getResource());
+    }
+
+    @Test
+    @DisplayName("Should provide consistent error details through getters")
+    void shouldProvideConsistentErrorDetailsThroughGetters() {
+        // Given
+        AuthorizationException exception = new AuthorizationException(TEST_ROLE, TEST_PERMISSION, TEST_RESOURCE);
+
+        // When/Then - Verify consistency across multiple calls
+        assertEquals(TEST_ROLE, exception.getRequiredRole());
+        assertEquals(TEST_ROLE, exception.getRequiredRole()); // Second call should return same value
+
+        assertEquals(TEST_PERMISSION, exception.getRequiredPermission());
+        assertEquals(TEST_PERMISSION, exception.getRequiredPermission()); // Second call should return same value
+
+        assertEquals(TEST_RESOURCE, exception.getResource());
+        assertEquals(TEST_RESOURCE, exception.getResource()); // Second call should return same value
+    }
+
+    @Test
+    @DisplayName("Should always set HTTP status to FORBIDDEN")
+    void shouldAlwaysSetHttpStatusToForbidden() {
+        // Test all constructor variants
+        AuthorizationException exception1 = new AuthorizationException();
+        assertEquals(HttpStatus.FORBIDDEN, exception1.getHttpStatus());
+
+        AuthorizationException exception2 = new AuthorizationException(TEST_MESSAGE);
+        assertEquals(HttpStatus.FORBIDDEN, exception2.getHttpStatus());
+
+        AuthorizationException exception3 = new AuthorizationException(TEST_ROLE, TEST_RESOURCE);
+        assertEquals(HttpStatus.FORBIDDEN, exception3.getHttpStatus());
+
+        AuthorizationException exception4 = new AuthorizationException(TEST_ROLE, TEST_PERMISSION, TEST_RESOURCE);
+        assertEquals(HttpStatus.FORBIDDEN, exception4.getHttpStatus());
+
+        Throwable cause = new RuntimeException("Root cause");
+        AuthorizationException exception5 = new AuthorizationException(TEST_MESSAGE, cause, TEST_ROLE, TEST_RESOURCE);
+        assertEquals(HttpStatus.FORBIDDEN, exception5.getHttpStatus());
+
+        AuthorizationException exception6 = AuthorizationException.forWebhookConfiguration();
+        assertEquals(HttpStatus.FORBIDDEN, exception6.getHttpStatus());
+
+        AuthorizationException exception7 = AuthorizationException.forApplicationModification("APP123");
+        assertEquals(HttpStatus.FORBIDDEN, exception7.getHttpStatus());
+
+        AuthorizationException exception8 = AuthorizationException.forSystemConfiguration();
+        assertEquals(HttpStatus.FORBIDDEN, exception8.getHttpStatus());
     }
 }
