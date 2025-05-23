@@ -15,6 +15,80 @@ from datetime import datetime, timedelta
 import os
 from pathlib import Path
 
+# Bucket configurations for different environments
+BUCKET_CONFIGS = {
+    'development': {
+        'name': 'mca-documents-development',
+        'region': 'us-east-1',
+        'versioning_enabled': True,
+        'lifecycle_rules': [
+            {
+                'ID': 'Delete old versions',
+                'Status': 'Enabled',
+                'NoncurrentVersionExpiration': {'NoncurrentDays': 90}
+            }
+        ],
+        'cors_rules': [
+            {
+                'AllowedHeaders': ['*'],
+                'AllowedMethods': ['GET', 'PUT', 'POST', 'DELETE', 'HEAD'],
+                'AllowedOrigins': ['*'],
+                'ExposeHeaders': ['ETag'],
+                'MaxAgeSeconds': 3000
+            }
+        ],
+        'encryption': 'AES256'
+    },
+    'staging': {
+        'name': 'mca-documents-staging',
+        'region': 'us-east-1',
+        'versioning_enabled': True,
+        'lifecycle_rules': [
+            {
+                'ID': 'Delete old versions',
+                'Status': 'Enabled',
+                'NoncurrentVersionExpiration': {'NoncurrentDays': 90}
+            }
+        ],
+        'cors_rules': [
+            {
+                'AllowedHeaders': ['*'],
+                'AllowedMethods': ['GET', 'PUT', 'POST', 'DELETE', 'HEAD'],
+                'AllowedOrigins': ['*'],
+                'ExposeHeaders': ['ETag'],
+                'MaxAgeSeconds': 3000
+            }
+        ],
+        'encryption': 'AES256'
+    },
+    'production': {
+        'name': 'mca-documents-production',
+        'region': 'us-east-1',
+        'versioning_enabled': True,
+        'lifecycle_rules': [
+            {
+                'ID': 'Archive old versions',
+                'Status': 'Enabled',
+                'NoncurrentVersionTransition': {
+                    'NoncurrentDays': 30,
+                    'StorageClass': 'STANDARD_IA'
+                },
+                'NoncurrentVersionExpiration': {'NoncurrentDays': 2555}  # 7 years retention
+            }
+        ],
+        'cors_rules': [
+            {
+                'AllowedHeaders': ['*'],
+                'AllowedMethods': ['GET', 'PUT', 'POST', 'DELETE', 'HEAD'],
+                'AllowedOrigins': ['*'],
+                'ExposeHeaders': ['ETag'],
+                'MaxAgeSeconds': 3000
+            }
+        ],
+        'encryption': 'AES256'
+    }
+}
+
 
 class StorageErrorCode(Enum):
     """Error codes for storage operations."""
