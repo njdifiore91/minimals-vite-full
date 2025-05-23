@@ -1,11 +1,13 @@
-import express, { Application as ExpressApplication, Request, Response, NextFunction } from 'express';
-import cors from 'cors';
+import express, { Application, Request, Response, NextFunction } from 'express';
 import helmet from 'helmet';
-import compression from 'compression';
-import { Server } from 'http';
+import cors from 'cors';
+import { createServer, Server } from 'http';
+import { connect, Connection, Channel } from 'amqplib';
+import { Redis } from 'ioredis';
 
 // Import configuration
-import { appConfig, loggerConfig, rabbitMQConfig, redisConfig, webhookConfig } from './config';
+import { appConfig, rabbitMQConfig, redisConfig } from './config';
+import { configureLogger, logger } from './config/logger';
 
 // Import services
 import {
@@ -18,121 +20,98 @@ import {
 
 // Import middleware
 import {
+  registerMiddleware,
   correlationMiddleware,
   loggingMiddleware,
-  errorMiddleware,
-  authMiddleware,
-  validationMiddleware,
-  rateLimitMiddleware
+  errorMiddleware
 } from './middleware';
 
 // Import routes
-import { healthRoutes, webhookRoutes, statusRoutes } from './routes';
+import { webhookRoutes, healthRoutes, statusRoutes } from './routes';
 
 // Import types
-import { IServiceStatus } from './types/common';
-import { ILogContext } from './types/common';
-
-// Import logger
-import logger from './config/logger';
+import { INotification, IRabbitMQConnection } from './types';
 
 /**
- * Main Application class for the Notification Service
- * Manages the lifecycle of the service and coordinates all components
+ * Main application class for the Notification Service
+ * 
+ * This class is responsible for:
+ * - Initializing the Express application
+ * - Configuring middleware and routes
+ * - Establishing connections to RabbitMQ and Redis
+ * - Creating service instances
+ * - Managing application lifecycle (start/stop)
  */
-export class Application {
-  private static instance: Application;
-  private express: ExpressApplication;
+export class App {
+  private app: Application;
   private server: Server | null = null;
-  private isShuttingDown = false;
+  private rabbitConnection: Connection | null = null;
+  private rabbitChannel: Channel | null = null;
+  private redisClient: Redis | null = null;
   
   // Service instances
-  private notificationService: NotificationService;
-  private webhookService: WebhookService;
-  private retryService: RetryService;
-  private auditService: AuditService;
-  private messageService: MessageService;
+  private notificationService: NotificationService | null = null;
+  private webhookService: WebhookService | null = null;
+  private retryService: RetryService | null = null;
+  private auditService: AuditService | null = null;
+  private messageService: MessageService | null = null;
+  
+  // Application state
+  private isShuttingDown = false;
+  private healthStatus = {
+    status: 'starting',
+    rabbitmq: false,
+    redis: false,
+    services: false
+  };
 
   /**
-   * Private constructor to enforce singleton pattern
+   * Constructor initializes the Express application and configures middleware
    */
-  private constructor() {
-    // Initialize Express application
-    this.express = express();
+  constructor() {
+    // Initialize logger with configured log levels
+    configureLogger(appConfig.environment);
+    logger.info(`Initializing Notification Service in ${appConfig.environment} environment`);
     
-    // Initialize services
-    this.notificationService = new NotificationService();
-    this.webhookService = new WebhookService();
-    this.retryService = new RetryService();
-    this.auditService = new AuditService();
-    this.messageService = new MessageService();
+    // Create Express application
+    this.app = express();
     
-    // Configure Express middleware
-    this.configureMiddleware();
+    // Configure basic middleware
+    this.app.use(helmet());
+    this.app.use(cors());
+    this.app.use(express.json());
+    this.app.use(express.urlencoded({ extended: true }));
     
-    // Configure Express routes
+    // Add correlation ID middleware for request tracking
+    this.app.use(correlationMiddleware());
+    
+    // Add request logging middleware
+    this.app.use(loggingMiddleware());
+    
+    // Register all middleware
+    registerMiddleware(this.app);
+    
+    // Configure routes
     this.configureRoutes();
+    
+    // Add error handling middleware (must be last)
+    this.app.use(errorMiddleware());
   }
 
   /**
-   * Get the singleton instance of the Application
-   * @returns Application instance
-   */
-  public static getInstance(): Application {
-    if (!Application.instance) {
-      Application.instance = new Application();
-    }
-    return Application.instance;
-  }
-
-  /**
-   * Configure Express middleware
-   */
-  private configureMiddleware(): void {
-    // Security middleware
-    this.express.use(helmet());
-    
-    // CORS configuration
-    this.express.use(cors({
-      origin: appConfig.corsOrigins,
-      methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-      allowedHeaders: ['Content-Type', 'Authorization', 'X-Correlation-ID'],
-      credentials: true,
-      maxAge: 86400 // 24 hours
-    }));
-    
-    // Request parsing
-    this.express.use(express.json({ limit: '1mb' }));
-    this.express.use(express.urlencoded({ extended: true, limit: '1mb' }));
-    
-    // Compression
-    this.express.use(compression());
-    
-    // Custom middleware
-    this.express.use(correlationMiddleware());
-    this.express.use(loggingMiddleware(loggerConfig));
-    
-    // Rate limiting for API endpoints
-    this.express.use('/api', rateLimitMiddleware(redisConfig));
-    
-    // Authentication for protected routes
-    this.express.use('/api/webhooks', authMiddleware());
-  }
-
-  /**
-   * Configure Express routes
+   * Configure application routes
    */
   private configureRoutes(): void {
-    // Health check routes - no auth required
-    this.express.use('/health', healthRoutes);
+    // Health check routes (no auth required)
+    this.app.use('/health', healthRoutes);
     
-    // API routes - with auth
-    this.express.use('/api/webhooks', webhookRoutes);
-    this.express.use('/api/notifications', statusRoutes);
+    // API routes
+    this.app.use('/api/v1/webhooks', webhookRoutes);
+    this.app.use('/api/v1/notifications', statusRoutes);
     
     // Basic root endpoint
-    this.express.get('/', (req: Request, res: Response) => {
-      res.status(200).json({
+    this.app.get('/', (req: Request, res: Response) => {
+      res.json({
         service: 'Notification Service',
         version: appConfig.version,
         status: 'running'
@@ -140,225 +119,361 @@ export class Application {
     });
     
     // 404 handler
-    this.express.use((req: Request, res: Response) => {
-      res.status(404).json({
-        error: 'Not Found',
-        message: `Route ${req.method} ${req.path} not found`,
-        status: 404
-      });
+    this.app.use((req: Request, res: Response) => {
+      res.status(404).json({ error: 'Not Found' });
     });
+  }
+
+  /**
+   * Connect to RabbitMQ message broker
+   */
+  private async connectToRabbitMQ(): Promise<void> {
+    try {
+      logger.info('Connecting to RabbitMQ...');
+      
+      // Create connection with TLS options
+      const connectionOptions: IRabbitMQConnection = {
+        protocol: rabbitMQConfig.protocol,
+        hostname: rabbitMQConfig.host,
+        port: rabbitMQConfig.port,
+        username: rabbitMQConfig.username,
+        password: rabbitMQConfig.password,
+        vhost: rabbitMQConfig.vhost,
+        ...(rabbitMQConfig.useTLS && {
+          cert: rabbitMQConfig.certPath,
+          key: rabbitMQConfig.keyPath,
+          ca: [rabbitMQConfig.caPath],
+          passphrase: rabbitMQConfig.certPassphrase
+        })
+      };
+      
+      this.rabbitConnection = await connect(connectionOptions);
+      
+      // Handle connection errors and closure
+      this.rabbitConnection.on('error', (err) => {
+        logger.error('RabbitMQ connection error', { error: err.message });
+        this.healthStatus.rabbitmq = false;
+        
+        if (!this.isShuttingDown) {
+          setTimeout(() => this.connectToRabbitMQ(), 5000);
+        }
+      });
+      
+      this.rabbitConnection.on('close', () => {
+        logger.warn('RabbitMQ connection closed');
+        this.healthStatus.rabbitmq = false;
+        
+        if (!this.isShuttingDown) {
+          setTimeout(() => this.connectToRabbitMQ(), 5000);
+        }
+      });
+      
+      // Create channel
+      this.rabbitChannel = await this.rabbitConnection.createChannel();
+      
+      // Ensure queue exists
+      await this.rabbitChannel.assertQueue(rabbitMQConfig.queue, {
+        durable: true,
+        arguments: {
+          'x-dead-letter-exchange': rabbitMQConfig.deadLetterExchange,
+          'x-dead-letter-routing-key': rabbitMQConfig.deadLetterRoutingKey
+        }
+      });
+      
+      // Ensure dead letter queue exists
+      await this.rabbitChannel.assertQueue(rabbitMQConfig.deadLetterQueue, {
+        durable: true
+      });
+      
+      // Ensure dead letter exchange exists
+      await this.rabbitChannel.assertExchange(
+        rabbitMQConfig.deadLetterExchange,
+        'direct',
+        { durable: true }
+      );
+      
+      // Bind dead letter queue to exchange
+      await this.rabbitChannel.bindQueue(
+        rabbitMQConfig.deadLetterQueue,
+        rabbitMQConfig.deadLetterExchange,
+        rabbitMQConfig.deadLetterRoutingKey
+      );
+      
+      logger.info('Successfully connected to RabbitMQ');
+      this.healthStatus.rabbitmq = true;
+    } catch (error) {
+      logger.error('Failed to connect to RabbitMQ', { error: (error as Error).message });
+      this.healthStatus.rabbitmq = false;
+      
+      if (!this.isShuttingDown) {
+        setTimeout(() => this.connectToRabbitMQ(), 5000);
+      }
+    }
+  }
+
+  /**
+   * Connect to Redis cache
+   */
+  private async connectToRedis(): Promise<void> {
+    try {
+      logger.info('Connecting to Redis...');
+      
+      // Create Redis client with TLS if configured
+      this.redisClient = new Redis({
+        host: redisConfig.host,
+        port: redisConfig.port,
+        password: redisConfig.password,
+        db: redisConfig.db,
+        keyPrefix: redisConfig.keyPrefix,
+        retryStrategy: (times) => {
+          if (this.isShuttingDown) return null;
+          return Math.min(times * 100, 3000);
+        },
+        ...(redisConfig.useTLS && {
+          tls: {
+            ca: redisConfig.caPath,
+            cert: redisConfig.certPath,
+            key: redisConfig.keyPath,
+            passphrase: redisConfig.certPassphrase,
+            rejectUnauthorized: true
+          }
+        })
+      });
+      
+      // Handle Redis events
+      this.redisClient.on('connect', () => {
+        logger.info('Connected to Redis');
+        this.healthStatus.redis = true;
+      });
+      
+      this.redisClient.on('error', (err) => {
+        logger.error('Redis connection error', { error: err.message });
+        this.healthStatus.redis = false;
+      });
+      
+      this.redisClient.on('close', () => {
+        logger.warn('Redis connection closed');
+        this.healthStatus.redis = false;
+      });
+      
+      // Test connection
+      await this.redisClient.ping();
+      logger.info('Successfully connected to Redis');
+      this.healthStatus.redis = true;
+    } catch (error) {
+      logger.error('Failed to connect to Redis', { error: (error as Error).message });
+      this.healthStatus.redis = false;
+      
+      if (!this.isShuttingDown) {
+        setTimeout(() => this.connectToRedis(), 5000);
+      }
+    }
+  }
+
+  /**
+   * Initialize service instances
+   */
+  private initializeServices(): void {
+    try {
+      logger.info('Initializing services...');
+      
+      if (!this.rabbitChannel || !this.redisClient) {
+        throw new Error('Cannot initialize services: RabbitMQ or Redis not connected');
+      }
+      
+      // Create service instances
+      this.auditService = new AuditService(this.redisClient);
+      this.retryService = new RetryService(this.redisClient, this.auditService);
+      this.messageService = new MessageService(this.auditService);
+      this.webhookService = new WebhookService(this.retryService, this.auditService);
+      
+      // Create notification service (depends on other services)
+      this.notificationService = new NotificationService(
+        this.rabbitChannel,
+        this.webhookService,
+        this.messageService,
+        this.auditService
+      );
+      
+      logger.info('Services initialized successfully');
+      this.healthStatus.services = true;
+    } catch (error) {
+      logger.error('Failed to initialize services', { error: (error as Error).message });
+      this.healthStatus.services = false;
+      throw error;
+    }
+  }
+
+  /**
+   * Start consuming messages from RabbitMQ
+   */
+  private startConsumingMessages(): void {
+    if (!this.rabbitChannel || !this.notificationService) {
+      logger.error('Cannot start consuming messages: RabbitMQ channel or NotificationService not initialized');
+      return;
+    }
     
-    // Error middleware should be registered last
-    this.express.use(errorMiddleware());
+    try {
+      logger.info(`Starting to consume messages from queue: ${rabbitMQConfig.queue}`);
+      
+      // Start consuming messages
+      this.rabbitChannel.consume(
+        rabbitMQConfig.queue,
+        (msg) => {
+          if (msg) {
+            try {
+              // Parse message content
+              const content = msg.content.toString();
+              const notification = JSON.parse(content) as INotification;
+              
+              // Process notification
+              this.notificationService?.processNotification(notification, msg)
+                .catch((error) => {
+                  logger.error('Error processing notification', {
+                    error: error.message,
+                    notificationId: notification.id
+                  });
+                  
+                  // Reject message if processing fails
+                  this.rabbitChannel?.reject(msg, false);
+                });
+            } catch (error) {
+              logger.error('Error parsing message', { error: (error as Error).message });
+              
+              // Reject malformed messages
+              this.rabbitChannel?.reject(msg, false);
+            }
+          }
+        },
+        { noAck: false } // Manual acknowledgment
+      );
+      
+      logger.info('Successfully started consuming messages');
+    } catch (error) {
+      logger.error('Failed to start consuming messages', { error: (error as Error).message });
+      
+      if (!this.isShuttingDown) {
+        setTimeout(() => this.startConsumingMessages(), 5000);
+      }
+    }
+  }
+
+  /**
+   * Update health check status
+   */
+  private updateHealthStatus(): void {
+    const allServicesHealthy = this.healthStatus.rabbitmq && 
+                              this.healthStatus.redis && 
+                              this.healthStatus.services;
+    
+    this.healthStatus.status = this.isShuttingDown ? 'shutting_down' :
+                              allServicesHealthy ? 'healthy' : 'unhealthy';
+  }
+
+  /**
+   * Get current health status
+   */
+  public getHealthStatus() {
+    this.updateHealthStatus();
+    return {
+      ...this.healthStatus,
+      uptime: process.uptime(),
+      timestamp: new Date().toISOString(),
+      version: appConfig.version,
+      environment: appConfig.environment
+    };
   }
 
   /**
    * Start the application
-   * @returns Promise that resolves when the application has started
    */
   public async start(): Promise<void> {
     try {
       logger.info('Starting Notification Service...');
       
+      // Connect to external services
+      await Promise.all([
+        this.connectToRabbitMQ(),
+        this.connectToRedis()
+      ]);
+      
       // Initialize services
-      await this.initializeServices();
+      this.initializeServices();
       
       // Start HTTP server
-      await this.startServer();
+      this.server = createServer(this.app);
+      this.server.listen(appConfig.port, () => {
+        logger.info(`Notification Service listening on port ${appConfig.port}`);
+      });
       
-      logger.info(`Notification Service started successfully on port ${appConfig.port}`);
+      // Start consuming messages
+      this.startConsumingMessages();
+      
+      // Update health status
+      this.updateHealthStatus();
+      
+      logger.info('Notification Service started successfully');
     } catch (error) {
-      logger.error('Failed to start Notification Service', { error });
+      logger.error('Failed to start Notification Service', { error: (error as Error).message });
       throw error;
     }
-  }
-
-  /**
-   * Initialize all required services
-   * @returns Promise that resolves when all services are initialized
-   */
-  private async initializeServices(): Promise<void> {
-    try {
-      logger.info('Initializing services...');
-      
-      // Initialize Redis connection
-      logger.info('Connecting to Redis...');
-      // Redis initialization would happen here
-      
-      // Initialize RabbitMQ connection
-      logger.info('Connecting to RabbitMQ...');
-      await this.notificationService.initialize(rabbitMQConfig);
-      
-      // Initialize webhook service
-      logger.info('Initializing webhook service...');
-      await this.webhookService.initialize(webhookConfig);
-      
-      // Initialize retry service
-      logger.info('Initializing retry service...');
-      await this.retryService.initialize();
-      
-      // Initialize audit service
-      logger.info('Initializing audit service...');
-      await this.auditService.initialize();
-      
-      // Initialize message service
-      logger.info('Initializing message service...');
-      await this.messageService.initialize();
-      
-      logger.info('All services initialized successfully');
-    } catch (error) {
-      logger.error('Failed to initialize services', { error });
-      throw error;
-    }
-  }
-
-  /**
-   * Start the HTTP server
-   * @returns Promise that resolves when the server has started
-   */
-  private startServer(): Promise<void> {
-    return new Promise((resolve, reject) => {
-      try {
-        this.server = this.express.listen(appConfig.port, () => {
-          logger.info(`HTTP server listening on port ${appConfig.port}`);
-          resolve();
-        });
-        
-        // Handle server errors
-        this.server.on('error', (error) => {
-          logger.error('HTTP server error', { error });
-          reject(error);
-        });
-      } catch (error) {
-        logger.error('Failed to start HTTP server', { error });
-        reject(error);
-      }
-    });
   }
 
   /**
    * Stop the application gracefully
-   * @returns Promise that resolves when the application has stopped
    */
   public async stop(): Promise<void> {
-    if (this.isShuttingDown) {
-      logger.info('Shutdown already in progress');
-      return;
-    }
+    if (this.isShuttingDown) return;
     
     this.isShuttingDown = true;
-    logger.info('Stopping Notification Service...');
+    logger.info('Shutting down Notification Service...');
+    
+    // Update health status
+    this.updateHealthStatus();
     
     try {
-      // Stop HTTP server first to stop accepting new requests
+      // Close HTTP server
       if (this.server) {
-        await this.stopServer();
+        await new Promise<void>((resolve, reject) => {
+          this.server?.close((err) => {
+            if (err) reject(err);
+            else resolve();
+          });
+        });
+        logger.info('HTTP server closed');
       }
       
-      // Stop services
-      await this.stopServices();
-      
-      logger.info('Notification Service stopped successfully');
-    } catch (error) {
-      logger.error('Error during shutdown', { error });
-      // Force exit in case of shutdown errors
-      process.exit(1);
-    }
-  }
-
-  /**
-   * Stop the HTTP server gracefully
-   * @returns Promise that resolves when the server has stopped
-   */
-  private stopServer(): Promise<void> {
-    return new Promise((resolve, reject) => {
-      if (!this.server) {
-        resolve();
-        return;
+      // Close RabbitMQ connection
+      if (this.rabbitChannel) {
+        await this.rabbitChannel.close();
+        logger.info('RabbitMQ channel closed');
       }
       
-      logger.info('Stopping HTTP server...');
-      this.server.close((error) => {
-        if (error) {
-          logger.error('Error closing HTTP server', { error });
-          reject(error);
-          return;
-        }
-        
-        logger.info('HTTP server stopped successfully');
-        this.server = null;
-        resolve();
-      });
-    });
-  }
-
-  /**
-   * Stop all services gracefully
-   * @returns Promise that resolves when all services have stopped
-   */
-  private async stopServices(): Promise<void> {
-    try {
-      logger.info('Stopping services...');
+      if (this.rabbitConnection) {
+        await this.rabbitConnection.close();
+        logger.info('RabbitMQ connection closed');
+      }
       
-      // Stop notification service (RabbitMQ consumer)
-      logger.info('Stopping notification service...');
-      await this.notificationService.shutdown();
+      // Close Redis connection
+      if (this.redisClient) {
+        await this.redisClient.quit();
+        logger.info('Redis connection closed');
+      }
       
-      // Stop webhook service
-      logger.info('Stopping webhook service...');
-      await this.webhookService.shutdown();
-      
-      // Stop retry service
-      logger.info('Stopping retry service...');
-      await this.retryService.shutdown();
-      
-      // Stop audit service
-      logger.info('Stopping audit service...');
-      await this.auditService.shutdown();
-      
-      // Stop message service
-      logger.info('Stopping message service...');
-      await this.messageService.shutdown();
-      
-      logger.info('All services stopped successfully');
+      logger.info('Notification Service shut down successfully');
     } catch (error) {
-      logger.error('Error stopping services', { error });
+      logger.error('Error during shutdown', { error: (error as Error).message });
       throw error;
     }
   }
 
   /**
-   * Get the Express application instance
-   * @returns Express application
+   * Get Express application instance
    */
-  public getExpressApp(): ExpressApplication {
-    return this.express;
-  }
-
-  /**
-   * Get the health status of the application
-   * @returns Health status object
-   */
-  public async getHealthStatus(): Promise<IServiceStatus> {
-    const rabbitMQStatus = await this.notificationService.checkHealth();
-    const webhookStatus = await this.webhookService.checkHealth();
-    const retryStatus = await this.retryService.checkHealth();
-    
-    const isHealthy = rabbitMQStatus.healthy && webhookStatus.healthy && retryStatus.healthy;
-    
-    return {
-      service: 'notification-service',
-      version: appConfig.version,
-      healthy: isHealthy,
-      timestamp: new Date().toISOString(),
-      dependencies: {
-        rabbitMQ: rabbitMQStatus,
-        webhookService: webhookStatus,
-        retryService: retryStatus
-      }
-    };
+  public getApp(): Application {
+    return this.app;
   }
 }
 
-// Export default instance
-export default Application.getInstance();
+// Export a singleton instance
+export default new App();
