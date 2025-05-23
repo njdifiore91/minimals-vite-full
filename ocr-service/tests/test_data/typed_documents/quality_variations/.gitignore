@@ -1,11 +1,12 @@
-# OCR Service Test Data - Typed Documents Quality Variations .gitignore
+# OCR Service Test Data - Quality Variations .gitignore
 #
 # This file specifies which document files should be excluded from version control
-# to prevent repository bloat while ensuring that documentation and configuration
-# files are properly tracked.
+# in the quality_variations folder to prevent repository bloat while ensuring that
+# documentation and configuration files are properly tracked.
 #
-# The quality_variations directory contains test documents with varying quality levels
-# (high, medium, low) to test the OCR service's robustness against different document qualities.
+# Quality variations test documents include samples with different resolutions,
+# contrast levels, noise levels, and other quality parameters to test the OCR
+# service's robustness across varying document qualities.
 
 # Exclude all binary document files by default
 *.pdf
@@ -44,16 +45,16 @@
 
 # Keep metadata files
 !metadata.csv
-!document_index.csv
-!annotations.csv
 !quality_metrics.csv
+!annotations.csv
+!confidence_scores.csv
 
-# INSTRUCTIONS FOR TEST DOCUMENTS
+# INSTRUCTIONS FOR QUALITY VARIATIONS TEST DOCUMENTS
 #
 # The actual test documents are not stored in the Git repository to avoid bloat.
-# To obtain the quality variation test documents for development and testing:
+# To obtain the quality variations test documents for development and testing:
 #
-# 1. Download the quality variation test document package from the secure S3 bucket:
+# 1. Download the quality variations test document package from the secure S3 bucket:
 #    s3://mca-documents-staging/test-data/typed_documents/quality_variations.zip
 #
 # 2. Extract the package to this directory, preserving the folder structure
@@ -61,9 +62,12 @@
 # 3. Run the verification script to ensure all required test documents are present:
 #    python ../../../verify_test_data.py typed_documents/quality_variations
 #
-# 4. The quality_variations directory contains documents with the following quality levels:
-#    - high_quality/: Documents with clear text and optimal scanning conditions
-#    - medium_quality/: Documents with moderate noise, slight blurring, or lower resolution
-#    - low_quality/: Documents with significant noise, blurring, or poor scanning conditions
+# 4. The quality variations test set includes:
+#    - High quality: Clear, high-resolution documents with good contrast
+#    - Medium quality: Average resolution documents with acceptable contrast
+#    - Low quality: Poor resolution, low contrast, or noisy documents
+#
+# Each quality level has its own manifest file (high_quality_manifest.json,
+# low_quality_manifest.json) that maps test documents to their expected OCR results.
 #
 # For more information, see the README.md file in this directory.
