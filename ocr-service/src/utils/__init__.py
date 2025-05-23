@@ -1,135 +1,302 @@
-# OCR Service Utility Functions Package
-# Version: 1.0.0
-# Python 3.9+ Required
-# TensorFlow 2.15.0 Required for OCR functionality
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
 """
-OCR Service Utilities
+OCR Service Utilities Package
 
-This package provides utility functions for the OCR Service, a Python/TensorFlow-based
-microservice that extracts data from documents using machine learning models with GPU acceleration.
+This package provides utility functions for the OCR Service, including:
+- Time and date handling
+- File operations and MIME type detection
+- Validation utilities
+- Error handling
+- Logging
+- RabbitMQ integration
+- Text processing
+- Image processing
+- TensorFlow utilities
 
-The utility modules include:
-
-- time_utils: Date and time utilities for timestamp generation, formatting, and duration calculation
-- file_utils: File handling utilities for operations, MIME type detection, and content validation
-- security_utils: Security utilities for AES-256 encryption, HMAC signatures, and credential management
-- retry_utils: Retry logic with exponential backoff for handling temporary failures
-- validation_utils: Validation utilities for document types, formats, and input data
-- error_utils: Standardized error handling, classification, and formatting
-- logging_utils: Structured logging with context information and level filtering
-- rabbitmq_utils: RabbitMQ connection, publishing, and consumption utilities
-- s3_utils: S3-compatible storage integration with encryption for document storage
-- text_utils: Post-OCR text processing, normalization, and structured data extraction
-- image_utils: Image preprocessing, enhancement, and segmentation for OCR
-- tensorflow_utils: TensorFlow model loading, inference, and GPU resource management
-
-All utility modules are imported and exposed here for clean imports throughout the application,
-following a similar pattern to barrel files in TypeScript.
-
-Examples:
-    # Import specific utility modules
-    from ocr_service.utils import time_utils, file_utils
-    
-    # Use utility functions
-    timestamp = time_utils.get_current_timestamp()
-    mime_type = file_utils.detect_mime_type(file_path)
-    
-    # Or import all utilities at once
-    from ocr_service.utils import *
-    
-    # Then use any utility function
-    log_entry = logging_utils.create_log_entry("Processing document", "INFO")
-    encrypted_data = security_utils.encrypt_data(sensitive_data, encryption_key)
+All utility functions are exposed at the package level for easy importing.
 """
 
-# Version information
 __version__ = '1.0.0'
-__author__ = 'Dollar Funding OCR Team'
-__email__ = 'ocr-service@dollarfunding.com'
-__status__ = 'Production'
 
-# Import utility modules in dependency order to prevent circular imports
+# Import utilities in dependency order to prevent circular imports
 
-# Core utilities with no internal dependencies
-# These utilities have minimal dependencies and are used by other utility modules
-from . import logging_utils  # Logging should be first to enable logging during import
-from . import error_utils    # Error handling is used by most other modules
-from . import time_utils     # Time utilities are used by logging and other modules
-from . import validation_utils  # Validation is used by most processing modules
+# First, import basic utilities that don't depend on other modules
+from .time_utils import (
+    # Date validation and conversion
+    is_valid_date,
+    to_datetime,
+    
+    # Current time functions
+    get_current_timestamp,
+    get_utc_timestamp,
+    get_timestamp_ms,
+    get_log_timestamp,
+    
+    # Formatting functions
+    format_datetime,
+    format_date,
+    format_time,
+    format_iso8601,
+    format_date_range,
+    
+    # Date comparison functions
+    is_between,
+    is_after,
+    is_same,
+    
+    # Time calculation functions
+    add_time,
+    subtract_time,
+    calculate_duration,
+    calculate_processing_time,
+    calculate_age,
+    
+    # Document metadata
+    get_document_processing_metadata,
+    
+    # Constants
+    FORMAT_PATTERNS
+)
 
-# File and security utilities
-# These utilities handle file operations and security concerns
-from . import file_utils     # File operations for document handling
-from . import security_utils  # Security functions for encryption and authentication
+from .file_utils import (
+    # MIME type detection
+    get_mime_type,
+    get_mime_type_from_content,
+    is_supported_document_type,
+    get_file_extension,
+    get_content_type_for_s3,
+    
+    # File size utilities
+    get_file_size,
+    format_file_size,
+    
+    # Temporary file management
+    create_temp_file,
+    create_temp_directory,
+    cleanup_temp_file,
+    cleanup_temp_directory,
+    
+    # File conversion utilities
+    bytes_to_file,
+    file_to_bytes,
+    stream_to_bytes,
+    bytes_to_stream,
+    
+    # File system utilities
+    ensure_directory_exists,
+    is_valid_file,
+    get_safe_filename,
+    
+    # Constants
+    SUPPORTED_MIME_TYPES,
+    EXTENSION_TO_MIME
+)
 
-# External service integration utilities
-# These utilities handle integration with external services and include retry logic
-from . import retry_utils    # Retry logic used by service integration modules
-from . import s3_utils       # S3 storage integration for document storage
-from . import rabbitmq_utils  # RabbitMQ integration for message processing
+from .validation_utils import (
+    # Document validation
+    validate_document_type,
+    validate_document_size,
+    validate_document_content,
+    
+    # Data validation
+    validate_message_schema,
+    validate_extracted_data,
+    validate_confidence_scores,
+    
+    # Input validation
+    validate_input_parameters,
+    validate_processing_request,
+    
+    # Schema validation
+    get_schema_for_document_type
+)
 
-# OCR processing utilities
-# These utilities handle the core OCR functionality
-from . import image_utils    # Image preprocessing for OCR
-from . import text_utils     # Text processing after OCR
-from . import tensorflow_utils  # TensorFlow model management and inference
+from .error_utils import (
+    # Error creation
+    create_error,
+    format_error_message,
+    
+    # Error classification
+    is_retriable_error,
+    classify_error,
+    
+    # Error handling
+    handle_processing_error,
+    handle_connection_error,
+    
+    # Error context
+    enrich_error_context,
+    
+    # Error serialization
+    serialize_error_for_logging,
+    serialize_error_for_message
+)
 
-# Utility Function Dependencies and Usage Patterns
-"""
-Utility Module Dependencies:
+from .logging_utils import (
+    # Log creation
+    create_log_entry,
+    log_with_context,
+    
+    # Log formatting
+    format_log_message,
+    
+    # Specialized logging
+    log_processing_start,
+    log_processing_end,
+    log_processing_error,
+    log_extraction_results,
+    
+    # Request tracking
+    get_request_id,
+    set_request_context
+)
 
-1. Core Utilities:
-   - logging_utils: No internal dependencies
-   - error_utils: Depends on logging_utils
-   - time_utils: No internal dependencies
-   - validation_utils: Depends on error_utils
+from .rabbitmq_utils import (
+    # Connection management
+    create_connection,
+    create_channel,
+    close_connection,
+    close_channel,
+    
+    # Message operations
+    publish_message,
+    publish_message_with_retry,
+    consume_messages,
+    acknowledge_message,
+    reject_message,
+    
+    # Message serialization
+    serialize_message,
+    deserialize_message,
+    
+    # Queue management
+    declare_queue,
+    declare_exchange,
+    bind_queue
+)
 
-2. File and Security Utilities:
-   - file_utils: Depends on error_utils, logging_utils, validation_utils
-   - security_utils: Depends on error_utils, logging_utils
+from .text_utils import (
+    # Text cleaning
+    clean_text,
+    normalize_text,
+    remove_noise,
+    
+    # Text extraction
+    extract_key_value_pairs,
+    extract_structured_data,
+    extract_tables,
+    
+    # Text validation
+    validate_extracted_text,
+    calculate_text_confidence,
+    
+    # Text formatting
+    format_extracted_data,
+    generate_json_schema
+)
 
-3. Service Integration Utilities:
-   - retry_utils: Depends on error_utils, logging_utils, time_utils
-   - s3_utils: Depends on error_utils, logging_utils, file_utils, security_utils, retry_utils
-   - rabbitmq_utils: Depends on error_utils, logging_utils, retry_utils
+from .image_utils import (
+    # Image preprocessing
+    preprocess_image,
+    normalize_image,
+    enhance_image,
+    
+    # Image segmentation
+    segment_document,
+    detect_regions,
+    detect_tables,
+    detect_forms,
+    
+    # Image conversion
+    convert_to_grayscale,
+    convert_to_binary,
+    
+    # Image quality
+    assess_image_quality,
+    calculate_dpi,
+    is_suitable_for_ocr
+)
 
-4. OCR Processing Utilities:
-   - image_utils: Depends on error_utils, logging_utils, file_utils
-   - text_utils: Depends on error_utils, logging_utils, validation_utils
-   - tensorflow_utils: Depends on error_utils, logging_utils, file_utils, image_utils
+from .tensorflow_utils import (
+    # Model management
+    load_model,
+    get_model_for_document_type,
+    get_model_version,
+    
+    # Inference
+    run_inference,
+    run_text_detection,
+    run_text_recognition,
+    
+    # GPU management
+    configure_gpu,
+    get_available_gpus,
+    set_memory_growth,
+    
+    # Performance
+    calculate_inference_metrics,
+    calculate_confidence_scores,
+    
+    # Model utilities
+    preprocess_for_model,
+    postprocess_model_output
+)
 
-Common Usage Patterns:
-
-1. Document Processing Pipeline:
-   file_utils → validation_utils → image_utils → tensorflow_utils → text_utils → s3_utils
-
-2. Message Processing Pipeline:
-   rabbitmq_utils → validation_utils → s3_utils → processing → rabbitmq_utils
-
-3. Error Handling Pattern:
-   try → error_utils → logging_utils → retry_utils
-"""
-
-# Export all modules for easy access
-# This allows importing all utilities with: from ocr_service.utils import *
+# Define what's available for import with 'from utils import *'
 __all__ = [
-    # Core utilities
-    'logging_utils',   # Structured logging with context
-    'error_utils',     # Standardized error handling
-    'time_utils',      # Date and time utilities
-    'validation_utils', # Input validation
+    # Time utilities
+    'is_valid_date', 'to_datetime', 'get_current_timestamp', 'get_utc_timestamp',
+    'get_timestamp_ms', 'get_log_timestamp', 'format_datetime', 'format_date',
+    'format_time', 'format_iso8601', 'format_date_range', 'is_between',
+    'is_after', 'is_same', 'add_time', 'subtract_time', 'calculate_duration',
+    'calculate_processing_time', 'calculate_age', 'get_document_processing_metadata',
+    'FORMAT_PATTERNS',
     
-    # File and security utilities
-    'file_utils',      # File operations and MIME detection
-    'security_utils',  # Encryption and security
+    # File utilities
+    'get_mime_type', 'get_mime_type_from_content', 'is_supported_document_type',
+    'get_file_extension', 'get_content_type_for_s3', 'get_file_size',
+    'format_file_size', 'create_temp_file', 'create_temp_directory',
+    'cleanup_temp_file', 'cleanup_temp_directory', 'bytes_to_file',
+    'file_to_bytes', 'stream_to_bytes', 'bytes_to_stream',
+    'ensure_directory_exists', 'is_valid_file', 'get_safe_filename',
+    'SUPPORTED_MIME_TYPES', 'EXTENSION_TO_MIME',
     
-    # Service integration
-    'retry_utils',     # Retry logic with backoff
-    's3_utils',        # S3 storage with encryption
-    'rabbitmq_utils',  # Message queue integration
+    # Validation utilities
+    'validate_document_type', 'validate_document_size', 'validate_document_content',
+    'validate_message_schema', 'validate_extracted_data', 'validate_confidence_scores',
+    'validate_input_parameters', 'validate_processing_request', 'get_schema_for_document_type',
     
-    # OCR processing
-    'image_utils',     # Image preprocessing
-    'text_utils',      # Text extraction and normalization
-    'tensorflow_utils', # ML model management
+    # Error utilities
+    'create_error', 'format_error_message', 'is_retriable_error', 'classify_error',
+    'handle_processing_error', 'handle_connection_error', 'enrich_error_context',
+    'serialize_error_for_logging', 'serialize_error_for_message',
+    
+    # Logging utilities
+    'create_log_entry', 'log_with_context', 'format_log_message',
+    'log_processing_start', 'log_processing_end', 'log_processing_error',
+    'log_extraction_results', 'get_request_id', 'set_request_context',
+    
+    # RabbitMQ utilities
+    'create_connection', 'create_channel', 'close_connection', 'close_channel',
+    'publish_message', 'publish_message_with_retry', 'consume_messages',
+    'acknowledge_message', 'reject_message', 'serialize_message',
+    'deserialize_message', 'declare_queue', 'declare_exchange', 'bind_queue',
+    
+    # Text utilities
+    'clean_text', 'normalize_text', 'remove_noise', 'extract_key_value_pairs',
+    'extract_structured_data', 'extract_tables', 'validate_extracted_text',
+    'calculate_text_confidence', 'format_extracted_data', 'generate_json_schema',
+    
+    # Image utilities
+    'preprocess_image', 'normalize_image', 'enhance_image', 'segment_document',
+    'detect_regions', 'detect_tables', 'detect_forms', 'convert_to_grayscale',
+    'convert_to_binary', 'assess_image_quality', 'calculate_dpi', 'is_suitable_for_ocr',
+    
+    # TensorFlow utilities
+    'load_model', 'get_model_for_document_type', 'get_model_version', 'run_inference',
+    'run_text_detection', 'run_text_recognition', 'configure_gpu', 'get_available_gpus',
+    'set_memory_growth', 'calculate_inference_metrics', 'calculate_confidence_scores',
+    'preprocess_for_model', 'postprocess_model_output'
 ]
