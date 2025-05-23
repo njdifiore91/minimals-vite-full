@@ -1,34 +1,27 @@
 package com.dollarfunding.mca.exception;
 
+import com.dollarfunding.mca.util.Constants;
 import org.springframework.http.HttpStatus;
-
-import java.util.Arrays;
 
 /**
  * Exception thrown when a user attempts to access a resource or perform an action
- * without proper authorization. This exception is used by controllers and services
- * to enforce role-based access control, such as restricting webhook configuration
- * to System Admin role.
+ * without proper authorization.
+ * <p>
+ * This exception is used by controllers and services to enforce role-based access control,
+ * such as restricting webhook configuration to System Admin role.
+ * </p>
  */
 public class AuthorizationException extends BaseException {
 
     private final String requiredRole;
-    private final String[] requiredRoles;
+    private final String requiredPermission;
     private final String resource;
-    private final String action;
-
-    private static final HttpStatus DEFAULT_STATUS = HttpStatus.FORBIDDEN;
-    private static final String DEFAULT_ERROR_CODE = "AUTHORIZATION_ERROR";
 
     /**
      * Constructs a new AuthorizationException with a default message.
      */
     public AuthorizationException() {
-        super("You do not have permission to access this resource", DEFAULT_STATUS);
-        this.requiredRole = null;
-        this.requiredRoles = null;
-        this.resource = null;
-        this.action = null;
+        this("Access denied. You do not have permission to perform this action.");
     }
 
     /**
@@ -37,185 +30,125 @@ public class AuthorizationException extends BaseException {
      * @param message the detail message
      */
     public AuthorizationException(String message) {
-        super(message, DEFAULT_STATUS);
+        super(message, HttpStatus.FORBIDDEN, Constants.ErrorCode.FORBIDDEN);
         this.requiredRole = null;
-        this.requiredRoles = null;
+        this.requiredPermission = null;
         this.resource = null;
-        this.action = null;
     }
 
     /**
-     * Constructs a new AuthorizationException with the specified required role.
+     * Constructs a new AuthorizationException with a message indicating the required role.
      *
-     * @param requiredRole the role required to access the resource
+     * @param requiredRole the role required to access the resource or perform the action
      */
-    public AuthorizationException(String requiredRole) {
-        super("Access denied. Required role: " + requiredRole, DEFAULT_STATUS);
+    public AuthorizationException(String requiredRole, String resource) {
+        super(String.format("Access denied. Role '%s' is required to access %s.", requiredRole, resource),
+                HttpStatus.FORBIDDEN, Constants.ErrorCode.FORBIDDEN);
         this.requiredRole = requiredRole;
-        this.requiredRoles = new String[]{requiredRole};
-        this.resource = null;
-        this.action = null;
+        this.requiredPermission = null;
+        this.resource = resource;
     }
 
     /**
-     * Constructs a new AuthorizationException with the specified required roles.
+     * Constructs a new AuthorizationException with a message indicating the required permission.
      *
-     * @param requiredRoles the roles required to access the resource (any one of these roles is sufficient)
+     * @param requiredPermission the permission required to access the resource or perform the action
+     * @param resource the resource being accessed
      */
-    public AuthorizationException(String[] requiredRoles) {
-        super("Access denied. Required roles: " + Arrays.toString(requiredRoles), DEFAULT_STATUS);
-        this.requiredRole = null;
-        this.requiredRoles = requiredRoles;
-        this.resource = null;
-        this.action = null;
-    }
-
-    /**
-     * Constructs a new AuthorizationException with the specified resource and required role.
-     *
-     * @param resource     the resource being accessed
-     * @param requiredRole the role required to access the resource
-     */
-    public AuthorizationException(String resource, String requiredRole) {
-        super("Access denied to resource '" + resource + "'. Required role: " + requiredRole, DEFAULT_STATUS);
+    public AuthorizationException(String requiredRole, String requiredPermission, String resource) {
+        super(String.format("Access denied. Role '%s' with permission '%s' is required to access %s.",
+                requiredRole, requiredPermission, resource),
+                HttpStatus.FORBIDDEN, Constants.ErrorCode.FORBIDDEN);
         this.requiredRole = requiredRole;
-        this.requiredRoles = new String[]{requiredRole};
+        this.requiredPermission = requiredPermission;
         this.resource = resource;
-        this.action = null;
     }
 
     /**
-     * Constructs a new AuthorizationException with the specified resource and required roles.
+     * Constructs a new AuthorizationException with the specified message, cause, and required role.
      *
-     * @param resource      the resource being accessed
-     * @param requiredRoles the roles required to access the resource (any one of these roles is sufficient)
+     * @param message the detail message
+     * @param cause the cause of this exception
+     * @param requiredRole the role required to access the resource or perform the action
+     * @param resource the resource being accessed
      */
-    public AuthorizationException(String resource, String[] requiredRoles) {
-        super("Access denied to resource '" + resource + "'. Required roles: " + Arrays.toString(requiredRoles), DEFAULT_STATUS);
-        this.requiredRole = null;
-        this.requiredRoles = requiredRoles;
-        this.resource = resource;
-        this.action = null;
-    }
-
-    /**
-     * Constructs a new AuthorizationException with the specified resource, action, and required role.
-     *
-     * @param resource     the resource being accessed
-     * @param action       the action being performed
-     * @param requiredRole the role required to perform the action on the resource
-     */
-    public AuthorizationException(String resource, String action, String requiredRole) {
-        super("Access denied to perform '" + action + "' on resource '" + resource + "'. Required role: " + requiredRole, DEFAULT_STATUS);
+    public AuthorizationException(String message, Throwable cause, String requiredRole, String resource) {
+        super(message, cause, HttpStatus.FORBIDDEN, Constants.ErrorCode.FORBIDDEN);
         this.requiredRole = requiredRole;
-        this.requiredRoles = new String[]{requiredRole};
+        this.requiredPermission = null;
         this.resource = resource;
-        this.action = action;
     }
 
     /**
-     * Constructs a new AuthorizationException with the specified resource, action, and required roles.
+     * Returns the role required to access the resource or perform the action.
      *
-     * @param resource      the resource being accessed
-     * @param action        the action being performed
-     * @param requiredRoles the roles required to perform the action on the resource (any one of these roles is sufficient)
-     */
-    public AuthorizationException(String resource, String action, String[] requiredRoles) {
-        super("Access denied to perform '" + action + "' on resource '" + resource + "'. Required roles: " + Arrays.toString(requiredRoles), DEFAULT_STATUS);
-        this.requiredRole = null;
-        this.requiredRoles = requiredRoles;
-        this.resource = resource;
-        this.action = action;
-    }
-
-    /**
-     * Constructs a new AuthorizationException with a custom message and the specified required role.
-     *
-     * @param message      the detail message
-     * @param requiredRole the role required to access the resource
-     */
-    public AuthorizationException(String message, String requiredRole) {
-        super(message, DEFAULT_STATUS);
-        this.requiredRole = requiredRole;
-        this.requiredRoles = new String[]{requiredRole};
-        this.resource = null;
-        this.action = null;
-    }
-
-    /**
-     * Constructs a new AuthorizationException with a custom message and the specified required roles.
-     *
-     * @param message       the detail message
-     * @param requiredRoles the roles required to access the resource (any one of these roles is sufficient)
-     */
-    public AuthorizationException(String message, String[] requiredRoles) {
-        super(message, DEFAULT_STATUS);
-        this.requiredRole = null;
-        this.requiredRoles = requiredRoles;
-        this.resource = null;
-        this.action = null;
-    }
-
-    /**
-     * Returns the required role to access the resource.
-     *
-     * @return the required role, or null if multiple roles are required or no specific role is set
+     * @return the required role, or null if not specified
      */
     public String getRequiredRole() {
         return requiredRole;
     }
 
     /**
-     * Returns the required roles to access the resource.
+     * Returns the permission required to access the resource or perform the action.
      *
-     * @return the required roles, or null if no specific roles are set
+     * @return the required permission, or null if not specified
      */
-    public String[] getRequiredRoles() {
-        return requiredRoles;
+    public String getRequiredPermission() {
+        return requiredPermission;
     }
 
     /**
      * Returns the resource being accessed.
      *
-     * @return the resource, or null if no specific resource is set
+     * @return the resource, or null if not specified
      */
     public String getResource() {
         return resource;
     }
 
     /**
-     * Returns the action being performed.
+     * Creates an AuthorizationException for webhook configuration access.
+     * <p>
+     * This is a convenience method for creating an exception when a user attempts to
+     * access webhook configuration without the System Admin role.
+     * </p>
      *
-     * @return the action, or null if no specific action is set
-     */
-    public String getAction() {
-        return action;
-    }
-
-    /**
-     * Creates an AuthorizationException for webhook configuration access denied.
-     *
-     * @return a new AuthorizationException for webhook configuration
+     * @return a new AuthorizationException for webhook configuration access
      */
     public static AuthorizationException forWebhookConfiguration() {
-        return new AuthorizationException("webhooks", "configure", "System Admin");
+        return new AuthorizationException(
+                com.dollarfunding.mca.security.RoleConstants.SYSTEM_ADMIN,
+                "webhook configuration");
     }
 
     /**
-     * Creates an AuthorizationException for application management access denied.
+     * Creates an AuthorizationException for application data modification.
+     * <p>
+     * This is a convenience method for creating an exception when a user attempts to
+     * modify application data without the Operations Staff or System Admin role.
+     * </p>
      *
-     * @return a new AuthorizationException for application management
+     * @param applicationId the ID of the application being modified
+     * @return a new AuthorizationException for application data modification
      */
-    public static AuthorizationException forApplicationManagement() {
-        return new AuthorizationException("applications", "manage", new String[]{"Operations Staff", "System Admin"});
+    public static AuthorizationException forApplicationModification(String applicationId) {
+        return new AuthorizationException(
+                com.dollarfunding.mca.security.RoleConstants.OPERATIONS_STAFF,
+                String.format("application with ID %s", applicationId));
     }
 
     /**
-     * Creates an AuthorizationException for document access denied.
+     * Creates an AuthorizationException for system configuration access.
+     * <p>
+     * This is a convenience method for creating an exception when a user attempts to
+     * access system configuration without the System Admin role.
+     * </p>
      *
-     * @return a new AuthorizationException for document access
+     * @return a new AuthorizationException for system configuration access
      */
-    public static AuthorizationException forDocumentAccess() {
-        return new AuthorizationException("documents", "view", new String[]{"Operations Staff", "System Admin"});
+    public static AuthorizationException forSystemConfiguration() {
+        return new AuthorizationException(
+                com.dollarfunding.mca.security.RoleConstants.SYSTEM_ADMIN,
+                "system configuration");
     }
 }
