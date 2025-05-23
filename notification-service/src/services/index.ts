@@ -4,20 +4,12 @@
  * This barrel file exports all notification service modules to provide a clean, unified API surface.
  * It simplifies importing services throughout the application and ensures consistent service usage patterns.
  * 
- * Note: Using named exports to support tree-shaking for optimized builds.
+ * @module services
  */
 
-// Core notification service for processing messages from RabbitMQ
+// Export all services from their respective files
 export { NotificationService } from './notification-service';
-
-// Webhook delivery service with HMAC-SHA256 signing and delivery confirmation
 export { WebhookService } from './webhook-service';
-
-// Retry mechanism for failed notification deliveries
 export { RetryService } from './retry-service';
-
-// Audit logging service for notification activities
 export { AuditService } from './audit-service';
-
-// Multi-channel message formatting and delivery service
 export { MessageService } from './message-service';
