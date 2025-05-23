@@ -1,136 +1,197 @@
-# route_tables.tf - Defines route tables for VPC subnets, including routes for internet access, NAT gateways, and internal communication
-# This file establishes the network traffic flow patterns within the VPC and to external networks
-
-# This implementation supports:
-# 1. Network segmentation as required in section 3.8.3
-# 2. Secure routing patterns as implied in section 3.8.6
-# 3. Support for multi-AZ deployment as specified in section 8.2.1
-# 4. Database isolation as outlined in section 8.4.3
+# Route Tables Configuration for MCA Application Processing System
+# This file defines route tables for VPC subnets, including routes for internet access,
+# NAT gateways, and internal communication. This establishes the network traffic flow
+# patterns within the VPC and to external networks.
+#
+# Key features implemented:
+# - Network segmentation with separate route tables for public, private, and database subnets
+# - Secure routing patterns with controlled internet access
+# - Multi-AZ deployment support for high availability
+# - Database subnet isolation with no direct internet access
+# - VPC endpoint integration for secure AWS service access
+# - Optional Transit Gateway and Network Firewall integration points
 
 # ---------------------------------------------------------------------------------------------------------------------
-# PUBLIC ROUTE TABLES - Allow internet access via Internet Gateway
+# PUBLIC ROUTE TABLE
+# Route table for public subnets with direct internet access via Internet Gateway
 # ---------------------------------------------------------------------------------------------------------------------
-
 resource "aws_route_table" "public" {
-  count  = length(var.availability_zones)
-  vpc_id = var.vpc_id
-
-  # Default route to internet via Internet Gateway
-  route {
-    cidr_block = "0.0.0.0/0"
-    gateway_id = var.internet_gateway_id
-  }
-
-  # TLS 1.3 enforcement is handled at the application level and through security groups
-  # Network segmentation is implemented through subnet associations and security groups
-
+  vpc_id = aws_vpc.main.id
+  
   tags = merge(
     var.tags,
     {
-      Name        = "${var.name_prefix}-rt-public-${var.availability_zones[count.index]}"
-      Environment = var.environment
-      Tier        = "public"
-      AZ          = var.availability_zones[count.index]
-      ManagedBy   = "terraform"
+      Name = "${var.environment}-public-route-table"
+      Tier = "Public"
     }
   )
+}
 
-  lifecycle {
-    create_before_destroy = true
-  }
+# Add route to Internet Gateway for public subnets
+resource "aws_route" "public_internet_gateway" {
+  route_table_id         = aws_route_table.public.id
+  destination_cidr_block = "0.0.0.0/0"
+  gateway_id             = aws_internet_gateway.main.id
+}
+
+# Associate public route table with public subnets
+resource "aws_route_table_association" "public" {
+  count          = length(var.availability_zones)
+  subnet_id      = aws_subnet.public[count.index].id
+  route_table_id = aws_route_table.public.id
 }
 
 # ---------------------------------------------------------------------------------------------------------------------
-# PRIVATE ROUTE TABLES - Allow outbound internet access via NAT Gateway (one per AZ for high availability)
+# PRIVATE ROUTE TABLES
+# Route tables for private subnets with outbound internet access via NAT Gateways
+# One route table per AZ for fault isolation
 # ---------------------------------------------------------------------------------------------------------------------
-
 resource "aws_route_table" "private" {
   count  = length(var.availability_zones)
-  vpc_id = var.vpc_id
-
-  # Default route to internet via NAT Gateway (AZ-specific for high availability)
-  # This follows AWS best practices for multi-AZ deployments as specified in section 8.2.1
-  route {
-    cidr_block     = "0.0.0.0/0"
-    nat_gateway_id = var.nat_gateway_ids[count.index]
-  }
-
-  # Additional routes can be added dynamically using aws_route resources
-  # This separation allows for cleaner management of routes
-
+  vpc_id = aws_vpc.main.id
+  
   tags = merge(
     var.tags,
     {
-      Name        = "${var.name_prefix}-rt-private-${var.availability_zones[count.index]}"
-      Environment = var.environment
-      Tier        = "private"
-      AZ          = var.availability_zones[count.index]
-      ManagedBy   = "terraform"
+      Name = "${var.environment}-private-route-table-${var.availability_zones[count.index]}"
+      Tier = "Private"
+      AZ   = var.availability_zones[count.index]
     }
   )
+}
 
-  lifecycle {
-    create_before_destroy = true
-  }
+# Add routes to NAT Gateways for private subnets
+# Each private subnet in an AZ routes through the NAT Gateway in the same AZ
+resource "aws_route" "private_nat_gateway" {
+  count                  = length(var.availability_zones)
+  route_table_id         = aws_route_table.private[count.index].id
+  destination_cidr_block = "0.0.0.0/0"
+  nat_gateway_id         = aws_nat_gateway.main[count.index].id
+}
+
+# Associate private route tables with private subnets
+resource "aws_route_table_association" "private" {
+  count          = length(var.availability_zones)
+  subnet_id      = aws_subnet.private[count.index].id
+  route_table_id = aws_route_table.private[count.index].id
 }
 
 # ---------------------------------------------------------------------------------------------------------------------
-# DATABASE ROUTE TABLES - Internal-only routes with no direct internet access
-# Implements database isolation as outlined in section 8.4.3
+# DATABASE ROUTE TABLES
+# Route tables for database subnets with no direct internet access
+# One route table per AZ for fault isolation
 # ---------------------------------------------------------------------------------------------------------------------
-
 resource "aws_route_table" "database" {
   count  = length(var.availability_zones)
-  vpc_id = var.vpc_id
-
-  # No default route to internet - database subnets are isolated
-  # Only local VPC routes are automatically added
-  # This implements the database isolation requirement from section 8.4.3
+  vpc_id = aws_vpc.main.id
   
-  # For database maintenance access, specific routes can be added to the private subnets
-  # This maintains security while allowing controlled access
-
   tags = merge(
     var.tags,
     {
-      Name        = "${var.name_prefix}-rt-database-${var.availability_zones[count.index]}"
-      Environment = var.environment
-      Tier        = "database"
-      AZ          = var.availability_zones[count.index]
-      ManagedBy   = "terraform"
-      Isolated    = "true"
+      Name = "${var.environment}-database-route-table-${var.availability_zones[count.index]}"
+      Tier = "Database"
+      AZ   = var.availability_zones[count.index]
     }
   )
-
-  lifecycle {
-    create_before_destroy = true
-  }
 }
 
-# ---------------------------------------------------------------------------------------------------------------------
-# ROUTE TABLE ASSOCIATIONS - Associate route tables with their respective subnets
-# Implements network segmentation as required in section 3.8.3
-# ---------------------------------------------------------------------------------------------------------------------
-
-# Public subnet associations - for API Gateway and public-facing components
-resource "aws_route_table_association" "public" {
-  count          = length(var.public_subnet_ids)
-  subnet_id      = var.public_subnet_ids[count.index]
-  route_table_id = aws_route_table.public[count.index % length(var.availability_zones)].id
-}
-
-# Private subnet associations - for application services (microservices)
-# These implement the network segmentation requirement from section 3.8.3
-resource "aws_route_table_association" "private" {
-  count          = length(var.private_subnet_ids)
-  subnet_id      = var.private_subnet_ids[count.index]
-  route_table_id = aws_route_table.private[count.index % length(var.availability_zones)].id
-}
-
-# Database subnet associations - for PostgreSQL and other data services
-# These implement the database isolation requirement from section 8.4.3
+# Associate database route tables with database subnets
 resource "aws_route_table_association" "database" {
-  count          = length(var.database_subnet_ids)
-  subnet_id      = var.database_subnet_ids[count.index]
-  route_table_id = aws_route_table.database[count.index % length(var.availability_zones)].id
+  count          = length(var.availability_zones)
+  subnet_id      = aws_subnet.database[count.index].id
+  route_table_id = aws_route_table.database[count.index].id
+}
+
+# ---------------------------------------------------------------------------------------------------------------------
+# VPC ENDPOINT ROUTE TABLE ASSOCIATIONS
+# Associates VPC endpoints with appropriate route tables
+# ---------------------------------------------------------------------------------------------------------------------
+# Associate S3 Gateway Endpoint with private and database route tables
+resource "aws_vpc_endpoint_route_table_association" "private_s3" {
+  count           = length(var.availability_zones)
+  route_table_id  = aws_route_table.private[count.index].id
+  vpc_endpoint_id = aws_vpc_endpoint.s3.id
+}
+
+resource "aws_vpc_endpoint_route_table_association" "database_s3" {
+  count           = length(var.availability_zones)
+  route_table_id  = aws_route_table.database[count.index].id
+  vpc_endpoint_id = aws_vpc_endpoint.s3.id
+}
+
+# ---------------------------------------------------------------------------------------------------------------------
+# TRANSIT GATEWAY ROUTE (OPTIONAL)
+# Routes for connecting to on-premises or other VPCs via Transit Gateway
+# Uncomment and configure if Transit Gateway integration is required
+# ---------------------------------------------------------------------------------------------------------------------
+# resource "aws_route" "private_transit_gateway" {
+#   count                  = length(var.availability_zones)
+#   route_table_id         = aws_route_table.private[count.index].id
+#   destination_cidr_block = var.on_premises_cidr
+#   transit_gateway_id     = var.transit_gateway_id
+# }
+
+# resource "aws_route" "database_transit_gateway" {
+#   count                  = length(var.availability_zones)
+#   route_table_id         = aws_route_table.database[count.index].id
+#   destination_cidr_block = var.on_premises_cidr
+#   transit_gateway_id     = var.transit_gateway_id
+# }
+
+# ---------------------------------------------------------------------------------------------------------------------
+# TRANSIT GATEWAY ATTACHMENTS (OPTIONAL)
+# For hybrid connectivity to on-premises networks or other VPCs
+# Uncomment and configure if Transit Gateway integration is required
+# ---------------------------------------------------------------------------------------------------------------------
+# resource "aws_ec2_transit_gateway_vpc_attachment" "tgw_attachment" {
+#   subnet_ids         = aws_subnet.private[*].id
+#   transit_gateway_id = var.transit_gateway_id
+#   vpc_id             = aws_vpc.main.id
+#   
+#   dns_support                 = "enable"
+#   ipv6_support               = "disable"
+#   transit_gateway_default_route_table_association = false
+#   transit_gateway_default_route_table_propagation = false
+#   
+#   tags = merge(
+#     var.tags,
+#     {
+#       Name = "${var.environment}-tgw-attachment"
+#     }
+#   )
+# }
+
+# ---------------------------------------------------------------------------------------------------------------------
+# NETWORK FIREWALL ROUTE TABLE (OPTIONAL)
+# For implementing AWS Network Firewall for enhanced security
+# Uncomment and configure if Network Firewall is required
+# ---------------------------------------------------------------------------------------------------------------------
+# resource "aws_route_table" "network_firewall" {
+#   vpc_id = aws_vpc.main.id
+#   
+#   tags = merge(
+#     var.tags,
+#     {
+#       Name = "${var.environment}-network-firewall-route-table"
+#       Tier = "NetworkFirewall"
+#     }
+#   )
+# }
+
+# ---------------------------------------------------------------------------------------------------------------------
+# OUTPUTS
+# ---------------------------------------------------------------------------------------------------------------------
+output "public_route_table_id" {
+  description = "ID of the public route table"
+  value       = aws_route_table.public.id
+}
+
+output "private_route_table_ids" {
+  description = "IDs of the private route tables"
+  value       = aws_route_table.private[*].id
+}
+
+output "database_route_table_ids" {
+  description = "IDs of the database route tables"
+  value       = aws_route_table.database[*].id
 }
