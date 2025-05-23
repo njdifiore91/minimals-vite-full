@@ -9,256 +9,367 @@ all configuration components, providing a clean API surface for configuration im
 throughout the service.
 """
 
-import pytest
-from unittest.mock import patch, MagicMock
 import importlib
-import sys
+import inspect
+import pytest
+from types import ModuleType
+from typing import List, Dict, Any, Callable
+
+# Import the module under test
+import src.config as config
 
 
-# Test that all expected modules are imported and re-exported
-def test_all_modules_imported():
-    """
-    Test that all expected configuration modules are imported and re-exported.
-    """
-    # Import the config package
-    import src.config as config
-    
-    # Check that all expected modules are imported and re-exported
-    assert hasattr(config, 'app_config'), "app_config not imported"
-    assert hasattr(config, 'get_rabbitmq_config'), "rabbitmq_config functions not imported"
-    assert hasattr(config, 'get_s3_client_config'), "s3_config functions not imported"
-    assert hasattr(config, 'get_tensorflow_config'), "tensorflow_config functions not imported"
-    assert hasattr(config, 'configure_logging'), "logging_config functions not imported"
+class TestConfigInit:
+    """Test suite for the config/__init__.py module."""
+
+    def test_module_imports(self):
+        """Test that all expected configuration modules are imported."""
+        # Check that the module imports all expected submodules
+        assert hasattr(config, 'app_config'), "app_config module not imported"
+        assert hasattr(config, 'rabbitmq_config'), "rabbitmq_config module not imported"
+        assert hasattr(config, 's3_config'), "s3_config module not imported"
+        assert hasattr(config, 'tensorflow_config'), "tensorflow_config module not imported"
+        assert hasattr(config, 'logging_config'), "logging_config module not imported"
+
+    def test_app_config_exports(self):
+        """Test that app_config exports are correctly re-exported."""
+        # Check that app_config is correctly re-exported
+        assert hasattr(config, 'app_config'), "app_config not exported"
+        
+        # Check that app_config is the expected object
+        from src.config.app_config import app_config as original_app_config
+        assert config.app_config is original_app_config, "app_config is not the original object"
+
+    def test_rabbitmq_config_exports(self):
+        """Test that rabbitmq_config exports are correctly re-exported."""
+        # Check that all expected rabbitmq_config functions are re-exported
+        expected_rabbitmq_exports = [
+            'get_rabbitmq_config',
+            'get_rabbitmq_connection_parameters',
+            'get_rabbitmq_exchange_config',
+            'get_rabbitmq_queue_config',
+            'get_rabbitmq_consumer_config',
+            'get_rabbitmq_publisher_config',
+            'get_rabbitmq_retry_config',
+            'get_message_serializer',
+            'get_message_deserializer',
+            'create_ocr_result_message'
+        ]
+        
+        for export_name in expected_rabbitmq_exports:
+            assert hasattr(config, export_name), f"{export_name} not exported"
+            
+            # Check that the exported function is the original function
+            original_module = importlib.import_module('src.config.rabbitmq_config')
+            original_func = getattr(original_module, export_name)
+            exported_func = getattr(config, export_name)
+            
+            assert exported_func is original_func, f"{export_name} is not the original function"
+
+    def test_s3_config_exports(self):
+        """Test that s3_config exports are correctly re-exported."""
+        # Check that all expected s3_config functions and constants are re-exported
+        expected_s3_exports = [
+            'get_bucket_name',
+            'get_s3_client_config',
+            'get_storage_options',
+            'validate_s3_configuration',
+            'DOCUMENT_BUCKET',
+            'EXTRACTED_DATA_BUCKET',
+            'DEFAULT_STORAGE_OPTIONS'
+        ]
+        
+        for export_name in expected_s3_exports:
+            assert hasattr(config, export_name), f"{export_name} not exported"
+            
+            # Check that the exported item is the original item
+            original_module = importlib.import_module('src.config.s3_config')
+            original_item = getattr(original_module, export_name)
+            exported_item = getattr(config, export_name)
+            
+            assert exported_item is original_item, f"{export_name} is not the original item"
+
+    def test_tensorflow_config_exports(self):
+        """Test that tensorflow_config exports are correctly re-exported."""
+        # Check that all expected tensorflow_config functions and constants are re-exported
+        expected_tf_exports = [
+            'get_session_config',
+            'get_model_config',
+            'get_confidence_threshold',
+            'initialize_tensorflow',
+            'GPU_CONFIG',
+            'MODEL_PATHS',
+            'MODEL_HYPERPARAMS',
+            'CONFIDENCE_THRESHOLDS',
+            'MODEL_ARCHITECTURES',
+            'TF_OPTIMIZATION'
+        ]
+        
+        for export_name in expected_tf_exports:
+            assert hasattr(config, export_name), f"{export_name} not exported"
+            
+            # Check that the exported item is the original item
+            original_module = importlib.import_module('src.config.tensorflow_config')
+            original_item = getattr(original_module, export_name)
+            exported_item = getattr(config, export_name)
+            
+            assert exported_item is original_item, f"{export_name} is not the original item"
+
+    def test_logging_config_exports(self):
+        """Test that logging_config exports are correctly re-exported."""
+        # Check that all expected logging_config functions and constants are re-exported
+        expected_logging_exports = [
+            'setup_logging',
+            'get_logger',
+            'LogContext',
+            'add_context_to_record',
+            'SERVICE_NAME',
+            'ENVIRONMENT',
+            'LOG_LEVEL'
+        ]
+        
+        for export_name in expected_logging_exports:
+            assert hasattr(config, export_name), f"{export_name} not exported"
+            
+            # Check that the exported item is the original item
+            original_module = importlib.import_module('src.config.logging_config')
+            original_item = getattr(original_module, export_name)
+            exported_item = getattr(config, export_name)
+            
+            assert exported_item is original_item, f"{export_name} is not the original item"
+
+    def test_all_variable(self):
+        """Test that __all__ contains all expected exports."""
+        # Check that __all__ is defined
+        assert hasattr(config, '__all__'), "__all__ not defined"
+        
+        # Check that __all__ is a list of strings
+        assert isinstance(config.__all__, list), "__all__ is not a list"
+        assert all(isinstance(item, str) for item in config.__all__), "__all__ contains non-string items"
+        
+        # Check that __all__ contains all expected exports
+        expected_exports = [
+            # Application configuration
+            'app_config',
+            
+            # RabbitMQ configuration
+            'get_rabbitmq_config',
+            'get_rabbitmq_connection_parameters',
+            'get_rabbitmq_exchange_config',
+            'get_rabbitmq_queue_config',
+            'get_rabbitmq_consumer_config',
+            'get_rabbitmq_publisher_config',
+            'get_rabbitmq_retry_config',
+            'get_message_serializer',
+            'get_message_deserializer',
+            'create_ocr_result_message',
+            
+            # S3 configuration
+            'get_bucket_name',
+            'get_s3_client_config',
+            'get_storage_options',
+            'validate_s3_configuration',
+            'DOCUMENT_BUCKET',
+            'EXTRACTED_DATA_BUCKET',
+            'DEFAULT_STORAGE_OPTIONS',
+            
+            # TensorFlow configuration
+            'get_session_config',
+            'get_model_config',
+            'get_confidence_threshold',
+            'initialize_tensorflow',
+            'GPU_CONFIG',
+            'MODEL_PATHS',
+            'MODEL_HYPERPARAMS',
+            'CONFIDENCE_THRESHOLDS',
+            'MODEL_ARCHITECTURES',
+            'TF_OPTIMIZATION',
+            
+            # Logging configuration
+            'setup_logging',
+            'get_logger',
+            'LogContext',
+            'add_context_to_record',
+            'SERVICE_NAME',
+            'ENVIRONMENT',
+            'LOG_LEVEL'
+        ]
+        
+        for export_name in expected_exports:
+            assert export_name in config.__all__, f"{export_name} not in __all__"
+        
+        # Check that __all__ doesn't contain unexpected exports
+        for export_name in config.__all__:
+            assert export_name in expected_exports, f"{export_name} in __all__ but not expected"
+
+    def test_import_from_config(self):
+        """Test that imports from config work as expected."""
+        # Test importing app_config
+        from src.config import app_config
+        assert app_config is not None, "Failed to import app_config"
+        
+        # Test importing RabbitMQ functions
+        from src.config import get_rabbitmq_config, get_message_serializer
+        assert callable(get_rabbitmq_config), "get_rabbitmq_config is not callable"
+        assert callable(get_message_serializer), "get_message_serializer is not callable"
+        
+        # Test importing S3 functions
+        from src.config import get_bucket_name, get_s3_client_config
+        assert callable(get_bucket_name), "get_bucket_name is not callable"
+        assert callable(get_s3_client_config), "get_s3_client_config is not callable"
+        
+        # Test importing TensorFlow functions
+        from src.config import get_model_config, initialize_tensorflow
+        assert callable(get_model_config), "get_model_config is not callable"
+        assert callable(initialize_tensorflow), "initialize_tensorflow is not callable"
+        
+        # Test importing logging functions
+        from src.config import get_logger, setup_logging
+        assert callable(get_logger), "get_logger is not callable"
+        assert callable(setup_logging), "setup_logging is not callable"
+
+    def test_module_docstring(self):
+        """Test that the module has a proper docstring."""
+        # Check that the module has a docstring
+        assert config.__doc__ is not None, "Module does not have a docstring"
+        
+        # Check that the docstring contains expected information
+        docstring = config.__doc__.lower()
+        assert "ocr service" in docstring, "Docstring does not mention OCR Service"
+        assert "configuration" in docstring, "Docstring does not mention configuration"
+        assert "example" in docstring, "Docstring does not include example usage"
+
+    def test_example_usage_in_docstring(self):
+        """Test that the example usage in the docstring is valid."""
+        # Extract example code from docstring
+        docstring = config.__doc__
+        example_start = docstring.find("Example usage:")
+        assert example_start != -1, "Docstring does not contain 'Example usage:'"
+        
+        example_code = docstring[example_start:].split('\n\n')[0]
+        example_lines = [line.strip() for line in example_code.split('\n')[1:] if line.strip()]
+        
+        # Check that the example code mentions key imports and functions
+        example_text = '\n'.join(example_lines)
+        assert "from config import app_config" in example_text, "Example does not show importing app_config"
+        assert "service_name = app_config.SERVICE.name" in example_text, "Example does not show using app_config"
+        assert "model_config = get_model_config" in example_text, "Example does not show using get_model_config"
+        assert "bucket_name = get_bucket_name" in example_text, "Example does not show using get_bucket_name"
+        assert "rabbitmq_config = get_rabbitmq_config" in example_text, "Example does not show using get_rabbitmq_config"
+        assert "logger = get_logger" in example_text, "Example does not show using get_logger"
+
+    def test_no_private_exports(self):
+        """Test that no private functions or variables are exported."""
+        # Check that no exported names start with an underscore
+        for name in dir(config):
+            if not name.startswith('_'):  # Skip built-in attributes
+                assert not getattr(config, name).__name__.startswith('_') if callable(getattr(config, name)) else True, \
+                    f"Private function {getattr(config, name).__name__} is exported as {name}"
+
+    def test_function_signatures_preserved(self):
+        """Test that function signatures are preserved when re-exported."""
+        # Test a sample of functions to ensure signatures are preserved
+        functions_to_test = [
+            'get_rabbitmq_config',
+            'get_s3_client_config',
+            'get_model_config',
+            'get_logger'
+        ]
+        
+        for func_name in functions_to_test:
+            # Get the original function
+            module_name = next(mod_name for mod_name in ['rabbitmq_config', 's3_config', 'tensorflow_config', 'logging_config'] 
+                              if hasattr(importlib.import_module(f'src.config.{mod_name}'), func_name))
+            original_module = importlib.import_module(f'src.config.{module_name}')
+            original_func = getattr(original_module, func_name)
+            
+            # Get the exported function
+            exported_func = getattr(config, func_name)
+            
+            # Check that the signatures match
+            original_sig = inspect.signature(original_func)
+            exported_sig = inspect.signature(exported_func)
+            
+            assert str(original_sig) == str(exported_sig), \
+                f"Signature mismatch for {func_name}: original {original_sig}, exported {exported_sig}"
 
 
-# Test that all expected classes are imported and re-exported
-def test_all_classes_imported():
-    """
-    Test that all expected configuration classes are imported and re-exported.
-    """
-    # Import the config package
-    import src.config as config
-    
-    # Check that all expected classes are imported and re-exported
-    assert hasattr(config, 'AppConfig'), "AppConfig class not imported"
-    assert hasattr(config, 'Environment'), "Environment enum not imported"
-    assert hasattr(config, 'LogLevel'), "LogLevel enum not imported"
-    assert hasattr(config, 'ContextEnricher'), "ContextEnricher class not imported"
-    assert hasattr(config, 'JsonFormatter'), "JsonFormatter class not imported"
+class TestConfigImportPaths:
+    """Test suite for config import paths."""
 
-
-# Test that all expected constants are imported and re-exported
-def test_all_constants_imported():
-    """
-    Test that all expected configuration constants are imported and re-exported.
-    """
-    # Import the config package
-    import src.config as config
-    
-    # Check that all expected constants are imported and re-exported
-    
-    # App config constants
-    assert hasattr(config, 'get_config'), "get_config function not imported"
-    
-    # RabbitMQ config constants
-    assert hasattr(config, 'CONNECTION_CONFIG'), "CONNECTION_CONFIG not imported"
-    assert hasattr(config, 'EXCHANGE_CONFIG'), "EXCHANGE_CONFIG not imported"
-    assert hasattr(config, 'QUEUE_CONFIG'), "QUEUE_CONFIG not imported"
-    assert hasattr(config, 'RETRY_CONFIG'), "RETRY_CONFIG not imported"
-    assert hasattr(config, 'DEFAULT_MESSAGE_PROPERTIES'), "DEFAULT_MESSAGE_PROPERTIES not imported"
-    
-    # S3 config constants
-    assert hasattr(config, 'S3_CLIENT_CONFIG'), "S3_CLIENT_CONFIG not imported"
-    assert hasattr(config, 'S3_BOTO_CONFIG'), "S3_BOTO_CONFIG not imported"
-    assert hasattr(config, 'DEFAULT_STORAGE_OPTIONS'), "DEFAULT_STORAGE_OPTIONS not imported"
-    assert hasattr(config, 'BUCKETS'), "BUCKETS not imported"
-    assert hasattr(config, 'DOCUMENT_PATH_PREFIX'), "DOCUMENT_PATH_PREFIX not imported"
-    assert hasattr(config, 'EXTRACTED_DATA_PATH_PREFIX'), "EXTRACTED_DATA_PATH_PREFIX not imported"
-    assert hasattr(config, 'THUMBNAIL_PATH_PREFIX'), "THUMBNAIL_PATH_PREFIX not imported"
-    
-    # TensorFlow config constants
-    assert hasattr(config, 'MODEL_ARCHITECTURES'), "MODEL_ARCHITECTURES not imported"
-    assert hasattr(config, 'DOCUMENT_TYPE_MODEL_MAPPING'), "DOCUMENT_TYPE_MODEL_MAPPING not imported"
-    assert hasattr(config, 'FIELD_TYPE_MODEL_MAPPING'), "FIELD_TYPE_MODEL_MAPPING not imported"
-    assert hasattr(config, 'TENSORFLOW_VERSION'), "TENSORFLOW_VERSION not imported"
-    assert hasattr(config, 'USE_GPU'), "USE_GPU not imported"
-    assert hasattr(config, 'GPU_MEMORY_LIMIT'), "GPU_MEMORY_LIMIT not imported"
-    assert hasattr(config, 'CONFIDENCE_THRESHOLD'), "CONFIDENCE_THRESHOLD not imported"
-    
-    # Logging config constants
-    assert hasattr(config, 'LOG_LEVELS'), "LOG_LEVELS not imported"
-    assert hasattr(config, 'LOG_FORMAT'), "LOG_FORMAT not imported"
-    assert hasattr(config, 'DATE_FORMAT'), "DATE_FORMAT not imported"
-
-
-# Test that all expected functions are imported and re-exported
-def test_all_functions_imported():
-    """
-    Test that all expected configuration functions are imported and re-exported.
-    """
-    # Import the config package
-    import src.config as config
-    
-    # Check that all expected functions are imported and re-exported
-    
-    # RabbitMQ config functions
-    assert hasattr(config, 'get_ssl_context'), "get_ssl_context function not imported"
-    assert hasattr(config, 'validate_rabbitmq_configuration'), "validate_rabbitmq_configuration function not imported"
-    assert hasattr(config, 'get_connection_parameters'), "get_connection_parameters function not imported"
-    assert hasattr(config, 'get_consumer_options'), "get_consumer_options function not imported"
-    assert hasattr(config, 'get_publisher_options'), "get_publisher_options function not imported"
-    assert hasattr(config, 'serialize_message'), "serialize_message function not imported"
-    assert hasattr(config, 'deserialize_message'), "deserialize_message function not imported"
-    
-    # S3 config functions
-    assert hasattr(config, 'get_bucket_name'), "get_bucket_name function not imported"
-    assert hasattr(config, 'validate_s3_configuration'), "validate_s3_configuration function not imported"
-    assert hasattr(config, 'get_storage_options'), "get_storage_options function not imported"
-    
-    # TensorFlow config functions
-    assert hasattr(config, 'get_model_config'), "get_model_config function not imported"
-    assert hasattr(config, 'get_model_path'), "get_model_path function not imported"
-    assert hasattr(config, 'get_model_type_for_document'), "get_model_type_for_document function not imported"
-    assert hasattr(config, 'get_model_type_for_field'), "get_model_type_for_field function not imported"
-    assert hasattr(config, 'get_gpu_optimization_settings'), "get_gpu_optimization_settings function not imported"
-    assert hasattr(config, 'get_model_versioning_settings'), "get_model_versioning_settings function not imported"
-    assert hasattr(config, 'get_performance_monitoring_settings'), "get_performance_monitoring_settings function not imported"
-    assert hasattr(config, 'log_tensorflow_config'), "log_tensorflow_config function not imported"
-    
-    # Logging config functions
-    assert hasattr(config, 'get_logger'), "get_logger function not imported"
-    assert hasattr(config, 'set_request_context'), "set_request_context function not imported"
-    assert hasattr(config, 'clear_request_context'), "clear_request_context function not imported"
-    assert hasattr(config, 'get_logging_config'), "get_logging_config function not imported"
-
-
-# Test that package metadata is correctly defined
-def test_package_metadata():
-    """
-    Test that package metadata is correctly defined.
-    """
-    # Import the config package
-    import src.config as config
-    
-    # Check that package metadata is correctly defined
-    assert hasattr(config, '__version__'), "__version__ not defined"
-    assert config.__version__ == '1.0.0', "__version__ has incorrect value"
-    
-    assert hasattr(config, '__author__'), "__author__ not defined"
-    assert config.__author__ == 'Dollar Funding OCR Team', "__author__ has incorrect value"
-    
-    assert hasattr(config, '__email__'), "__email__ not defined"
-    assert config.__email__ == 'ocr-team@dollarfunding.com', "__email__ has incorrect value"
-    
-    assert hasattr(config, '__description__'), "__description__ not defined"
-    assert config.__description__ == 'Configuration package for the OCR Service', "__description__ has incorrect value"
-
-
-# Test that logging is configured when the package is imported
-@patch('src.config.logging_config.configure_logging')
-def test_logging_configured_on_import(mock_configure_logging):
-    """
-    Test that logging is configured when the package is imported.
-    """
-    # Remove the config module from sys.modules if it's already imported
-    if 'src.config' in sys.modules:
-        del sys.modules['src.config']
-    
-    # Import the config package
-    importlib.import_module('src.config')
-    
-    # Check that configure_logging was called
-    mock_configure_logging.assert_called_once()
-
-
-# Test that logging information is logged when the package is imported
-@patch('src.config.get_logger')
-def test_logging_info_on_import(mock_get_logger):
-    """
-    Test that logging information is logged when the package is imported.
-    """
-    # Create a mock logger
-    mock_logger = MagicMock()
-    mock_get_logger.return_value = mock_logger
-    
-    # Remove the config module from sys.modules if it's already imported
-    if 'src.config' in sys.modules:
-        del sys.modules['src.config']
-    
-    # Import the config package
-    importlib.import_module('src.config')
-    
-    # Check that get_logger was called with the correct module name
-    mock_get_logger.assert_called_once_with('src.config')
-    
-    # Check that logger.info was called with the correct messages
-    assert mock_logger.info.call_count >= 3, "logger.info not called enough times"
-    
-    # Check the content of the log messages
-    log_messages = [call.args[0] for call in mock_logger.info.call_args_list]
-    assert any('OCR Service Configuration loaded' in msg for msg in log_messages), "Configuration loaded message not logged"
-    assert any('Environment:' in msg for msg in log_messages), "Environment message not logged"
-    assert any('Service:' in msg for msg in log_messages), "Service message not logged"
-
-
-# Test that clean imports work as expected
-def test_clean_imports():
-    """
-    Test that clean imports work as expected throughout the service.
-    """
-    # Test importing app_config directly
-    from src.config import app_config
-    assert app_config is not None, "Failed to import app_config directly"
-    
-    # Test importing get_rabbitmq_config directly
-    from src.config import get_rabbitmq_config
-    assert get_rabbitmq_config is not None, "Failed to import get_rabbitmq_config directly"
-    
-    # Test importing get_s3_client_config directly
-    from src.config import get_s3_client_config
-    assert get_s3_client_config is not None, "Failed to import get_s3_client_config directly"
-    
-    # Test importing get_tensorflow_config directly
-    from src.config import get_tensorflow_config
-    assert get_tensorflow_config is not None, "Failed to import get_tensorflow_config directly"
-    
-    # Test importing configure_logging directly
-    from src.config import configure_logging
-    assert configure_logging is not None, "Failed to import configure_logging directly"
-    
-    # Test importing get_logger directly
-    from src.config import get_logger
-    assert get_logger is not None, "Failed to import get_logger directly"
-
-
-# Test that package structure is intact
-def test_package_structure():
-    """
-    Test that package structure is intact.
-    """
-    # Import the config package
-    import src.config as config
-    
-    # Check that the package has the expected structure
-    assert hasattr(config, 'app_config'), "app_config module not found"
-    assert hasattr(config, 'get_rabbitmq_config'), "rabbitmq_config module not properly imported"
-    assert hasattr(config, 'get_s3_client_config'), "s3_config module not properly imported"
-    assert hasattr(config, 'get_tensorflow_config'), "tensorflow_config module not properly imported"
-    assert hasattr(config, 'configure_logging'), "logging_config module not properly imported"
-    
-    # Check that the package doesn't have unexpected attributes
-    assert not hasattr(config, '_private_function'), "Package has unexpected private attribute"
-    assert not hasattr(config, 'internal_function'), "Package has unexpected internal attribute"
-
-
-# Test that the package can be imported without errors
-def test_package_import():
-    """
-    Test that the package can be imported without errors.
-    """
-    try:
+    def test_direct_import(self):
+        """Test that direct imports from config work."""
+        # Test direct import
         import src.config
-    except ImportError as e:
-        pytest.fail(f"Failed to import config package: {e}")
-    except Exception as e:
-        pytest.fail(f"Error importing config package: {e}")
+        assert isinstance(src.config, ModuleType), "Failed to import src.config"
+
+    def test_from_import(self):
+        """Test that from imports from config work."""
+        # Test from import for a sample of exports
+        from src.config import app_config, get_rabbitmq_config, get_bucket_name, get_model_config, get_logger
+        
+        assert app_config is not None, "Failed to import app_config"
+        assert callable(get_rabbitmq_config), "get_rabbitmq_config is not callable"
+        assert callable(get_bucket_name), "get_bucket_name is not callable"
+        assert callable(get_model_config), "get_model_config is not callable"
+        assert callable(get_logger), "get_logger is not callable"
+
+    def test_import_star(self):
+        """Test that 'from config import *' works as expected."""
+        # Create a new namespace
+        namespace = {}
+        
+        # Execute 'from src.config import *' in the namespace
+        exec('from src.config import *', namespace)
+        
+        # Check that all items in __all__ are in the namespace
+        for export_name in config.__all__:
+            assert export_name in namespace, f"{export_name} not imported with 'from config import *'"
+
+    def test_submodule_imports(self):
+        """Test that submodule imports work."""
+        # Test importing submodules
+        import src.config.app_config
+        import src.config.rabbitmq_config
+        import src.config.s3_config
+        import src.config.tensorflow_config
+        import src.config.logging_config
+        
+        assert isinstance(src.config.app_config, ModuleType), "Failed to import src.config.app_config"
+        assert isinstance(src.config.rabbitmq_config, ModuleType), "Failed to import src.config.rabbitmq_config"
+        assert isinstance(src.config.s3_config, ModuleType), "Failed to import src.config.s3_config"
+        assert isinstance(src.config.tensorflow_config, ModuleType), "Failed to import src.config.tensorflow_config"
+        assert isinstance(src.config.logging_config, ModuleType), "Failed to import src.config.logging_config"
+
+
+class TestConfigPackageStructure:
+    """Test suite for config package structure."""
+
+    def test_package_is_importable(self):
+        """Test that the config package is importable."""
+        # Test importing the package
+        import src.config
+        assert isinstance(src.config, ModuleType), "Failed to import src.config"
+
+    def test_submodules_are_importable(self):
+        """Test that all submodules are importable."""
+        # Test importing all submodules
+        submodules = ['app_config', 'rabbitmq_config', 's3_config', 'tensorflow_config', 'logging_config']
+        
+        for submodule in submodules:
+            module = importlib.import_module(f'src.config.{submodule}')
+            assert isinstance(module, ModuleType), f"Failed to import src.config.{submodule}"
+
+    def test_package_has_init(self):
+        """Test that the config package has an __init__.py file."""
+        # Check that the package has an __init__.py file
+        import src.config
+        assert hasattr(src.config, '__file__'), "src.config does not have __file__ attribute"
+        assert '__init__.py' in src.config.__file__, "src.config.__file__ does not point to __init__.py"
+
+    def test_package_version(self):
+        """Test that the package has a version."""
+        # Check that the package has a version
+        import src.config
+        assert hasattr(src.config, '__version__') or hasattr(src.config.app_config, 'VERSION'), \
+            "Neither src.config nor src.config.app_config has a version attribute"
