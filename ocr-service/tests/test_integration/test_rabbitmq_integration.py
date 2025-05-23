@@ -2,611 +2,971 @@
 # -*- coding: utf-8 -*-
 
 """
-Integration tests for RabbitMQ messaging in the OCR Service.
+Integration tests for the OCR Service's RabbitMQ integration.
 
-This module tests the integration between the OCR Service and RabbitMQ message queue,
-verifying that the service correctly consumes messages from input queues, processes documents,
-and publishes results to output queues, ensuring reliable message-based processing.
+This module tests the integration between the OCR Service and RabbitMQ message queue.
+It verifies that the service correctly consumes messages from input queues, processes
+documents, and publishes results to output queues, ensuring reliable message-based processing.
 
-Key test areas:
-1. Message consumption from the 'ocr.request' queue
-2. Message publishing to the 'data.processing' queue
-3. Message format and schema validation
-4. Error handling and retry logic for message processing
-5. Message acknowledgment and rejection
-6. Queue configuration and message routing
-7. TLS with client certificate authentication
+Key aspects tested:
+1. Connection to RabbitMQ with TLS and client certificate authentication
+2. Message consumption from the 'ocr.request' queue
+3. Message publishing to the 'data.processing' queue
+4. Message format and schema validation
+5. Error handling and retry logic
+6. Message acknowledgment and rejection
+7. Queue configuration and message routing
 """
 
 import json
 import os
-import pytest
 import ssl
-from unittest.mock import patch, MagicMock, call
-from typing import Dict, List, Any, Tuple, Optional
+import time
+from unittest.mock import MagicMock, patch, call, ANY
 
-# Import pika for RabbitMQ testing
-import pika
-from pika.exceptions import AMQPConnectionError, AMQPChannelError, AMQPError
+import pytest
+from pika.exceptions import AMQPConnectionError, AMQPChannelError, ConnectionClosedByBroker
 
-# Import application modules
-from src.services.queue_service import QueueService
-from src.services.ocr_service import OCRService
-from src.services.storage_service import StorageService
-from src.types.messages import MessagePayload, MessageHeaders, ExchangeConfig, QueueConfig, MessageResult
-from src.types.errors import ServiceError, ErrorCategory, Result
-from src.types.documents import DocumentType, ProcessingStatus
+# Import OCR service modules
+import sys
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../src')))
 
-
-# Mark all tests in this module as integration tests
-pytestmark = pytest.mark.integration
+from app import OCRServiceApp
+from config import rabbitmq_config
+from services.queue_service import QueueService, Result
+from types.messages import MessagePayload, MessageHeaders, MessageStatus, create_message_payload
+from types.errors import ServiceError, ErrorCategory
+from utils.rabbitmq_utils import RabbitMQConnection, with_connection_retry
 
 
-# ===== RabbitMQ Test Fixtures =====
+# ===== Test Fixtures =====
 
-@pytest.fixture
-def mock_pika_connection(mock_rabbitmq_connection, mock_rabbitmq_channel):
-    """Mock pika connection for RabbitMQ testing."""
-    with patch('pika.BlockingConnection') as mock_connection:
-        # Set the return value to our mock connection
-        mock_connection.return_value = mock_rabbitmq_connection
-        
-        # Return the mocks for testing
-        yield mock_connection, mock_rabbitmq_channel
-
-
-@pytest.fixture
-def mock_ssl_context():
-    """Mock SSL context for RabbitMQ TLS testing."""
-    with patch('ssl.create_default_context') as mock_context:
-        mock_ssl_context = MagicMock(spec=ssl.SSLContext)
-        mock_context.return_value = mock_ssl_context
-        mock_ssl_context.load_cert_chain = MagicMock()
-        yield mock_ssl_context
-
-
-@pytest.fixture
-def queue_service(mock_pika_connection, integration_test_rabbitmq_config):
-    """Create a QueueService instance with mocked RabbitMQ connection."""
-    with patch('src.services.queue_service.rabbitmq_config', integration_test_rabbitmq_config):
-        service = QueueService()
-        # Force the service to use our mocked connection
-        mock_conn, mock_channel = mock_pika_connection
-        service.connection = mock_rabbitmq_connection
-        service.channel = mock_channel
-        service.connected = True
-        service.consumer_tag = None
-        
-        # Set service properties from config
-        service.exchange_name = integration_test_rabbitmq_config.exchange_name
-        service.exchange_type = integration_test_rabbitmq_config.exchange_type
-        service.ocr_request_queue = integration_test_rabbitmq_config.ocr_request_queue
-        service.data_processing_queue = integration_test_rabbitmq_config.data_processing_queue
-        service.max_retries = integration_test_rabbitmq_config.max_retries
-        service.retry_delay = integration_test_rabbitmq_config.retry_delay
-        
-        yield service
-
-
-@pytest.fixture
-def sample_ocr_response_message(sample_rabbitmq_message) -> MessagePayload:
-    """Create a sample OCR response message for testing."""
-    request_payload, _ = sample_rabbitmq_message
+@pytest.fixture(scope="function")
+def mock_rabbitmq_config():
+    """Create a mock RabbitMQ configuration for testing."""
+    config = rabbitmq_config.get_rabbitmq_config()
     
-    return {
-        "document_id": request_payload["document_id"],
-        "application_id": request_payload["application_id"],
-        "document_type": request_payload["document_type"],
-        "storage_path": request_payload["storage_path"],
-        "extraction_results": {
-            "fields": {
-                "business_name": {
-                    "value": "ACME Corporation",
-                    "confidence": 0.95
-                },
-                "tax_id": {
-                    "value": "12-3456789",
-                    "confidence": 0.85
-                },
-                "address": {
-                    "value": "123 Main St, Anytown, USA 12345",
-                    "confidence": 0.92
-                }
+    # Override configuration for testing
+    config.host = "test-rabbitmq-host"
+    config.port = 5671
+    config.virtual_host = "/test"
+    config.username = "test-user"
+    config.password = "test-password"
+    config.ca_cert_path = "/path/to/ca.pem"
+    config.client_cert_path = "/path/to/client.pem"
+    config.client_key_path = "/path/to/client.key"
+    config.cert_password = "test-cert-password"
+    
+    # Configure exchanges and queues for testing
+    config.exchanges = [
+        {
+            "name": "mca.documents.test",
+            "exchange_type": "topic",
+            "durable": True
+        },
+        {
+            "name": "mca.data.processing.test",
+            "exchange_type": "topic",
+            "durable": True
+        }
+    ]
+    
+    config.queues = [
+        {
+            "name": "ocr.request.test",
+            "durable": True,
+            "arguments": {
+                "x-dead-letter-exchange": "mca.dead-letter.test",
+                "x-dead-letter-routing-key": "ocr.request.dead"
             },
-            "overall_confidence": 0.91,
-            "requires_verification": False
+            "bindings": [
+                {
+                    "exchange": "mca.documents.test",
+                    "routing_key": "ocr.request"
+                }
+            ]
         },
-        "processing_time_ms": 1500,
-        "correlation_id": request_payload.get("correlation_id", ""),
-        "timestamp": "2023-01-01T12:01:30Z"
-    }
-
-
-@pytest.fixture
-def mock_ocr_service():
-    """Mock OCR service for testing message processing."""
-    mock_service = MagicMock(spec=OCRService)
+        {
+            "name": "data.processing.test",
+            "durable": True,
+            "arguments": {
+                "x-dead-letter-exchange": "mca.dead-letter.test",
+                "x-dead-letter-routing-key": "data.processing.dead"
+            },
+            "bindings": [
+                {
+                    "exchange": "mca.data.processing.test",
+                    "routing_key": "data.extraction.complete"
+                },
+                {
+                    "exchange": "mca.data.processing.test",
+                    "routing_key": "data.extraction.error"
+                }
+            ]
+        }
+    ]
     
-    # Configure the mock to return predictable results
-    mock_service.process_document.return_value = {
-        "fields": {
-            "business_name": {"value": "ACME Corporation", "confidence": 0.95},
-            "tax_id": {"value": "12-3456789", "confidence": 0.85},
-            "address": {"value": "123 Main St, Anytown, USA 12345", "confidence": 0.92}
-        },
-        "overall_confidence": 0.91,
-        "requires_verification": False
-    }
-    
-    return mock_service
+    return config
 
 
-@pytest.fixture
-def mock_storage_service():
-    """Mock storage service for testing document retrieval."""
-    mock_service = MagicMock(spec=StorageService)
+@pytest.fixture(scope="function")
+def queue_service_with_mocks(mock_rabbitmq_config, mock_rabbitmq_connection):
+    """Create a QueueService instance with mocked RabbitMQ connection."""
+    mock_connection, mock_channel = mock_rabbitmq_connection
     
-    # Configure the mock to return predictable results
-    mock_service.download_document.return_value = Result(
-        success=True,
-        data=b"Sample document content for testing",
-        metadata={
-            "document_id": "doc-123456",
-            "content_type": "application/pdf"
+    with patch('services.queue_service.RabbitMQConnection') as MockRabbitMQConnection:
+        # Configure the mock RabbitMQConnection
+        mock_rmq_connection = MagicMock()
+        mock_rmq_connection.connection = mock_connection
+        mock_rmq_connection.channel = mock_channel
+        mock_rmq_connection.ensure_connection.return_value = True
+        mock_rmq_connection.is_connected.return_value = True
+        mock_rmq_connection.publish_message.return_value = True
+        MockRabbitMQConnection.return_value = mock_rmq_connection
+        
+        # Create QueueService with mock config
+        queue_service = QueueService(config=mock_rabbitmq_config)
+        queue_service.running = True
+        
+        yield queue_service, mock_rmq_connection
+
+
+# ===== Test Connection and Configuration =====
+
+def test_queue_service_initialization(mock_rabbitmq_config):
+    """Test that QueueService initializes correctly with the provided configuration."""
+    with patch('services.queue_service.RabbitMQConnection') as MockRabbitMQConnection:
+        # Create a mock RabbitMQConnection
+        mock_connection = MagicMock()
+        MockRabbitMQConnection.return_value = mock_connection
+        
+        # Initialize QueueService
+        queue_service = QueueService(config=mock_rabbitmq_config)
+        
+        # Verify that RabbitMQConnection was initialized with the correct config
+        MockRabbitMQConnection.assert_called_once_with(mock_rabbitmq_config)
+        
+        # Verify that the QueueService was initialized correctly
+        assert queue_service.config == mock_rabbitmq_config
+        assert queue_service.connection == mock_connection
+        assert queue_service.callback is None
+        assert queue_service.running is False
+
+
+def test_queue_service_start(queue_service_with_mocks):
+    """Test that QueueService.start() correctly sets up exchanges and queues."""
+    queue_service, mock_rmq_connection = queue_service_with_mocks
+    
+    # Reset the running flag
+    queue_service.running = False
+    
+    # Start the QueueService
+    result = queue_service.start()
+    
+    # Verify that the start method was successful
+    assert result.success is True
+    assert queue_service.running is True
+    
+    # Verify that the connection was established
+    mock_rmq_connection.connect.assert_called_once()
+    
+    # Verify that exchanges were declared
+    assert mock_rmq_connection.declare_exchange.call_count == 2
+    mock_rmq_connection.declare_exchange.assert_any_call(
+        exchange="mca.documents.test",
+        exchange_type="topic",
+        durable=True
+    )
+    mock_rmq_connection.declare_exchange.assert_any_call(
+        exchange="mca.data.processing.test",
+        exchange_type="topic",
+        durable=True
+    )
+    
+    # Verify that queues were declared and bound
+    assert mock_rmq_connection.declare_queue.call_count == 2
+    mock_rmq_connection.declare_queue.assert_any_call(
+        queue="ocr.request.test",
+        durable=True,
+        arguments={
+            "x-dead-letter-exchange": "mca.dead-letter.test",
+            "x-dead-letter-routing-key": "ocr.request.dead"
+        }
+    )
+    mock_rmq_connection.declare_queue.assert_any_call(
+        queue="data.processing.test",
+        durable=True,
+        arguments={
+            "x-dead-letter-exchange": "mca.dead-letter.test",
+            "x-dead-letter-routing-key": "data.processing.dead"
         }
     )
     
-    return mock_service
+    # Verify that queues were bound to exchanges
+    assert mock_rmq_connection.bind_queue.call_count == 3
+    mock_rmq_connection.bind_queue.assert_any_call(
+        queue="ocr.request.test",
+        exchange="mca.documents.test",
+        routing_key="ocr.request"
+    )
+    mock_rmq_connection.bind_queue.assert_any_call(
+        queue="data.processing.test",
+        exchange="mca.data.processing.test",
+        routing_key="data.extraction.complete"
+    )
+    mock_rmq_connection.bind_queue.assert_any_call(
+        queue="data.processing.test",
+        exchange="mca.data.processing.test",
+        routing_key="data.extraction.error"
+    )
 
 
-# ===== RabbitMQ Integration Tests =====
+def test_queue_service_stop(queue_service_with_mocks):
+    """Test that QueueService.stop() correctly closes the connection."""
+    queue_service, mock_rmq_connection = queue_service_with_mocks
+    
+    # Stop the QueueService
+    result = queue_service.stop()
+    
+    # Verify that the stop method was successful
+    assert result.success is True
+    assert queue_service.running is False
+    
+    # Verify that the connection was closed
+    mock_rmq_connection.close.assert_called_once()
 
-class TestRabbitMQIntegration:
-    """Test suite for RabbitMQ integration with the OCR Service."""
+
+def test_queue_service_health_check(queue_service_with_mocks):
+    """Test that QueueService.health_check() returns the correct status."""
+    queue_service, mock_rmq_connection = queue_service_with_mocks
     
-    def test_rabbitmq_connection_initialization(self, mock_pika_connection, mock_ssl_context):
-        """Test that the QueueService correctly initializes the RabbitMQ connection with TLS.
-        
-        This test verifies that the connection is established with the correct parameters,
-        including TLS configuration with client certificate authentication as required by
-        the technical specification.
-        """
-        # Initialize QueueService to trigger connection setup
-        with patch('ssl.create_default_context', return_value=mock_ssl_context):
-            service = QueueService()
-        
-        # Verify connection was attempted with correct parameters
-        mock_conn, _ = mock_pika_connection
-        mock_conn.assert_called_once()
-        
-        # Get the connection parameters from the call
-        conn_params = mock_conn.call_args[0][0]
-        
-        # Verify connection parameters
-        assert conn_params.host == service.config.host
-        assert conn_params.port == service.config.port
-        assert conn_params.virtual_host == service.config.virtual_host
-        
-        # Verify SSL options if TLS is enabled
-        if service.config.use_tls:
-            assert conn_params.ssl_options is not None
-            # Verify SSL context was created and configured
-            mock_ssl_context.load_cert_chain.assert_called_once()
-            assert mock_ssl_context.verify_mode == ssl.CERT_REQUIRED
-            assert mock_ssl_context.check_hostname is True
+    # Configure the mock connection to be open
+    mock_rmq_connection.is_connected.return_value = True
     
-    def test_exchange_and_queue_declaration(self, queue_service):
-        """Test that the QueueService correctly declares exchanges and queues.
-        
-        This test verifies that the exchange and queues are declared with the correct
-        parameters as specified in the technical specification.
-        """
-        # Get the mock channel
-        channel = queue_service.channel
-        
-        # Verify exchange declaration
-        channel.exchange_declare.assert_called_with(
-            exchange=queue_service.exchange_name,
-            exchange_type=queue_service.exchange_type,
-            durable=True
-        )
-        
-        # Verify queue declarations
-        assert channel.queue_declare.call_count >= 2
-        
-        # Verify queue bindings
-        assert channel.queue_bind.call_count >= 2
-        
-        # Verify specific queue bindings
-        ocr_request_binding_call = call(
-            queue=queue_service.ocr_request_queue,
-            exchange=queue_service.exchange_name,
-            routing_key='ocr.request'
-        )
-        data_processing_binding_call = call(
-            queue=queue_service.data_processing_queue,
-            exchange=queue_service.exchange_name,
-            routing_key='data.processing'
-        )
-        
-        assert ocr_request_binding_call in channel.queue_bind.call_args_list
-        assert data_processing_binding_call in channel.queue_bind.call_args_list
-        
-        # Verify QoS setting
-        channel.basic_qos.assert_called_once()
+    # Perform health check
+    health_info = queue_service.health_check()
     
-    def test_message_publishing(self, queue_service, sample_ocr_response_message):
-        """Test that messages are correctly published to RabbitMQ.
-        
-        This test verifies that the QueueService correctly publishes messages to the
-        appropriate exchange with the correct routing key and message properties.
-        """
-        # Publish a message
-        result = queue_service.publish_message(
-            payload=sample_ocr_response_message,
-            routing_key='data.processing',
-            headers={"source": "ocr-service"}
-        )
-        
-        # Verify publish was successful
-        assert result.success is True
-        
-        # Verify basic_publish was called with correct parameters
-        queue_service.channel.basic_publish.assert_called_once()
-        call_args = queue_service.channel.basic_publish.call_args[1]
-        
-        # Verify exchange and routing key
-        assert call_args["exchange"] == queue_service.exchange_name
-        assert call_args["routing_key"] == 'data.processing'
-        
-        # Verify message body is JSON serialized
-        body = call_args["body"]
-        assert isinstance(body, bytes)
-        deserialized = json.loads(body.decode('utf-8'))
-        assert deserialized["document_id"] == sample_ocr_response_message["document_id"]
-        
-        # Verify message properties
-        properties = call_args["properties"]
-        assert properties.content_type == 'application/json'
-        assert properties.content_encoding == 'utf-8'
-        assert properties.delivery_mode == 2  # Persistent
-        assert properties.headers["source"] == "ocr-service"
+    # Verify health check results
+    assert health_info["status"] == "healthy"
+    assert health_info["details"]["running"] is True
+    assert health_info["details"]["connected"] is True
+    assert health_info["details"]["connection"]["host"] == queue_service.config.host
+    assert health_info["details"]["connection"]["port"] == queue_service.config.port
+    assert health_info["details"]["connection"]["virtual_host"] == queue_service.config.virtual_host
     
-    def test_message_consumption(self, queue_service, sample_rabbitmq_message, sample_rabbitmq_method, sample_rabbitmq_properties):
-        """Test that messages are correctly consumed from RabbitMQ.
+    # Configure the mock connection to be closed
+    mock_rmq_connection.is_connected.return_value = False
+    
+    # Perform health check again
+    health_info = queue_service.health_check()
+    
+    # Verify health check results
+    assert health_info["status"] == "unhealthy"
+
+
+# ===== Test Message Consumption =====
+
+def test_consume_messages(queue_service_with_mocks):
+    """Test that QueueService.consume_messages() correctly sets up message consumption."""
+    queue_service, mock_rmq_connection = queue_service_with_mocks
+    
+    # Create a mock callback function
+    callback = MagicMock()
+    queue_service.register_callback(callback)
+    
+    # Start consuming messages
+    result = queue_service.consume_messages(queue="ocr.request.test", prefetch_count=5)
+    
+    # Verify that the consume_messages method was successful
+    assert result.success is True
+    
+    # Verify that the connection was ensured
+    mock_rmq_connection.ensure_connection.assert_called_once()
+    
+    # Verify that basic_qos was set
+    mock_rmq_connection.channel.basic_qos.assert_called_once_with(prefetch_count=5)
+    
+    # Verify that consume_messages was called with the correct parameters
+    mock_rmq_connection.consume_messages.assert_called_once_with(
+        queue="ocr.request.test",
+        callback=queue_service._message_handler,
+        auto_ack=False,
+        prefetch_count=5
+    )
+
+
+def test_consume_messages_no_callback(queue_service_with_mocks):
+    """Test that QueueService.consume_messages() fails when no callback is registered."""
+    queue_service, mock_rmq_connection = queue_service_with_mocks
+    
+    # Ensure no callback is registered
+    queue_service.callback = None
+    
+    # Start consuming messages
+    result = queue_service.consume_messages(queue="ocr.request.test")
+    
+    # Verify that the consume_messages method failed
+    assert result.success is False
+    assert isinstance(result.error, RuntimeError)
+    assert "No callback registered" in str(result.error)
+    
+    # Verify that consume_messages was not called
+    mock_rmq_connection.consume_messages.assert_not_called()
+
+
+def test_message_handler_success(queue_service_with_mocks):
+    """Test that _message_handler correctly processes valid messages."""
+    queue_service, mock_rmq_connection = queue_service_with_mocks
+    
+    # Create a mock callback function
+    callback = MagicMock()
+    queue_service.register_callback(callback)
+    
+    # Create mock message components
+    channel = MagicMock()
+    method = MagicMock()
+    method.delivery_tag = "test-tag"
+    properties = MagicMock()
+    properties.message_id = "test-message-id"
+    properties.headers = {"source": "document-service"}
+    
+    # Create a test message payload
+    payload = {
+        "document_id": "doc-12345",
+        "document_type": "APPLICATION",
+        "storage_path": "mca-documents-staging/applications/doc-12345.pdf",
+        "application_id": "app-12345"
+    }
+    body = json.dumps(payload).encode('utf-8')
+    
+    # Mock the deserialize_message function
+    with patch('services.queue_service.utils_deserialize_message') as mock_deserialize:
+        mock_deserialize.return_value = (payload, properties.headers)
         
-        This test verifies that the QueueService correctly sets up message consumption
-        from the ocr.request queue and processes messages with the provided callback.
-        """
-        # Create a mock callback function
-        mock_callback = MagicMock()
+        # Call the message handler
+        queue_service._message_handler(channel, method, properties, body)
         
-        # Start consuming in a separate thread to avoid blocking
-        with patch('src.services.queue_service.QueueService.start_consuming') as mock_start_consuming:
-            queue_service.start_consuming(mock_callback)
-            
-            # Verify basic_consume was called with correct parameters
-            queue_service.channel.basic_consume.assert_called_once()
-            call_args = queue_service.channel.basic_consume.call_args[1]
-            
-            # Verify queue and auto_ack
-            assert call_args["queue"] == queue_service.ocr_request_queue
-            assert call_args["auto_ack"] is False  # Manual acknowledgment
-            
-            # Get the message handler function
-            message_handler = call_args["on_message_callback"]
-            
-            # Get payload and headers from fixture
-            payload, headers = sample_rabbitmq_message
-            
-            # Create message body
-            message_body = json.dumps(payload).encode('utf-8')
+        # Verify that deserialize_message was called with the correct parameters
+        mock_deserialize.assert_called_once_with(body, properties)
+        
+        # Verify that the callback was called with the correct parameters
+        callback.assert_called_once_with(channel, method, properties, body, payload, properties.headers)
+        
+        # Verify that the message was acknowledged
+        mock_rmq_connection.acknowledge_message.assert_called_once_with(method.delivery_tag)
+
+
+def test_message_handler_deserialization_error(queue_service_with_mocks):
+    """Test that _message_handler correctly handles deserialization errors."""
+    queue_service, mock_rmq_connection = queue_service_with_mocks
+    
+    # Create a mock callback function
+    callback = MagicMock()
+    queue_service.register_callback(callback)
+    
+    # Create mock message components
+    channel = MagicMock()
+    method = MagicMock()
+    method.delivery_tag = "test-tag"
+    properties = MagicMock()
+    properties.message_id = "test-message-id"
+    properties.headers = {}
+    body = b"invalid json"
+    
+    # Mock the deserialize_message function to raise an exception
+    with patch('services.queue_service.utils_deserialize_message') as mock_deserialize:
+        mock_deserialize.side_effect = ValueError("Invalid JSON")
+        
+        # Call the message handler
+        queue_service._message_handler(channel, method, properties, body)
+        
+        # Verify that deserialize_message was called with the correct parameters
+        mock_deserialize.assert_called_once_with(body, properties)
+        
+        # Verify that the callback was not called
+        callback.assert_not_called()
+        
+        # Verify that the message was rejected without requeue
+        mock_rmq_connection.reject_message.assert_called_once_with(method.delivery_tag, requeue=False)
+
+
+def test_message_handler_callback_error(queue_service_with_mocks):
+    """Test that _message_handler correctly handles callback errors."""
+    queue_service, mock_rmq_connection = queue_service_with_mocks
+    
+    # Create a mock callback function that raises an exception
+    callback = MagicMock(side_effect=Exception("Processing error"))
+    queue_service.register_callback(callback)
+    
+    # Create mock message components
+    channel = MagicMock()
+    method = MagicMock()
+    method.delivery_tag = "test-tag"
+    properties = MagicMock()
+    properties.message_id = "test-message-id"
+    properties.headers = {}
+    
+    # Create a test message payload
+    payload = {"document_id": "doc-12345"}
+    body = json.dumps(payload).encode('utf-8')
+    
+    # Mock the deserialize_message function
+    with patch('services.queue_service.utils_deserialize_message') as mock_deserialize:
+        mock_deserialize.return_value = (payload, properties.headers)
+        
+        # Mock the get_retry_count function
+        with patch('services.queue_service.get_retry_count') as mock_get_retry_count:
+            mock_get_retry_count.return_value = 0  # First attempt
             
             # Call the message handler
-            message_handler(queue_service.channel, sample_rabbitmq_method, sample_rabbitmq_properties, message_body)
+            queue_service._message_handler(channel, method, properties, body)
             
-            # Verify callback was called with correct parameters
-            mock_callback.assert_called_once()
-            callback_args = mock_callback.call_args[0]
+            # Verify that deserialize_message was called with the correct parameters
+            mock_deserialize.assert_called_once_with(body, properties)
             
-            # Verify payload and headers
-            assert callback_args[0] == payload
-            assert callback_args[1] == sample_rabbitmq_properties.headers
-            assert callback_args[2] == queue_service.channel
-            assert callback_args[3] == sample_rabbitmq_method
-    
-    def test_message_acknowledgment(self, queue_service):
-        """Test that messages are correctly acknowledged after processing.
-        
-        This test verifies that the QueueService correctly acknowledges messages
-        after successful processing.
-        """
-        # Acknowledge a message
-        delivery_tag = 123
-        queue_service.acknowledge_message(delivery_tag)
-        
-        # Verify basic_ack was called with correct parameters
-        queue_service.channel.basic_ack.assert_called_once_with(delivery_tag=delivery_tag)
-    
-    def test_message_rejection(self, queue_service):
-        """Test that messages are correctly rejected when processing fails.
-        
-        This test verifies that the QueueService correctly rejects messages
-        when processing fails, with the option to requeue for retry.
-        """
-        # Reject a message without requeue
-        delivery_tag = 123
-        queue_service.reject_message(delivery_tag, requeue=False)
-        
-        # Verify basic_reject was called with correct parameters
-        queue_service.channel.basic_reject.assert_called_once_with(
-            delivery_tag=delivery_tag, requeue=False)
-        
-        # Reset mock
-        queue_service.channel.basic_reject.reset_mock()
-        
-        # Reject a message with requeue
-        queue_service.reject_message(delivery_tag, requeue=True)
-        
-        # Verify basic_reject was called with correct parameters
-        queue_service.channel.basic_reject.assert_called_once_with(
-            delivery_tag=delivery_tag, requeue=True)
-    
-    def test_message_format_validation(self, queue_service, sample_rabbitmq_method):
-        """Test that message format is validated before processing.
-        
-        This test verifies that the QueueService validates message format and rejects
-        invalid messages without requeuing them.
-        """
-        # Create a mock callback function
-        mock_callback = MagicMock()
-        
-        # Get the message handler function
-        queue_service.channel.basic_consume.reset_mock()
-        queue_service.start_consuming(mock_callback)
-        call_args = queue_service.channel.basic_consume.call_args[1]
-        message_handler = call_args["on_message_callback"]
-        
-        # Create mock properties with empty headers
-        mock_properties = MagicMock()
-        mock_properties.headers = {}
-        
-        # Test with invalid JSON
-        invalid_body = b"This is not valid JSON"
-        
-        # Reset the reject mock
-        queue_service.channel.basic_reject.reset_mock()
-        
-        # Call the message handler
-        message_handler(queue_service.channel, sample_rabbitmq_method, mock_properties, invalid_body)
-        
-        # Verify callback was not called
-        mock_callback.assert_not_called()
-        
-        # Verify message was rejected without requeue
-        queue_service.channel.basic_reject.assert_called_once_with(
-            delivery_tag=sample_rabbitmq_method.delivery_tag, requeue=False)
-    
-    def test_connection_error_handling(self, mock_pika_connection):
-        """Test that connection errors are properly handled.
-        
-        This test verifies that the QueueService correctly handles connection errors
-        and implements retry logic with exponential backoff.
-        """
-        # Configure mock connection to raise error on first attempt
-        mock_conn, _ = mock_pika_connection
-        mock_conn.side_effect = [AMQPConnectionError("Connection refused"), MagicMock()]
-        
-        # Patch the retry delay to speed up the test
-        with patch('src.services.queue_service.QueueService.retry_delay', 0.01):
-            # Initialize QueueService - should retry and succeed
-            with patch('time.sleep'):  # Avoid actual sleep in tests
-                service = QueueService()
+            # Verify that the callback was called with the correct parameters
+            callback.assert_called_once_with(channel, method, properties, body, payload, properties.headers)
             
-            # Verify connection was attempted twice
-            assert mock_conn.call_count == 2
-    
-    def test_channel_error_handling(self, queue_service, sample_ocr_response_message):
-        """Test that channel errors are properly handled.
-        
-        This test verifies that the QueueService correctly handles channel errors
-        and implements retry logic with exponential backoff.
-        """
-        # Configure mock channel to raise error on publish attempt
-        queue_service.channel.basic_publish.side_effect = AMQPChannelError("Channel closed")
-        
-        # Patch the retry decorator to use a real implementation with short delays
-        with patch('src.services.queue_service.QueueService.with_retry', 
-                  lambda func: func):  # Disable retry for this test
-            # Patch the connection check to avoid reconnection attempts
-            with patch('src.services.queue_service.QueueService.with_connection', 
-                      lambda func: func):  # Disable connection check
-                # Attempt to publish - should raise an error
-                with pytest.raises(ServiceError) as excinfo:
-                    queue_service.publish_message(
-                        payload=sample_ocr_response_message,
-                        routing_key='data.processing'
-                    )
-                
-                # Verify error category
-                assert excinfo.value.category == ErrorCategory.CONNECTION
-    
-    def test_retry_logic(self, queue_service, sample_ocr_response_message):
-        """Test that retry logic is correctly implemented for RabbitMQ operations.
-        
-        This test verifies that the QueueService implements retry logic with exponential
-        backoff for RabbitMQ operations, as required by the technical specification.
-        """
-        # Configure mock channel to fail twice then succeed
-        queue_service.channel.basic_publish.side_effect = [
-            AMQPChannelError("Channel closed"),
-            AMQPChannelError("Channel closed"),
-            None  # Success on third attempt
-        ]
-        
-        # Create a simplified retry decorator for testing
-        def test_retry_decorator(func):
-            def wrapper(*args, **kwargs):
-                retries = 0
-                max_retries = 3
-                last_error = None
-                
-                while retries <= max_retries:
-                    try:
-                        result = func(*args, **kwargs)
-                        if isinstance(result, Result) and not result.success:
-                            last_error = result.error
-                            retries += 1
-                            if retries <= max_retries:
-                                continue  # Retry without delay in tests
-                            return result
-                        return Result(success=True, data=True)
-                    except Exception as e:
-                        last_error = e
-                        retries += 1
-                        if retries <= max_retries:
-                            continue  # Retry without delay in tests
-                
-                return Result(success=False, error=last_error)
-            return wrapper
-        
-        # Apply the test retry decorator
-        with patch('src.services.queue_service.QueueService.with_retry', 
-                  lambda func: test_retry_decorator(func)):
-            # Patch the connection check to avoid reconnection attempts
-            with patch('src.services.queue_service.QueueService.with_connection', 
-                      lambda func: func):
-                # Attempt to publish - should succeed after retries
-                result = queue_service.publish_message(
-                    payload=sample_ocr_response_message,
-                    routing_key='data.processing'
-                )
-                
-                # Verify publish was successful after retries
-                assert result.success is True
-                
-                # Verify basic_publish was called three times
-                assert queue_service.channel.basic_publish.call_count == 3
-    
-    def test_end_to_end_message_processing(self, queue_service, mock_ocr_service, 
-                                         mock_storage_service, sample_rabbitmq_message,
-                                         sample_rabbitmq_method, sample_rabbitmq_properties):
-        """Test the end-to-end message processing flow.
-        
-        This test verifies the complete flow of message processing, from consumption
-        to document retrieval, OCR processing, and result publishing.
-        """
-        # Create a message processing callback that simulates the OCR pipeline
-        def process_message(payload, headers, channel, method):
-            try:
-                # Extract document information
-                document_id = payload.get('document_id')
-                storage_path = payload.get('storage_path')
-                document_type = payload.get('document_type')
-                
-                # Download document from storage
-                download_result = mock_storage_service.download_document(storage_path)
-                if not download_result.success:
-                    raise ServiceError("Failed to download document", ErrorCategory.STORAGE)
-                
-                # Process document with OCR
-                ocr_result = mock_ocr_service.process_document(
-                    download_result.data, document_type)
-                
-                # Prepare result message
-                result_payload = {
-                    "document_id": document_id,
-                    "document_type": document_type,
-                    "storage_path": storage_path,
-                    "extraction_results": ocr_result,
-                    "processing_time_ms": 1500,
-                    "correlation_id": payload.get("correlation_id", ""),
-                    "timestamp": "2023-01-01T12:01:30Z"
-                }
-                
-                # Publish result
-                publish_result = queue_service.publish_message(
-                    payload=result_payload,
-                    routing_key='data.processing',
-                    headers={"source": "ocr-service"}
-                )
-                
-                if not publish_result.success:
-                    raise ServiceError("Failed to publish result", ErrorCategory.MESSAGING)
-                
-                # Acknowledge the message
-                channel.basic_ack(delivery_tag=method.delivery_tag)
-                
-                return True
-            except Exception as e:
-                # Reject the message with requeue for retriable errors
-                if isinstance(e, ServiceError) and e.category in [
-                    ErrorCategory.CONNECTION, ErrorCategory.TEMPORARY]:
-                    channel.basic_reject(delivery_tag=method.delivery_tag, requeue=True)
-                else:
-                    # Don't requeue for non-retriable errors
-                    channel.basic_reject(delivery_tag=method.delivery_tag, requeue=False)
-                
-                return False
-        
-        # Get the message handler function
-        queue_service.channel.basic_consume.reset_mock()
-        queue_service.start_consuming(process_message)
-        call_args = queue_service.channel.basic_consume.call_args[1]
-        message_handler = call_args["on_message_callback"]
-        
-        # Get payload and headers from fixture
-        payload, headers = sample_rabbitmq_message
-        
-        # Create message body
-        message_body = json.dumps(payload).encode('utf-8')
-        
-        # Reset mocks
-        queue_service.channel.basic_publish.reset_mock()
-        queue_service.channel.basic_ack.reset_mock()
-        
-        # Call the message handler
-        message_handler(queue_service.channel, sample_rabbitmq_method, sample_rabbitmq_properties, message_body)
-        
-        # Verify document was downloaded
-        mock_storage_service.download_document.assert_called_once_with(payload["storage_path"])
-        
-        # Verify OCR processing was performed
-        mock_ocr_service.process_document.assert_called_once()
-        
-        # Verify result was published
-        queue_service.channel.basic_publish.assert_called_once()
-        
-        # Verify message was acknowledged
-        queue_service.channel.basic_ack.assert_called_once_with(delivery_tag=sample_rabbitmq_method.delivery_tag)
-    
-    def test_graceful_shutdown(self, queue_service):
-        """Test that the QueueService shuts down gracefully.
-        
-        This test verifies that the QueueService properly closes the RabbitMQ connection
-        and channel when shutting down, to prevent resource leaks.
-        """
-        # Set up consumer tag
-        queue_service.consumer_tag = "test-consumer"
-        
-        # Close the service
-        queue_service.close()
-        
-        # Verify consumer was canceled
-        queue_service.channel.basic_cancel.assert_called_once_with("test-consumer")
-        
-        # Verify channel was closed
-        queue_service.channel.close.assert_called_once()
-        
-        # Verify connection was closed
-        queue_service.connection.close.assert_called_once()
-        
-        # Verify state was reset
-        assert queue_service.connected is False
-        assert queue_service.channel is None
-        assert queue_service.connection is None
-        assert queue_service.consumer_tag is None
+            # Verify that the message was rejected with requeue
+            mock_rmq_connection.reject_message.assert_called_once_with(method.delivery_tag, requeue=True)
 
 
-if __name__ == "__main__":
-    pytest.main(['-xvs', __file__])
+def test_message_handler_callback_error_max_retries(queue_service_with_mocks):
+    """Test that _message_handler correctly handles callback errors after max retries."""
+    queue_service, mock_rmq_connection = queue_service_with_mocks
+    
+    # Create a mock callback function that raises an exception
+    callback = MagicMock(side_effect=Exception("Processing error"))
+    queue_service.register_callback(callback)
+    
+    # Create mock message components
+    channel = MagicMock()
+    method = MagicMock()
+    method.delivery_tag = "test-tag"
+    properties = MagicMock()
+    properties.message_id = "test-message-id"
+    properties.headers = {}
+    
+    # Create a test message payload
+    payload = {"document_id": "doc-12345"}
+    body = json.dumps(payload).encode('utf-8')
+    
+    # Mock the deserialize_message function
+    with patch('services.queue_service.utils_deserialize_message') as mock_deserialize:
+        mock_deserialize.return_value = (payload, properties.headers)
+        
+        # Mock the get_retry_count function
+        with patch('services.queue_service.get_retry_count') as mock_get_retry_count:
+            mock_get_retry_count.return_value = 3  # Max retries reached
+            
+            # Call the message handler
+            queue_service._message_handler(channel, method, properties, body)
+            
+            # Verify that deserialize_message was called with the correct parameters
+            mock_deserialize.assert_called_once_with(body, properties)
+            
+            # Verify that the callback was called with the correct parameters
+            callback.assert_called_once_with(channel, method, properties, body, payload, properties.headers)
+            
+            # Verify that the message was rejected without requeue
+            mock_rmq_connection.reject_message.assert_called_once_with(method.delivery_tag, requeue=False)
+
+
+# ===== Test Message Publishing =====
+
+def test_publish_message(queue_service_with_mocks):
+    """Test that publish_message correctly publishes messages to RabbitMQ."""
+    queue_service, mock_rmq_connection = queue_service_with_mocks
+    
+    # Create a test message payload
+    payload = {
+        "document_id": "doc-12345",
+        "document_type": "APPLICATION",
+        "storage_path": "mca-documents-staging/applications/doc-12345.pdf",
+        "application_id": "app-12345"
+    }
+    
+    # Create test headers
+    headers = {"source": "ocr-service"}
+    
+    # Mock the serialize_message function
+    with patch('services.queue_service.utils_serialize_message') as mock_serialize:
+        mock_serialize.return_value = (json.dumps(payload).encode('utf-8'), headers)
+        
+        # Publish the message
+        result = queue_service.publish_message(
+            exchange="mca.data.processing.test",
+            routing_key="data.extraction.complete",
+            payload=payload,
+            headers=headers
+        )
+        
+        # Verify that the publish_message method was successful
+        assert result.success is True
+        
+        # Verify that the connection was ensured
+        mock_rmq_connection.ensure_connection.assert_called_once()
+        
+        # Verify that serialize_message was called with the correct parameters
+        mock_serialize.assert_called_once_with(payload, headers)
+        
+        # Verify that publish_message was called with the correct parameters
+        mock_rmq_connection.publish_message.assert_called_once_with(
+            exchange="mca.data.processing.test",
+            routing_key="data.extraction.complete",
+            body=mock_serialize.return_value[0],
+            headers=headers,
+            options=None
+        )
+
+
+def test_publish_message_connection_error(queue_service_with_mocks):
+    """Test that publish_message correctly handles connection errors."""
+    queue_service, mock_rmq_connection = queue_service_with_mocks
+    
+    # Configure the mock connection to raise an exception
+    mock_rmq_connection.ensure_connection.side_effect = AMQPConnectionError("Connection refused")
+    
+    # Create a test message payload
+    payload = {"document_id": "doc-12345"}
+    
+    # Publish the message
+    result = queue_service.publish_message(
+        exchange="mca.data.processing.test",
+        routing_key="data.extraction.complete",
+        payload=payload
+    )
+    
+    # Verify that the publish_message method failed
+    assert result.success is False
+    assert isinstance(result.error, AMQPConnectionError)
+    assert "Connection refused" in str(result.error)
+    
+    # Verify that the connection was attempted
+    mock_rmq_connection.ensure_connection.assert_called_once()
+    
+    # Verify that publish_message was not called
+    mock_rmq_connection.publish_message.assert_not_called()
+
+
+def test_publish_message_channel_error(queue_service_with_mocks):
+    """Test that publish_message correctly handles channel errors."""
+    queue_service, mock_rmq_connection = queue_service_with_mocks
+    
+    # Configure the mock connection to raise an exception on publish
+    mock_rmq_connection.publish_message.side_effect = AMQPChannelError("Channel closed")
+    
+    # Create a test message payload
+    payload = {"document_id": "doc-12345"}
+    
+    # Mock the serialize_message function
+    with patch('services.queue_service.utils_serialize_message') as mock_serialize:
+        mock_serialize.return_value = (json.dumps(payload).encode('utf-8'), {})
+        
+        # Publish the message
+        result = queue_service.publish_message(
+            exchange="mca.data.processing.test",
+            routing_key="data.extraction.complete",
+            payload=payload
+        )
+        
+        # Verify that the publish_message method failed
+        assert result.success is False
+        assert isinstance(result.error, AMQPChannelError)
+        assert "Channel closed" in str(result.error)
+        
+        # Verify that the connection was ensured
+        mock_rmq_connection.ensure_connection.assert_called_once()
+        
+        # Verify that serialize_message was called
+        mock_serialize.assert_called_once()
+        
+        # Verify that publish_message was called
+        mock_rmq_connection.publish_message.assert_called_once()
+
+
+def test_publish_extraction_results(queue_service_with_mocks):
+    """Test that publish_extraction_results correctly publishes extraction results."""
+    queue_service, mock_rmq_connection = queue_service_with_mocks
+    
+    # Mock the publish_message method
+    with patch.object(queue_service, 'publish_message') as mock_publish_message:
+        mock_publish_message.return_value = Result.ok(True)
+        
+        # Publish extraction results
+        result = queue_service.publish_extraction_results(
+            document_id="doc-12345",
+            application_id="app-12345",
+            storage_path="mca-documents-staging/applications/doc-12345.pdf",
+            extraction_results={
+                "business_name": "Dollar Funding LLC",
+                "tax_id": "12-3456789",
+                "address": "123 Main St, New York, NY 10001",
+                "requested_amount": "50000"
+            },
+            confidence_scores={
+                "business_name": 0.98,
+                "tax_id": 0.95,
+                "address": 0.92,
+                "requested_amount": 0.97
+            },
+            document_type="APPLICATION",
+            processing_time_ms=1250.0,
+            requires_verification=False
+        )
+        
+        # Verify that the publish_extraction_results method was successful
+        assert result.success is True
+        
+        # Verify that publish_message was called with the correct parameters
+        mock_publish_message.assert_called_once()
+        call_args = mock_publish_message.call_args[1]
+        
+        assert call_args["exchange"] == "mca.data.processing"
+        assert call_args["routing_key"] == "data.extraction.complete"
+        
+        # Verify payload contents
+        payload = call_args["payload"]
+        assert payload["document_id"] == "doc-12345"
+        assert payload["document_type"] == "APPLICATION"
+        assert payload["application_id"] == "app-12345"
+        assert payload["storage_path"] == "mca-documents-staging/applications/doc-12345.pdf"
+        assert payload["content_type"] == "application/json"
+        assert payload["source_service"] == "ocr-service"
+        assert payload["status"] == MessageStatus.COMPLETED.value
+        assert payload["extraction_results"] == {
+            "business_name": "Dollar Funding LLC",
+            "tax_id": "12-3456789",
+            "address": "123 Main St, New York, NY 10001",
+            "requested_amount": "50000"
+        }
+        assert payload["confidence_scores"] == {
+            "business_name": 0.98,
+            "tax_id": 0.95,
+            "address": 0.92,
+            "requested_amount": 0.97
+        }
+        assert payload["processing_time_ms"] == 1250.0
+        assert payload["requires_verification"] is False
+
+
+def test_publish_extraction_results_with_verification(queue_service_with_mocks):
+    """Test that publish_extraction_results correctly handles verification flags."""
+    queue_service, mock_rmq_connection = queue_service_with_mocks
+    
+    # Mock the publish_message method
+    with patch.object(queue_service, 'publish_message') as mock_publish_message:
+        mock_publish_message.return_value = Result.ok(True)
+        
+        # Publish extraction results with verification required
+        result = queue_service.publish_extraction_results(
+            document_id="doc-12345",
+            application_id="app-12345",
+            storage_path="mca-documents-staging/applications/doc-12345.pdf",
+            extraction_results={
+                "business_name": "Dollar Funding LLC",
+                "tax_id": "12-3456789",
+                "address": "123 Main St, New York, NY 10001",
+                "requested_amount": "50000"
+            },
+            confidence_scores={
+                "business_name": 0.98,
+                "tax_id": 0.65,  # Low confidence
+                "address": 0.92,
+                "requested_amount": 0.97
+            },
+            document_type="APPLICATION",
+            processing_time_ms=1250.0,
+            requires_verification=True,
+            verification_fields=["tax_id"]
+        )
+        
+        # Verify that the publish_extraction_results method was successful
+        assert result.success is True
+        
+        # Verify that publish_message was called with the correct parameters
+        mock_publish_message.assert_called_once()
+        call_args = mock_publish_message.call_args[1]
+        
+        # Verify payload contents
+        payload = call_args["payload"]
+        assert payload["requires_verification"] is True
+        assert payload["verification_fields"] == ["tax_id"]
+
+
+def test_publish_extraction_error(queue_service_with_mocks):
+    """Test that publish_extraction_error correctly publishes error information."""
+    queue_service, mock_rmq_connection = queue_service_with_mocks
+    
+    # Mock the publish_message method
+    with patch.object(queue_service, 'publish_message') as mock_publish_message:
+        mock_publish_message.return_value = Result.ok(True)
+        
+        # Publish extraction error
+        result = queue_service.publish_extraction_error(
+            document_id="doc-12345",
+            application_id="app-12345",
+            storage_path="mca-documents-staging/applications/doc-12345.pdf",
+            error={
+                "code": "OCR_PROCESSING_ERROR",
+                "message": "Failed to extract text from document",
+                "details": "Document is corrupted or contains no readable text"
+            },
+            document_type="APPLICATION"
+        )
+        
+        # Verify that the publish_extraction_error method was successful
+        assert result.success is True
+        
+        # Verify that publish_message was called with the correct parameters
+        mock_publish_message.assert_called_once()
+        call_args = mock_publish_message.call_args[1]
+        
+        assert call_args["exchange"] == "mca.data.processing"
+        assert call_args["routing_key"] == "data.extraction.error"
+        
+        # Verify payload contents
+        payload = call_args["payload"]
+        assert payload["document_id"] == "doc-12345"
+        assert payload["document_type"] == "APPLICATION"
+        assert payload["application_id"] == "app-12345"
+        assert payload["storage_path"] == "mca-documents-staging/applications/doc-12345.pdf"
+        assert payload["content_type"] == "application/json"
+        assert payload["source_service"] == "ocr-service"
+        assert payload["status"] == MessageStatus.FAILED.value
+        assert payload["error"] == {
+            "code": "OCR_PROCESSING_ERROR",
+            "message": "Failed to extract text from document",
+            "details": "Document is corrupted or contains no readable text"
+        }
+
+
+# ===== Test End-to-End Message Flow =====
+
+def test_end_to_end_message_flow(queue_service_with_mocks, mock_ocr_service, mock_storage_service):
+    """Test the end-to-end flow of messages through the OCR Service."""
+    queue_service, mock_rmq_connection = queue_service_with_mocks
+    
+    # Create a test document processing callback
+    def document_processing_callback(channel, method, properties, body, payload, headers):
+        # Extract document information
+        document_id = payload.get("document_id")
+        document_type = payload.get("document_type")
+        storage_path = payload.get("storage_path")
+        application_id = payload.get("application_id")
+        
+        # Simulate document processing
+        extraction_results = {
+            "business_name": "Dollar Funding LLC",
+            "tax_id": "12-3456789",
+            "address": "123 Main St, New York, NY 10001",
+            "requested_amount": "50000"
+        }
+        confidence_scores = {
+            "business_name": 0.98,
+            "tax_id": 0.95,
+            "address": 0.92,
+            "requested_amount": 0.97
+        }
+        
+        # Publish extraction results
+        queue_service.publish_extraction_results(
+            document_id=document_id,
+            application_id=application_id,
+            storage_path=storage_path,
+            extraction_results=extraction_results,
+            confidence_scores=confidence_scores,
+            document_type=document_type,
+            processing_time_ms=1250.0,
+            requires_verification=False
+        )
+    
+    # Register the callback
+    queue_service.register_callback(document_processing_callback)
+    
+    # Mock the publish_extraction_results method
+    with patch.object(queue_service, 'publish_extraction_results') as mock_publish_results:
+        mock_publish_results.return_value = Result.ok(True)
+        
+        # Create mock message components
+        channel = MagicMock()
+        method = MagicMock()
+        method.delivery_tag = "test-tag"
+        properties = MagicMock()
+        properties.message_id = "test-message-id"
+        properties.headers = {"source": "document-service"}
+        
+        # Create a test message payload
+        payload = {
+            "document_id": "doc-12345",
+            "document_type": "APPLICATION",
+            "storage_path": "mca-documents-staging/applications/doc-12345.pdf",
+            "application_id": "app-12345"
+        }
+        body = json.dumps(payload).encode('utf-8')
+        
+        # Mock the deserialize_message function
+        with patch('services.queue_service.utils_deserialize_message') as mock_deserialize:
+            mock_deserialize.return_value = (payload, properties.headers)
+            
+            # Call the message handler
+            queue_service._message_handler(channel, method, properties, body)
+            
+            # Verify that deserialize_message was called
+            mock_deserialize.assert_called_once()
+            
+            # Verify that publish_extraction_results was called with the correct parameters
+            mock_publish_results.assert_called_once_with(
+                document_id="doc-12345",
+                application_id="app-12345",
+                storage_path="mca-documents-staging/applications/doc-12345.pdf",
+                extraction_results={
+                    "business_name": "Dollar Funding LLC",
+                    "tax_id": "12-3456789",
+                    "address": "123 Main St, New York, NY 10001",
+                    "requested_amount": "50000"
+                },
+                confidence_scores={
+                    "business_name": 0.98,
+                    "tax_id": 0.95,
+                    "address": 0.92,
+                    "requested_amount": 0.97
+                },
+                document_type="APPLICATION",
+                processing_time_ms=1250.0,
+                requires_verification=False
+            )
+            
+            # Verify that the message was acknowledged
+            mock_rmq_connection.acknowledge_message.assert_called_once_with(method.delivery_tag)
+
+
+def test_end_to_end_error_handling(queue_service_with_mocks, mock_ocr_service, mock_storage_service):
+    """Test the end-to-end error handling in the OCR Service."""
+    queue_service, mock_rmq_connection = queue_service_with_mocks
+    
+    # Create a test document processing callback that raises an exception
+    def document_processing_callback(channel, method, properties, body, payload, headers):
+        # Simulate a processing error
+        raise Exception("Document processing failed: Unreadable content")
+    
+    # Register the callback
+    queue_service.register_callback(document_processing_callback)
+    
+    # Create mock message components
+    channel = MagicMock()
+    method = MagicMock()
+    method.delivery_tag = "test-tag"
+    properties = MagicMock()
+    properties.message_id = "test-message-id"
+    properties.headers = {"source": "document-service"}
+    
+    # Create a test message payload
+    payload = {
+        "document_id": "doc-12345",
+        "document_type": "APPLICATION",
+        "storage_path": "mca-documents-staging/applications/doc-12345.pdf",
+        "application_id": "app-12345"
+    }
+    body = json.dumps(payload).encode('utf-8')
+    
+    # Mock the deserialize_message function
+    with patch('services.queue_service.utils_deserialize_message') as mock_deserialize:
+        mock_deserialize.return_value = (payload, properties.headers)
+        
+        # Mock the get_retry_count function
+        with patch('services.queue_service.get_retry_count') as mock_get_retry_count:
+            mock_get_retry_count.return_value = 0  # First attempt
+            
+            # Call the message handler
+            queue_service._message_handler(channel, method, properties, body)
+            
+            # Verify that deserialize_message was called
+            mock_deserialize.assert_called_once()
+            
+            # Verify that the message was rejected with requeue
+            mock_rmq_connection.reject_message.assert_called_once_with(method.delivery_tag, requeue=True)
+
+
+# ===== Test TLS Configuration =====
+
+def test_tls_configuration(mock_rabbitmq_config):
+    """Test that TLS is correctly configured for RabbitMQ connections."""
+    with patch('services.queue_service.RabbitMQConnection') as MockRabbitMQConnection:
+        # Create a mock RabbitMQConnection
+        mock_connection = MagicMock()
+        MockRabbitMQConnection.return_value = mock_connection
+        
+        # Initialize QueueService
+        queue_service = QueueService(config=mock_rabbitmq_config)
+        
+        # Verify that RabbitMQConnection was initialized with the correct config
+        MockRabbitMQConnection.assert_called_once_with(mock_rabbitmq_config)
+        
+        # Verify TLS configuration
+        assert mock_rabbitmq_config.ca_cert_path == "/path/to/ca.pem"
+        assert mock_rabbitmq_config.client_cert_path == "/path/to/client.pem"
+        assert mock_rabbitmq_config.client_key_path == "/path/to/client.key"
+        assert mock_rabbitmq_config.cert_password == "test-cert-password"
+
+
+# ===== Test Integration with OCR Service Application =====
+
+def test_integration_with_app(mock_app, queue_service_with_mocks):
+    """Test integration of QueueService with the OCR Service application."""
+    queue_service, mock_rmq_connection = queue_service_with_mocks
+    app = mock_app
+    
+    # Set the queue_service on the app
+    app.queue_service = queue_service
+    
+    # Create a test message callback
+    def test_callback(channel, method, properties, body, payload, headers):
+        # Process the document
+        app.process_document(
+            document_id=payload.get("document_id"),
+            document_type=payload.get("document_type"),
+            storage_path=payload.get("storage_path"),
+            application_id=payload.get("application_id")
+        )
+    
+    # Register the callback
+    queue_service.register_callback(test_callback)
+    
+    # Create mock message components
+    channel = MagicMock()
+    method = MagicMock()
+    method.delivery_tag = "test-tag"
+    properties = MagicMock()
+    properties.message_id = "test-message-id"
+    properties.headers = {"source": "document-service"}
+    
+    # Create a test message payload
+    payload = {
+        "document_id": "doc-12345",
+        "document_type": "APPLICATION",
+        "storage_path": "mca-documents-staging/applications/doc-12345.pdf",
+        "application_id": "app-12345"
+    }
+    body = json.dumps(payload).encode('utf-8')
+    
+    # Mock the deserialize_message function
+    with patch('services.queue_service.utils_deserialize_message') as mock_deserialize:
+        mock_deserialize.return_value = (payload, properties.headers)
+        
+        # Call the message handler
+        queue_service._message_handler(channel, method, properties, body)
+        
+        # Verify that deserialize_message was called
+        mock_deserialize.assert_called_once()
+        
+        # Verify that process_document was called with the correct parameters
+        app.process_document.assert_called_once_with(
+            document_id="doc-12345",
+            document_type="APPLICATION",
+            storage_path="mca-documents-staging/applications/doc-12345.pdf",
+            application_id="app-12345"
+        )
+        
+        # Verify that the message was acknowledged
+        mock_rmq_connection.acknowledge_message.assert_called_once_with(method.delivery_tag)
