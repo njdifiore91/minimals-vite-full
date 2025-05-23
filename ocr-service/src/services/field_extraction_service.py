@@ -1,1328 +1,1607 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
-"""
-Field Extraction Service for OCR results.
-
-This module provides functionality for extracting structured data from OCR results,
-identifying key-value pairs, and applying structure recognition to forms, tables,
-and document sections. It transforms raw OCR text into structured JSON data for
-downstream processing.
-"""
+# ocr-service/src/services/field_extraction_service.py
 
 import logging
-import re
+from typing import Dict, List, Optional, Tuple, Any, Union
 import json
-from datetime import datetime
-from typing import Dict, List, Optional, Tuple, Any, Set, Union
-from uuid import uuid4
+import re
 
+import tensorflow as tf
 import numpy as np
 
-from ..config import app_config
 from ..types.extraction import (
-    ConfidenceScore,
-    ExtractedData,
-    ExtractedField,
-    TableData,
-    FieldLocation,
+    ExtractedField, 
+    ConfidenceScore, 
+    ExtractedData, 
+    FieldLocation, 
     ExtractionMetadata,
-    JSONSchema,
-    JSONSchemaRegistry,
-    FieldType
+    JSONSchema
 )
-from ..types.documents import DocumentType, Document
-from ..utils.text_utils import (
-    clean_text,
-    normalize_text,
-    correct_ocr_errors,
-    extract_key_value_pairs,
-    normalize_key,
-    extract_tables,
-    extract_sections,
-    validate_field,
-    normalize_business_terms,
-    DOCUMENT_TYPE_FIELDS
-)
-from ..utils.logging_utils import get_logger
+from ..types.models import OCRModelType, ModelResult
+from ..types.errors import ServiceError, ErrorCategory, Result
+from ..types.config import ConfigDict
 
+from ..utils.logging_utils import log_with_context
+from ..utils.text_utils import clean_text, normalize_field_value
+from ..utils.error_utils import create_error
+from ..utils.validation_utils import validate_field_value
+
+from ..models.structure_recognition_model import StructureRecognitionModel
+
+logger = logging.getLogger(__name__)
 
 class FieldExtractionService:
-    """Service for extracting structured data from OCR results.
+    """
+    Service for extracting structured data from OCR results.
     
     This service is responsible for:
-    1. Extracting key-value pairs from OCR text
-    2. Recognizing document structure (forms, tables, sections)
-    3. Applying document type-specific extraction rules
-    4. Normalizing and standardizing extracted fields
-    5. Formatting data as structured JSON
+    1. Identifying document structure (forms, tables, sections)
+    2. Extracting key-value pairs from OCR text
+    3. Normalizing and standardizing field values
+    4. Applying document type-specific extraction rules
+    5. Formatting extracted data as JSON
     6. Validating and correcting extracted fields
     
-    Attributes:
-        logger: Logger instance for this service
-        config: Application configuration
-        document_templates: Templates for different document types
-        field_validators: Validation rules for different field types
+    The service transforms raw OCR text into structured JSON data for downstream processing.
     """
     
-    def __init__(self):
-        """Initialize the FieldExtractionService with configuration settings."""
-        self.logger = get_logger(__name__)
-        self.config = app_config
-        
-        # Load document templates from configuration
-        self.document_templates = self._load_document_templates()
-        
-        # Initialize field validators
-        self.field_validators = self._initialize_field_validators()
-        
-        self.logger.info("FieldExtractionService initialized with %d document templates", 
-                         len(self.document_templates))
-    
-    def _load_document_templates(self) -> Dict[str, Dict[str, Any]]:
-        """Load document templates for different document types.
-        
-        Templates define expected fields, their positions, and validation rules
-        for different document types.
-        
-        Returns:
-            Dictionary mapping document types to their templates
+    def __init__(self, config: ConfigDict):
         """
-        # Default templates if not specified in config
-        default_templates = {
-            DocumentType.APPLICATION.value: {
-                "expected_fields": DOCUMENT_TYPE_FIELDS[DocumentType.APPLICATION],
-                "required_fields": [
-                    "legal_name", "address", "phone", "ein", "requested_amount"
-                ],
-                "field_types": {
-                    "legal_name": FieldType.NAME.value,
-                    "dba_name": FieldType.NAME.value,
-                    "address": FieldType.ADDRESS.value,
-                    "phone": FieldType.PHONE.value,
-                    "email": FieldType.EMAIL.value,
-                    "ein": FieldType.EIN.value,
-                    "industry": FieldType.TEXT.value,
-                    "years_in_business": FieldType.NUMBER.value,
-                    "monthly_revenue": FieldType.CURRENCY.value,
-                    "requested_amount": FieldType.CURRENCY.value
-                }
-            },
-            DocumentType.TAX_RETURN.value: {
-                "expected_fields": DOCUMENT_TYPE_FIELDS[DocumentType.TAX_RETURN],
-                "required_fields": [
-                    "tax_year", "business_name", "ein", "gross_receipts", "total_income"
-                ],
-                "field_types": {
-                    "tax_year": FieldType.TEXT.value,
-                    "business_name": FieldType.NAME.value,
-                    "ein": FieldType.EIN.value,
-                    "gross_receipts": FieldType.CURRENCY.value,
-                    "total_income": FieldType.CURRENCY.value,
-                    "total_deductions": FieldType.CURRENCY.value,
-                    "taxable_income": FieldType.CURRENCY.value,
-                    "total_tax": FieldType.CURRENCY.value
-                }
-            },
-            DocumentType.BANK_STATEMENT.value: {
-                "expected_fields": DOCUMENT_TYPE_FIELDS[DocumentType.BANK_STATEMENT],
-                "required_fields": [
-                    "bank_name", "account_holder", "account_number", "statement_period", 
-                    "opening_balance", "closing_balance"
-                ],
-                "field_types": {
-                    "bank_name": FieldType.NAME.value,
-                    "account_holder": FieldType.NAME.value,
-                    "account_number": FieldType.ACCOUNT_NUMBER.value,
-                    "statement_period": FieldType.DATE.value,
-                    "opening_balance": FieldType.CURRENCY.value,
-                    "closing_balance": FieldType.CURRENCY.value,
-                    "total_deposits": FieldType.CURRENCY.value,
-                    "total_withdrawals": FieldType.CURRENCY.value
-                }
-            },
-            DocumentType.PAY_STUB.value: {
-                "expected_fields": DOCUMENT_TYPE_FIELDS[DocumentType.PAY_STUB],
-                "required_fields": [
-                    "employer_name", "employee_name", "pay_period", "pay_date", 
-                    "gross_pay", "net_pay"
-                ],
-                "field_types": {
-                    "employer_name": FieldType.NAME.value,
-                    "employee_name": FieldType.NAME.value,
-                    "pay_period": FieldType.DATE.value,
-                    "pay_date": FieldType.DATE.value,
-                    "gross_pay": FieldType.CURRENCY.value,
-                    "net_pay": FieldType.CURRENCY.value,
-                    "ytd_gross": FieldType.CURRENCY.value,
-                    "ytd_net": FieldType.CURRENCY.value
-                }
-            },
-            DocumentType.ID_DOCUMENT.value: {
-                "expected_fields": DOCUMENT_TYPE_FIELDS[DocumentType.ID_DOCUMENT],
-                "required_fields": [
-                    "document_type", "id_number", "full_name", "date_of_birth"
-                ],
-                "field_types": {
-                    "document_type": FieldType.TEXT.value,
-                    "id_number": FieldType.TEXT.value,
-                    "full_name": FieldType.NAME.value,
-                    "address": FieldType.ADDRESS.value,
-                    "date_of_birth": FieldType.DATE.value,
-                    "issue_date": FieldType.DATE.value,
-                    "expiration_date": FieldType.DATE.value
-                }
-            }
-        }
-        
-        # Try to load from config, fall back to defaults if not found
-        try:
-            templates = getattr(self.config, 'document_templates', None)
-            if not templates:
-                return default_templates
-            return templates
-        except (AttributeError, KeyError):
-            self.logger.warning("Document templates not found in config, using defaults")
-            return default_templates
-    
-    def _initialize_field_validators(self) -> Dict[str, callable]:
-        """Initialize field validators for different field types.
-        
-        Returns:
-            Dictionary mapping field types to validator functions
-        """
-        return {
-            FieldType.EMAIL.value: self._validate_email,
-            FieldType.PHONE.value: self._validate_phone,
-            FieldType.DATE.value: self._validate_date,
-            FieldType.CURRENCY.value: self._validate_currency,
-            FieldType.PERCENTAGE.value: self._validate_percentage,
-            FieldType.NAME.value: self._validate_name,
-            FieldType.ADDRESS.value: self._validate_address,
-            FieldType.EIN.value: self._validate_ein,
-            FieldType.SSN.value: self._validate_ssn,
-            FieldType.ACCOUNT_NUMBER.value: self._validate_account_number,
-            FieldType.NUMBER.value: self._validate_number,
-            FieldType.CHECKBOX.value: self._validate_checkbox,
-            FieldType.TEXT.value: self._validate_text  # Default validator
-        }
-    
-    def extract_fields_from_text(self, text: str, document_type: DocumentType) -> ExtractedData:
-        """Extract structured fields from OCR text based on document type.
-        
-        This is the main entry point for field extraction, which orchestrates the
-        extraction process based on document type and structure.
+        Initialize the FieldExtractionService with configuration.
         
         Args:
-            text: Raw OCR text to process
-            document_type: Type of document for specialized extraction
+            config: Configuration dictionary containing extraction settings
+        """
+        self.config = config
+        self.structure_model = StructureRecognitionModel(config)
+        
+        # Load document type-specific extraction templates
+        self.extraction_templates = self._load_extraction_templates()
+        
+        # Field normalization rules
+        self.normalization_rules = self._load_normalization_rules()
+        
+        # Field validation rules
+        self.validation_rules = self._load_validation_rules()
+        
+        # Regular expressions for common field patterns
+        self.field_patterns = self._load_field_patterns()
+        
+        log_with_context(logger.info, "FieldExtractionService initialized")
+    
+    def extract_structured_data(self, ocr_result: ModelResult, document_type: str) -> Result[ExtractedData]:
+        """
+        Extract structured data from OCR results based on document type.
+        
+        Args:
+            ocr_result: The raw OCR result containing extracted text and metadata
+            document_type: The type of document (e.g., 'loan_application', 'tax_return')
             
         Returns:
-            ExtractedData object containing structured fields and metadata
+            Result containing ExtractedData with structured fields or an error
         """
-        self.logger.info("Extracting fields from %s document", document_type.value)
+        try:
+            log_with_context(logger.info, f"Extracting structured data for document type: {document_type}")
+            
+            # Recognize document structure (forms, tables, sections)
+            structure_result = self.recognize_structure(ocr_result, document_type)
+            if isinstance(structure_result, ServiceError):
+                return structure_result
+            
+            document_structure = structure_result
+            
+            # Extract fields based on document structure and type
+            extraction_result = self._extract_fields_by_document_type(
+                ocr_result, 
+                document_structure, 
+                document_type
+            )
+            if isinstance(extraction_result, ServiceError):
+                return extraction_result
+                
+            extracted_fields = extraction_result
+            
+            # Normalize and standardize field values
+            normalized_fields = self._normalize_fields(extracted_fields, document_type)
+            
+            # Validate extracted fields
+            validated_fields = self._validate_fields(normalized_fields, document_type)
+            
+            # Format as JSON with proper schema
+            formatted_data = self._format_as_json(validated_fields, document_type)
+            
+            log_with_context(
+                logger.info, 
+                f"Successfully extracted {len(validated_fields)} fields from {document_type}"
+            )
+            
+            return formatted_data
+        except Exception as e:
+            error = create_error(
+                ErrorCategory.PROCESSING_ERROR,
+                f"Failed to extract structured data: {str(e)}",
+                exception=e
+            )
+            log_with_context(logger.error, error.message, error=error)
+            return error
+    
+    def recognize_structure(self, ocr_result: ModelResult, document_type: str) -> Result[Dict[str, Any]]:
+        """
+        Recognize the structure of a document including forms, tables, and sections.
         
-        # Clean and normalize the text
-        cleaned_text = clean_text(text)
+        Args:
+            ocr_result: The raw OCR result containing extracted text and metadata
+            document_type: The type of document
+            
+        Returns:
+            Result containing document structure information or an error
+        """
+        try:
+            log_with_context(logger.info, f"Recognizing structure for document type: {document_type}")
+            
+            # Use the structure recognition model to identify document components
+            structure = self.structure_model.recognize(ocr_result.text, document_type)
+            
+            # Extract forms from the document
+            forms = self._identify_forms(structure, ocr_result.text)
+            
+            # Extract tables from the document
+            tables = self._identify_tables(structure, ocr_result.text)
+            
+            # Extract sections from the document
+            sections = self._identify_sections(structure, ocr_result.text)
+            
+            document_structure = {
+                "forms": forms,
+                "tables": tables,
+                "sections": sections,
+                "page_count": ocr_result.metadata.get("page_count", 1),
+                "orientation": ocr_result.metadata.get("orientation", "portrait"),
+                "language": ocr_result.metadata.get("language", "en")
+            }
+            
+            log_with_context(
+                logger.info, 
+                f"Structure recognition complete: {len(forms)} forms, {len(tables)} tables, {len(sections)} sections"
+            )
+            
+            return document_structure
+        except Exception as e:
+            error = create_error(
+                ErrorCategory.PROCESSING_ERROR,
+                f"Failed to recognize document structure: {str(e)}",
+                exception=e
+            )
+            log_with_context(logger.error, error.message, error=error)
+            return error
+    
+    def extract_key_value_pairs(self, text: str, document_type: str) -> List[Tuple[str, str, ConfidenceScore]]:
+        """
+        Extract key-value pairs from OCR text.
         
-        # Extract document sections for context
-        sections = extract_sections(cleaned_text)
+        Args:
+            text: The OCR text to extract key-value pairs from
+            document_type: The type of document
+            
+        Returns:
+            List of tuples containing (key, value, confidence_score)
+        """
+        log_with_context(logger.info, f"Extracting key-value pairs for document type: {document_type}")
         
-        # Extract tables from the document
-        tables = self._extract_and_process_tables(cleaned_text, document_type)
+        key_value_pairs = []
         
-        # Extract key-value pairs from the text
-        key_value_pairs = extract_key_value_pairs(cleaned_text)
+        # Get document-specific patterns for key-value extraction
+        patterns = self.field_patterns.get(document_type, self.field_patterns.get("default", {}))
         
-        # Process extracted fields based on document type
-        fields = self._process_extracted_fields(key_value_pairs, document_type, sections)
+        # Apply general key-value extraction for labeled fields
+        # Pattern: Key: Value or Key - Value
+        general_kv_pattern = r"([\w\s\-&]+)[:|-]\s*([\w\s\-\.,;\$%#@!\(\)\/'"]+)"
+        matches = re.finditer(general_kv_pattern, text)
         
+        for match in matches:
+            key = match.group(1).strip()
+            value = match.group(2).strip()
+            
+            # Skip if key or value is too short
+            if len(key) < 2 or len(value) < 1:
+                continue
+                
+            # Calculate confidence based on pattern match quality
+            confidence = self._calculate_key_value_confidence(key, value, document_type)
+            
+            key_value_pairs.append((key, value, confidence))
+        
+        # Apply document-specific patterns for known fields
+        for field_name, pattern in patterns.items():
+            matches = re.finditer(pattern, text)
+            for match in matches:
+                if match.lastindex and match.lastindex >= 1:
+                    value = match.group(1).strip()
+                    # Calculate confidence based on pattern match quality
+                    confidence = self._calculate_pattern_match_confidence(match, pattern)
+                    key_value_pairs.append((field_name, value, confidence))
+        
+        log_with_context(logger.info, f"Extracted {len(key_value_pairs)} key-value pairs")
+        return key_value_pairs
+    
+    def extract_table_data(self, table_structure: Dict[str, Any], text: str) -> List[Dict[str, Any]]:
+        """
+        Extract structured data from tables identified in the document.
+        
+        Args:
+            table_structure: The structure information for the table
+            text: The OCR text containing the table
+            
+        Returns:
+            List of dictionaries representing table rows with column values
+        """
+        log_with_context(logger.info, "Extracting data from table structure")
+        
+        table_data = []
+        
+        # Extract table boundaries
+        table_text = text[table_structure["start_idx"]:table_structure["end_idx"]]
+        
+        # Extract header row to identify columns
+        headers = table_structure.get("headers", [])
+        if not headers and "header_row" in table_structure:
+            header_text = table_text[table_structure["header_row"]["start_idx"]:table_structure["header_row"]["end_idx"]]
+            headers = self._extract_table_headers(header_text)
+        
+        # Extract data rows
+        rows = table_structure.get("rows", [])
+        for row in rows:
+            row_text = table_text[row["start_idx"]:row["end_idx"]]
+            row_data = self._extract_row_data(row_text, headers, table_structure)
+            if row_data:
+                table_data.append(row_data)
+        
+        log_with_context(logger.info, f"Extracted {len(table_data)} rows from table")
+        return table_data
+    
+    def _extract_fields_by_document_type(self, 
+                                        ocr_result: ModelResult, 
+                                        document_structure: Dict[str, Any], 
+                                        document_type: str) -> Result[List[ExtractedField]]:
+        """
+        Extract fields based on document type and structure.
+        
+        Args:
+            ocr_result: The raw OCR result
+            document_structure: The recognized document structure
+            document_type: The type of document
+            
+        Returns:
+            Result containing list of extracted fields or an error
+        """
+        try:
+            extracted_fields = []
+            
+            # Get document template if available
+            template = self.extraction_templates.get(document_type)
+            
+            # Extract key-value pairs from the entire document
+            key_value_pairs = self.extract_key_value_pairs(ocr_result.text, document_type)
+            
+            # Convert key-value pairs to ExtractedField objects
+            for key, value, confidence in key_value_pairs:
+                # Map to standardized field name if template is available
+                field_name = key
+                if template and key in template.get("field_mapping", {}):
+                    field_name = template["field_mapping"][key]
+                
+                # Create field location (approximate based on text search)
+                location = self._find_field_location(key, value, ocr_result.text)
+                
+                extracted_fields.append(ExtractedField(
+                    name=field_name,
+                    value=value,
+                    confidence=confidence,
+                    location=location,
+                    metadata={
+                        "source": "key_value_extraction",
+                        "original_name": key if field_name != key else None
+                    }
+                ))
+            
+            # Extract fields from forms
+            for form in document_structure.get("forms", []):
+                form_fields = self._extract_form_fields(form, ocr_result.text, document_type)
+                extracted_fields.extend(form_fields)
+            
+            # Extract fields from tables
+            for table in document_structure.get("tables", []):
+                table_data = self.extract_table_data(table, ocr_result.text)
+                # Store table data as a special field
+                if table_data:
+                    table_name = table.get("name", f"table_{len(extracted_fields)}")
+                    extracted_fields.append(ExtractedField(
+                        name=table_name,
+                        value=json.dumps(table_data),  # Store as JSON string
+                        confidence=ConfidenceScore(0.9),  # Tables typically have high confidence
+                        location=FieldLocation(
+                            page=table.get("page", 0),
+                            x=table.get("x", 0),
+                            y=table.get("y", 0),
+                            width=table.get("width", 0),
+                            height=table.get("height", 0)
+                        ),
+                        metadata={
+                            "source": "table_extraction",
+                            "row_count": len(table_data),
+                            "is_table": True
+                        }
+                    ))
+            
+            # Apply document-specific extraction logic
+            if document_type == "loan_application":
+                loan_fields = self._extract_loan_application_fields(ocr_result.text, document_structure)
+                extracted_fields.extend(loan_fields)
+            elif document_type == "tax_return":
+                tax_fields = self._extract_tax_return_fields(ocr_result.text, document_structure)
+                extracted_fields.extend(tax_fields)
+            elif document_type == "bank_statement":
+                bank_fields = self._extract_bank_statement_fields(ocr_result.text, document_structure)
+                extracted_fields.extend(bank_fields)
+            elif document_type == "identity_document":
+                id_fields = self._extract_identity_document_fields(ocr_result.text, document_structure)
+                extracted_fields.extend(id_fields)
+            
+            # Remove duplicate fields (prefer higher confidence)
+            deduplicated_fields = self._deduplicate_fields(extracted_fields)
+            
+            log_with_context(
+                logger.info, 
+                f"Extracted {len(deduplicated_fields)} fields for document type {document_type}"
+            )
+            
+            return deduplicated_fields
+        except Exception as e:
+            error = create_error(
+                ErrorCategory.PROCESSING_ERROR,
+                f"Failed to extract fields for document type {document_type}: {str(e)}",
+                exception=e
+            )
+            log_with_context(logger.error, error.message, error=error)
+            return error
+    
+    def _normalize_fields(self, fields: List[ExtractedField], document_type: str) -> List[ExtractedField]:
+        """
+        Normalize and standardize field values based on field type and document type.
+        
+        Args:
+            fields: List of extracted fields
+            document_type: The type of document
+            
+        Returns:
+            List of normalized fields
+        """
+        log_with_context(logger.info, f"Normalizing {len(fields)} fields for document type {document_type}")
+        
+        normalized_fields = []
+        
+        # Get normalization rules for this document type
+        type_rules = self.normalization_rules.get(document_type, {})
+        default_rules = self.normalization_rules.get("default", {})
+        
+        for field in fields:
+            # Skip table fields (already in structured format)
+            if field.metadata.get("is_table", False):
+                normalized_fields.append(field)
+                continue
+                
+            # Get field-specific normalization rule
+            rule = type_rules.get(field.name, default_rules.get(field.name))
+            
+            if rule:
+                field_type = rule.get("type", "string")
+                format_spec = rule.get("format")
+                
+                # Apply normalization based on field type
+                normalized_value = normalize_field_value(field.value, field_type, format_spec)
+                
+                # Create new field with normalized value
+                normalized_field = ExtractedField(
+                    name=field.name,
+                    value=normalized_value,
+                    confidence=field.confidence,
+                    location=field.location,
+                    metadata={
+                        **field.metadata,
+                        "original_value": field.value if normalized_value != field.value else None,
+                        "normalized": True,
+                        "field_type": field_type
+                    }
+                )
+                normalized_fields.append(normalized_field)
+            else:
+                # No specific rule, just clean the text
+                cleaned_value = clean_text(field.value)
+                if cleaned_value != field.value:
+                    field.metadata["original_value"] = field.value
+                    field.value = cleaned_value
+                    field.metadata["normalized"] = True
+                normalized_fields.append(field)
+        
+        log_with_context(logger.info, f"Normalized {len(normalized_fields)} fields")
+        return normalized_fields
+    
+    def _validate_fields(self, fields: List[ExtractedField], document_type: str) -> List[ExtractedField]:
+        """
+        Validate extracted fields and attempt to correct errors.
+        
+        Args:
+            fields: List of normalized fields
+            document_type: The type of document
+            
+        Returns:
+            List of validated fields
+        """
+        log_with_context(logger.info, f"Validating {len(fields)} fields for document type {document_type}")
+        
+        validated_fields = []
+        
+        # Get validation rules for this document type
+        type_rules = self.validation_rules.get(document_type, {})
+        default_rules = self.validation_rules.get("default", {})
+        
+        for field in fields:
+            # Skip table fields (handled separately)
+            if field.metadata.get("is_table", False):
+                validated_fields.append(field)
+                continue
+                
+            # Get field-specific validation rule
+            rule = type_rules.get(field.name, default_rules.get(field.name))
+            
+            if rule:
+                field_type = field.metadata.get("field_type", rule.get("type", "string"))
+                constraints = rule.get("constraints", {})
+                
+                # Validate field value
+                is_valid, corrected_value, validation_message = validate_field_value(
+                    field.value, field_type, constraints
+                )
+                
+                if is_valid:
+                    # Field is valid, no changes needed
+                    if validation_message:
+                        field.metadata["validation_message"] = validation_message
+                    validated_fields.append(field)
+                elif corrected_value is not None:
+                    # Field was corrected
+                    corrected_field = ExtractedField(
+                        name=field.name,
+                        value=corrected_value,
+                        confidence=field.confidence * 0.9,  # Reduce confidence slightly for corrected fields
+                        location=field.location,
+                        metadata={
+                            **field.metadata,
+                            "original_value": field.metadata.get("original_value", field.value),
+                            "corrected": True,
+                            "validation_message": validation_message
+                        }
+                    )
+                    validated_fields.append(corrected_field)
+                else:
+                    # Field is invalid and couldn't be corrected
+                    # Mark as low confidence
+                    invalid_field = ExtractedField(
+                        name=field.name,
+                        value=field.value,
+                        confidence=ConfidenceScore(min(field.confidence.value, 0.5)),  # Cap confidence at 0.5
+                        location=field.location,
+                        metadata={
+                            **field.metadata,
+                            "validation_failed": True,
+                            "validation_message": validation_message
+                        }
+                    )
+                    validated_fields.append(invalid_field)
+            else:
+                # No validation rule, keep as is
+                validated_fields.append(field)
+        
+        log_with_context(logger.info, f"Validated {len(validated_fields)} fields")
+        return validated_fields
+    
+    def _format_as_json(self, fields: List[ExtractedField], document_type: str) -> ExtractedData:
+        """
+        Format extracted fields as JSON according to document type schema.
+        
+        Args:
+            fields: List of validated fields
+            document_type: The type of document
+            
+        Returns:
+            ExtractedData object with formatted JSON
+        """
+        log_with_context(logger.info, f"Formatting {len(fields)} fields as JSON for document type {document_type}")
+        
+        # Create a dictionary to hold the structured data
+        data = {}
+        tables = {}
+        metadata = {}
+        
+        # Process regular fields
+        for field in fields:
+            if field.metadata.get("is_table", False):
+                # Handle table data separately
+                tables[field.name] = json.loads(field.value)
+            else:
+                # Add field to appropriate section based on metadata
+                section = field.metadata.get("section", "main")
+                
+                if section not in data:
+                    data[section] = {}
+                    
+                data[section][field.name] = {
+                    "value": field.value,
+                    "confidence": field.confidence.value
+                }
+                
+                # Add metadata if present
+                if field.metadata:
+                    filtered_metadata = {k: v for k, v in field.metadata.items() 
+                                       if k not in ["section", "is_table", "source"] and v is not None}
+                    if filtered_metadata:
+                        data[section][field.name]["metadata"] = filtered_metadata
+        
+        # Add tables to the data structure if present
+        if tables:
+            data["tables"] = tables
+            
         # Create extraction metadata
-        extraction_id = str(uuid4())
-        timestamp = datetime.utcnow().isoformat()
-        
-        # Identify missing and low confidence fields
-        missing_fields, low_confidence_fields = self._identify_field_issues(fields, document_type)
-        
-        # Determine if verification is needed
-        requires_verification = len(low_confidence_fields) > 0 or len(missing_fields) > 0
-        
-        # Create the extraction metadata
-        metadata = ExtractionMetadata(
-            extraction_id=extraction_id,
-            document_id="",  # Will be filled by the calling service
-            model_id="",  # Will be filled by the calling service
-            model_version="",  # Will be filled by the calling service
-            document_type=document_type.value,
-            page_count=1,  # Will be updated by the calling service
-            language="en",  # Default language
-            processing_node="",  # Will be filled by the calling service
-            extraction_status="success" if not missing_fields else "partial",
-            processing_time=0.0,  # Will be updated by the calling service
-            warnings=[f"Missing required field: {field}" for field in missing_fields],
-            errors=[]
+        extraction_metadata = ExtractionMetadata(
+            document_type=document_type,
+            field_count=len(fields),
+            table_count=len(tables),
+            average_confidence=self._calculate_average_confidence(fields),
+            timestamp=self._get_current_timestamp()
         )
         
-        # Create the extracted data
+        # Create JSON schema based on document type
+        schema = self._create_json_schema(document_type, fields)
+        
+        # Create the final ExtractedData object
         extracted_data = ExtractedData(
-            extraction_id=extraction_id,
-            fields=fields,
-            tables=tables,
-            metadata=metadata,
-            raw_text=cleaned_text,
-            low_confidence_fields=low_confidence_fields,
-            requires_verification=requires_verification,
-            extraction_timestamp=timestamp,
-            schema_version="1.0",
-            document_type=document_type.value
+            data=data,
+            metadata=extraction_metadata,
+            schema=schema
         )
         
-        self.logger.info(
-            "Extraction completed: %d fields, %d tables, %d missing fields, %d low confidence fields",
-            len(fields), len(tables), len(missing_fields), len(low_confidence_fields)
-        )
-        
+        log_with_context(logger.info, f"Formatted data as JSON with {len(data)} sections")
         return extracted_data
     
-    def _process_extracted_fields(
-        self, key_value_pairs: List[Tuple[str, str, float]], 
-        document_type: DocumentType,
-        sections: Dict[str, str]
-    ) -> Dict[str, ExtractedField]:
-        """Process extracted key-value pairs into structured fields.
+    def _identify_forms(self, structure: Dict[str, Any], text: str) -> List[Dict[str, Any]]:
+        """
+        Identify forms within the document structure.
         
         Args:
-            key_value_pairs: List of (key, value, confidence) tuples
-            document_type: Type of document for specialized processing
-            sections: Dictionary of document sections for context
+            structure: The document structure from the recognition model
+            text: The OCR text
             
         Returns:
-            Dictionary of field names to ExtractedField objects
+            List of form structures with field information
         """
-        fields = {}
-        template = self.document_templates.get(document_type.value, {})
-        expected_field_types = template.get("field_types", {})
+        forms = []
         
-        # Process each key-value pair
-        for key, value, confidence in key_value_pairs:
-            # Skip empty values
-            if not value.strip():
-                continue
+        # Extract form regions from structure
+        for form_region in structure.get("form_regions", []):
+            form_text = text[form_region["start_idx"]:form_region["end_idx"]]
             
-            # Normalize the key
-            normalized_key = normalize_key(key)
+            # Identify form fields within the form
+            fields = []
+            for field in form_region.get("fields", []):
+                field_text = form_text[field["start_idx"]:field["end_idx"]]
+                
+                # Extract label and value
+                label_text = field_text[:field.get("label_end_idx", 0)].strip()
+                value_text = field_text[field.get("label_end_idx", 0):].strip()
+                
+                fields.append({
+                    "label": label_text,
+                    "value": value_text,
+                    "x": field.get("x", 0),
+                    "y": field.get("y", 0),
+                    "width": field.get("width", 0),
+                    "height": field.get("height", 0),
+                    "page": field.get("page", 0)
+                })
             
-            # Determine field type
-            field_type = expected_field_types.get(normalized_key, FieldType.TEXT.value)
-            
-            # Validate and normalize the value based on field type
-            processed_value, validation_confidence, requires_verification = self._validate_field(
-                value, field_type
-            )
-            
-            # Combine extraction and validation confidence
-            combined_confidence = confidence * validation_confidence
-            
-            # Create field location (placeholder - would be populated by OCR service)
-            field_location = FieldLocation(
-                page=1,
-                top=0.0,
-                left=0.0,
-                bottom=0.0,
-                right=0.0,
-                width=0.0,
-                height=0.0
-            )
-            
-            # Create the extracted field
-            field = ExtractedField(
-                field_name=normalized_key,
-                field_type=field_type,
-                value=processed_value,
-                raw_text=value,
-                confidence=ConfidenceScore(combined_confidence),
-                location=field_location,
-                alternatives=[],  # Could be populated with alternative values
-                metadata={
-                    "section": self._find_section_for_field(normalized_key, sections),
-                    "original_key": key,
-                    "validation_confidence": validation_confidence
-                },
-                requires_verification=requires_verification,
-                verification_reason="Low confidence" if combined_confidence < 0.8 else None,
-                extraction_timestamp=datetime.utcnow().isoformat()
-            )
-            
-            fields[normalized_key] = field
+            forms.append({
+                "name": form_region.get("name", "unnamed_form"),
+                "fields": fields,
+                "x": form_region.get("x", 0),
+                "y": form_region.get("y", 0),
+                "width": form_region.get("width", 0),
+                "height": form_region.get("height", 0),
+                "page": form_region.get("page", 0),
+                "start_idx": form_region["start_idx"],
+                "end_idx": form_region["end_idx"]
+            })
         
-        # Apply document-specific field processing
-        fields = self._apply_document_specific_processing(fields, document_type)
-        
-        return fields
+        return forms
     
-    def _extract_and_process_tables(self, text: str, document_type: DocumentType) -> List[TableData]:
-        """Extract and process tables from document text.
+    def _identify_tables(self, structure: Dict[str, Any], text: str) -> List[Dict[str, Any]]:
+        """
+        Identify tables within the document structure.
         
         Args:
-            text: Document text to process
-            document_type: Type of document for specialized processing
+            structure: The document structure from the recognition model
+            text: The OCR text
             
         Returns:
-            List of TableData objects
+            List of table structures with row and column information
         """
-        # Extract raw tables
-        raw_tables = extract_tables(text)
-        processed_tables = []
+        tables = []
         
-        for i, raw_table in enumerate(raw_tables):
-            # Create a unique ID for the table
-            table_id = f"table_{i+1}"
+        # Extract table regions from structure
+        for table_region in structure.get("table_regions", []):
+            table_text = text[table_region["start_idx"]:table_region["end_idx"]]
             
-            # Extract headers and rows
-            headers = raw_table.get("headers", [])
-            rows = raw_table.get("rows", [])
+            # Extract header row
+            header_row = table_region.get("header_row", {})
+            headers = []
             
-            # Skip empty tables
-            if not headers or not rows:
-                continue
+            if header_row:
+                header_text = table_text[header_row.get("start_idx", 0):header_row.get("end_idx", 0)]
+                headers = self._extract_table_headers(header_text)
             
-            # Create field mapping (header name to column index)
-            field_mapping = {header.lower().replace(' ', '_'): i for i, header in enumerate(headers)}
+            # Extract data rows
+            rows = []
+            for row in table_region.get("rows", []):
+                row_text = table_text[row.get("start_idx", 0):row.get("end_idx", 0)]
+                
+                # Extract cells if available
+                cells = []
+                for cell in row.get("cells", []):
+                    cell_text = row_text[cell.get("start_idx", 0):cell.get("end_idx", 0)]
+                    cells.append({
+                        "text": cell_text.strip(),
+                        "column_index": cell.get("column_index", 0),
+                        "x": cell.get("x", 0),
+                        "y": cell.get("y", 0),
+                        "width": cell.get("width", 0),
+                        "height": cell.get("height", 0)
+                    })
+                
+                rows.append({
+                    "text": row_text.strip(),
+                    "cells": cells,
+                    "start_idx": row.get("start_idx", 0),
+                    "end_idx": row.get("end_idx", 0),
+                    "x": row.get("x", 0),
+                    "y": row.get("y", 0),
+                    "width": row.get("width", 0),
+                    "height": row.get("height", 0)
+                })
             
-            # Calculate confidence score for the table
-            # This is a simplified approach - in a real implementation, you would use
-            # more sophisticated methods to evaluate table extraction quality
-            confidence = 0.9  # Default high confidence for tables
+            tables.append({
+                "name": table_region.get("name", "unnamed_table"),
+                "headers": headers,
+                "rows": rows,
+                "column_count": table_region.get("column_count", len(headers)),
+                "row_count": len(rows),
+                "header_row": header_row,
+                "x": table_region.get("x", 0),
+                "y": table_region.get("y", 0),
+                "width": table_region.get("width", 0),
+                "height": table_region.get("height", 0),
+                "page": table_region.get("page", 0),
+                "start_idx": table_region["start_idx"],
+                "end_idx": table_region["end_idx"]
+            })
+        
+        return tables
+    
+    def _identify_sections(self, structure: Dict[str, Any], text: str) -> List[Dict[str, Any]]:
+        """
+        Identify document sections within the document structure.
+        
+        Args:
+            structure: The document structure from the recognition model
+            text: The OCR text
             
-            # Create the table data
-            table_data = TableData(
-                table_id=table_id,
-                table_name=self._determine_table_name(headers, document_type),
-                headers=headers,
-                rows=rows,
-                header_row_index=0,
-                field_mapping=field_mapping,
-                row_count=len(rows),
-                column_count=len(headers),
-                confidence=ConfidenceScore(confidence),
-                is_complete=True,  # Assume complete unless determined otherwise
+        Returns:
+            List of section structures with content information
+        """
+        sections = []
+        
+        # Extract section regions from structure
+        for section_region in structure.get("section_regions", []):
+            section_text = text[section_region["start_idx"]:section_region["end_idx"]]
+            
+            # Extract section title if available
+            title = ""
+            if "title_end_idx" in section_region:
+                title = section_text[:section_region["title_end_idx"]].strip()
+                content = section_text[section_region["title_end_idx"]:].strip()
+            else:
+                content = section_text.strip()
+            
+            sections.append({
+                "title": title,
+                "content": content,
+                "x": section_region.get("x", 0),
+                "y": section_region.get("y", 0),
+                "width": section_region.get("width", 0),
+                "height": section_region.get("height", 0),
+                "page": section_region.get("page", 0),
+                "start_idx": section_region["start_idx"],
+                "end_idx": section_region["end_idx"]
+            })
+        
+        return sections
+    
+    def _extract_form_fields(self, form: Dict[str, Any], text: str, document_type: str) -> List[ExtractedField]:
+        """
+        Extract fields from a form structure.
+        
+        Args:
+            form: The form structure
+            text: The OCR text
+            document_type: The type of document
+            
+        Returns:
+            List of extracted fields from the form
+        """
+        extracted_fields = []
+        
+        for field in form.get("fields", []):
+            # Calculate confidence based on field clarity
+            confidence = self._calculate_field_confidence(field["value"])
+            
+            # Map field label to standardized name if possible
+            field_name = self._map_field_name(field["label"], document_type)
+            
+            # Create field location
+            location = FieldLocation(
+                page=field.get("page", 0),
+                x=field.get("x", 0),
+                y=field.get("y", 0),
+                width=field.get("width", 0),
+                height=field.get("height", 0)
+            )
+            
+            extracted_fields.append(ExtractedField(
+                name=field_name,
+                value=field["value"],
+                confidence=confidence,
+                location=location,
                 metadata={
-                    "document_type": document_type.value,
-                    "extraction_timestamp": datetime.utcnow().isoformat()
+                    "source": "form_extraction",
+                    "form_name": form.get("name", "unnamed_form"),
+                    "original_label": field["label"] if field_name != field["label"] else None,
+                    "section": "form_fields"
                 }
-            )
-            
-            processed_tables.append(table_data)
+            ))
         
-        return processed_tables
+        return extracted_fields
     
-    def _determine_table_name(self, headers: List[str], document_type: DocumentType) -> Optional[str]:
-        """Determine a meaningful name for a table based on its headers and document type.
+    def _extract_table_headers(self, header_text: str) -> List[str]:
+        """
+        Extract column headers from table header text.
         
         Args:
-            headers: Table headers
-            document_type: Type of document
+            header_text: The text of the table header row
             
         Returns:
-            Table name or None if no specific name can be determined
+            List of column header names
         """
-        # Convert headers to lowercase for case-insensitive matching
-        headers_lower = [h.lower() for h in headers]
-        
-        # Bank statement tables
-        if document_type == DocumentType.BANK_STATEMENT:
-            if any("date" in h for h in headers_lower) and any("amount" in h for h in headers_lower):
-                return "Transactions"
-            if any("deposit" in h for h in headers_lower):
-                return "Deposits"
-            if any("withdrawal" in h for h in headers_lower):
-                return "Withdrawals"
-        
-        # Tax return tables
-        elif document_type == DocumentType.TAX_RETURN:
-            if any("income" in h for h in headers_lower):
-                return "Income"
-            if any("deduction" in h for h in headers_lower):
-                return "Deductions"
-            if any("expense" in h for h in headers_lower):
-                return "Expenses"
-        
-        # Application tables
-        elif document_type == DocumentType.APPLICATION:
-            if any("owner" in h for h in headers_lower):
-                return "Owners"
-            if any("reference" in h for h in headers_lower):
-                return "References"
-        
-        # Default: no specific name determined
-        return None
+        # Simple splitting by whitespace for now
+        # In a real implementation, this would use more sophisticated parsing
+        # based on the table structure recognition
+        headers = [h.strip() for h in re.split(r'\s{2,}', header_text) if h.strip()]
+        return headers
     
-    def _find_section_for_field(self, field_name: str, sections: Dict[str, str]) -> Optional[str]:
-        """Find the document section that contains a field.
+    def _extract_row_data(self, row_text: str, headers: List[str], table_structure: Dict[str, Any]) -> Dict[str, str]:
+        """
+        Extract data from a table row.
         
         Args:
-            field_name: Name of the field to locate
-            sections: Dictionary of document sections
+            row_text: The text of the table row
+            headers: The column headers
+            table_structure: The table structure information
             
         Returns:
-            Section name or None if not found in any specific section
+            Dictionary mapping column names to cell values
         """
-        # Convert field name to a pattern that might appear in the text
-        # Replace underscores with spaces and compile a case-insensitive regex
-        field_pattern = re.compile(
-            r'\b' + field_name.replace('_', ' ') + r'\b', 
-            re.IGNORECASE
+        row_data = {}
+        
+        # If we have cell information, use it
+        cells = table_structure.get("cells", [])
+        if cells:
+            for cell in cells:
+                if cell.get("column_index", -1) < len(headers):
+                    header = headers[cell.get("column_index", 0)]
+                    row_data[header] = cell.get("text", "").strip()
+        else:
+            # Simple splitting by whitespace
+            # In a real implementation, this would use more sophisticated parsing
+            values = [v.strip() for v in re.split(r'\s{2,}', row_text) if v.strip()]
+            
+            # Map values to headers
+            for i, value in enumerate(values):
+                if i < len(headers):
+                    row_data[headers[i]] = value
+        
+        return row_data
+    
+    def _find_field_location(self, key: str, value: str, text: str) -> FieldLocation:
+        """
+        Find the approximate location of a field in the document.
+        
+        Args:
+            key: The field key/label
+            value: The field value
+            text: The OCR text
+            
+        Returns:
+            FieldLocation object with approximate coordinates
+        """
+        # In a real implementation, this would use the bounding box information
+        # from the OCR result to determine the exact location
+        # For now, we'll just use a placeholder
+        return FieldLocation(
+            page=0,
+            x=0,
+            y=0,
+            width=0,
+            height=0
         )
-        
-        for section_name, section_text in sections.items():
-            if field_pattern.search(section_text):
-                return section_name
-        
-        return None
     
-    def _identify_field_issues(
-        self, fields: Dict[str, ExtractedField], document_type: DocumentType
-    ) -> Tuple[List[str], List[str]]:
-        """Identify missing required fields and low confidence fields.
+    def _calculate_key_value_confidence(self, key: str, value: str, document_type: str) -> ConfidenceScore:
+        """
+        Calculate confidence score for a key-value pair extraction.
         
         Args:
-            fields: Dictionary of extracted fields
-            document_type: Type of document
+            key: The extracted key
+            value: The extracted value
+            document_type: The type of document
             
         Returns:
-            Tuple of (missing_fields, low_confidence_fields)
+            ConfidenceScore between 0.0 and 1.0
         """
-        template = self.document_templates.get(document_type.value, {})
-        required_fields = template.get("required_fields", [])
+        # Start with a base confidence
+        confidence = 0.7
         
-        # Identify missing required fields
-        missing_fields = [field for field in required_fields if field not in fields]
+        # Adjust based on key characteristics
+        if len(key) < 3:
+            confidence -= 0.1  # Very short keys are less reliable
         
-        # Identify low confidence fields
-        low_confidence_fields = [
-            field_name for field_name, field in fields.items()
-            if field.confidence.value < 0.8
-        ]
+        # Adjust based on value characteristics
+        if not value or len(value) < 2:
+            confidence -= 0.2  # Empty or very short values are less reliable
         
-        return missing_fields, low_confidence_fields
+        # Check if key matches expected fields for this document type
+        template = self.extraction_templates.get(document_type, {})
+        if template and key in template.get("field_mapping", {}):
+            confidence += 0.2  # Known field increases confidence
+        
+        # Ensure confidence is within bounds
+        confidence = max(0.1, min(0.95, confidence))
+        
+        return ConfidenceScore(confidence)
     
-    def _apply_document_specific_processing(
-        self, fields: Dict[str, ExtractedField], document_type: DocumentType
-    ) -> Dict[str, ExtractedField]:
-        """Apply document-specific processing rules to extracted fields.
+    def _calculate_pattern_match_confidence(self, match: re.Match, pattern: str) -> ConfidenceScore:
+        """
+        Calculate confidence score for a regex pattern match.
         
         Args:
-            fields: Dictionary of extracted fields
-            document_type: Type of document
+            match: The regex match object
+            pattern: The regex pattern used
             
         Returns:
-            Processed fields dictionary
+            ConfidenceScore between 0.0 and 1.0
         """
-        # Apply document-specific processing based on document type
-        if document_type == DocumentType.APPLICATION:
-            return self._process_application_fields(fields)
-        elif document_type == DocumentType.TAX_RETURN:
-            return self._process_tax_return_fields(fields)
-        elif document_type == DocumentType.BANK_STATEMENT:
-            return self._process_bank_statement_fields(fields)
-        elif document_type == DocumentType.PAY_STUB:
-            return self._process_pay_stub_fields(fields)
-        elif document_type == DocumentType.ID_DOCUMENT:
-            return self._process_id_document_fields(fields)
-        else:
-            # Default processing for other document types
-            return fields
+        # Start with a base confidence for pattern matches
+        confidence = 0.8
+        
+        # Adjust based on match characteristics
+        if match.group(1) and len(match.group(1)) > 3:
+            confidence += 0.1  # Longer matches are more reliable
+        
+        # Adjust based on pattern complexity
+        pattern_complexity = len(pattern) / 50  # Normalize by typical pattern length
+        confidence += min(0.1, pattern_complexity * 0.1)  # More complex patterns can be more reliable
+        
+        # Ensure confidence is within bounds
+        confidence = max(0.1, min(0.95, confidence))
+        
+        return ConfidenceScore(confidence)
     
-    def _process_application_fields(
-        self, fields: Dict[str, ExtractedField]
-    ) -> Dict[str, ExtractedField]:
-        """Process fields specific to application forms.
+    def _calculate_field_confidence(self, value: str) -> ConfidenceScore:
+        """
+        Calculate confidence score for a form field value.
         
         Args:
-            fields: Dictionary of extracted fields
+            value: The field value
             
         Returns:
-            Processed fields dictionary
+            ConfidenceScore between 0.0 and 1.0
         """
-        # Normalize business names
-        if 'legal_name' in fields:
-            fields['legal_name'].value = normalize_business_terms(fields['legal_name'].value)
+        # Start with a base confidence
+        confidence = 0.75
         
-        if 'dba_name' in fields:
-            fields['dba_name'].value = normalize_business_terms(fields['dba_name'].value)
+        # Adjust based on value characteristics
+        if not value:
+            confidence = 0.1  # Empty values have very low confidence
+        elif len(value) < 2:
+            confidence = 0.3  # Very short values have low confidence
+        elif len(value) > 50:
+            confidence -= 0.1  # Very long values might be less reliable
         
-        # Format currency fields
-        currency_fields = ['monthly_revenue', 'requested_amount']
-        for field_name in currency_fields:
-            if field_name in fields:
-                fields[field_name].value = self._format_currency(fields[field_name].value)
+        # Check for common OCR errors (mixed case, special characters)
+        if re.search(r'[A-Za-z0-9].*[^A-Za-z0-9\s\.,;:\-\'"]', value):
+            confidence -= 0.1  # Unusual character combinations
         
-        # Format phone numbers
-        if 'phone' in fields:
-            fields['phone'].value = self._format_phone_number(fields['phone'].value)
+        # Ensure confidence is within bounds
+        confidence = max(0.1, min(0.95, confidence))
         
-        # Format EIN
-        if 'ein' in fields:
-            fields['ein'].value = self._format_ein(fields['ein'].value)
-        
-        return fields
+        return ConfidenceScore(confidence)
     
-    def _process_tax_return_fields(
-        self, fields: Dict[str, ExtractedField]
-    ) -> Dict[str, ExtractedField]:
-        """Process fields specific to tax return documents.
+    def _map_field_name(self, label: str, document_type: str) -> str:
+        """
+        Map a field label to a standardized field name.
         
         Args:
-            fields: Dictionary of extracted fields
+            label: The original field label
+            document_type: The type of document
             
         Returns:
-            Processed fields dictionary
+            Standardized field name
         """
-        # Normalize business name
-        if 'business_name' in fields:
-            fields['business_name'].value = normalize_business_terms(fields['business_name'].value)
+        # Get document template if available
+        template = self.extraction_templates.get(document_type, {})
+        field_mapping = template.get("field_mapping", {})
         
-        # Format currency fields
-        currency_fields = ['gross_receipts', 'total_income', 'total_deductions', 
-                          'taxable_income', 'total_tax']
-        for field_name in currency_fields:
-            if field_name in fields:
-                fields[field_name].value = self._format_currency(fields[field_name].value)
+        # Check for exact match
+        if label in field_mapping:
+            return field_mapping[label]
         
-        # Format EIN
-        if 'ein' in fields:
-            fields['ein'].value = self._format_ein(fields['ein'].value)
+        # Check for case-insensitive match
+        label_lower = label.lower()
+        for key, value in field_mapping.items():
+            if key.lower() == label_lower:
+                return value
         
-        # Format tax year
-        if 'tax_year' in fields:
-            fields['tax_year'].value = self._format_tax_year(fields['tax_year'].value)
+        # Check for partial match (if label contains the key)
+        for key, value in field_mapping.items():
+            if key.lower() in label_lower:
+                return value
         
-        return fields
+        # No mapping found, use the original label
+        return label
     
-    def _process_bank_statement_fields(
-        self, fields: Dict[str, ExtractedField]
-    ) -> Dict[str, ExtractedField]:
-        """Process fields specific to bank statement documents.
+    def _deduplicate_fields(self, fields: List[ExtractedField]) -> List[ExtractedField]:
+        """
+        Remove duplicate fields, preferring those with higher confidence.
         
         Args:
-            fields: Dictionary of extracted fields
+            fields: List of extracted fields
             
         Returns:
-            Processed fields dictionary
+            Deduplicated list of fields
         """
-        # Normalize bank name
-        if 'bank_name' in fields:
-            fields['bank_name'].value = normalize_business_terms(fields['bank_name'].value)
+        # Group fields by name
+        field_groups = {}
+        for field in fields:
+            if field.name not in field_groups:
+                field_groups[field.name] = []
+            field_groups[field.name].append(field)
         
-        # Normalize account holder name
-        if 'account_holder' in fields:
-            fields['account_holder'].value = normalize_business_terms(fields['account_holder'].value)
+        # For each group, select the field with highest confidence
+        deduplicated = []
+        for name, group in field_groups.items():
+            if len(group) == 1:
+                deduplicated.append(group[0])
+            else:
+                # Sort by confidence (descending)
+                sorted_group = sorted(group, key=lambda f: f.confidence.value, reverse=True)
+                deduplicated.append(sorted_group[0])
         
-        # Format currency fields
-        currency_fields = ['opening_balance', 'closing_balance', 
-                          'total_deposits', 'total_withdrawals']
-        for field_name in currency_fields:
-            if field_name in fields:
-                fields[field_name].value = self._format_currency(fields[field_name].value)
-        
-        # Format account number (mask except last 4 digits)
-        if 'account_number' in fields:
-            fields['account_number'].value = self._mask_account_number(fields['account_number'].value)
-        
-        # Format statement period
-        if 'statement_period' in fields:
-            fields['statement_period'].value = self._format_date_range(fields['statement_period'].value)
-        
-        return fields
+        return deduplicated
     
-    def _process_pay_stub_fields(
-        self, fields: Dict[str, ExtractedField]
-    ) -> Dict[str, ExtractedField]:
-        """Process fields specific to pay stub documents.
+    def _calculate_average_confidence(self, fields: List[ExtractedField]) -> float:
+        """
+        Calculate the average confidence score across all fields.
         
         Args:
-            fields: Dictionary of extracted fields
+            fields: List of extracted fields
             
         Returns:
-            Processed fields dictionary
+            Average confidence score
         """
-        # Normalize employer name
-        if 'employer_name' in fields:
-            fields['employer_name'].value = normalize_business_terms(fields['employer_name'].value)
-        
-        # Format currency fields
-        currency_fields = ['gross_pay', 'net_pay', 'ytd_gross', 'ytd_net']
-        for field_name in currency_fields:
-            if field_name in fields:
-                fields[field_name].value = self._format_currency(fields[field_name].value)
-        
-        # Format dates
-        date_fields = ['pay_date']
-        for field_name in date_fields:
-            if field_name in fields:
-                fields[field_name].value = self._format_date(fields[field_name].value)
-        
-        # Format pay period
-        if 'pay_period' in fields:
-            fields['pay_period'].value = self._format_date_range(fields['pay_period'].value)
-        
-        return fields
+        if not fields:
+            return 0.0
+            
+        total_confidence = sum(field.confidence.value for field in fields)
+        return total_confidence / len(fields)
     
-    def _process_id_document_fields(
-        self, fields: Dict[str, ExtractedField]
-    ) -> Dict[str, ExtractedField]:
-        """Process fields specific to ID documents.
+    def _get_current_timestamp(self) -> str:
+        """
+        Get the current timestamp in ISO 8601 format.
+        
+        Returns:
+            Current timestamp string
+        """
+        from datetime import datetime
+        return datetime.utcnow().isoformat() + "Z"
+    
+    def _create_json_schema(self, document_type: str, fields: List[ExtractedField]) -> JSONSchema:
+        """
+        Create a JSON schema for the extracted data based on document type.
         
         Args:
-            fields: Dictionary of extracted fields
+            document_type: The type of document
+            fields: List of extracted fields
             
         Returns:
-            Processed fields dictionary
+            JSONSchema object
         """
-        # Format dates
-        date_fields = ['date_of_birth', 'issue_date', 'expiration_date']
-        for field_name in date_fields:
-            if field_name in fields:
-                fields[field_name].value = self._format_date(fields[field_name].value)
-        
-        return fields
+        # In a real implementation, this would create a proper JSON Schema
+        # based on the document type and extracted fields
+        # For now, we'll just use a placeholder
+        return JSONSchema(
+            schema_id=f"mca-{document_type}-schema",
+            version="1.0.0",
+            schema={}
+        )
     
-    def _validate_field(
-        self, value: str, field_type: str
-    ) -> Tuple[Any, float, bool]:
-        """Validate and normalize a field value based on its type.
-        
-        Args:
-            value: Raw field value to validate
-            field_type: Type of field
-            
-        Returns:
-            Tuple of (processed_value, confidence_score, requires_verification)
+    def _load_extraction_templates(self) -> Dict[str, Dict[str, Any]]:
         """
-        # Get the appropriate validator for this field type
-        validator = self.field_validators.get(field_type, self._validate_text)
+        Load document type-specific extraction templates.
         
-        # Apply the validator
-        return validator(value)
-    
-    def _validate_email(self, value: str) -> Tuple[str, float, bool]:
-        """Validate and normalize an email address.
-        
-        Args:
-            value: Email address to validate
-            
         Returns:
-            Tuple of (processed_value, confidence_score, requires_verification)
+            Dictionary mapping document types to extraction templates
         """
-        # Clean and normalize the value
-        cleaned_value = clean_text(value)
-        
-        # Apply email-specific corrections
-        corrected_value, confidence = correct_ocr_errors(cleaned_value, 'email')
-        
-        # Check if it matches a valid email pattern
-        email_pattern = re.compile(r'^[\w\.-]+@([\w\-]+\.)+[A-Za-z]{2,}$')
-        is_valid = bool(email_pattern.match(corrected_value))
-        
-        # Emails with low confidence or invalid format require verification
-        requires_verification = not is_valid or confidence < 0.8
-        
-        return corrected_value, confidence, requires_verification
-    
-    def _validate_phone(self, value: str) -> Tuple[str, float, bool]:
-        """Validate and normalize a phone number.
-        
-        Args:
-            value: Phone number to validate
-            
-        Returns:
-            Tuple of (processed_value, confidence_score, requires_verification)
-        """
-        # Clean and normalize the value
-        cleaned_value = clean_text(value)
-        
-        # Apply phone-specific corrections
-        corrected_value, confidence = correct_ocr_errors(cleaned_value, 'phone')
-        
-        # Format as a standard phone number
-        formatted_value = self._format_phone_number(corrected_value)
-        
-        # Check if it matches a valid phone pattern after formatting
-        phone_pattern = re.compile(r'^\(\d{3}\) \d{3}-\d{4}$')
-        is_valid = bool(phone_pattern.match(formatted_value))
-        
-        # Phone numbers with low confidence or invalid format require verification
-        requires_verification = not is_valid or confidence < 0.8
-        
-        return formatted_value, confidence, requires_verification
-    
-    def _validate_date(self, value: str) -> Tuple[str, float, bool]:
-        """Validate and normalize a date.
-        
-        Args:
-            value: Date to validate
-            
-        Returns:
-            Tuple of (processed_value, confidence_score, requires_verification)
-        """
-        # Clean and normalize the value
-        cleaned_value = clean_text(value)
-        
-        # Apply date-specific corrections
-        corrected_value, confidence = correct_ocr_errors(cleaned_value, 'date')
-        
-        # Format as a standard date
-        formatted_value = self._format_date(corrected_value)
-        
-        # Check if formatting was successful
-        is_valid = formatted_value != corrected_value
-        
-        # Dates with low confidence or invalid format require verification
-        requires_verification = not is_valid or confidence < 0.8
-        
-        return formatted_value, confidence, requires_verification
-    
-    def _validate_currency(self, value: str) -> Tuple[float, float, bool]:
-        """Validate and normalize a currency value.
-        
-        Args:
-            value: Currency value to validate
-            
-        Returns:
-            Tuple of (processed_value, confidence_score, requires_verification)
-        """
-        # Clean and normalize the value
-        cleaned_value = clean_text(value)
-        
-        # Apply currency-specific corrections
-        corrected_value, confidence = correct_ocr_errors(cleaned_value, 'currency')
-        
-        try:
-            # Remove currency symbols and commas
-            numeric_string = corrected_value.replace('$', '').replace(',', '').strip()
-            
-            # Convert to float
-            numeric_value = float(numeric_string)
-            
-            # Currency values with low confidence require verification
-            requires_verification = confidence < 0.8
-            
-            return numeric_value, confidence, requires_verification
-        except ValueError:
-            # If conversion fails, return 0.0 with low confidence
-            return 0.0, 0.5, True
-    
-    def _validate_percentage(self, value: str) -> Tuple[float, float, bool]:
-        """Validate and normalize a percentage value.
-        
-        Args:
-            value: Percentage value to validate
-            
-        Returns:
-            Tuple of (processed_value, confidence_score, requires_verification)
-        """
-        # Clean and normalize the value
-        cleaned_value = clean_text(value)
-        
-        # Remove percentage symbol
-        cleaned_value = cleaned_value.replace('%', '').strip()
-        
-        try:
-            # Convert to float
-            numeric_value = float(cleaned_value) / 100.0  # Convert to decimal
-            
-            # Use high confidence for successful conversion
-            confidence = 0.9
-            requires_verification = False
-            
-            return numeric_value, confidence, requires_verification
-        except ValueError:
-            # If conversion fails, return 0.0 with low confidence
-            return 0.0, 0.5, True
-    
-    def _validate_name(self, value: str) -> Tuple[str, float, bool]:
-        """Validate and normalize a name.
-        
-        Args:
-            value: Name to validate
-            
-        Returns:
-            Tuple of (processed_value, confidence_score, requires_verification)
-        """
-        # Clean and normalize the value
-        cleaned_value = clean_text(value)
-        
-        # Apply business term normalization
-        normalized_value = normalize_business_terms(cleaned_value)
-        
-        # Names with very short length might be incomplete
-        is_valid = len(normalized_value) >= 3
-        
-        # Use high confidence for valid names
-        confidence = 0.9 if is_valid else 0.7
-        
-        # Names that are too short require verification
-        requires_verification = not is_valid
-        
-        return normalized_value, confidence, requires_verification
-    
-    def _validate_address(self, value: str) -> Tuple[str, float, bool]:
-        """Validate and normalize an address.
-        
-        Args:
-            value: Address to validate
-            
-        Returns:
-            Tuple of (processed_value, confidence_score, requires_verification)
-        """
-        # Clean and normalize the value
-        cleaned_value = clean_text(value)
-        
-        # Addresses with very short length might be incomplete
-        is_valid = len(cleaned_value) >= 10
-        
-        # Use high confidence for valid addresses
-        confidence = 0.9 if is_valid else 0.7
-        
-        # Addresses that are too short require verification
-        requires_verification = not is_valid
-        
-        return cleaned_value, confidence, requires_verification
-    
-    def _validate_ein(self, value: str) -> Tuple[str, float, bool]:
-        """Validate and normalize an EIN.
-        
-        Args:
-            value: EIN to validate
-            
-        Returns:
-            Tuple of (processed_value, confidence_score, requires_verification)
-        """
-        # Clean and normalize the value
-        cleaned_value = clean_text(value)
-        
-        # Apply EIN-specific corrections
-        corrected_value, confidence = correct_ocr_errors(cleaned_value, 'ein')
-        
-        # Format as a standard EIN
-        formatted_value = self._format_ein(corrected_value)
-        
-        # Check if it matches a valid EIN pattern
-        ein_pattern = re.compile(r'^\d{2}-\d{7}$')
-        is_valid = bool(ein_pattern.match(formatted_value))
-        
-        # EINs with low confidence or invalid format require verification
-        requires_verification = not is_valid or confidence < 0.8
-        
-        return formatted_value, confidence, requires_verification
-    
-    def _validate_ssn(self, value: str) -> Tuple[str, float, bool]:
-        """Validate and normalize an SSN.
-        
-        Args:
-            value: SSN to validate
-            
-        Returns:
-            Tuple of (processed_value, confidence_score, requires_verification)
-        """
-        # Clean and normalize the value
-        cleaned_value = clean_text(value)
-        
-        # Apply SSN-specific corrections
-        corrected_value, confidence = correct_ocr_errors(cleaned_value, 'ssn')
-        
-        # Format as a standard SSN
-        formatted_value = self._format_ssn(corrected_value)
-        
-        # Check if it matches a valid SSN pattern
-        ssn_pattern = re.compile(r'^\d{3}-\d{2}-\d{4}$')
-        is_valid = bool(ssn_pattern.match(formatted_value))
-        
-        # SSNs with low confidence or invalid format require verification
-        requires_verification = not is_valid or confidence < 0.8
-        
-        return formatted_value, confidence, requires_verification
-    
-    def _validate_account_number(self, value: str) -> Tuple[str, float, bool]:
-        """Validate and normalize an account number.
-        
-        Args:
-            value: Account number to validate
-            
-        Returns:
-            Tuple of (processed_value, confidence_score, requires_verification)
-        """
-        # Clean and normalize the value
-        cleaned_value = clean_text(value)
-        
-        # Remove all non-numeric characters
-        numeric_only = re.sub(r'[^0-9]', '', cleaned_value)
-        
-        # Account numbers should have a reasonable length
-        is_valid = 4 <= len(numeric_only) <= 17
-        
-        # Use high confidence for valid account numbers
-        confidence = 0.9 if is_valid else 0.7
-        
-        # Account numbers with invalid length require verification
-        requires_verification = not is_valid
-        
-        # Mask the account number for security
-        masked_value = self._mask_account_number(numeric_only)
-        
-        return masked_value, confidence, requires_verification
-    
-    def _validate_number(self, value: str) -> Tuple[float, float, bool]:
-        """Validate and normalize a numeric value.
-        
-        Args:
-            value: Numeric value to validate
-            
-        Returns:
-            Tuple of (processed_value, confidence_score, requires_verification)
-        """
-        # Clean and normalize the value
-        cleaned_value = clean_text(value)
-        
-        # Remove all non-numeric characters except decimal point
-        numeric_string = re.sub(r'[^0-9\.]', '', cleaned_value)
-        
-        try:
-            # Convert to float
-            numeric_value = float(numeric_string)
-            
-            # Use high confidence for successful conversion
-            confidence = 0.9
-            requires_verification = False
-            
-            return numeric_value, confidence, requires_verification
-        except ValueError:
-            # If conversion fails, return 0.0 with low confidence
-            return 0.0, 0.5, True
-    
-    def _validate_checkbox(self, value: str) -> Tuple[bool, float, bool]:
-        """Validate and normalize a checkbox value.
-        
-        Args:
-            value: Checkbox value to validate
-            
-        Returns:
-            Tuple of (processed_value, confidence_score, requires_verification)
-        """
-        # Clean and normalize the value
-        cleaned_value = clean_text(value).lower()
-        
-        # Check for positive indicators
-        positive_indicators = ['x', 'yes', 'y', 'true', 't', 'checked', 'selected', '✓', '✔']
-        is_checked = any(indicator in cleaned_value for indicator in positive_indicators)
-        
-        # Use high confidence for clear indicators
-        confidence = 0.9 if any(indicator == cleaned_value for indicator in positive_indicators) else 0.7
-        
-        # Ambiguous checkbox values require verification
-        requires_verification = confidence < 0.8
-        
-        return is_checked, confidence, requires_verification
-    
-    def _validate_text(self, value: str) -> Tuple[str, float, bool]:
-        """Validate and normalize a text value.
-        
-        This is the default validator for fields without a specific type.
-        
-        Args:
-            value: Text value to validate
-            
-        Returns:
-            Tuple of (processed_value, confidence_score, requires_verification)
-        """
-        # Clean and normalize the value
-        cleaned_value = clean_text(value)
-        
-        # Use high confidence for non-empty text
-        confidence = 0.9 if cleaned_value else 0.5
-        
-        # Empty text requires verification
-        requires_verification = not cleaned_value
-        
-        return cleaned_value, confidence, requires_verification
-    
-    def _format_currency(self, value: Any) -> str:
-        """Format a value as currency.
-        
-        Args:
-            value: Value to format
-            
-        Returns:
-            Formatted currency string
-        """
-        if isinstance(value, str):
-            # Remove currency symbols and commas
-            numeric_string = value.replace('$', '').replace(',', '').strip()
-            try:
-                value = float(numeric_string)
-            except ValueError:
-                return value  # Return original if conversion fails
-        
-        if isinstance(value, (int, float)):
-            return f"${value:,.2f}"
-        
-        return str(value)  # Fallback for other types
-    
-    def _format_phone_number(self, value: str) -> str:
-        """Format a value as a phone number.
-        
-        Args:
-            value: Value to format
-            
-        Returns:
-            Formatted phone number string
-        """
-        # Remove all non-numeric characters
-        digits = re.sub(r'\D', '', value)
-        
-        # Handle different phone number lengths
-        if len(digits) == 10:  # Standard US phone number
-            return f"({digits[0:3]}) {digits[3:6]}-{digits[6:]}"
-        elif len(digits) == 11 and digits[0] == '1':  # US phone with country code
-            return f"({digits[1:4]}) {digits[4:7]}-{digits[7:]}"
-        else:
-            # Return original if format is unclear
-            return value
-    
-    def _format_ein(self, value: str) -> str:
-        """Format a value as an EIN.
-        
-        Args:
-            value: Value to format
-            
-        Returns:
-            Formatted EIN string
-        """
-        # Remove all non-numeric characters
-        digits = re.sub(r'\D', '', value)
-        
-        # EIN format: XX-XXXXXXX
-        if len(digits) == 9:
-            return f"{digits[0:2]}-{digits[2:]}"
-        else:
-            # Return original if format is unclear
-            return value
-    
-    def _format_ssn(self, value: str) -> str:
-        """Format a value as an SSN.
-        
-        Args:
-            value: Value to format
-            
-        Returns:
-            Formatted SSN string
-        """
-        # Remove all non-numeric characters
-        digits = re.sub(r'\D', '', value)
-        
-        # SSN format: XXX-XX-XXXX
-        if len(digits) == 9:
-            return f"{digits[0:3]}-{digits[3:5]}-{digits[5:]}"
-        else:
-            # Return original if format is unclear
-            return value
-    
-    def _mask_account_number(self, value: str) -> str:
-        """Mask an account number for security.
-        
-        Args:
-            value: Account number to mask
-            
-        Returns:
-            Masked account number string
-        """
-        # Remove all non-numeric characters
-        digits = re.sub(r'\D', '', value)
-        
-        # Mask all but the last 4 digits
-        if len(digits) > 4:
-            return f"{'*' * (len(digits) - 4)}{digits[-4:]}"
-        else:
-            # If less than 4 digits, return as is
-            return digits
-    
-    def _format_date(self, value: str) -> str:
-        """Format a value as a date.
-        
-        Args:
-            value: Value to format
-            
-        Returns:
-            Formatted date string
-        """
-        # Common date patterns
-        date_patterns = [
-            # MM/DD/YYYY
-            (re.compile(r'^(\d{1,2})/(\d{1,2})/(\d{2,4})$'), 
-             lambda m: f"{int(m.group(1)):02d}/{int(m.group(2)):02d}/{int(m.group(3)):04d}"),
-            # MM-DD-YYYY
-            (re.compile(r'^(\d{1,2})-(\d{1,2})-(\d{2,4})$'), 
-             lambda m: f"{int(m.group(1)):02d}/{int(m.group(2)):02d}/{int(m.group(3)):04d}"),
-            # YYYY/MM/DD
-            (re.compile(r'^(\d{4})/(\d{1,2})/(\d{1,2})$'), 
-             lambda m: f"{int(m.group(2)):02d}/{int(m.group(3)):02d}/{int(m.group(1)):04d}"),
-            # YYYY-MM-DD
-            (re.compile(r'^(\d{4})-(\d{1,2})-(\d{1,2})$'), 
-             lambda m: f"{int(m.group(2)):02d}/{int(m.group(3)):02d}/{int(m.group(1)):04d}"),
-            # Month DD, YYYY
-            (re.compile(r'^([A-Za-z]{3,9})\s+(\d{1,2}),?\s+(\d{2,4})$'), 
-             lambda m: f"{self._month_to_number(m.group(1)):02d}/{int(m.group(2)):02d}/{int(m.group(3)):04d}")
-        ]
-        
-        # Try each pattern
-        for pattern, formatter in date_patterns:
-            match = pattern.match(value)
-            if match:
-                try:
-                    return formatter(match)
-                except (ValueError, IndexError):
-                    continue
-        
-        # Return original if no pattern matches
-        return value
-    
-    def _format_date_range(self, value: str) -> str:
-        """Format a value as a date range.
-        
-        Args:
-            value: Value to format
-            
-        Returns:
-            Formatted date range string
-        """
-        # Look for common date range separators
-        separators = [' to ', ' - ', ' through ', '–', '—']
-        
-        for separator in separators:
-            if separator in value:
-                parts = value.split(separator, 1)
-                if len(parts) == 2:
-                    start_date = self._format_date(parts[0].strip())
-                    end_date = self._format_date(parts[1].strip())
-                    return f"{start_date} - {end_date}"
-        
-        # If no range separator found, try to format as a single date
-        return self._format_date(value)
-    
-    def _format_tax_year(self, value: str) -> str:
-        """Format a value as a tax year.
-        
-        Args:
-            value: Value to format
-            
-        Returns:
-            Formatted tax year string
-        """
-        # Extract year from various formats
-        year_pattern = re.compile(r'\b(19|20)\d{2}\b')
-        match = year_pattern.search(value)
-        
-        if match:
-            return match.group(0)  # Return the 4-digit year
-        else:
-            # Return original if no year found
-            return value
-    
-    def _month_to_number(self, month_name: str) -> int:
-        """Convert a month name to its numeric value.
-        
-        Args:
-            month_name: Month name to convert
-            
-        Returns:
-            Month number (1-12)
-        """
-        month_map = {
-            'jan': 1, 'january': 1,
-            'feb': 2, 'february': 2,
-            'mar': 3, 'march': 3,
-            'apr': 4, 'april': 4,
-            'may': 5,
-            'jun': 6, 'june': 6,
-            'jul': 7, 'july': 7,
-            'aug': 8, 'august': 8,
-            'sep': 9, 'september': 9,
-            'oct': 10, 'october': 10,
-            'nov': 11, 'november': 11,
-            'dec': 12, 'december': 12
+        # In a real implementation, these would be loaded from configuration files
+        # For now, we'll define them inline
+        templates = {
+            "loan_application": {
+                "field_mapping": {
+                    "Business Name": "business_name",
+                    "Business Legal Name": "business_legal_name",
+                    "DBA": "dba_name",
+                    "Tax ID": "tax_id",
+                    "EIN": "tax_id",
+                    "Federal Tax ID": "tax_id",
+                    "Business Address": "business_address",
+                    "Business Phone": "business_phone",
+                    "Business Email": "business_email",
+                    "Years in Business": "years_in_business",
+                    "Annual Revenue": "annual_revenue",
+                    "Monthly Revenue": "monthly_revenue",
+                    "Requested Amount": "requested_amount",
+                    "Owner Name": "owner_name",
+                    "Owner Address": "owner_address",
+                    "Owner Phone": "owner_phone",
+                    "Owner Email": "owner_email",
+                    "Owner SSN": "owner_ssn",
+                    "Date of Birth": "owner_dob",
+                    "Credit Score": "credit_score",
+                    "Business Type": "business_type",
+                    "Industry": "industry"
+                }
+            },
+            "tax_return": {
+                "field_mapping": {
+                    "Adjusted Gross Income": "adjusted_gross_income",
+                    "Total Income": "total_income",
+                    "Taxable Income": "taxable_income",
+                    "Total Tax": "total_tax",
+                    "Federal Income Tax Withheld": "federal_tax_withheld",
+                    "Tax Year": "tax_year",
+                    "Filing Status": "filing_status",
+                    "Taxpayer Name": "taxpayer_name",
+                    "Taxpayer SSN": "taxpayer_ssn",
+                    "Spouse Name": "spouse_name",
+                    "Spouse SSN": "spouse_ssn",
+                    "Business Income": "business_income",
+                    "Business Expenses": "business_expenses",
+                    "Net Profit": "net_profit"
+                }
+            },
+            "bank_statement": {
+                "field_mapping": {
+                    "Account Number": "account_number",
+                    "Account Holder": "account_holder",
+                    "Bank Name": "bank_name",
+                    "Statement Period": "statement_period",
+                    "Beginning Balance": "beginning_balance",
+                    "Ending Balance": "ending_balance",
+                    "Total Deposits": "total_deposits",
+                    "Total Withdrawals": "total_withdrawals",
+                    "Average Balance": "average_balance"
+                }
+            },
+            "identity_document": {
+                "field_mapping": {
+                    "Full Name": "full_name",
+                    "First Name": "first_name",
+                    "Last Name": "last_name",
+                    "Date of Birth": "date_of_birth",
+                    "Address": "address",
+                    "ID Number": "id_number",
+                    "License Number": "license_number",
+                    "Expiration Date": "expiration_date",
+                    "Issue Date": "issue_date",
+                    "State": "state",
+                    "Country": "country",
+                    "Gender": "gender",
+                    "Height": "height",
+                    "Eye Color": "eye_color",
+                    "Class": "license_class"
+                }
+            }
         }
         
-        return month_map.get(month_name.lower()[:3], 1)  # Default to January if not found
+        return templates
     
-    def format_extraction_as_json(self, extracted_data: ExtractedData) -> str:
-        """Format extracted data as a JSON string.
-        
-        Args:
-            extracted_data: ExtractedData object to format
-            
-        Returns:
-            JSON string representation of the extracted data
+    def _load_normalization_rules(self) -> Dict[str, Dict[str, Dict[str, Any]]]:
         """
-        # Create a serializable dictionary from the extracted data
-        serializable_data = {
-            "extraction_id": extracted_data.extraction_id,
-            "document_type": extracted_data.document_type,
-            "fields": {},
-            "tables": [],
-            "metadata": dict(extracted_data.metadata),
-            "requires_verification": extracted_data.requires_verification,
-            "low_confidence_fields": extracted_data.low_confidence_fields,
-            "extraction_timestamp": extracted_data.extraction_timestamp,
-            "schema_version": extracted_data.schema_version
+        Load field normalization rules.
+        
+        Returns:
+            Dictionary mapping document types to field normalization rules
+        """
+        # In a real implementation, these would be loaded from configuration files
+        # For now, we'll define them inline
+        rules = {
+            "default": {
+                "date_of_birth": {"type": "date", "format": "%Y-%m-%d"},
+                "expiration_date": {"type": "date", "format": "%Y-%m-%d"},
+                "issue_date": {"type": "date", "format": "%Y-%m-%d"},
+                "phone": {"type": "phone", "format": "E.164"},
+                "email": {"type": "email"},
+                "ssn": {"type": "ssn", "format": "XXX-XX-XXXX"},
+                "tax_id": {"type": "tax_id", "format": "XX-XXXXXXX"},
+                "amount": {"type": "currency", "format": "USD"},
+                "percentage": {"type": "percentage"}
+            },
+            "loan_application": {
+                "business_phone": {"type": "phone", "format": "E.164"},
+                "owner_phone": {"type": "phone", "format": "E.164"},
+                "business_email": {"type": "email"},
+                "owner_email": {"type": "email"},
+                "owner_ssn": {"type": "ssn", "format": "XXX-XX-XXXX"},
+                "owner_dob": {"type": "date", "format": "%Y-%m-%d"},
+                "annual_revenue": {"type": "currency", "format": "USD"},
+                "monthly_revenue": {"type": "currency", "format": "USD"},
+                "requested_amount": {"type": "currency", "format": "USD"},
+                "years_in_business": {"type": "number", "format": "integer"}
+            },
+            "bank_statement": {
+                "beginning_balance": {"type": "currency", "format": "USD"},
+                "ending_balance": {"type": "currency", "format": "USD"},
+                "total_deposits": {"type": "currency", "format": "USD"},
+                "total_withdrawals": {"type": "currency", "format": "USD"},
+                "average_balance": {"type": "currency", "format": "USD"},
+                "statement_period": {"type": "date_range", "format": "%Y-%m-%d to %Y-%m-%d"}
+            }
         }
         
-        # Convert fields to serializable format
-        for field_name, field in extracted_data.fields.items():
-            serializable_data["fields"][field_name] = {
-                "field_name": field.field_name,
-                "field_type": field.field_type,
-                "value": field.value,
-                "raw_text": field.raw_text,
-                "confidence": float(field.confidence),
-                "location": dict(field.location),
-                "requires_verification": field.requires_verification,
-                "verification_reason": field.verification_reason,
-                "metadata": field.metadata
-            }
-        
-        # Convert tables to serializable format
-        for table in extracted_data.tables:
-            serializable_table = {
-                "table_id": table.table_id,
-                "table_name": table.table_name,
-                "headers": table.headers,
-                "rows": table.rows,
-                "header_row_index": table.header_row_index,
-                "field_mapping": table.field_mapping,
-                "row_count": table.row_count,
-                "column_count": table.column_count,
-                "confidence": float(table.confidence),
-                "is_complete": table.is_complete,
-                "metadata": table.metadata
-            }
-            serializable_data["tables"].append(serializable_table)
-        
-        # Convert to JSON string with indentation for readability
-        return json.dumps(serializable_data, indent=2, default=str)
+        return rules
     
-    def validate_extraction_against_schema(
-        self, extracted_data: ExtractedData
-    ) -> Tuple[bool, List[str]]:
-        """Validate extracted data against its JSON schema.
+    def _load_validation_rules(self) -> Dict[str, Dict[str, Dict[str, Any]]]:
+        """
+        Load field validation rules.
+        
+        Returns:
+            Dictionary mapping document types to field validation rules
+        """
+        # In a real implementation, these would be loaded from configuration files
+        # For now, we'll define them inline
+        rules = {
+            "default": {
+                "email": {
+                    "type": "email",
+                    "constraints": {
+                        "pattern": r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
+                    }
+                },
+                "phone": {
+                    "type": "phone",
+                    "constraints": {
+                        "min_length": 10,
+                        "max_length": 15
+                    }
+                },
+                "date": {
+                    "type": "date",
+                    "constraints": {
+                        "min_date": "1900-01-01",
+                        "max_date": "2100-12-31"
+                    }
+                },
+                "currency": {
+                    "type": "currency",
+                    "constraints": {
+                        "min_value": 0,
+                        "max_value": 1000000000
+                    }
+                }
+            },
+            "loan_application": {
+                "tax_id": {
+                    "type": "tax_id",
+                    "constraints": {
+                        "pattern": r"^\d{2}-\d{7}$|^\d{9}$"
+                    }
+                },
+                "owner_ssn": {
+                    "type": "ssn",
+                    "constraints": {
+                        "pattern": r"^\d{3}-\d{2}-\d{4}$|^\d{9}$"
+                    }
+                },
+                "years_in_business": {
+                    "type": "number",
+                    "constraints": {
+                        "min_value": 0,
+                        "max_value": 100,
+                        "integer": True
+                    }
+                },
+                "requested_amount": {
+                    "type": "currency",
+                    "constraints": {
+                        "min_value": 1000,
+                        "max_value": 5000000
+                    }
+                }
+            },
+            "bank_statement": {
+                "account_number": {
+                    "type": "string",
+                    "constraints": {
+                        "min_length": 4,
+                        "max_length": 17,
+                        "pattern": r"^[\d\*]+$"
+                    }
+                }
+            }
+        }
+        
+        return rules
+    
+    def _load_field_patterns(self) -> Dict[str, Dict[str, str]]:
+        """
+        Load regular expression patterns for field extraction.
+        
+        Returns:
+            Dictionary mapping document types to field patterns
+        """
+        # In a real implementation, these would be loaded from configuration files
+        # For now, we'll define them inline
+        patterns = {
+            "default": {
+                "email": r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}",
+                "phone": r"\(?(\d{3})\)?[- ]?(\d{3})[- ]?(\d{4})",
+                "date": r"(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{4}[/-]\d{1,2}[/-]\d{1,2})",
+                "ssn": r"(\d{3}[-]?\d{2}[-]?\d{4})",
+                "currency": r"\$?([\d,]+\.?\d*)"
+            },
+            "loan_application": {
+                "business_name": r"Business\s+Name[:\s]+(.*?)(?=\n|$|\s{2,})",
+                "tax_id": r"(?:Tax\s+ID|EIN|Federal\s+Tax\s+ID)[:\s]+(\d{2}[-]?\d{7})",
+                "requested_amount": r"(?:Requested|Loan)\s+Amount[:\s]+\$?([\d,]+\.?\d*)",
+                "years_in_business": r"Years\s+in\s+Business[:\s]+(\d+)",
+                "annual_revenue": r"Annual\s+Revenue[:\s]+\$?([\d,]+\.?\d*)"
+            },
+            "bank_statement": {
+                "account_number": r"Account\s+(?:Number|#)[:\s]+([\d\*]+)",
+                "beginning_balance": r"(?:Beginning|Opening)\s+Balance[:\s]+\$?([\d,]+\.?\d*)",
+                "ending_balance": r"(?:Ending|Closing)\s+Balance[:\s]+\$?([\d,]+\.?\d*)",
+                "statement_period": r"Statement\s+(?:Period|Date)[:\s]+(.*?)(?=\n|$|\s{2,})"
+            },
+            "tax_return": {
+                "adjusted_gross_income": r"Adjusted\s+Gross\s+Income[:\s]+\$?([\d,]+\.?\d*)",
+                "total_tax": r"Total\s+Tax[:\s]+\$?([\d,]+\.?\d*)",
+                "tax_year": r"Tax\s+Year[:\s]+(\d{4})"
+            },
+            "identity_document": {
+                "license_number": r"(?:License|ID)\s+(?:Number|#)[:\s]+([A-Z0-9]+)",
+                "expiration_date": r"(?:Expiration|Exp)\s+Date[:\s]+(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{4}[/-]\d{1,2}[/-]\d{1,2})",
+                "date_of_birth": r"(?:Date\s+of\s+Birth|DOB|Birth\s+Date)[:\s]+(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{4}[/-]\d{1,2}[/-]\d{1,2})"
+            }
+        }
+        
+        return patterns
+    
+    # Document-specific extraction methods
+    
+    def _extract_loan_application_fields(self, text: str, document_structure: Dict[str, Any]) -> List[ExtractedField]:
+        """
+        Extract fields specific to loan application documents.
         
         Args:
-            extracted_data: ExtractedData object to validate
+            text: The OCR text
+            document_structure: The document structure
             
         Returns:
-            Tuple of (is_valid, error_messages)
+            List of extracted fields specific to loan applications
         """
-        # Get the document type
-        document_type = extracted_data.document_type
+        fields = []
         
-        # Validate using the schema registry
-        return JSONSchemaRegistry.validate_extraction(extracted_data)
+        # Look for specific sections in the document
+        business_info_section = None
+        owner_info_section = None
+        financial_info_section = None
+        
+        for section in document_structure.get("sections", []):
+            title_lower = section.get("title", "").lower()
+            if "business" in title_lower and "information" in title_lower:
+                business_info_section = section
+            elif "owner" in title_lower and "information" in title_lower:
+                owner_info_section = section
+            elif "financial" in title_lower and "information" in title_lower:
+                financial_info_section = section
+        
+        # Extract business information
+        if business_info_section:
+            business_text = business_info_section.get("content", "")
+            business_kv_pairs = self.extract_key_value_pairs(business_text, "loan_application")
+            
+            for key, value, confidence in business_kv_pairs:
+                # Map to standardized field name
+                field_name = self._map_field_name(key, "loan_application")
+                
+                fields.append(ExtractedField(
+                    name=field_name,
+                    value=value,
+                    confidence=confidence,
+                    location=self._find_field_location(key, value, business_text),
+                    metadata={
+                        "source": "section_extraction",
+                        "section": "business_information",
+                        "original_name": key if field_name != key else None
+                    }
+                ))
+        
+        # Extract owner information
+        if owner_info_section:
+            owner_text = owner_info_section.get("content", "")
+            owner_kv_pairs = self.extract_key_value_pairs(owner_text, "loan_application")
+            
+            for key, value, confidence in owner_kv_pairs:
+                # Map to standardized field name
+                field_name = self._map_field_name(key, "loan_application")
+                
+                fields.append(ExtractedField(
+                    name=field_name,
+                    value=value,
+                    confidence=confidence,
+                    location=self._find_field_location(key, value, owner_text),
+                    metadata={
+                        "source": "section_extraction",
+                        "section": "owner_information",
+                        "original_name": key if field_name != key else None
+                    }
+                ))
+        
+        # Extract financial information
+        if financial_info_section:
+            financial_text = financial_info_section.get("content", "")
+            financial_kv_pairs = self.extract_key_value_pairs(financial_text, "loan_application")
+            
+            for key, value, confidence in financial_kv_pairs:
+                # Map to standardized field name
+                field_name = self._map_field_name(key, "loan_application")
+                
+                fields.append(ExtractedField(
+                    name=field_name,
+                    value=value,
+                    confidence=confidence,
+                    location=self._find_field_location(key, value, financial_text),
+                    metadata={
+                        "source": "section_extraction",
+                        "section": "financial_information",
+                        "original_name": key if field_name != key else None
+                    }
+                ))
+        
+        return fields
+    
+    def _extract_tax_return_fields(self, text: str, document_structure: Dict[str, Any]) -> List[ExtractedField]:
+        """
+        Extract fields specific to tax return documents.
+        
+        Args:
+            text: The OCR text
+            document_structure: The document structure
+            
+        Returns:
+            List of extracted fields specific to tax returns
+        """
+        fields = []
+        
+        # Extract tax return specific fields using patterns
+        patterns = self.field_patterns.get("tax_return", {})
+        
+        for field_name, pattern in patterns.items():
+            matches = re.finditer(pattern, text)
+            for match in matches:
+                if match.lastindex and match.lastindex >= 1:
+                    value = match.group(1).strip()
+                    confidence = self._calculate_pattern_match_confidence(match, pattern)
+                    
+                    fields.append(ExtractedField(
+                        name=field_name,
+                        value=value,
+                        confidence=confidence,
+                        location=self._find_field_location(field_name, value, text),
+                        metadata={
+                            "source": "pattern_extraction",
+                            "section": "tax_return",
+                            "pattern": pattern
+                        }
+                    ))
+        
+        # Look for income tables
+        for table in document_structure.get("tables", []):
+            table_name = table.get("name", "").lower()
+            if "income" in table_name or "revenue" in table_name:
+                table_data = self.extract_table_data(table, text)
+                if table_data:
+                    fields.append(ExtractedField(
+                        name="income_table",
+                        value=json.dumps(table_data),
+                        confidence=ConfidenceScore(0.9),
+                        location=FieldLocation(
+                            page=table.get("page", 0),
+                            x=table.get("x", 0),
+                            y=table.get("y", 0),
+                            width=table.get("width", 0),
+                            height=table.get("height", 0)
+                        ),
+                        metadata={
+                            "source": "table_extraction",
+                            "section": "tax_return",
+                            "is_table": True,
+                            "row_count": len(table_data)
+                        }
+                    ))
+        
+        return fields
+    
+    def _extract_bank_statement_fields(self, text: str, document_structure: Dict[str, Any]) -> List[ExtractedField]:
+        """
+        Extract fields specific to bank statement documents.
+        
+        Args:
+            text: The OCR text
+            document_structure: The document structure
+            
+        Returns:
+            List of extracted fields specific to bank statements
+        """
+        fields = []
+        
+        # Extract bank statement specific fields using patterns
+        patterns = self.field_patterns.get("bank_statement", {})
+        
+        for field_name, pattern in patterns.items():
+            matches = re.finditer(pattern, text)
+            for match in matches:
+                if match.lastindex and match.lastindex >= 1:
+                    value = match.group(1).strip()
+                    confidence = self._calculate_pattern_match_confidence(match, pattern)
+                    
+                    fields.append(ExtractedField(
+                        name=field_name,
+                        value=value,
+                        confidence=confidence,
+                        location=self._find_field_location(field_name, value, text),
+                        metadata={
+                            "source": "pattern_extraction",
+                            "section": "bank_statement",
+                            "pattern": pattern
+                        }
+                    ))
+        
+        # Look for transaction tables
+        for table in document_structure.get("tables", []):
+            table_name = table.get("name", "").lower()
+            if "transaction" in table_name or "activity" in table_name:
+                table_data = self.extract_table_data(table, text)
+                if table_data:
+                    fields.append(ExtractedField(
+                        name="transactions",
+                        value=json.dumps(table_data),
+                        confidence=ConfidenceScore(0.9),
+                        location=FieldLocation(
+                            page=table.get("page", 0),
+                            x=table.get("x", 0),
+                            y=table.get("y", 0),
+                            width=table.get("width", 0),
+                            height=table.get("height", 0)
+                        ),
+                        metadata={
+                            "source": "table_extraction",
+                            "section": "bank_statement",
+                            "is_table": True,
+                            "row_count": len(table_data)
+                        }
+                    ))
+        
+        return fields
+    
+    def _extract_identity_document_fields(self, text: str, document_structure: Dict[str, Any]) -> List[ExtractedField]:
+        """
+        Extract fields specific to identity documents.
+        
+        Args:
+            text: The OCR text
+            document_structure: The document structure
+            
+        Returns:
+            List of extracted fields specific to identity documents
+        """
+        fields = []
+        
+        # Extract identity document specific fields using patterns
+        patterns = self.field_patterns.get("identity_document", {})
+        
+        for field_name, pattern in patterns.items():
+            matches = re.finditer(pattern, text)
+            for match in matches:
+                if match.lastindex and match.lastindex >= 1:
+                    value = match.group(1).strip()
+                    confidence = self._calculate_pattern_match_confidence(match, pattern)
+                    
+                    fields.append(ExtractedField(
+                        name=field_name,
+                        value=value,
+                        confidence=confidence,
+                        location=self._find_field_location(field_name, value, text),
+                        metadata={
+                            "source": "pattern_extraction",
+                            "section": "identity_document",
+                            "pattern": pattern
+                        }
+                    ))
+        
+        # Extract name components if full name is present
+        full_name = None
+        for field in fields:
+            if field.name == "full_name":
+                full_name = field.value
+                break
+        
+        if full_name:
+            # Simple name splitting logic - in a real implementation this would be more sophisticated
+            name_parts = full_name.split()
+            if len(name_parts) >= 2:
+                first_name = name_parts[0]
+                last_name = name_parts[-1]
+                
+                # Add first name if not already present
+                if not any(f.name == "first_name" for f in fields):
+                    fields.append(ExtractedField(
+                        name="first_name",
+                        value=first_name,
+                        confidence=ConfidenceScore(0.8),  # Slightly lower confidence for derived fields
+                        location=FieldLocation(page=0, x=0, y=0, width=0, height=0),
+                        metadata={
+                            "source": "derived",
+                            "derived_from": "full_name",
+                            "section": "identity_document"
+                        }
+                    ))
+                
+                # Add last name if not already present
+                if not any(f.name == "last_name" for f in fields):
+                    fields.append(ExtractedField(
+                        name="last_name",
+                        value=last_name,
+                        confidence=ConfidenceScore(0.8),  # Slightly lower confidence for derived fields
+                        location=FieldLocation(page=0, x=0, y=0, width=0, height=0),
+                        metadata={
+                            "source": "derived",
+                            "derived_from": "full_name",
+                            "section": "identity_document"
+                        }
+                    ))
+        
+        return fields
