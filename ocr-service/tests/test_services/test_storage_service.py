@@ -4,658 +4,687 @@
 """
 Unit tests for the S3-compatible storage service.
 
-This module contains tests that verify document retrieval, storage operations,
-encryption implementation, and metadata management for the storage service.
-It ensures the storage service correctly handles document access with proper
-security measures including AES-256 encryption.
+This module contains tests for the StorageService class, which provides
+S3-compatible storage operations for the OCR Service microservice. It verifies
+document retrieval, storage operations, encryption implementation, and metadata
+management with proper security measures including AES-256 encryption.
+
+Key test areas:
+1. S3 client connection and authentication
+2. Document download functionality from specified buckets
+3. AES-256 encryption implementation for document storage
+4. Error handling and retry logic for storage operations
+5. Document metadata extraction and updating functionality
+6. Versioning support for document history tracking
 """
 
 import os
 import json
-import pytest
-import boto3
-from unittest.mock import MagicMock, patch, call
-from botocore.exceptions import ClientError, ConnectionError
+import tempfile
+import unittest
 from datetime import datetime
+from unittest.mock import patch, MagicMock, mock_open
 
-# Import the service to test
-from src.services.storage_service import StorageService, with_retry
+import boto3
+import pytest
+from botocore.exceptions import ClientError
+from moto import mock_s3
 
-# Import types
-from src.types.storage import StorageOptions, StorageMetadata, StorageResult
-
-
-# ===== Test Initialization and Configuration =====
-
-def test_storage_service_initialization(s3_client_config):
-    """Test that the storage service initializes correctly with the provided configuration."""
-    # Create a storage service with the test configuration
-    service = StorageService(s3_client_config)
-    
-    # Verify the service was initialized with the correct configuration
-    assert service.config == s3_client_config
-    assert service.bucket_name == s3_client_config.get('bucket')
+from src.services.storage_service import StorageService
+from src.types.storage import (
+    StorageResult,
+    StorageMetadata,
+    StorageOptions,
+    StorageErrorCode,
+    StorageKey,
+    SignedUrlOptions
+)
 
 
-def test_get_bucket_name_by_environment():
-    """Test that the correct bucket name is selected based on the environment."""
-    # Test with production environment
-    with patch('src.services.storage_service.app_config.ENVIRONMENT', 'production'):
-        with patch('src.services.storage_service.s3_config.PRODUCTION_BUCKET', 'mca-documents-production'):
-            service = StorageService()
-            assert service._get_bucket_name() == 'mca-documents-production'
-    
-    # Test with staging environment
-    with patch('src.services.storage_service.app_config.ENVIRONMENT', 'staging'):
-        with patch('src.services.storage_service.s3_config.STAGING_BUCKET', 'mca-documents-staging'):
-            service = StorageService()
-            assert service._get_bucket_name() == 'mca-documents-staging'
-    
-    # Test with development environment
-    with patch('src.services.storage_service.app_config.ENVIRONMENT', 'development'):
-        with patch('src.services.storage_service.s3_config.DEVELOPMENT_BUCKET', 'mca-documents-development'):
-            service = StorageService()
-            assert service._get_bucket_name() == 'mca-documents-development'
-
-
-def test_initialize_client_with_retry_settings():
-    """Test that the S3 client is initialized with the correct retry settings."""
-    with patch('boto3.client') as mock_boto3_client:
-        # Create a mock client
-        mock_client = MagicMock()
-        mock_boto3_client.return_value = mock_client
+@pytest.fixture
+def s3_client():
+    """Fixture that provides a mocked S3 client using moto."""
+    with mock_s3():
+        # Set up test environment variables
+        os.environ["AWS_ACCESS_KEY_ID"] = "testing"
+        os.environ["AWS_SECRET_ACCESS_KEY"] = "testing"
+        os.environ["AWS_SECURITY_TOKEN"] = "testing"
+        os.environ["AWS_SESSION_TOKEN"] = "testing"
+        os.environ["AWS_DEFAULT_REGION"] = "us-east-1"
         
-        # Create a storage service
+        # Create S3 client
+        s3 = boto3.client('s3', region_name='us-east-1')
+        
+        # Create test buckets
+        s3.create_bucket(Bucket='mca-documents-production')
+        s3.create_bucket(Bucket='mca-documents-staging')
+        s3.create_bucket(Bucket='mca-extracted-data-production')
+        s3.create_bucket(Bucket='mca-extracted-data-staging')
+        
+        yield s3
+
+
+@pytest.fixture
+def storage_service(s3_client):
+    """Fixture that provides a StorageService instance with mocked S3 client."""
+    with patch('src.services.storage_service.boto3.client', return_value=s3_client):
         service = StorageService()
-        
-        # Verify boto3.client was called with the correct parameters
-        mock_boto3_client.assert_called_once()
-        
-        # Check that retry configuration was included
-        args, kwargs = mock_boto3_client.call_args
-        assert 's3' in args or kwargs.get('service_name') == 's3'
-        assert 'config' in kwargs
-        
-        # Verify the client was stored correctly
-        assert service.client == mock_client
+        yield service
 
 
-# ===== Test Document Download Operations =====
+@pytest.fixture
+def test_document():
+    """Fixture that provides a temporary test document."""
+    with tempfile.NamedTemporaryFile(delete=False) as tmp:
+        tmp.write(b"This is a test document for OCR processing.")
+        tmp_path = tmp.name
+    
+    yield tmp_path
+    
+    # Clean up the temporary file
+    if os.path.exists(tmp_path):
+        os.unlink(tmp_path)
 
-def test_download_document_success(s3_mock):
-    """Test successful document download from S3."""
-    # Set up test data
-    bucket_name = 'mca-documents-test'
-    key = 'test-document.pdf'
-    content = b'Test document content'
-    metadata = {
-        'document-id': 'doc-123',
-        'application-id': 'app-456',
-        'content-type': 'application/pdf'
+
+@pytest.fixture
+def test_metadata():
+    """Fixture that provides test document metadata."""
+    return {
+        "document-id": "doc-123",
+        "application-id": "app-456",
+        "document-type": "invoice",
+        "original-filename": "invoice.pdf",
+        "created-at": datetime.now().isoformat(),
+        "extraction-status": "pending",
+        "custom-field1": "value1",
+        "custom-field2": "value2"
     }
-    
-    # Upload a test document to the mock S3
-    s3_mock.put_object(
-        Bucket=bucket_name,
-        Key=key,
-        Body=content,
-        Metadata=metadata,
-        ServerSideEncryption='AES256'
-    )
-    
-    # Create a storage service with the mock S3 client
-    with patch('src.services.storage_service.boto3.client', return_value=s3_mock):
-        with patch('src.services.storage_service.app_config.ENVIRONMENT', 'test'):
-            with patch('src.services.storage_service.s3_config.DEVELOPMENT_BUCKET', bucket_name):
-                service = StorageService()
-                result = service.download_document(key)
-    
-    # Verify the result
-    assert result.success is True
-    assert result.data == content
-    assert result.metadata is not None
-    assert result.metadata.get('metadata') == metadata
 
 
-def test_download_document_with_version_id(s3_mock):
-    """Test document download with a specific version ID."""
-    # Set up test data
-    bucket_name = 'mca-documents-test'
-    key = 'test-document-versioned.pdf'
-    content_v1 = b'Test document content v1'
-    content_v2 = b'Test document content v2'
-    
-    # Enable versioning on the bucket
-    s3_mock.put_bucket_versioning(
-        Bucket=bucket_name,
-        VersioningConfiguration={'Status': 'Enabled'}
-    )
-    
-    # Upload two versions of the document
-    response_v1 = s3_mock.put_object(
-        Bucket=bucket_name,
-        Key=key,
-        Body=content_v1,
-        ServerSideEncryption='AES256'
-    )
-    version_id_v1 = response_v1.get('VersionId')
-    
-    response_v2 = s3_mock.put_object(
-        Bucket=bucket_name,
-        Key=key,
-        Body=content_v2,
-        ServerSideEncryption='AES256'
-    )
-    version_id_v2 = response_v2.get('VersionId')
-    
-    # Create a storage service with the mock S3 client
-    with patch('src.services.storage_service.boto3.client', return_value=s3_mock):
-        with patch('src.services.storage_service.app_config.ENVIRONMENT', 'test'):
-            with patch('src.services.storage_service.s3_config.DEVELOPMENT_BUCKET', bucket_name):
-                service = StorageService()
-                
-                # Download the latest version (v2)
-                result_latest = service.download_document(key)
-                
-                # Download a specific version (v1)
-                result_v1 = service.download_document(key, version_id=version_id_v1)
-    
-    # Verify the results
-    assert result_latest.success is True
-    assert result_latest.data == content_v2
-    
-    assert result_v1.success is True
-    assert result_v1.data == content_v1
-    assert result_v1.version_id == version_id_v1
+class TestStorageService:
+    """Test cases for the StorageService class."""
 
+    def test_initialization(self, storage_service):
+        """Test that the StorageService initializes correctly."""
+        assert storage_service is not None
+        assert storage_service.document_bucket == "mca-documents-production"
+        assert storage_service.extracted_data_bucket == "mca-extracted-data-production"
 
-def test_download_document_not_found(s3_mock):
-    """Test document download when the document doesn't exist."""
-    # Set up test data
-    bucket_name = 'mca-documents-test'
-    key = 'non-existent-document.pdf'
-    
-    # Create a storage service with the mock S3 client
-    with patch('src.services.storage_service.boto3.client', return_value=s3_mock):
-        with patch('src.services.storage_service.app_config.ENVIRONMENT', 'test'):
-            with patch('src.services.storage_service.s3_config.DEVELOPMENT_BUCKET', bucket_name):
-                service = StorageService()
-                result = service.download_document(key)
-    
-    # Verify the result
-    assert result.success is False
-    assert 'NoSuchKey' in result.error or 'not found' in result.error.lower()
+    def test_download_document(self, storage_service, s3_client, test_document):
+        """Test downloading a document from S3 storage."""
+        # Upload a test document to S3
+        key = "test/document.txt"
+        with open(test_document, 'rb') as f:
+            s3_client.put_object(
+                Bucket=storage_service.document_bucket,
+                Key=key,
+                Body=f.read(),
+                ServerSideEncryption="AES256"
+            )
+        
+        # Download the document
+        result = storage_service.download_document(key)
+        
+        # Verify the result
+        assert result.success is True
+        assert os.path.exists(result.data)
+        
+        # Verify the content
+        with open(result.data, 'rb') as f:
+            content = f.read()
+            assert content == b"This is a test document for OCR processing."
 
+    def test_download_document_with_local_path(self, storage_service, s3_client, test_document):
+        """Test downloading a document to a specific local path."""
+        # Upload a test document to S3
+        key = "test/document_local.txt"
+        with open(test_document, 'rb') as f:
+            s3_client.put_object(
+                Bucket=storage_service.document_bucket,
+                Key=key,
+                Body=f.read(),
+                ServerSideEncryption="AES256"
+            )
+        
+        # Create a local path for download
+        local_path = os.path.join(tempfile.gettempdir(), "downloaded_document.txt")
+        
+        # Download the document to the local path
+        result = storage_service.download_document(key, local_path)
+        
+        # Verify the result
+        assert result.success is True
+        assert result.data == local_path
+        assert os.path.exists(local_path)
+        
+        # Verify the content
+        with open(local_path, 'rb') as f:
+            content = f.read()
+            assert content == b"This is a test document for OCR processing."
+        
+        # Clean up
+        if os.path.exists(local_path):
+            os.unlink(local_path)
 
-# ===== Test Document Upload Operations =====
+    def test_download_document_not_found(self, storage_service):
+        """Test downloading a document that doesn't exist."""
+        key = "test/nonexistent.txt"
+        
+        # Download the document
+        result = storage_service.download_document(key)
+        
+        # Verify the result
+        assert result.success is False
+        assert result.error_code == StorageErrorCode.RESOURCE_NOT_FOUND
 
-def test_upload_document_success(s3_mock):
-    """Test successful document upload to S3 with AES-256 encryption."""
-    # Set up test data
-    bucket_name = 'mca-documents-test'
-    key = 'upload-test-document.pdf'
-    content = b'Test document content for upload'
-    metadata = {
-        'document-id': 'doc-789',
-        'application-id': 'app-123',
-        'content-type': 'application/pdf'
-    }
-    
-    # Create a storage service with the mock S3 client
-    with patch('src.services.storage_service.boto3.client', return_value=s3_mock):
-        with patch('src.services.storage_service.app_config.ENVIRONMENT', 'test'):
-            with patch('src.services.storage_service.s3_config.DEVELOPMENT_BUCKET', bucket_name):
-                service = StorageService()
-                result = service.upload_document(
-                    key=key,
-                    data=content,
-                    metadata=metadata,
-                    options=StorageOptions(content_type="application/pdf")
+    def test_upload_document(self, storage_service, test_document, test_metadata):
+        """Test uploading a document to S3 storage with AES-256 encryption."""
+        key = "test/uploaded_document.txt"
+        
+        # Upload the document
+        result = storage_service.upload_document(
+            local_path=test_document,
+            key=key,
+            metadata=test_metadata,
+            content_type="text/plain"
+        )
+        
+        # Verify the result
+        assert result.success is True
+        assert result.data == key
+        
+        # Verify the document was uploaded with encryption
+        response = storage_service.s3_client.head_object(
+            Bucket=storage_service.document_bucket,
+            Key=key
+        )
+        
+        # Check encryption
+        assert response.get('ServerSideEncryption') == "AES256"
+        
+        # Check metadata
+        for key, value in test_metadata.items():
+            assert response['Metadata'].get(key.lower()) == value
+        
+        # Check content type
+        assert response.get('ContentType') == "text/plain"
+
+    def test_upload_extracted_data(self, storage_service):
+        """Test uploading extracted OCR data to S3 storage."""
+        key = "test/extracted_data.json"
+        data = {
+            "document_id": "doc-123",
+            "application_id": "app-456",
+            "extracted_fields": {
+                "invoice_number": {
+                    "value": "INV-12345",
+                    "confidence": 0.95
+                },
+                "date": {
+                    "value": "2025-05-01",
+                    "confidence": 0.92
+                },
+                "total_amount": {
+                    "value": "$1,234.56",
+                    "confidence": 0.88
+                }
+            }
+        }
+        
+        # Upload the extracted data
+        result = storage_service.upload_extracted_data(
+            data=data,
+            key=key,
+            metadata=test_metadata
+        )
+        
+        # Verify the result
+        assert result.success is True
+        assert result.data == key
+        
+        # Verify the data was uploaded with encryption
+        response = storage_service.s3_client.get_object(
+            Bucket=storage_service.extracted_data_bucket,
+            Key=key
+        )
+        
+        # Check encryption
+        assert response.get('ServerSideEncryption') == "AES256"
+        
+        # Check content
+        content = response['Body'].read().decode('utf-8')
+        uploaded_data = json.loads(content)
+        assert uploaded_data == data
+
+    def test_get_document_metadata(self, storage_service, s3_client, test_document, test_metadata):
+        """Test retrieving document metadata from S3 storage."""
+        key = "test/metadata_document.txt"
+        
+        # Upload a test document with metadata
+        with open(test_document, 'rb') as f:
+            s3_client.put_object(
+                Bucket=storage_service.document_bucket,
+                Key=key,
+                Body=f.read(),
+                Metadata=test_metadata,
+                ContentType="text/plain",
+                ServerSideEncryption="AES256"
+            )
+        
+        # Get the metadata
+        result = storage_service.get_document_metadata(key)
+        
+        # Verify the result
+        assert result.success is True
+        assert isinstance(result.data, StorageMetadata)
+        
+        # Check metadata fields
+        assert result.data.document_id == test_metadata['document-id']
+        assert result.data.application_id == test_metadata['application-id']
+        assert result.data.document_type == test_metadata['document-type']
+        assert result.data.original_filename == test_metadata['original-filename']
+        assert result.data.content_type == "text/plain"
+        assert result.data.extraction_status == test_metadata['extraction-status']
+        
+        # Check custom metadata
+        assert result.data.custom_metadata['field1'] == test_metadata['custom-field1']
+        assert result.data.custom_metadata['field2'] == test_metadata['custom-field2']
+
+    def test_update_document_metadata(self, storage_service, s3_client, test_document, test_metadata):
+        """Test updating document metadata in S3 storage."""
+        key = "test/update_metadata_document.txt"
+        
+        # Upload a test document with metadata
+        with open(test_document, 'rb') as f:
+            s3_client.put_object(
+                Bucket=storage_service.document_bucket,
+                Key=key,
+                Body=f.read(),
+                Metadata=test_metadata,
+                ContentType="text/plain",
+                ServerSideEncryption="AES256"
+            )
+        
+        # Update metadata
+        metadata_updates = {
+            "extraction-status": "completed",
+            "extraction-confidence": "0.95",
+            "custom-field3": "new-value"
+        }
+        
+        result = storage_service.update_document_metadata(key, metadata_updates)
+        
+        # Verify the result
+        assert result.success is True
+        
+        # Get the updated metadata
+        updated_metadata_result = storage_service.get_document_metadata(key)
+        updated_metadata = updated_metadata_result.data
+        
+        # Check updated fields
+        assert updated_metadata.extraction_status == "completed"
+        assert updated_metadata.extraction_confidence == 0.95
+        assert updated_metadata.custom_metadata['field3'] == "new-value"
+        
+        # Check that original fields are preserved
+        assert updated_metadata.document_id == test_metadata['document-id']
+        assert updated_metadata.application_id == test_metadata['application-id']
+        assert updated_metadata.document_type == test_metadata['document-type']
+
+    def test_update_extraction_status(self, storage_service, s3_client, test_document, test_metadata):
+        """Test updating extraction status and confidence for a document."""
+        key = "test/extraction_status_document.txt"
+        
+        # Upload a test document with metadata
+        with open(test_document, 'rb') as f:
+            s3_client.put_object(
+                Bucket=storage_service.document_bucket,
+                Key=key,
+                Body=f.read(),
+                Metadata=test_metadata,
+                ContentType="text/plain",
+                ServerSideEncryption="AES256"
+            )
+        
+        # Update extraction status and confidence
+        result = storage_service.update_extraction_status(
+            key=key,
+            status="completed",
+            confidence=0.98
+        )
+        
+        # Verify the result
+        assert result.success is True
+        
+        # Get the updated metadata
+        updated_metadata_result = storage_service.get_document_metadata(key)
+        updated_metadata = updated_metadata_result.data
+        
+        # Check updated fields
+        assert updated_metadata.extraction_status == "completed"
+        assert updated_metadata.extraction_confidence == 0.98
+
+    def test_get_document_versions(self, storage_service, s3_client, test_document):
+        """Test retrieving version history for a document in S3 storage."""
+        key = "test/versioned_document.txt"
+        
+        # Enable versioning on the bucket
+        s3_client.put_bucket_versioning(
+            Bucket=storage_service.document_bucket,
+            VersioningConfiguration={'Status': 'Enabled'}
+        )
+        
+        # Upload initial version
+        with open(test_document, 'rb') as f:
+            s3_client.put_object(
+                Bucket=storage_service.document_bucket,
+                Key=key,
+                Body=f.read(),
+                ContentType="text/plain",
+                ServerSideEncryption="AES256"
+            )
+        
+        # Upload second version
+        s3_client.put_object(
+            Bucket=storage_service.document_bucket,
+            Key=key,
+            Body=b"Updated content for version 2",
+            ContentType="text/plain",
+            ServerSideEncryption="AES256"
+        )
+        
+        # Get version history
+        result = storage_service.get_document_versions(key)
+        
+        # Verify the result
+        assert result.success is True
+        assert len(result.data) == 2  # Should have two versions
+        
+        # Check version attributes
+        for version in result.data:
+            assert 'version_id' in version
+            assert 'last_modified' in version
+            assert 'size_bytes' in version
+            assert 'is_latest' in version
+            assert 'etag' in version
+
+    def test_get_document_version(self, storage_service, s3_client, test_document):
+        """Test retrieving a specific version of a document from S3 storage."""
+        key = "test/specific_version_document.txt"
+        
+        # Enable versioning on the bucket
+        s3_client.put_bucket_versioning(
+            Bucket=storage_service.document_bucket,
+            VersioningConfiguration={'Status': 'Enabled'}
+        )
+        
+        # Upload initial version
+        with open(test_document, 'rb') as f:
+            response = s3_client.put_object(
+                Bucket=storage_service.document_bucket,
+                Key=key,
+                Body=f.read(),
+                ContentType="text/plain",
+                ServerSideEncryption="AES256"
+            )
+        
+        # Get the version ID
+        version_id = response['VersionId']
+        
+        # Upload second version
+        s3_client.put_object(
+            Bucket=storage_service.document_bucket,
+            Key=key,
+            Body=b"Updated content for version 2",
+            ContentType="text/plain",
+            ServerSideEncryption="AES256"
+        )
+        
+        # Get the specific version
+        result = storage_service.get_document_version(key, version_id)
+        
+        # Verify the result
+        assert result.success is True
+        assert os.path.exists(result.data)
+        
+        # Verify the content matches the first version
+        with open(result.data, 'rb') as f:
+            content = f.read()
+            assert content == b"This is a test document for OCR processing."
+
+    def test_generate_presigned_url(self, storage_service, s3_client, test_document):
+        """Test generating a presigned URL for accessing a document."""
+        key = "test/presigned_url_document.txt"
+        
+        # Upload a test document
+        with open(test_document, 'rb') as f:
+            s3_client.put_object(
+                Bucket=storage_service.document_bucket,
+                Key=key,
+                Body=f.read(),
+                ContentType="text/plain",
+                ServerSideEncryption="AES256"
+            )
+        
+        # Generate a presigned URL
+        options = SignedUrlOptions(expiration=3600)
+        result = storage_service.generate_presigned_url(key, options)
+        
+        # Verify the result
+        assert result.success is True
+        assert isinstance(result.data, str)
+        assert "https://" in result.data
+        assert key in result.data
+        assert "AWSAccessKeyId" in result.data
+        assert "Signature" in result.data
+        assert "Expires" in result.data
+
+    def test_check_document_exists(self, storage_service, s3_client, test_document):
+        """Test checking if a document exists in S3 storage."""
+        key = "test/exists_document.txt"
+        
+        # Upload a test document
+        with open(test_document, 'rb') as f:
+            s3_client.put_object(
+                Bucket=storage_service.document_bucket,
+                Key=key,
+                Body=f.read(),
+                ContentType="text/plain",
+                ServerSideEncryption="AES256"
+            )
+        
+        # Check if document exists
+        result = storage_service.check_document_exists(key)
+        
+        # Verify the result
+        assert result.success is True
+        assert result.data is True
+        
+        # Check for non-existent document
+        nonexistent_result = storage_service.check_document_exists("test/nonexistent.txt")
+        
+        # Verify the result
+        assert nonexistent_result.success is True
+        assert nonexistent_result.data is False
+
+    def test_list_documents(self, storage_service, s3_client, test_document):
+        """Test listing documents in S3 storage with a given prefix."""
+        prefix = "test/list/"
+        
+        # Upload multiple test documents with the same prefix
+        for i in range(3):
+            key = f"{prefix}document_{i}.txt"
+            with open(test_document, 'rb') as f:
+                s3_client.put_object(
+                    Bucket=storage_service.document_bucket,
+                    Key=key,
+                    Body=f.read(),
+                    ContentType="text/plain",
+                    ServerSideEncryption="AES256"
                 )
-    
-    # Verify the result
-    assert result.success is True
-    assert result.version_id is not None
-    
-    # Verify the document was uploaded with the correct content and metadata
-    response = s3_mock.get_object(Bucket=bucket_name, Key=key)
-    assert response['Body'].read() == content
-    assert response['Metadata'] == metadata
-    assert response['ServerSideEncryption'] == 'AES256'  # Verify AES-256 encryption
-
-
-def test_upload_extraction_results(s3_mock):
-    """Test uploading OCR extraction results to S3."""
-    # Set up test data
-    bucket_name = 'mca-documents-test'
-    document_key = 'test-document.pdf'
-    extraction_data = {
-        'text': 'Extracted text from document',
-        'fields': {
-            'name': 'John Doe',
-            'address': '123 Main St',
-            'phone': '555-123-4567'
-        }
-    }
-    confidence_scores = {
-        'name': 0.98,
-        'address': 0.92,
-        'phone': 0.89
-    }
-    
-    # Create a storage service with the mock S3 client
-    with patch('src.services.storage_service.boto3.client', return_value=s3_mock):
-        with patch('src.services.storage_service.app_config.ENVIRONMENT', 'test'):
-            with patch('src.services.storage_service.s3_config.DEVELOPMENT_BUCKET', bucket_name):
-                with patch('src.services.storage_service.app_config.VERSION', '1.0.0-test'):
-                    service = StorageService()
-                    result = service.upload_extraction_results(
-                        document_key=document_key,
-                        extraction_data=extraction_data,
-                        confidence_scores=confidence_scores
-                    )
-    
-    # Verify the result
-    assert result.success is True
-    
-    # Verify the results were uploaded correctly
-    results_key = f"{document_key.rsplit('.', 1)[0]}_results.json"
-    response = s3_mock.get_object(Bucket=bucket_name, Key=results_key)
-    results_data = json.loads(response['Body'].read().decode('utf-8'))
-    
-    assert results_data['document_key'] == document_key
-    assert results_data['extracted_data'] == extraction_data
-    assert results_data['confidence_scores'] == confidence_scores
-    assert results_data['version'] == '1.0.0-test'
-    assert 'extraction_timestamp' in results_data
-    
-    # Verify metadata and encryption
-    assert response['Metadata']['content-type'] == 'application/json'
-    assert response['Metadata']['extraction-service'] == 'ocr-service'
-    assert 'extraction-timestamp' in response['Metadata']
-    assert response['ServerSideEncryption'] == 'AES256'  # Verify AES-256 encryption
-
-
-# ===== Test Error Handling and Retry Logic =====
-
-def test_with_retry_decorator():
-    """Test the with_retry decorator for implementing retry logic."""
-    # Create a mock function that fails twice and succeeds on the third try
-    mock_func = MagicMock(side_effect=[ConnectionError("Connection failed"), 
-                                      ConnectionError("Connection failed again"), 
-                                      "Success"])
-    
-    # Apply the with_retry decorator
-    decorated_func = with_retry(max_retries=3, base_delay=0.01, max_delay=0.1)(mock_func)
-    
-    # Call the decorated function
-    result = decorated_func()
-    
-    # Verify the function was called multiple times and eventually succeeded
-    assert mock_func.call_count == 3
-    assert result == "Success"
-
-
-def test_with_retry_decorator_max_retries_exceeded():
-    """Test the with_retry decorator when max retries are exceeded."""
-    # Create a mock function that always fails
-    mock_func = MagicMock(side_effect=ConnectionError("Connection failed"))
-    
-    # Apply the with_retry decorator with a small delay for faster testing
-    decorated_func = with_retry(max_retries=2, base_delay=0.01, max_delay=0.05)(mock_func)
-    
-    # Call the decorated function and expect it to raise an exception
-    with pytest.raises(ConnectionError):
-        decorated_func()
-    
-    # Verify the function was called the expected number of times
-    assert mock_func.call_count == 3  # Initial call + 2 retries
-
-
-def test_download_document_with_connection_error():
-    """Test document download with a connection error that triggers retries."""
-    # Create a mock S3 client that raises a connection error
-    mock_client = MagicMock()
-    mock_client.get_object.side_effect = ConnectionError("Connection failed")
-    
-    # Create a storage service with the mock client
-    with patch('src.services.storage_service.boto3.client', return_value=mock_client):
-        service = StorageService()
         
-        # Patch the retry decorator to use small delays for faster testing
-        with patch('src.services.storage_service.with_retry', 
-                  return_value=with_retry(max_retries=2, base_delay=0.01, max_delay=0.05)):
-            result = service.download_document('test-key')
-    
-    # Verify the result
-    assert result.success is False
-    assert 'connection error' in result.error.lower()
-    
-    # Verify the client method was called multiple times
-    assert mock_client.get_object.call_count > 1
+        # Upload a document with a different prefix
+        with open(test_document, 'rb') as f:
+            s3_client.put_object(
+                Bucket=storage_service.document_bucket,
+                Key="different/prefix/document.txt",
+                Body=f.read(),
+                ContentType="text/plain",
+                ServerSideEncryption="AES256"
+            )
+        
+        # List documents with the prefix
+        result = storage_service.list_documents(prefix)
+        
+        # Verify the result
+        assert result.success is True
+        assert len(result.data) == 3
+        
+        # Check that all documents have the correct prefix
+        for document in result.data:
+            assert document['key'].startswith(prefix)
 
+    def test_delete_document(self, storage_service, s3_client, test_document):
+        """Test deleting a document from S3 storage."""
+        key = "test/delete_document.txt"
+        
+        # Upload a test document
+        with open(test_document, 'rb') as f:
+            s3_client.put_object(
+                Bucket=storage_service.document_bucket,
+                Key=key,
+                Body=f.read(),
+                ContentType="text/plain",
+                ServerSideEncryption="AES256"
+            )
+        
+        # Verify the document exists
+        exists_result = storage_service.check_document_exists(key)
+        assert exists_result.success is True
+        assert exists_result.data is True
+        
+        # Delete the document
+        delete_result = storage_service.delete_document(key)
+        
+        # Verify the delete result
+        assert delete_result.success is True
+        assert delete_result.data is True
+        
+        # Verify the document no longer exists
+        after_delete_result = storage_service.check_document_exists(key)
+        assert after_delete_result.success is True
+        assert after_delete_result.data is False
 
-# ===== Test Metadata Management =====
+    def test_calculate_md5(self, storage_service, test_document):
+        """Test calculating MD5 hash for a file."""
+        # Calculate MD5 hash
+        md5_hash = storage_service.calculate_md5(test_document)
+        
+        # Verify the result is a valid MD5 hash
+        assert isinstance(md5_hash, str)
+        assert len(md5_hash) == 32  # MD5 hash is 32 characters long
+        
+        # Verify the hash is consistent
+        second_hash = storage_service.calculate_md5(test_document)
+        assert md5_hash == second_hash
 
-def test_extract_metadata():
-    """Test extraction of metadata from an S3 object response."""
-    # Create a mock S3 response
-    mock_response = {
-        'ContentType': 'application/pdf',
-        'ContentLength': 12345,
-        'LastModified': datetime(2023, 1, 1, 12, 0, 0),
-        'ETag': '"abcdef123456"',
-        'VersionId': 'v1',
-        'ServerSideEncryption': 'AES256',
-        'Metadata': {
-            'document-id': 'doc-123',
-            'application-id': 'app-456'
+    def test_health_check(self, storage_service):
+        """Test the health check functionality."""
+        # Perform health check
+        result = storage_service.health_check()
+        
+        # Verify the result
+        assert result is True
+
+    def test_error_handling_connection_error(self, storage_service):
+        """Test error handling for connection errors."""
+        # Mock a connection error
+        error_response = {
+            'Error': {
+                'Code': 'ConnectionError',
+                'Message': 'Connection error occurred'
+            }
         }
-    }
-    
-    # Create a storage service
-    service = StorageService()
-    
-    # Extract metadata
-    metadata = service._extract_metadata(mock_response)
-    
-    # Verify the extracted metadata
-    assert metadata.content_type == 'application/pdf'
-    assert metadata.content_length == 12345
-    assert metadata.last_modified == datetime(2023, 1, 1, 12, 0, 0)
-    assert metadata.etag == 'abcdef123456'  # ETag should be stripped of quotes
-    assert metadata.version_id == 'v1'
-    assert metadata.server_side_encryption == 'AES256'
-    assert metadata.metadata == {'document-id': 'doc-123', 'application-id': 'app-456'}
+        client_error = ClientError(error_response, 'GetObject')
+        
+        with patch.object(storage_service.s3_client, 'download_file', side_effect=client_error):
+            result = storage_service.download_document("test/error_document.txt")
+        
+        # Verify the result
+        assert result.success is False
+        assert result.error_code == StorageErrorCode.CONNECTION_ERROR
+        assert "Connection error occurred" in result.error_message
+
+    def test_error_handling_timeout(self, storage_service):
+        """Test error handling for timeout errors."""
+        # Mock a timeout error
+        error_response = {
+            'Error': {
+                'Code': 'RequestTimeout',
+                'Message': 'Request timed out'
+            }
+        }
+        client_error = ClientError(error_response, 'GetObject')
+        
+        with patch.object(storage_service.s3_client, 'download_file', side_effect=client_error):
+            result = storage_service.download_document("test/timeout_document.txt")
+        
+        # Verify the result
+        assert result.success is False
+        assert result.error_code == StorageErrorCode.TIMEOUT
+        assert "Request timed out" in result.error_message
+
+    def test_error_handling_access_denied(self, storage_service):
+        """Test error handling for access denied errors."""
+        # Mock an access denied error
+        error_response = {
+            'Error': {
+                'Code': 'AccessDenied',
+                'Message': 'Access denied'
+            }
+        }
+        client_error = ClientError(error_response, 'GetObject')
+        
+        with patch.object(storage_service.s3_client, 'download_file', side_effect=client_error):
+            result = storage_service.download_document("test/access_denied_document.txt")
+        
+        # Verify the result
+        assert result.success is False
+        assert result.error_code == StorageErrorCode.ACCESS_DENIED
+        assert "Access denied" in result.error_message
+
+    def test_error_handling_unknown_error(self, storage_service):
+        """Test error handling for unknown errors."""
+        # Mock an unknown error
+        with patch.object(storage_service.s3_client, 'download_file', side_effect=Exception("Unknown error")):
+            result = storage_service.download_document("test/unknown_error_document.txt")
+        
+        # Verify the result
+        assert result.success is False
+        assert result.error_code == StorageErrorCode.UNKNOWN_ERROR
+        assert "Unknown error" in result.error_message
+
+    def test_retry_logic(self, storage_service):
+        """Test retry logic for transient errors."""
+        # Mock a connection error that succeeds on the second attempt
+        error_response = {
+            'Error': {
+                'Code': 'ConnectionError',
+                'Message': 'Connection error occurred'
+            }
+        }
+        client_error = ClientError(error_response, 'GetObject')
+        
+        # Create a side effect that fails on first call but succeeds on second call
+        mock_download = MagicMock(side_effect=[client_error, None])
+        
+        with patch.object(storage_service.s3_client, 'download_file', mock_download):
+            result = storage_service.download_document("test/retry_document.txt")
+        
+        # Verify the result
+        assert result.success is True
+        assert mock_download.call_count == 2  # Should have been called twice due to retry
 
 
-def test_update_document_metadata(s3_mock):
-    """Test updating metadata for a document in S3."""
-    # Set up test data
-    bucket_name = 'mca-documents-test'
-    key = 'metadata-test-document.pdf'
-    content = b'Test document content for metadata update'
-    initial_metadata = {
-        'document-id': 'doc-123',
-        'application-id': 'app-456',
-        'status': 'pending'
-    }
-    updated_metadata = {
-        'document-id': 'doc-123',
-        'application-id': 'app-456',
-        'status': 'completed',
-        'confidence': '0.95'
-    }
-    
-    # Upload a test document with initial metadata
-    s3_mock.put_object(
-        Bucket=bucket_name,
-        Key=key,
-        Body=content,
-        Metadata=initial_metadata,
-        ServerSideEncryption='AES256'
-    )
-    
-    # Create a storage service with the mock S3 client
-    with patch('src.services.storage_service.boto3.client', return_value=s3_mock):
-        with patch('src.services.storage_service.app_config.ENVIRONMENT', 'test'):
-            with patch('src.services.storage_service.s3_config.DEVELOPMENT_BUCKET', bucket_name):
-                service = StorageService()
-                result = service.update_document_metadata(key, updated_metadata)
-    
-    # Verify the result
-    assert result.success is True
-    
-    # Verify the metadata was updated
-    response = s3_mock.get_object(Bucket=bucket_name, Key=key)
-    assert response['Metadata'] == updated_metadata
-    
-    # Verify the content was preserved
-    assert response['Body'].read() == content
-    
-    # Verify encryption was maintained
-    assert response['ServerSideEncryption'] == 'AES256'
-
-
-# ===== Test Versioning Support =====
-
-def test_get_document_versions(s3_mock):
-    """Test retrieving all versions of a document for audit purposes."""
-    # Set up test data
-    bucket_name = 'mca-documents-test'
-    key = 'versioned-document.pdf'
-    
-    # Enable versioning on the bucket
-    s3_mock.put_bucket_versioning(
-        Bucket=bucket_name,
-        VersioningConfiguration={'Status': 'Enabled'}
-    )
-    
-    # Upload multiple versions of the document
-    version_ids = []
-    for i in range(3):
-        response = s3_mock.put_object(
-            Bucket=bucket_name,
-            Key=key,
-            Body=f'Version {i+1} content'.encode(),
-            ServerSideEncryption='AES256'
-        )
-        version_ids.append(response.get('VersionId'))
-    
-    # Create a storage service with the mock S3 client
-    with patch('src.services.storage_service.boto3.client', return_value=s3_mock):
-        with patch('src.services.storage_service.app_config.ENVIRONMENT', 'test'):
-            with patch('src.services.storage_service.s3_config.DEVELOPMENT_BUCKET', bucket_name):
-                service = StorageService()
-                result = service.get_document_versions(key)
-    
-    # Verify the result
-    assert result.success is True
-    assert len(result.data) == 3  # Should have 3 versions
-    
-    # Verify version information
-    for version in result.data:
-        assert 'version_id' in version
-        assert 'last_modified' in version
-        assert 'is_latest' in version
-        assert 'size' in version
-    
-    # The latest version should be marked as such
-    latest_versions = [v for v in result.data if v['is_latest']]
-    assert len(latest_versions) == 1
-
-
-def test_check_bucket_versioning(s3_mock):
-    """Test checking if versioning is enabled on the bucket."""
-    # Set up test data
-    bucket_name = 'mca-documents-test'
-    
-    # Enable versioning on the bucket
-    s3_mock.put_bucket_versioning(
-        Bucket=bucket_name,
-        VersioningConfiguration={'Status': 'Enabled'}
-    )
-    
-    # Create a storage service with the mock S3 client
-    with patch('src.services.storage_service.boto3.client', return_value=s3_mock):
-        with patch('src.services.storage_service.app_config.ENVIRONMENT', 'test'):
-            with patch('src.services.storage_service.s3_config.DEVELOPMENT_BUCKET', bucket_name):
-                service = StorageService()
-                result = service.check_bucket_versioning()
-    
-    # Verify versioning is enabled
-    assert result is True
-
-
-def test_enable_bucket_versioning(s3_mock):
-    """Test enabling versioning on the bucket if not already enabled."""
-    # Set up test data
-    bucket_name = 'mca-documents-test'
-    
-    # Disable versioning on the bucket
-    s3_mock.put_bucket_versioning(
-        Bucket=bucket_name,
-        VersioningConfiguration={'Status': 'Suspended'}
-    )
-    
-    # Create a storage service with the mock S3 client
-    with patch('src.services.storage_service.boto3.client', return_value=s3_mock):
-        with patch('src.services.storage_service.app_config.ENVIRONMENT', 'test'):
-            with patch('src.services.storage_service.s3_config.DEVELOPMENT_BUCKET', bucket_name):
-                service = StorageService()
-                
-                # Verify versioning is not enabled
-                assert service.check_bucket_versioning() is False
-                
-                # Enable versioning
-                result = service.enable_bucket_versioning()
-                
-                # Verify versioning was enabled
-                assert result is True
-                assert service.check_bucket_versioning() is True
-
-
-# ===== Test Additional Functionality =====
-
-def test_generate_presigned_url(s3_mock):
-    """Test generating a presigned URL for temporary access to a document."""
-    # Set up test data
-    bucket_name = 'mca-documents-test'
-    key = 'presigned-url-document.pdf'
-    content = b'Test document content for presigned URL'
-    
-    # Upload a test document
-    s3_mock.put_object(
-        Bucket=bucket_name,
-        Key=key,
-        Body=content,
-        ServerSideEncryption='AES256'
-    )
-    
-    # Mock the generate_presigned_url method
-    s3_mock.generate_presigned_url = MagicMock(return_value='https://example.com/presigned-url')
-    
-    # Create a storage service with the mock S3 client
-    with patch('src.services.storage_service.boto3.client', return_value=s3_mock):
-        with patch('src.services.storage_service.app_config.ENVIRONMENT', 'test'):
-            with patch('src.services.storage_service.s3_config.DEVELOPMENT_BUCKET', bucket_name):
-                service = StorageService()
-                url = service.generate_presigned_url(key, expiration=3600)
-    
-    # Verify the URL was generated
-    assert url == 'https://example.com/presigned-url'
-    
-    # Verify the generate_presigned_url method was called with the correct parameters
-    s3_mock.generate_presigned_url.assert_called_once_with(
-        'get_object',
-        Params={'Bucket': bucket_name, 'Key': key},
-        ExpiresIn=3600
-    )
-
-
-def test_document_exists(s3_mock):
-    """Test checking if a document exists in S3 storage."""
-    # Set up test data
-    bucket_name = 'mca-documents-test'
-    existing_key = 'existing-document.pdf'
-    non_existing_key = 'non-existing-document.pdf'
-    
-    # Upload a test document
-    s3_mock.put_object(
-        Bucket=bucket_name,
-        Key=existing_key,
-        Body=b'Test document content',
-        ServerSideEncryption='AES256'
-    )
-    
-    # Create a storage service with the mock S3 client
-    with patch('src.services.storage_service.boto3.client', return_value=s3_mock):
-        with patch('src.services.storage_service.app_config.ENVIRONMENT', 'test'):
-            with patch('src.services.storage_service.s3_config.DEVELOPMENT_BUCKET', bucket_name):
-                service = StorageService()
-                
-                # Check if the existing document exists
-                exists_result = service.document_exists(existing_key)
-                
-                # Check if the non-existing document exists
-                not_exists_result = service.document_exists(non_existing_key)
-    
-    # Verify the results
-    assert exists_result is True
-    assert not_exists_result is False
-
-
-def test_delete_document(s3_mock):
-    """Test deleting a document from S3 storage."""
-    # Set up test data
-    bucket_name = 'mca-documents-test'
-    key = 'document-to-delete.pdf'
-    
-    # Upload a test document
-    s3_mock.put_object(
-        Bucket=bucket_name,
-        Key=key,
-        Body=b'Test document content to delete',
-        ServerSideEncryption='AES256'
-    )
-    
-    # Create a storage service with the mock S3 client
-    with patch('src.services.storage_service.boto3.client', return_value=s3_mock):
-        with patch('src.services.storage_service.app_config.ENVIRONMENT', 'test'):
-            with patch('src.services.storage_service.s3_config.DEVELOPMENT_BUCKET', bucket_name):
-                service = StorageService()
-                
-                # Verify the document exists
-                assert service.document_exists(key) is True
-                
-                # Delete the document
-                result = service.delete_document(key)
-                
-                # Verify the document was deleted
-                assert result.success is True
-                assert service.document_exists(key) is False
-
-
-def test_delete_specific_version(s3_mock):
-    """Test deleting a specific version of a document from S3 storage."""
-    # Set up test data
-    bucket_name = 'mca-documents-test'
-    key = 'versioned-document-to-delete.pdf'
-    
-    # Enable versioning on the bucket
-    s3_mock.put_bucket_versioning(
-        Bucket=bucket_name,
-        VersioningConfiguration={'Status': 'Enabled'}
-    )
-    
-    # Upload multiple versions of the document
-    version_ids = []
-    for i in range(3):
-        response = s3_mock.put_object(
-            Bucket=bucket_name,
-            Key=key,
-            Body=f'Version {i+1} content'.encode(),
-            ServerSideEncryption='AES256'
-        )
-        version_ids.append(response.get('VersionId'))
-    
-    # Create a storage service with the mock S3 client
-    with patch('src.services.storage_service.boto3.client', return_value=s3_mock):
-        with patch('src.services.storage_service.app_config.ENVIRONMENT', 'test'):
-            with patch('src.services.storage_service.s3_config.DEVELOPMENT_BUCKET', bucket_name):
-                service = StorageService()
-                
-                # Delete a specific version
-                version_to_delete = version_ids[1]  # Delete the middle version
-                result = service.delete_document(key, version_id=version_to_delete)
-                
-                # Verify the result
-                assert result.success is True
-                
-                # Get all versions
-                versions_result = service.get_document_versions(key)
-                
-                # Verify the specific version was deleted
-                remaining_version_ids = [v['version_id'] for v in versions_result.data]
-                assert version_to_delete not in remaining_version_ids
-                assert len(remaining_version_ids) == 2  # Should have 2 versions left
+if __name__ == "__main__":
+    pytest.main()
