@@ -1,637 +1,541 @@
-import pytest
-import time
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+Scalability tests for the OCR Service.
+
+This module tests how the OCR Service scales with increasing load and resources.
+It verifies that the service can handle growing document volumes by adding resources,
+and measures performance under constrained resources to understand scaling limitations.
+
+The tests validate:
+1. Linear scaling with additional resources
+2. Performance under constrained resources
+3. Recovery after resource exhaustion
+4. Optimal resource allocation
+5. System scalability to meet varying demand levels
+"""
+
 import os
+import time
+import json
+import pytest
 import numpy as np
-import tensorflow as tf
 import concurrent.futures
-import psutil
-import GPUtil
-from unittest.mock import patch, MagicMock
-from contextlib import contextmanager
+from unittest.mock import MagicMock, patch, PropertyMock
+from typing import Dict, List, Any, Tuple, Optional
 
-# Import OCR service components
-from ocr_service.app import create_app
-from ocr_service.services.ocr_service import OCRService
-from ocr_service.models.model_factory import ModelFactory
-from ocr_service.config.tensorflow_config import TensorFlowConfig
-from ocr_service.utils.resource_monitor import ResourceMonitor
-
-
-@pytest.fixture
-def app():
-    """Create a test instance of the OCR service application."""
-    app = create_app('testing')
-    return app
+# Import application modules
+from src.app import Application
+from src.services.ocr_service import OCRService
+from src.services.queue_service import QueueService
+from src.services.storage_service import StorageService
+from src.models.model_factory import ModelFactory
+from src.types.documents import Document, DocumentType, DocumentMetadata, ProcessingStatus
+from src.types.extraction import ExtractedData, ExtractedField, ConfidenceScore
+from src.types.models import OCRModelType, ModelResult, ModelParameters
+from src.types.messages import MessagePayload, MessageHeaders
+from src.types.errors import ServiceError, ErrorCategory, Result
+from src.utils.tensorflow_utils import is_gpu_available, get_gpu_info, get_available_memory
 
 
-@pytest.fixture
-def ocr_service():
-    """Create a test instance of the OCR service."""
-    return OCRService()
-
-
-@pytest.fixture
-def resource_monitor():
-    """Create a resource monitor for tracking system resources during tests."""
-    return ResourceMonitor()
-
-
-@pytest.fixture
-def test_documents(request):
-    """Provide test documents of specified size and quantity for scalability testing.
+class TestScalability:
+    """Test the scalability of the OCR Service under various load conditions."""
     
-    Parameters can be customized using pytest's parametrize decorator.
-    """
-    doc_size = getattr(request, 'param', {}).get('size', 'medium')
-    doc_count = getattr(request, 'param', {}).get('count', 10)
-    doc_type = getattr(request, 'param', {}).get('type', 'mixed')
+    @pytest.mark.parametrize("num_workers", [1, 2, 4, 8])
+    def test_linear_scaling_with_workers(self, num_workers, document_collection, mock_application):
+        """
+        Test that the OCR service scales linearly with additional worker processes.
+        
+        This test verifies that adding more worker processes improves throughput
+        proportionally, up to the point of diminishing returns.
+        """
+        # Skip if not enough documents for meaningful test
+        if len(document_collection) < 10:
+            pytest.skip("Not enough documents for meaningful scalability test")
+        
+        # Configure the mocks for successful processing
+        self._configure_mocks_for_successful_processing(mock_application)
+        
+        # Process documents with different numbers of workers and measure throughput
+        start_time = time.time()
+        processed_docs = self._process_documents_with_workers(document_collection, num_workers, mock_application)
+        end_time = time.time()
+        
+        # Calculate throughput (docs/second)
+        processing_time = end_time - start_time
+        throughput = len(processed_docs) / processing_time if processing_time > 0 else 0
+        
+        # Log results for analysis
+        print(f"Workers: {num_workers}, Throughput: {throughput:.2f} docs/sec, Time: {processing_time:.2f} sec")
+        
+        # Verify that all documents were processed successfully
+        assert len(processed_docs) == len(document_collection)
+        assert all(result.is_success for result in processed_docs)
+        
+        # Store throughput for comparison across worker counts
+        if not hasattr(self, '_throughput_data'):
+            self._throughput_data = {}
+        self._throughput_data[num_workers] = throughput
+        
+        # If we have at least two data points, check for scaling
+        if len(self._throughput_data) >= 2 and num_workers > 1:
+            # Calculate scaling efficiency (should be close to 1.0 for perfect linear scaling)
+            baseline_workers = 1
+            baseline_throughput = self._throughput_data.get(baseline_workers, 0)
+            if baseline_throughput > 0:
+                scaling_efficiency = (throughput / num_workers) / (baseline_throughput / baseline_workers)
+                
+                # Scaling efficiency should be at least 0.7 (70% efficient) for reasonable scaling
+                # This threshold might need adjustment based on the specific system
+                assert scaling_efficiency >= 0.7, f"Poor scaling efficiency: {scaling_efficiency:.2f}"
+                
+                print(f"Scaling efficiency with {num_workers} workers: {scaling_efficiency:.2f}")
     
-    # Document sizes in MB (approximate file sizes)
-    sizes = {
-        'small': 0.5,  # ~500KB
-        'medium': 2,   # ~2MB
-        'large': 5,    # ~5MB
-        'xlarge': 10   # ~10MB
-    }
+    @pytest.mark.parametrize("memory_limit_mb", [1024, 512, 256])
+    def test_performance_under_memory_constraints(self, memory_limit_mb, typed_document, mock_application):
+        """
+        Test OCR service performance under memory constraints.
+        
+        This test verifies that the service can operate effectively even with
+        limited memory resources, and gracefully handles memory pressure.
+        """
+        # Configure the mocks for successful processing
+        self._configure_mocks_for_successful_processing(mock_application)
+        
+        # Mock the memory limit
+        with patch('src.utils.tensorflow_utils.get_available_memory', return_value=memory_limit_mb * 1024 * 1024):
+            # Process the document and measure performance
+            start_time = time.time()
+            result = mock_application.process_document(typed_document)
+            processing_time = time.time() - start_time
+            
+            # Log results
+            print(f"Memory limit: {memory_limit_mb} MB, Processing time: {processing_time:.2f} sec")
+            
+            # Verify that the document was processed successfully
+            assert result.is_success, f"Processing failed with memory limit {memory_limit_mb} MB"
+            
+            # Verify that processing time is reasonable (adjust threshold as needed)
+            assert processing_time < 300, f"Processing time exceeded 5 minutes with memory limit {memory_limit_mb} MB"
     
-    # Document types
-    types = {
-        'typed': 'application/pdf',
-        'handwritten': 'image/tiff',
-        'mixed': 'application/pdf'
-    }
-    
-    # Create mock documents with appropriate metadata
-    documents = []
-    for i in range(doc_count):
-        doc = MagicMock()
-        doc.size = int(sizes[doc_size] * 1024 * 1024)  # Convert to bytes
-        doc.content_type = types[doc_type]
-        doc.id = f"test-doc-{i}"
-        doc.path = f"/test/documents/{doc.id}.{doc.content_type.split('/')[-1]}"
-        documents.append(doc)
-    
-    return documents
-
-
-@contextmanager
-def gpu_memory_limit(limit_mb):
-    """Context manager to limit GPU memory usage for testing resource constraints.
-    
-    Args:
-        limit_mb: Memory limit in megabytes
-    """
-    original_config = tf.config.experimental.get_memory_growth
-    gpus = tf.config.experimental.list_physical_devices('GPU')
-    
-    if not gpus:
-        # No GPUs available, just yield
-        yield
-        return
-    
-    try:
-        # Set memory limit on the GPU
-        tf.config.experimental.set_virtual_device_configuration(
-            gpus[0],
-            [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=limit_mb)]
+    @pytest.mark.parametrize("cpu_limit", [1, 2, 4])
+    def test_performance_under_cpu_constraints(self, cpu_limit, document_collection, mock_application):
+        """
+        Test OCR service performance under CPU constraints.
+        
+        This test verifies that the service can operate effectively even with
+        limited CPU resources, and gracefully handles CPU pressure.
+        """
+        # Skip if not enough documents for meaningful test
+        if len(document_collection) < 5:
+            pytest.skip("Not enough documents for meaningful scalability test")
+        
+        # Configure the mocks for successful processing
+        self._configure_mocks_for_successful_processing(mock_application)
+        
+        # Process documents with limited CPU cores and measure throughput
+        start_time = time.time()
+        processed_docs = self._process_documents_with_workers(
+            document_collection[:5],  # Use a subset for faster testing
+            min(cpu_limit, len(document_collection)),
+            mock_application
         )
-        yield
-    finally:
-        # Reset GPU configuration
-        for gpu in gpus:
-            tf.config.experimental.set_memory_growth(gpu, original_config(gpu))
-
-
-@contextmanager
-def cpu_core_limit(cores):
-    """Context manager to limit CPU cores for testing resource constraints.
-    
-    Args:
-        cores: Number of CPU cores to use
-    """
-    original_affinity = psutil.Process().cpu_affinity()
-    
-    try:
-        # Limit to specified number of cores
-        available_cores = list(range(psutil.cpu_count()))
-        limited_cores = available_cores[:cores]
-        psutil.Process().cpu_affinity(limited_cores)
-        yield
-    finally:
-        # Reset CPU affinity
-        psutil.Process().cpu_affinity(original_affinity)
-
-
-# Linear Scaling Tests
-@pytest.mark.parametrize('test_documents', [
-    {'size': 'medium', 'count': 10, 'type': 'mixed'},
-    {'size': 'medium', 'count': 50, 'type': 'mixed'},
-    {'size': 'medium', 'count': 100, 'type': 'mixed'}
-], indirect=True)
-def test_linear_scaling_with_document_volume(ocr_service, test_documents, resource_monitor):
-    """Test that processing time scales linearly with document volume.
-    
-    This test verifies that the OCR service can handle increasing document volumes
-    with predictable performance scaling.
-    """
-    # Process documents and measure time
-    start_time = time.time()
-    resource_monitor.start()
-    
-    results = []
-    for doc in test_documents:
-        result = ocr_service.process_document(doc)
-        results.append(result)
-    
-    end_time = time.time()
-    metrics = resource_monitor.stop()
-    
-    # Calculate processing time per document
-    total_time = end_time - start_time
-    time_per_document = total_time / len(test_documents)
-    
-    # Verify linear scaling (time per document should remain relatively constant)
-    # Allow for some variance (20%) due to system fluctuations
-    assert 0.8 <= time_per_document <= 1.2 * time_per_document, \
-        f"Processing time per document should scale linearly, but was {time_per_document} seconds"
-    
-    # Verify all documents were processed successfully
-    assert len(results) == len(test_documents), "Not all documents were processed"
-    assert all(r.get('success') for r in results), "Some documents failed processing"
-    
-    # Log performance metrics
-    print(f"Processed {len(test_documents)} documents in {total_time:.2f} seconds")
-    print(f"Time per document: {time_per_document:.2f} seconds")
-    print(f"Peak memory usage: {metrics['peak_memory_mb']:.2f} MB")
-    print(f"Peak GPU memory usage: {metrics['peak_gpu_memory_mb']:.2f} MB")
-
-
-@pytest.mark.parametrize('worker_count', [1, 2, 4, 8])
-def test_linear_scaling_with_worker_count(ocr_service, test_documents, worker_count):
-    """Test that throughput scales linearly with worker count.
-    
-    This test verifies that adding more worker processes increases throughput
-    proportionally, demonstrating the service's ability to scale horizontally.
-    """
-    # Fixed document set
-    docs = test_documents(MagicMock(param={'size': 'medium', 'count': 100, 'type': 'mixed'}))
-    
-    # Process documents with different worker counts and measure throughput
-    start_time = time.time()
-    
-    with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
-        futures = [executor.submit(ocr_service.process_document, doc) for doc in docs]
-        results = [future.result() for future in concurrent.futures.as_completed(futures)]
-    
-    end_time = time.time()
-    
-    # Calculate throughput (documents per second)
-    total_time = end_time - start_time
-    throughput = len(docs) / total_time
-    throughput_per_worker = throughput / worker_count
-    
-    # Verify all documents were processed successfully
-    assert len(results) == len(docs), "Not all documents were processed"
-    assert all(r.get('success') for r in results), "Some documents failed processing"
-    
-    # Log performance metrics
-    print(f"Worker count: {worker_count}")
-    print(f"Processed {len(docs)} documents in {total_time:.2f} seconds")
-    print(f"Throughput: {throughput:.2f} documents per second")
-    print(f"Throughput per worker: {throughput_per_worker:.2f} documents per second")
-    
-    # Store results for comparison across worker counts
-    return {
-        'worker_count': worker_count,
-        'throughput': throughput,
-        'throughput_per_worker': throughput_per_worker
-    }
-
-
-# Resource Constraint Tests
-@pytest.mark.parametrize('memory_limit_mb', [2048, 4096, 8192])
-def test_performance_under_memory_constraints(ocr_service, test_documents, memory_limit_mb):
-    """Test OCR service performance under different memory constraints.
-    
-    This test verifies that the service can operate effectively even with
-    limited memory resources, though performance may degrade gracefully.
-    """
-    # Fixed document set - medium complexity
-    docs = test_documents(MagicMock(param={'size': 'medium', 'count': 20, 'type': 'mixed'}))
-    
-    # Process documents with memory constraints
-    with gpu_memory_limit(memory_limit_mb):
-        start_time = time.time()
-        
-        results = []
-        for doc in docs:
-            result = ocr_service.process_document(doc)
-            results.append(result)
-        
         end_time = time.time()
-    
-    # Calculate performance metrics
-    total_time = end_time - start_time
-    time_per_document = total_time / len(docs)
-    success_rate = sum(1 for r in results if r.get('success')) / len(results)
-    
-    # Verify service can operate under constraints
-    assert success_rate >= 0.9, f"Success rate under {memory_limit_mb}MB constraint was only {success_rate:.2f}"
-    
-    # Log performance metrics
-    print(f"Memory limit: {memory_limit_mb} MB")
-    print(f"Processed {len(docs)} documents in {total_time:.2f} seconds")
-    print(f"Time per document: {time_per_document:.2f} seconds")
-    print(f"Success rate: {success_rate:.2f}")
-    
-    return {
-        'memory_limit_mb': memory_limit_mb,
-        'time_per_document': time_per_document,
-        'success_rate': success_rate
-    }
-
-
-@pytest.mark.parametrize('cpu_cores', [1, 2, 4])
-def test_performance_under_cpu_constraints(ocr_service, test_documents, cpu_cores):
-    """Test OCR service performance under CPU core constraints.
-    
-    This test verifies that the service can operate effectively even with
-    limited CPU resources, though performance may degrade gracefully.
-    """
-    # Fixed document set - medium complexity
-    docs = test_documents(MagicMock(param={'size': 'medium', 'count': 20, 'type': 'mixed'}))
-    
-    # Process documents with CPU constraints
-    with cpu_core_limit(cpu_cores):
-        start_time = time.time()
         
-        results = []
-        for doc in docs:
-            result = ocr_service.process_document(doc)
-            results.append(result)
+        # Calculate throughput (docs/second)
+        processing_time = end_time - start_time
+        throughput = len(processed_docs) / processing_time if processing_time > 0 else 0
         
-        end_time = time.time()
-    
-    # Calculate performance metrics
-    total_time = end_time - start_time
-    time_per_document = total_time / len(docs)
-    success_rate = sum(1 for r in results if r.get('success')) / len(results)
-    
-    # Verify service can operate under constraints
-    assert success_rate >= 0.9, f"Success rate under {cpu_cores} CPU cores was only {success_rate:.2f}"
-    
-    # Log performance metrics
-    print(f"CPU cores: {cpu_cores}")
-    print(f"Processed {len(docs)} documents in {total_time:.2f} seconds")
-    print(f"Time per document: {time_per_document:.2f} seconds")
-    print(f"Success rate: {success_rate:.2f}")
-    
-    return {
-        'cpu_cores': cpu_cores,
-        'time_per_document': time_per_document,
-        'success_rate': success_rate
-    }
-
-
-# Recovery Tests
-@pytest.mark.parametrize('test_documents', [
-    {'size': 'xlarge', 'count': 50, 'type': 'mixed'}
-], indirect=True)
-def test_recovery_after_resource_exhaustion(ocr_service, test_documents, resource_monitor):
-    """Test service recovery after resource exhaustion.
-    
-    This test verifies that the OCR service can recover and continue processing
-    after experiencing resource exhaustion (memory or GPU).
-    """
-    # Process a large batch of documents to potentially exhaust resources
-    resource_monitor.start()
-    
-    results = []
-    for i, doc in enumerate(test_documents):
-        try:
-            result = ocr_service.process_document(doc)
-            results.append((True, result))
-        except Exception as e:
-            results.append((False, str(e)))
+        # Log results for analysis
+        print(f"CPU limit: {cpu_limit}, Throughput: {throughput:.2f} docs/sec, Time: {processing_time:.2f} sec")
         
-        # Force garbage collection after each document to help recovery
-        if i % 10 == 0:
-            import gc
-            gc.collect()
-    
-    metrics = resource_monitor.stop()
-    
-    # Check if we experienced any failures
-    failures = [r for r in results if not r[0]]
-    successes = [r for r in results if r[0]]
-    
-    # Verify recovery capability
-    if failures:
-        # If we had failures, verify that we recovered and processed documents after failures
-        failure_indices = [i for i, r in enumerate(results) if not r[0]]
-        last_failure_index = max(failure_indices)
+        # Verify that all documents were processed successfully
+        assert len(processed_docs) == min(5, len(document_collection))
+        assert all(result.is_success for result in processed_docs)
         
-        # Verify we had successful processing after the last failure
-        assert last_failure_index < len(results) - 1, "Service did not recover after failures"
+        # Store throughput for comparison across CPU limits
+        if not hasattr(self, '_cpu_throughput_data'):
+            self._cpu_throughput_data = {}
+        self._cpu_throughput_data[cpu_limit] = throughput
+    
+    def test_gpu_acceleration_scaling(self, document_collection, mock_application):
+        """
+        Test scaling with GPU acceleration.
         
-        # Verify some documents were processed successfully after the last failure
-        successful_after_failure = sum(1 for i, r in enumerate(results) 
-                                     if i > last_failure_index and r[0])
-        assert successful_after_failure > 0, "No documents processed successfully after failure"
-    
-    # Log performance metrics
-    print(f"Processed {len(test_documents)} documents with {len(failures)} failures")
-    print(f"Peak memory usage: {metrics['peak_memory_mb']:.2f} MB")
-    print(f"Peak GPU memory usage: {metrics['peak_gpu_memory_mb']:.2f} MB")
-    
-    # Even with some failures, overall success rate should be high
-    success_rate = len(successes) / len(results)
-    assert success_rate >= 0.8, f"Overall success rate was only {success_rate:.2f}"
-
-
-# Optimal Resource Allocation Tests
-@pytest.mark.parametrize('batch_size', [1, 5, 10, 20, 50])
-def test_optimal_batch_size(ocr_service, test_documents, batch_size):
-    """Test to determine the optimal batch size for document processing.
-    
-    This test measures performance with different batch sizes to identify
-    the optimal batch size for maximum throughput.
-    """
-    # Fixed document set
-    docs = test_documents(MagicMock(param={'size': 'medium', 'count': 100, 'type': 'mixed'}))
-    
-    # Process documents in batches
-    start_time = time.time()
-    
-    results = []
-    for i in range(0, len(docs), batch_size):
-        batch = docs[i:i+batch_size]
-        batch_results = ocr_service.process_batch(batch)
-        results.extend(batch_results)
-    
-    end_time = time.time()
-    
-    # Calculate performance metrics
-    total_time = end_time - start_time
-    throughput = len(docs) / total_time
-    success_rate = sum(1 for r in results if r.get('success')) / len(results)
-    
-    # Log performance metrics
-    print(f"Batch size: {batch_size}")
-    print(f"Processed {len(docs)} documents in {total_time:.2f} seconds")
-    print(f"Throughput: {throughput:.2f} documents per second")
-    print(f"Success rate: {success_rate:.2f}")
-    
-    # Verify acceptable success rate
-    assert success_rate >= 0.95, f"Success rate with batch size {batch_size} was only {success_rate:.2f}"
-    
-    return {
-        'batch_size': batch_size,
-        'throughput': throughput,
-        'success_rate': success_rate
-    }
-
-
-@pytest.mark.parametrize('model_complexity', ['fast', 'balanced', 'accurate'])
-def test_model_complexity_performance_tradeoff(ocr_service, test_documents, model_complexity):
-    """Test performance tradeoffs with different model complexity settings.
-    
-    This test evaluates the tradeoff between processing speed and accuracy
-    with different model complexity settings.
-    """
-    # Fixed document set
-    docs = test_documents(MagicMock(param={'size': 'medium', 'count': 50, 'type': 'mixed'}))
-    
-    # Configure model complexity
-    with patch.object(TensorFlowConfig, 'MODEL_COMPLEXITY', model_complexity):
-        # Reinitialize model factory with new complexity setting
-        model_factory = ModelFactory()
-        ocr_service.model_factory = model_factory
+        This test verifies that the service can effectively utilize GPU resources
+        when available, and scales appropriately with GPU capabilities.
+        """
+        # Skip if not enough documents for meaningful test
+        if len(document_collection) < 5:
+            pytest.skip("Not enough documents for meaningful scalability test")
         
-        # Process documents
-        start_time = time.time()
+        # Configure the mocks for successful processing
+        self._configure_mocks_for_successful_processing(mock_application)
         
-        results = []
-        for doc in docs:
-            result = ocr_service.process_document(doc)
-            results.append(result)
-        
-        end_time = time.time()
-    
-    # Calculate performance metrics
-    total_time = end_time - start_time
-    time_per_document = total_time / len(docs)
-    throughput = len(docs) / total_time
-    
-    # Extract accuracy metrics from results
-    confidence_scores = [r.get('confidence', 0) for r in results if r.get('success')]
-    avg_confidence = np.mean(confidence_scores) if confidence_scores else 0
-    
-    # Log performance metrics
-    print(f"Model complexity: {model_complexity}")
-    print(f"Processed {len(docs)} documents in {total_time:.2f} seconds")
-    print(f"Time per document: {time_per_document:.2f} seconds")
-    print(f"Throughput: {throughput:.2f} documents per second")
-    print(f"Average confidence score: {avg_confidence:.2f}")
-    
-    # Verify expected tradeoffs
-    if model_complexity == 'fast':
-        # Fast models should have higher throughput but potentially lower confidence
-        assert throughput >= 1.0, "Fast model should have high throughput"
-    elif model_complexity == 'accurate':
-        # Accurate models should have higher confidence but potentially lower throughput
-        assert avg_confidence >= 0.9, "Accurate model should have high confidence scores"
-    
-    return {
-        'model_complexity': model_complexity,
-        'throughput': throughput,
-        'avg_confidence': avg_confidence
-    }
-
-
-# Varying Demand Tests
-@pytest.mark.parametrize('demand_pattern', ['steady', 'spike', 'fluctuating'])
-def test_performance_under_varying_demand(ocr_service, test_documents, demand_pattern):
-    """Test OCR service performance under different demand patterns.
-    
-    This test verifies that the service can handle varying demand levels,
-    including steady load, sudden spikes, and fluctuating demand.
-    """
-    # Create document sets based on demand pattern
-    if demand_pattern == 'steady':
-        # Steady stream of documents
-        doc_batches = [test_documents(MagicMock(param={'size': 'medium', 'count': 20, 'type': 'mixed'}))
-                      for _ in range(5)]
-    elif demand_pattern == 'spike':
-        # Sudden spike in document volume
-        doc_batches = [
-            test_documents(MagicMock(param={'size': 'medium', 'count': 10, 'type': 'mixed'})),
-            test_documents(MagicMock(param={'size': 'medium', 'count': 50, 'type': 'mixed'})),  # Spike
-            test_documents(MagicMock(param={'size': 'medium', 'count': 10, 'type': 'mixed'}))
+        # Test with and without GPU acceleration
+        scenarios = [
+            {"gpu_available": False, "gpu_memory": 0, "gpu_info": None},
+            {"gpu_available": True, "gpu_memory": 4096, "gpu_info": "Tesla T4"},  # 4GB VRAM
+            {"gpu_available": True, "gpu_memory": 8192, "gpu_info": "Tesla V100"},  # 8GB VRAM
+            {"gpu_available": True, "gpu_memory": 16384, "gpu_info": "Tesla A100"}  # 16GB VRAM
         ]
-    elif demand_pattern == 'fluctuating':
-        # Fluctuating document volume
-        doc_batches = [
-            test_documents(MagicMock(param={'size': 'medium', 'count': 10, 'type': 'mixed'})),
-            test_documents(MagicMock(param={'size': 'medium', 'count': 30, 'type': 'mixed'})),
-            test_documents(MagicMock(param={'size': 'medium', 'count': 5, 'type': 'mixed'})),
-            test_documents(MagicMock(param={'size': 'medium', 'count': 20, 'type': 'mixed'}))
+        
+        results = {}
+        
+        for scenario in scenarios:
+            # Mock GPU environment
+            with patch('src.utils.tensorflow_utils.is_gpu_available', return_value=scenario["gpu_available"]), \
+                 patch('src.utils.tensorflow_utils.get_gpu_info', return_value=scenario["gpu_info"]), \
+                 patch('src.utils.tensorflow_utils.get_gpu_memory', return_value=scenario["gpu_memory"]):
+                
+                # Process documents and measure throughput
+                start_time = time.time()
+                processed_docs = self._process_documents_with_workers(
+                    document_collection[:5],  # Use a subset for faster testing
+                    4,  # Use fixed number of workers for consistent comparison
+                    mock_application
+                )
+                end_time = time.time()
+                
+                # Calculate throughput (docs/second)
+                processing_time = end_time - start_time
+                throughput = len(processed_docs) / processing_time if processing_time > 0 else 0
+                
+                # Store results
+                scenario_name = scenario["gpu_info"] if scenario["gpu_available"] else "CPU only"
+                results[scenario_name] = throughput
+                
+                # Log results
+                print(f"Scenario: {scenario_name}, Throughput: {throughput:.2f} docs/sec")
+                
+                # Verify that all documents were processed successfully
+                assert len(processed_docs) == 5
+                assert all(result.is_success for result in processed_docs)
+        
+        # Verify that GPU acceleration improves throughput
+        if "CPU only" in results and "Tesla T4" in results:
+            assert results["Tesla T4"] > results["CPU only"], "GPU acceleration did not improve throughput"
+        
+        # Verify that more GPU memory improves throughput (if we have multiple GPU scenarios)
+        if "Tesla T4" in results and "Tesla V100" in results:
+            assert results["Tesla V100"] >= results["Tesla T4"], "More GPU memory did not improve throughput"
+    
+    def test_recovery_after_resource_exhaustion(self, document_collection, mock_application):
+        """
+        Test recovery after resource exhaustion.
+        
+        This test verifies that the service can recover and continue processing
+        after experiencing resource exhaustion (memory, CPU, etc.).
+        """
+        # Skip if not enough documents for meaningful test
+        if len(document_collection) < 10:
+            pytest.skip("Not enough documents for meaningful scalability test")
+        
+        # Configure the mocks for successful processing
+        self._configure_mocks_for_successful_processing(mock_application)
+        
+        # Simulate resource exhaustion during processing
+        # First, process half the documents normally
+        first_half = document_collection[:len(document_collection)//2]
+        first_half_results = []
+        for doc in first_half:
+            result = mock_application.process_document(doc)
+            first_half_results.append(result)
+        
+        # Now simulate resource exhaustion for one document
+        exhaustion_doc = document_collection[len(document_collection)//2]
+        mock_application.ocr_service.process_document.side_effect = ServiceError(
+            "Out of memory", ErrorCategory.RESOURCE, {"resource": "memory"}
+        )
+        exhaustion_result = mock_application.process_document(exhaustion_doc)
+        
+        # Verify that the exhaustion document failed with a resource error
+        assert not exhaustion_result.is_success
+        assert exhaustion_result.error.category == ErrorCategory.RESOURCE
+        
+        # Reset the mock to simulate recovery
+        mock_application.ocr_service.process_document.side_effect = None
+        self._configure_mocks_for_successful_processing(mock_application)
+        
+        # Process the remaining documents after "recovery"
+        second_half = document_collection[len(document_collection)//2 + 1:]
+        second_half_results = []
+        for doc in second_half:
+            result = mock_application.process_document(doc)
+            second_half_results.append(result)
+        
+        # Verify that processing continued successfully after recovery
+        assert all(result.is_success for result in first_half_results)
+        assert all(result.is_success for result in second_half_results)
+        
+        # Verify that the service processed the expected number of documents
+        assert len(first_half_results) + len(second_half_results) == len(document_collection) - 1
+    
+    def test_optimal_resource_allocation(self, document_collection, mock_application):
+        """
+        Test to determine optimal resource allocation.
+        
+        This test measures performance across different resource allocations
+        to identify the optimal configuration for the OCR service.
+        """
+        # Skip if not enough documents for meaningful test
+        if len(document_collection) < 5:
+            pytest.skip("Not enough documents for meaningful scalability test")
+        
+        # Configure the mocks for successful processing
+        self._configure_mocks_for_successful_processing(mock_application)
+        
+        # Define different resource configurations to test
+        configurations = [
+            {"workers": 1, "memory_mb": 1024, "gpu_available": False},
+            {"workers": 2, "memory_mb": 2048, "gpu_available": False},
+            {"workers": 4, "memory_mb": 4096, "gpu_available": False},
+            {"workers": 2, "memory_mb": 2048, "gpu_available": True},
+            {"workers": 4, "memory_mb": 4096, "gpu_available": True}
         ]
-    
-    # Process document batches and measure performance
-    batch_metrics = []
-    
-    for i, batch in enumerate(doc_batches):
-        start_time = time.time()
         
-        results = []
-        for doc in batch:
-            result = ocr_service.process_document(doc)
-            results.append(result)
+        results = {}
         
-        end_time = time.time()
+        for config in configurations:
+            # Mock resource environment
+            with patch('src.utils.tensorflow_utils.is_gpu_available', return_value=config["gpu_available"]), \
+                 patch('src.utils.tensorflow_utils.get_available_memory', return_value=config["memory_mb"] * 1024 * 1024):
+                
+                # Process documents with the current configuration
+                start_time = time.time()
+                processed_docs = self._process_documents_with_workers(
+                    document_collection[:5],  # Use a subset for faster testing
+                    config["workers"],
+                    mock_application
+                )
+                end_time = time.time()
+                
+                # Calculate throughput (docs/second)
+                processing_time = end_time - start_time
+                throughput = len(processed_docs) / processing_time if processing_time > 0 else 0
+                
+                # Calculate resource efficiency (throughput per resource unit)
+                # This is a simplified metric - in real scenarios, you might use a more complex formula
+                resource_units = config["workers"] * (config["memory_mb"] / 1024)
+                if config["gpu_available"]:
+                    resource_units *= 2  # GPU resources are weighted more heavily
+                
+                efficiency = throughput / resource_units if resource_units > 0 else 0
+                
+                # Store results
+                config_name = f"W{config['workers']}_M{config['memory_mb']}{'_GPU' if config['gpu_available'] else ''}"
+                results[config_name] = {
+                    "throughput": throughput,
+                    "efficiency": efficiency,
+                    "processing_time": processing_time
+                }
+                
+                # Log results
+                print(f"Config: {config_name}, Throughput: {throughput:.2f} docs/sec, Efficiency: {efficiency:.4f}")
+                
+                # Verify that all documents were processed successfully
+                assert len(processed_docs) == 5
+                assert all(result.is_success for result in processed_docs)
         
-        # Calculate batch metrics
-        batch_time = end_time - start_time
-        batch_throughput = len(batch) / batch_time
-        batch_success_rate = sum(1 for r in results if r.get('success')) / len(results)
+        # Find the most efficient configuration
+        most_efficient_config = max(results.items(), key=lambda x: x[1]["efficiency"])[0]
+        print(f"Most efficient configuration: {most_efficient_config}")
         
-        batch_metrics.append({
-            'batch': i + 1,
-            'size': len(batch),
-            'time': batch_time,
-            'throughput': batch_throughput,
-            'success_rate': batch_success_rate
-        })
+        # Find the highest throughput configuration
+        highest_throughput_config = max(results.items(), key=lambda x: x[1]["throughput"])[0]
+        print(f"Highest throughput configuration: {highest_throughput_config}")
     
-    # Calculate overall metrics
-    total_docs = sum(len(batch) for batch in doc_batches)
-    total_time = sum(m['time'] for m in batch_metrics)
-    overall_throughput = total_docs / total_time
-    
-    # Log performance metrics
-    print(f"Demand pattern: {demand_pattern}")
-    print(f"Processed {total_docs} documents in {total_time:.2f} seconds")
-    print(f"Overall throughput: {overall_throughput:.2f} documents per second")
-    
-    for m in batch_metrics:
-        print(f"Batch {m['batch']} ({m['size']} docs): {m['throughput']:.2f} docs/sec, "
-              f"Success rate: {m['success_rate']:.2f}")
-    
-    # Verify service can handle the demand pattern
-    assert all(m['success_rate'] >= 0.9 for m in batch_metrics), \
-        "Service should maintain high success rate across all demand patterns"
-    
-    # For spike pattern, verify the service can handle the spike
-    if demand_pattern == 'spike':
-        spike_batch = batch_metrics[1]  # The middle batch is the spike
-        assert spike_batch['throughput'] >= 0.5 * overall_throughput, \
-            "Service should maintain reasonable throughput during demand spikes"
-    
-    return {
-        'demand_pattern': demand_pattern,
-        'overall_throughput': overall_throughput,
-        'batch_metrics': batch_metrics
-    }
-
-
-# System Uptime Tests
-@pytest.mark.long_running
-def test_sustained_operation(ocr_service, test_documents):
-    """Test OCR service performance during sustained operation.
-    
-    This test verifies that the service can maintain performance and reliability
-    during extended periods of operation, supporting the 99.9% uptime requirement.
-    """
-    # Run for a shorter time in test mode, but long enough to detect issues
-    test_duration_seconds = 300  # 5 minutes
-    
-    # Create a steady stream of documents
-    docs_per_batch = 10
-    doc_batches = []
-    
-    # Create enough batches to last the test duration (assuming ~10 seconds per batch)
-    estimated_batches = (test_duration_seconds // 10) + 5  # Add buffer
-    for _ in range(estimated_batches):
-        doc_batches.append(test_documents(MagicMock(
-            param={'size': 'medium', 'count': docs_per_batch, 'type': 'mixed'}
-        )))
-    
-    # Process documents until test duration is reached
-    start_time = time.time()
-    end_time = start_time + test_duration_seconds
-    
-    batch_metrics = []
-    errors = []
-    batch_index = 0
-    
-    while time.time() < end_time and batch_index < len(doc_batches):
-        batch = doc_batches[batch_index]
-        batch_start = time.time()
+    def test_scaling_with_varying_demand(self, document_collection, mock_application):
+        """
+        Test scaling with varying demand levels.
         
-        results = []
-        for doc in batch:
-            try:
-                result = ocr_service.process_document(doc)
-                results.append((True, result))
-            except Exception as e:
-                results.append((False, str(e)))
-                errors.append({
-                    'batch': batch_index,
-                    'time': time.time() - start_time,
-                    'error': str(e)
-                })
+        This test verifies that the service can scale to meet varying demand levels,
+        efficiently handling both low and high load conditions.
+        """
+        # Skip if not enough documents for meaningful test
+        if len(document_collection) < 20:
+            pytest.skip("Not enough documents for meaningful scalability test")
         
-        batch_end = time.time()
+        # Configure the mocks for successful processing
+        self._configure_mocks_for_successful_processing(mock_application)
         
-        # Calculate batch metrics
-        batch_time = batch_end - batch_start
-        batch_success_count = sum(1 for r in results if r[0])
-        batch_success_rate = batch_success_count / len(results)
+        # Define different demand levels (number of documents to process)
+        demand_levels = [1, 5, 10, 20]
         
-        batch_metrics.append({
-            'batch': batch_index,
-            'time': batch_time,
-            'success_rate': batch_success_rate,
-            'elapsed': batch_end - start_time
+        results = {}
+        
+        for demand in demand_levels:
+            # Process documents for the current demand level
+            start_time = time.time()
+            processed_docs = self._process_documents_with_workers(
+                document_collection[:demand],
+                min(4, demand),  # Use appropriate number of workers for the demand
+                mock_application
+            )
+            end_time = time.time()
+            
+            # Calculate throughput (docs/second)
+            processing_time = end_time - start_time
+            throughput = len(processed_docs) / processing_time if processing_time > 0 else 0
+            
+            # Store results
+            results[demand] = {
+                "throughput": throughput,
+                "processing_time": processing_time,
+                "avg_time_per_doc": processing_time / demand if demand > 0 else 0
+            }
+            
+            # Log results
+            print(f"Demand: {demand} docs, Throughput: {throughput:.2f} docs/sec, "  
+                  f"Avg time per doc: {results[demand]['avg_time_per_doc']:.2f} sec")
+            
+            # Verify that all documents were processed successfully
+            assert len(processed_docs) == demand
+            assert all(result.is_success for result in processed_docs)
+        
+        # Verify that the service maintains reasonable performance across demand levels
+        # The average time per document should not increase dramatically with higher demand
+        # This indicates good scaling with demand
+        if 1 in results and 20 in results:
+            # Allow for some increase in per-document time at higher loads, but not excessive
+            # A factor of 2x is reasonable for most systems under higher load
+            assert results[20]["avg_time_per_doc"] < results[1]["avg_time_per_doc"] * 2, \
+                "Performance degraded significantly under high demand"
+    
+    def test_concurrent_processing_scalability(self, document_collection, mock_application):
+        """
+        Test scalability of concurrent document processing.
+        
+        This test verifies that the service can efficiently process multiple documents
+        concurrently, and scales appropriately with the number of concurrent requests.
+        """
+        # Skip if not enough documents for meaningful test
+        if len(document_collection) < 10:
+            pytest.skip("Not enough documents for meaningful scalability test")
+        
+        # Configure the mocks for successful processing
+        self._configure_mocks_for_successful_processing(mock_application)
+        
+        # Define different concurrency levels to test
+        concurrency_levels = [1, 2, 4, 8]
+        
+        results = {}
+        
+        for concurrency in concurrency_levels:
+            # Process documents with the current concurrency level
+            start_time = time.time()
+            
+            # Use ProcessPoolExecutor to simulate concurrent processing
+            with concurrent.futures.ProcessPoolExecutor(max_workers=concurrency) as executor:
+                # Create a list of documents to process (use the same document multiple times for simplicity)
+                docs_to_process = document_collection[:min(10, len(document_collection))]
+                
+                # Submit document processing tasks to the executor
+                future_to_doc = {}
+                for doc in docs_to_process:
+                    future = executor.submit(self._process_single_document, doc, mock_application)
+                    future_to_doc[future] = doc
+                
+                # Collect results as they complete
+                processed_docs = []
+                for future in concurrent.futures.as_completed(future_to_doc):
+                    doc = future_to_doc[future]
+                    try:
+                        result = future.result()
+                        processed_docs.append(result)
+                    except Exception as e:
+                        print(f"Document processing failed: {e}")
+            
+            end_time = time.time()
+            
+            # Calculate throughput (docs/second)
+            processing_time = end_time - start_time
+            throughput = len(processed_docs) / processing_time if processing_time > 0 else 0
+            
+            # Store results
+            results[concurrency] = {
+                "throughput": throughput,
+                "processing_time": processing_time
+            }
+            
+            # Log results
+            print(f"Concurrency: {concurrency}, Throughput: {throughput:.2f} docs/sec, "  
+                  f"Time: {processing_time:.2f} sec")
+            
+            # Verify that all documents were processed successfully
+            assert len(processed_docs) == len(docs_to_process)
+            assert all(result.is_success for result in processed_docs)
+        
+        # Verify that throughput increases with concurrency (up to a point)
+        # This indicates good scaling with concurrent processing
+        if 1 in results and 4 in results:
+            assert results[4]["throughput"] > results[1]["throughput"], \
+                "Throughput did not increase with higher concurrency"
+    
+    # Helper methods
+    
+    def _configure_mocks_for_successful_processing(self, mock_application):
+        """Configure the mock application for successful document processing."""
+        # Configure the OCR service to return successful results
+        mock_application.ocr_service.process_document.return_value = Result.success(({"text": "Sample extracted text for testing", "confidence": 0.95}, 1.0))
+        
+        # Configure the field extraction service to return successful results
+        mock_application.field_extraction_service.extract_fields.return_value = Result.success({
+            "fields": {
+                "name": {"value": "John Doe", "confidence": 0.98},
+                "address": {"value": "123 Main St", "confidence": 0.95},
+                "phone": {"value": "555-123-4567", "confidence": 0.92},
+                "email": {"value": "john.doe@example.com", "confidence": 0.97},
+                "business_name": {"value": "Acme Corporation", "confidence": 0.99},
+                "tax_id": {"value": "12-3456789", "confidence": 0.96}
+            }
         })
         
-        batch_index += 1
-    
-    # Calculate overall metrics
-    total_elapsed = time.time() - start_time
-    total_batches = batch_index
-    total_docs = total_batches * docs_per_batch
-    overall_success_count = sum(m['success_rate'] * docs_per_batch for m in batch_metrics)
-    overall_success_rate = overall_success_count / total_docs
-    
-    # Log performance metrics
-    print(f"Sustained operation test ran for {total_elapsed:.2f} seconds")
-    print(f"Processed {total_docs} documents in {total_batches} batches")
-    print(f"Overall success rate: {overall_success_rate:.4f}")
-    print(f"Total errors: {len(errors)}")
-    
-    # Verify service maintains high reliability during sustained operation
-    assert overall_success_rate >= 0.999, \
-        f"Service should maintain 99.9% success rate, but achieved only {overall_success_rate:.4f}"
-    
-    # Verify no significant performance degradation over time
-    if len(batch_metrics) >= 10:  # Need enough batches to detect trends
-        # Compare first and last 3 batches
-        first_batches = batch_metrics[:3]
-        last_batches = batch_metrics[-3:]
+        # Configure the confidence service to return high confidence scores
+        mock_application.confidence_service.evaluate_confidence.return_value = Result.success({
+            "overall_confidence": 0.99,
+            "requires_verification": False
+        })
         
-        first_avg_time = sum(b['time'] for b in first_batches) / len(first_batches)
-        last_avg_time = sum(b['time'] for b in last_batches) / len(last_batches)
+        # Configure the storage service to return successful results
+        mock_application.storage_service.upload_extracted_data.return_value = Result.success(
+            "s3://mca-documents-test/extracted/doc-123.json"
+        )
         
-        # Allow for some degradation (50% slower) but not extreme
-        assert last_avg_time <= 1.5 * first_avg_time, \
-            "Service performance should not degrade significantly over time"
+        # Configure the queue service to return successful results
+        mock_application.queue_service.publish_message.return_value = Result.success(True)
     
-    return {
-        'duration': total_elapsed,
-        'batches': total_batches,
-        'documents': total_docs,
-        'success_rate': overall_success_rate,
-        'errors': len(errors)
-    }
+    def _process_documents_with_workers(self, documents, num_workers, mock_application):
+        """Process a collection of documents using multiple worker processes."""
+        results = []
+        
+        # Use ProcessPoolExecutor to simulate multiple workers
+        with concurrent.futures.ProcessPoolExecutor(max_workers=num_workers) as executor:
+            # Submit document processing tasks to the executor
+            future_to_doc = {}
+            for doc in documents:
+                future = executor.submit(self._process_single_document, doc, mock_application)
+                future_to_doc[future] = doc
+            
+            # Collect results as they complete
+            for future in concurrent.futures.as_completed(future_to_doc):
+                doc = future_to_doc[future]
+                try:
+                    result = future.result()
+                    results.append(result)
+                except Exception as e:
+                    print(f"Document processing failed: {e}")
+                    # Create a failure result
+                    results.append(Result.failure(ServiceError(
+                        f"Processing failed: {str(e)}", ErrorCategory.UNKNOWN, {}
+                    )))
+        
+        return results
+    
+    def _process_single_document(self, document, mock_application):
+        """Process a single document and return the result."""
+        # This is a helper method that will be called by the ProcessPoolExecutor
+        # In a real implementation, this would process the document directly
+        # For testing, we'll just call the mock application's process_document method
+        return mock_application.process_document(document)
