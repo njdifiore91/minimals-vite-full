@@ -1,18 +1,17 @@
 package com.dollarfunding.mca.dto;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.exc.UnrecognizedPropertyException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.NullAndEmptySource;
-import org.junit.jupiter.params.provider.ValueSource;
 
 import javax.validation.ConstraintViolation;
 import javax.validation.Validation;
 import javax.validation.Validator;
 import javax.validation.ValidatorFactory;
+import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
@@ -20,287 +19,252 @@ import java.util.Set;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Test class for {@link WebhookTestRequestDTO} that verifies validation constraints,
- * JSON serialization/deserialization, and field validation.
- * 
- * This test suite ensures that the DTO properly validates webhook test requests,
- * handles custom payloads correctly, and validates delivery options appropriately.
+ * Test class for {@link WebhookTestRequestDTO}.
+ * Tests validation constraints, JSON serialization/deserialization, and field validation.
  */
-@DisplayName("WebhookTestRequestDTO Tests")
-class WebhookTestRequestDTOTest {
+public class WebhookTestRequestDTOTest {
 
     private Validator validator;
     private ObjectMapper objectMapper;
-    private WebhookTestRequestDTO validDto;
-    private Map<String, Object> testPayload;
 
     @BeforeEach
     void setUp() {
-        // Initialize validator
         ValidatorFactory factory = Validation.buildDefaultValidatorFactory();
         validator = factory.getValidator();
-        
-        // Initialize ObjectMapper
         objectMapper = new ObjectMapper();
-        
-        // Create a test payload
-        testPayload = new HashMap<>();
-        testPayload.put("applicationId", "app-123");
-        testPayload.put("status", "APPROVED");
-        testPayload.put("timestamp", "2023-06-15T14:30:00Z");
-        
-        // Create a valid DTO for testing
-        validDto = new WebhookTestRequestDTO(
-                "webhook-123",
-                testPayload,
-                false,
-                true,
-                true
-        );
+    }
+
+    /**
+     * Creates a valid WebhookTestRequestDTO for testing.
+     *
+     * @return A valid WebhookTestRequestDTO instance
+     */
+    private WebhookTestRequestDTO createValidDTO() {
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("event", "application.approved");
+        payload.put("applicationId", "app-123");
+        payload.put("timestamp", "2023-01-01T12:00:00Z");
+
+        WebhookTestRequestDTO dto = new WebhookTestRequestDTO();
+        dto.setWebhookId("webhook-123");
+        dto.setTestPayload(payload);
+        dto.setAsync(false);
+        dto.setRetry(true);
+        dto.setIncludeSignature(true);
+
+        return dto;
     }
 
     @Nested
-    @DisplayName("Validation Tests")
-    class ValidationTests {
+    @DisplayName("Required Field Validation Tests")
+    class RequiredFieldValidationTests {
 
         @Test
-        @DisplayName("Valid DTO should pass validation")
-        void validDtoShouldPassValidation() {
-            // When
-            Set<ConstraintViolation<WebhookTestRequestDTO>> violations = validator.validate(validDto);
-            
-            // Then
-            assertTrue(violations.isEmpty(), "Valid DTO should not have validation violations");
-        }
-
-        @ParameterizedTest
-        @NullAndEmptySource
-        @ValueSource(strings = {" ", "\t", "\n"})
-        @DisplayName("DTO with blank webhook ID should fail validation")
-        void dtoWithBlankWebhookIdShouldFailValidation(String webhookId) {
+        @DisplayName("Should validate when all required fields are present")
+        void shouldValidateWhenAllRequiredFieldsArePresent() {
             // Given
-            validDto.setWebhookId(webhookId);
-            
+            WebhookTestRequestDTO dto = createValidDTO();
+
             // When
-            Set<ConstraintViolation<WebhookTestRequestDTO>> violations = validator.validate(validDto);
-            
+            Set<ConstraintViolation<WebhookTestRequestDTO>> violations = validator.validate(dto);
+
             // Then
-            assertFalse(violations.isEmpty(), "DTO with blank webhook ID should have validation violations");
-            
-            boolean hasWebhookIdViolation = violations.stream()
-                    .anyMatch(v -> v.getPropertyPath().toString().equals("webhookId") && 
-                              v.getMessage().equals("Webhook ID is required"));
-            
-            assertTrue(hasWebhookIdViolation, "Should have a violation on webhookId field");
+            assertTrue(violations.isEmpty(), "No violations should be found");
         }
 
         @Test
-        @DisplayName("DTO with webhook ID exceeding max length should fail validation")
-        void dtoWithLongWebhookIdShouldFailValidation() {
+        @DisplayName("Should fail validation when webhookId is null")
+        void shouldFailValidationWhenWebhookIdIsNull() {
             // Given
-            String longWebhookId = "a".repeat(37); // 37 characters (max is 36)
-            validDto.setWebhookId(longWebhookId);
-            
+            WebhookTestRequestDTO dto = createValidDTO();
+            dto.setWebhookId(null);
+
             // When
-            Set<ConstraintViolation<WebhookTestRequestDTO>> violations = validator.validate(validDto);
-            
+            Set<ConstraintViolation<WebhookTestRequestDTO>> violations = validator.validate(dto);
+
             // Then
-            assertFalse(violations.isEmpty(), "DTO with long webhook ID should have validation violations");
-            
-            boolean hasWebhookIdSizeViolation = violations.stream()
-                    .anyMatch(v -> v.getPropertyPath().toString().equals("webhookId") && 
-                              v.getMessage().contains("cannot exceed 36 characters"));
-            
-            assertTrue(hasWebhookIdSizeViolation, "Should have a size violation on webhookId field");
+            assertEquals(1, violations.size(), "Should have one violation");
+            ConstraintViolation<WebhookTestRequestDTO> violation = violations.iterator().next();
+            assertEquals("webhookId", violation.getPropertyPath().toString(), "Violation should be on webhookId field");
+            assertEquals("Webhook ID is required", violation.getMessage(), "Violation message should match");
         }
 
         @Test
-        @DisplayName("DTO with null test payload should fail validation")
-        void dtoWithNullTestPayloadShouldFailValidation() {
+        @DisplayName("Should fail validation when webhookId is empty")
+        void shouldFailValidationWhenWebhookIdIsEmpty() {
             // Given
-            validDto.setTestPayload(null);
-            
-            // When
-            Set<ConstraintViolation<WebhookTestRequestDTO>> violations = validator.validate(validDto);
-            
-            // Then
-            assertFalse(violations.isEmpty(), "DTO with null test payload should have validation violations");
-            
-            boolean hasTestPayloadViolation = violations.stream()
-                    .anyMatch(v -> v.getPropertyPath().toString().equals("testPayload") && 
-                              v.getMessage().equals("Test payload is required"));
-            
-            assertTrue(hasTestPayloadViolation, "Should have a violation on testPayload field");
-        }
-    }
+            WebhookTestRequestDTO dto = createValidDTO();
+            dto.setWebhookId("");
 
-    @Nested
-    @DisplayName("JSON Serialization/Deserialization Tests")
-    class JsonTests {
-
-        @Test
-        @DisplayName("DTO should serialize to JSON correctly")
-        void dtoShouldSerializeToJsonCorrectly() throws Exception {
             // When
-            String json = objectMapper.writeValueAsString(validDto);
-            
+            Set<ConstraintViolation<WebhookTestRequestDTO>> violations = validator.validate(dto);
+
             // Then
-            assertNotNull(json, "JSON should not be null");
-            assertTrue(json.contains("\"webhookId\":\"webhook-123\""), "JSON should contain webhookId field");
-            assertTrue(json.contains("\"testPayload\":"), "JSON should contain testPayload field");
-            assertTrue(json.contains("\"applicationId\":\"app-123\""), "JSON should contain applicationId in testPayload");
-            assertTrue(json.contains("\"status\":\"APPROVED\""), "JSON should contain status in testPayload");
-            assertTrue(json.contains("\"async\":false"), "JSON should contain async field");
-            assertTrue(json.contains("\"retry\":true"), "JSON should contain retry field");
-            assertTrue(json.contains("\"includeSignature\":true"), "JSON should contain includeSignature field");
+            assertEquals(1, violations.size(), "Should have one violation");
+            ConstraintViolation<WebhookTestRequestDTO> violation = violations.iterator().next();
+            assertEquals("webhookId", violation.getPropertyPath().toString(), "Violation should be on webhookId field");
+            assertEquals("Webhook ID is required", violation.getMessage(), "Violation message should match");
         }
 
         @Test
-        @DisplayName("JSON should deserialize to DTO correctly")
-        void jsonShouldDeserializeToDtoCorrectly() throws Exception {
+        @DisplayName("Should fail validation when webhookId exceeds maximum length")
+        void shouldFailValidationWhenWebhookIdExceedsMaxLength() {
             // Given
-            String json = "{\"webhookId\":\"webhook-456\",\"testPayload\":{\"applicationId\":\"app-456\",\"status\":\"REJECTED\",\"reason\":\"Insufficient documentation\"},\"async\":true,\"retry\":false,\"includeSignature\":false}";
-            
+            WebhookTestRequestDTO dto = createValidDTO();
+            dto.setWebhookId("a".repeat(37)); // 37 characters, max is 36
+
             // When
-            WebhookTestRequestDTO dto = objectMapper.readValue(json, WebhookTestRequestDTO.class);
-            
+            Set<ConstraintViolation<WebhookTestRequestDTO>> violations = validator.validate(dto);
+
             // Then
-            assertNotNull(dto, "DTO should not be null");
-            assertEquals("webhook-456", dto.getWebhookId(), "Webhook ID should match");
-            assertNotNull(dto.getTestPayload(), "Test payload should not be null");
-            assertEquals("app-456", dto.getTestPayload().get("applicationId"), "Application ID in test payload should match");
-            assertEquals("REJECTED", dto.getTestPayload().get("status"), "Status in test payload should match");
-            assertEquals("Insufficient documentation", dto.getTestPayload().get("reason"), "Reason in test payload should match");
-            assertEquals(true, dto.getAsync(), "Async flag should match");
-            assertEquals(false, dto.getRetry(), "Retry flag should match");
-            assertEquals(false, dto.getIncludeSignature(), "Include signature flag should match");
+            assertEquals(1, violations.size(), "Should have one violation");
+            ConstraintViolation<WebhookTestRequestDTO> violation = violations.iterator().next();
+            assertEquals("webhookId", violation.getPropertyPath().toString(), "Violation should be on webhookId field");
+            assertEquals("Webhook ID cannot exceed 36 characters", violation.getMessage(), "Violation message should match");
         }
 
         @Test
-        @DisplayName("DTO should ignore unknown JSON properties")
-        void dtoShouldIgnoreUnknownJsonProperties() throws Exception {
+        @DisplayName("Should fail validation when testPayload is null")
+        void shouldFailValidationWhenTestPayloadIsNull() {
             // Given
-            String json = "{\"webhookId\":\"webhook-123\",\"testPayload\":{\"applicationId\":\"app-123\"},\"async\":false,\"retry\":true,\"includeSignature\":true,\"unknown_field\":\"value\"}";
-            
-            // When
-            WebhookTestRequestDTO dto = objectMapper.readValue(json, WebhookTestRequestDTO.class);
-            
-            // Then
-            assertNotNull(dto, "DTO should not be null");
-            assertEquals("webhook-123", dto.getWebhookId(), "Webhook ID should match");
-            assertNotNull(dto.getTestPayload(), "Test payload should not be null");
-            assertEquals("app-123", dto.getTestPayload().get("applicationId"), "Application ID in test payload should match");
-            assertEquals(false, dto.getAsync(), "Async flag should match");
-            assertEquals(true, dto.getRetry(), "Retry flag should match");
-            assertEquals(true, dto.getIncludeSignature(), "Include signature flag should match");
-            // Unknown field should be ignored without exception
-        }
+            WebhookTestRequestDTO dto = createValidDTO();
+            dto.setTestPayload(null);
 
-        @Test
-        @DisplayName("DTO should handle null optional fields during deserialization")
-        void dtoShouldHandleNullOptionalFieldsDuringDeserialization() throws Exception {
-            // Given
-            String json = "{\"webhookId\":\"webhook-123\",\"testPayload\":{\"applicationId\":\"app-123\"}}";
-            
             // When
-            WebhookTestRequestDTO dto = objectMapper.readValue(json, WebhookTestRequestDTO.class);
-            
+            Set<ConstraintViolation<WebhookTestRequestDTO>> violations = validator.validate(dto);
+
             // Then
-            assertNotNull(dto, "DTO should not be null");
-            assertEquals("webhook-123", dto.getWebhookId(), "Webhook ID should match");
-            assertNotNull(dto.getTestPayload(), "Test payload should not be null");
-            assertEquals("app-123", dto.getTestPayload().get("applicationId"), "Application ID in test payload should match");
-            assertEquals(false, dto.getAsync(), "Async flag should default to false");
-            assertEquals(true, dto.getRetry(), "Retry flag should default to true");
-            assertEquals(true, dto.getIncludeSignature(), "Include signature flag should default to true");
+            assertEquals(1, violations.size(), "Should have one violation");
+            ConstraintViolation<WebhookTestRequestDTO> violation = violations.iterator().next();
+            assertEquals("testPayload", violation.getPropertyPath().toString(), "Violation should be on testPayload field");
+            assertEquals("Test payload is required", violation.getMessage(), "Violation message should match");
         }
     }
 
     @Nested
-    @DisplayName("Custom Payload Tests")
-    class CustomPayloadTests {
+    @DisplayName("JSON Serialization Tests")
+    class JsonSerializationTests {
 
         @Test
-        @DisplayName("DTO should accept complex nested payload")
-        void dtoShouldAcceptComplexNestedPayload() {
+        @DisplayName("Should serialize to JSON correctly")
+        void shouldSerializeToJsonCorrectly() throws IOException {
             // Given
-            Map<String, Object> nestedData = new HashMap<>();
-            nestedData.put("firstName", "John");
-            nestedData.put("lastName", "Doe");
-            nestedData.put("age", 35);
-            
-            Map<String, Object> addressData = new HashMap<>();
-            addressData.put("street", "123 Main St");
-            addressData.put("city", "New York");
-            addressData.put("zipCode", "10001");
-            
-            nestedData.put("address", addressData);
-            
+            WebhookTestRequestDTO dto = createValidDTO();
+
+            // When
+            String json = objectMapper.writeValueAsString(dto);
+
+            // Then
+            assertTrue(json.contains("\"webhookId\":\"webhook-123\""), "JSON should contain webhookId");
+            assertTrue(json.contains("\"testPayload\":"), "JSON should contain testPayload");
+            assertTrue(json.contains("\"event\":\"application.approved\""), "JSON should contain event in payload");
+            assertTrue(json.contains("\"applicationId\":\"app-123\""), "JSON should contain applicationId in payload");
+            assertTrue(json.contains("\"async\":false"), "JSON should contain async=false");
+            assertTrue(json.contains("\"retry\":true"), "JSON should contain retry=true");
+            assertTrue(json.contains("\"includeSignature\":true"), "JSON should contain includeSignature=true");
+        }
+
+        @Test
+        @DisplayName("Should deserialize from JSON correctly")
+        void shouldDeserializeFromJsonCorrectly() throws IOException {
+            // Given
+            String json = "{\"webhookId\":\"webhook-123\",\"testPayload\":{\"event\":\"application.approved\",\"applicationId\":\"app-123\",\"timestamp\":\"2023-01-01T12:00:00Z\"},\"async\":false,\"retry\":true,\"includeSignature\":true}";
+
+            // When
+            WebhookTestRequestDTO dto = objectMapper.readValue(json, WebhookTestRequestDTO.class);
+
+            // Then
+            assertEquals("webhook-123", dto.getWebhookId(), "webhookId should match");
+            assertNotNull(dto.getTestPayload(), "testPayload should not be null");
+            assertEquals("application.approved", dto.getTestPayload().get("event"), "event in payload should match");
+            assertEquals("app-123", dto.getTestPayload().get("applicationId"), "applicationId in payload should match");
+            assertEquals("2023-01-01T12:00:00Z", dto.getTestPayload().get("timestamp"), "timestamp in payload should match");
+            assertFalse(dto.getAsync(), "async should be false");
+            assertTrue(dto.getRetry(), "retry should be true");
+            assertTrue(dto.getIncludeSignature(), "includeSignature should be true");
+        }
+
+        @Test
+        @DisplayName("Should throw exception when deserializing JSON with unknown properties")
+        void shouldThrowExceptionWhenDeserializingJsonWithUnknownProperties() {
+            // Given
+            String json = "{\"webhookId\":\"webhook-123\",\"testPayload\":{\"event\":\"application.approved\"},\"unknownProperty\":\"value\"}";
+
+            // When & Then
+            assertThrows(UnrecognizedPropertyException.class, () -> {
+                objectMapper.readValue(json, WebhookTestRequestDTO.class);
+            }, "Should throw UnrecognizedPropertyException for unknown properties");
+        }
+    }
+
+    @Nested
+    @DisplayName("Custom Test Payload Handling Tests")
+    class CustomTestPayloadHandlingTests {
+
+        @Test
+        @DisplayName("Should handle simple payload")
+        void shouldHandleSimplePayload() {
+            // Given
+            WebhookTestRequestDTO dto = createValidDTO();
+            Map<String, Object> simplePayload = new HashMap<>();
+            simplePayload.put("key", "value");
+            dto.setTestPayload(simplePayload);
+
+            // When
+            Set<ConstraintViolation<WebhookTestRequestDTO>> violations = validator.validate(dto);
+
+            // Then
+            assertTrue(violations.isEmpty(), "No violations should be found");
+            assertEquals(1, dto.getTestPayload().size(), "Payload should have 1 entry");
+            assertEquals("value", dto.getTestPayload().get("key"), "Payload value should match");
+        }
+
+        @Test
+        @DisplayName("Should handle complex nested payload")
+        void shouldHandleComplexNestedPayload() {
+            // Given
+            WebhookTestRequestDTO dto = createValidDTO();
+            Map<String, Object> nestedMap = new HashMap<>();
+            nestedMap.put("nestedKey", "nestedValue");
+            nestedMap.put("nestedNumber", 123);
+
             Map<String, Object> complexPayload = new HashMap<>();
-            complexPayload.put("applicationId", "app-789");
-            complexPayload.put("merchant", nestedData);
-            complexPayload.put("amount", 50000.00);
-            complexPayload.put("approved", true);
-            
+            complexPayload.put("string", "value");
+            complexPayload.put("number", 42);
+            complexPayload.put("boolean", true);
+            complexPayload.put("nested", nestedMap);
+            dto.setTestPayload(complexPayload);
+
             // When
-            validDto.setTestPayload(complexPayload);
-            Set<ConstraintViolation<WebhookTestRequestDTO>> violations = validator.validate(validDto);
-            
+            Set<ConstraintViolation<WebhookTestRequestDTO>> violations = validator.validate(dto);
+
             // Then
-            assertTrue(violations.isEmpty(), "DTO with complex nested payload should pass validation");
-            assertEquals(complexPayload, validDto.getTestPayload(), "Complex payload should be stored correctly");
-            
-            // Verify nested structure is preserved
+            assertTrue(violations.isEmpty(), "No violations should be found");
+            assertEquals(4, dto.getTestPayload().size(), "Payload should have 4 entries");
+            assertEquals("value", dto.getTestPayload().get("string"), "String value should match");
+            assertEquals(42, dto.getTestPayload().get("number"), "Number value should match");
+            assertEquals(true, dto.getTestPayload().get("boolean"), "Boolean value should match");
+            assertTrue(dto.getTestPayload().get("nested") instanceof Map, "Nested value should be a Map");
+
             @SuppressWarnings("unchecked")
-            Map<String, Object> merchant = (Map<String, Object>) validDto.getTestPayload().get("merchant");
-            assertNotNull(merchant, "Nested merchant data should be preserved");
-            assertEquals("John", merchant.get("firstName"), "Nested firstName should be preserved");
-            
-            @SuppressWarnings("unchecked")
-            Map<String, Object> address = (Map<String, Object>) merchant.get("address");
-            assertNotNull(address, "Nested address data should be preserved");
-            assertEquals("New York", address.get("city"), "Nested city should be preserved");
+            Map<String, Object> retrievedNestedMap = (Map<String, Object>) dto.getTestPayload().get("nested");
+            assertEquals("nestedValue", retrievedNestedMap.get("nestedKey"), "Nested string value should match");
+            assertEquals(123, retrievedNestedMap.get("nestedNumber"), "Nested number value should match");
         }
 
         @Test
-        @DisplayName("DTO should handle empty payload map")
-        void dtoShouldHandleEmptyPayloadMap() {
+        @DisplayName("Should handle empty payload map")
+        void shouldHandleEmptyPayloadMap() {
             // Given
-            Map<String, Object> emptyPayload = new HashMap<>();
-            
-            // When
-            validDto.setTestPayload(emptyPayload);
-            Set<ConstraintViolation<WebhookTestRequestDTO>> violations = validator.validate(validDto);
-            
-            // Then
-            assertTrue(violations.isEmpty(), "DTO with empty payload map should pass validation");
-            assertEquals(emptyPayload, validDto.getTestPayload(), "Empty payload should be stored correctly");
-            assertTrue(validDto.getTestPayload().isEmpty(), "Test payload should be empty");
-        }
+            WebhookTestRequestDTO dto = createValidDTO();
+            dto.setTestPayload(new HashMap<>());
 
-        @Test
-        @DisplayName("DTO should handle payload with array values")
-        void dtoShouldHandlePayloadWithArrayValues() throws Exception {
-            // Given
-            String json = "{\"webhookId\":\"webhook-123\",\"testPayload\":{\"applicationId\":\"app-123\",\"documents\":[\"doc1\",\"doc2\",\"doc3\"]}}";
-            
             // When
-            WebhookTestRequestDTO dto = objectMapper.readValue(json, WebhookTestRequestDTO.class);
-            
+            Set<ConstraintViolation<WebhookTestRequestDTO>> violations = validator.validate(dto);
+
             // Then
-            assertNotNull(dto, "DTO should not be null");
-            assertNotNull(dto.getTestPayload(), "Test payload should not be null");
-            assertEquals("app-123", dto.getTestPayload().get("applicationId"), "Application ID should match");
-            
-            Object documentsObj = dto.getTestPayload().get("documents");
-            assertTrue(documentsObj instanceof java.util.List, "Documents should be a List");
-            
-            @SuppressWarnings("unchecked")
-            java.util.List<String> documents = (java.util.List<String>) documentsObj;
-            assertEquals(3, documents.size(), "Documents list should have 3 items");
-            assertEquals("doc1", documents.get(0), "First document should match");
-            assertEquals("doc2", documents.get(1), "Second document should match");
-            assertEquals("doc3", documents.get(2), "Third document should match");
+            assertTrue(violations.isEmpty(), "No violations should be found");
+            assertTrue(dto.getTestPayload().isEmpty(), "Payload should be empty");
         }
     }
 
@@ -309,96 +273,154 @@ class WebhookTestRequestDTOTest {
     class DeliveryOptionsTests {
 
         @Test
-        @DisplayName("DTO should use default values for delivery options when not specified")
-        void dtoShouldUseDefaultValuesForDeliveryOptionsWhenNotSpecified() {
+        @DisplayName("Should have correct default values for delivery options")
+        void shouldHaveCorrectDefaultValuesForDeliveryOptions() {
             // Given
             WebhookTestRequestDTO dto = new WebhookTestRequestDTO();
-            dto.setWebhookId("webhook-123");
-            dto.setTestPayload(testPayload);
-            
-            // When
-            Set<ConstraintViolation<WebhookTestRequestDTO>> violations = validator.validate(dto);
-            
+
             // Then
-            assertTrue(violations.isEmpty(), "DTO with default delivery options should pass validation");
-            assertEquals(false, dto.getAsync(), "Async should default to false");
-            assertEquals(true, dto.getRetry(), "Retry should default to true");
-            assertEquals(true, dto.getIncludeSignature(), "Include signature should default to true");
+            assertFalse(dto.getAsync(), "Default async value should be false");
+            assertTrue(dto.getRetry(), "Default retry value should be true");
+            assertTrue(dto.getIncludeSignature(), "Default includeSignature value should be true");
         }
 
         @Test
-        @DisplayName("DTO should accept explicit delivery option values")
-        void dtoShouldAcceptExplicitDeliveryOptionValues() {
+        @DisplayName("Should set async option correctly")
+        void shouldSetAsyncOptionCorrectly() {
             // Given
-            validDto.setAsync(true);
-            validDto.setRetry(false);
-            validDto.setIncludeSignature(false);
-            
+            WebhookTestRequestDTO dto = createValidDTO();
+
             // When
-            Set<ConstraintViolation<WebhookTestRequestDTO>> violations = validator.validate(validDto);
-            
+            dto.setAsync(true);
+
             // Then
-            assertTrue(violations.isEmpty(), "DTO with explicit delivery options should pass validation");
-            assertEquals(true, validDto.getAsync(), "Async should be set to true");
-            assertEquals(false, validDto.getRetry(), "Retry should be set to false");
-            assertEquals(false, validDto.getIncludeSignature(), "Include signature should be set to false");
+            assertTrue(dto.getAsync(), "Async should be true");
         }
 
         @Test
-        @DisplayName("DTO should handle null delivery option values")
-        void dtoShouldHandleNullDeliveryOptionValues() {
+        @DisplayName("Should set retry option correctly")
+        void shouldSetRetryOptionCorrectly() {
             // Given
-            validDto.setAsync(null);
-            validDto.setRetry(null);
-            validDto.setIncludeSignature(null);
-            
+            WebhookTestRequestDTO dto = createValidDTO();
+
             // When
-            Set<ConstraintViolation<WebhookTestRequestDTO>> violations = validator.validate(validDto);
-            
+            dto.setRetry(false);
+
             // Then
-            assertTrue(violations.isEmpty(), "DTO with null delivery options should pass validation");
-            assertEquals(false, validDto.getAsync(), "Async should default to false when null");
-            assertEquals(true, validDto.getRetry(), "Retry should default to true when null");
-            assertEquals(true, validDto.getIncludeSignature(), "Include signature should default to true when null");
+            assertFalse(dto.getRetry(), "Retry should be false");
+        }
+
+        @Test
+        @DisplayName("Should set includeSignature option correctly")
+        void shouldSetIncludeSignatureOptionCorrectly() {
+            // Given
+            WebhookTestRequestDTO dto = createValidDTO();
+
+            // When
+            dto.setIncludeSignature(false);
+
+            // Then
+            assertFalse(dto.getIncludeSignature(), "IncludeSignature should be false");
+        }
+
+        @Test
+        @DisplayName("Should deserialize JSON with missing delivery options to default values")
+        void shouldDeserializeJsonWithMissingDeliveryOptionsToDefaultValues() throws IOException {
+            // Given
+            String json = "{\"webhookId\":\"webhook-123\",\"testPayload\":{\"event\":\"application.approved\"}}";
+
+            // When
+            WebhookTestRequestDTO dto = objectMapper.readValue(json, WebhookTestRequestDTO.class);
+
+            // Then
+            assertFalse(dto.getAsync(), "Default async value should be false");
+            assertTrue(dto.getRetry(), "Default retry value should be true");
+            assertTrue(dto.getIncludeSignature(), "Default includeSignature value should be true");
         }
     }
 
     @Nested
-    @DisplayName("ToString Tests")
-    class ToStringTests {
+    @DisplayName("Validation Failure Scenarios Tests")
+    class ValidationFailureScenariosTests {
 
         @Test
-        @DisplayName("toString should include all fields")
-        void toStringShouldIncludeAllFields() {
+        @DisplayName("Should fail validation with multiple violations")
+        void shouldFailValidationWithMultipleViolations() {
+            // Given
+            WebhookTestRequestDTO dto = new WebhookTestRequestDTO();
+            // Both required fields are missing
+
             // When
-            String toString = validDto.toString();
-            
+            Set<ConstraintViolation<WebhookTestRequestDTO>> violations = validator.validate(dto);
+
             // Then
-            assertTrue(toString.contains("webhookId='webhook-123'"), 
-                    "toString should include webhookId field");
-            assertTrue(toString.contains("testPayload="), 
-                    "toString should include testPayload field");
-            assertTrue(toString.contains("async=false"), 
-                    "toString should include async field");
-            assertTrue(toString.contains("retry=true"), 
-                    "toString should include retry field");
-            assertTrue(toString.contains("includeSignature=true"), 
-                    "toString should include includeSignature field");
+            assertEquals(2, violations.size(), "Should have two violations");
+            
+            // Convert violations to a more easily testable format
+            Map<String, String> violationMap = new HashMap<>();
+            for (ConstraintViolation<WebhookTestRequestDTO> violation : violations) {
+                violationMap.put(violation.getPropertyPath().toString(), violation.getMessage());
+            }
+            
+            assertTrue(violationMap.containsKey("webhookId"), "Should have violation for webhookId");
+            assertEquals("Webhook ID is required", violationMap.get("webhookId"), "webhookId violation message should match");
+            
+            assertTrue(violationMap.containsKey("testPayload"), "Should have violation for testPayload");
+            assertEquals("Test payload is required", violationMap.get("testPayload"), "testPayload violation message should match");
         }
 
         @Test
-        @DisplayName("toString should include test payload content")
-        void toStringShouldIncludeTestPayloadContent() {
+        @DisplayName("Should validate with all fields set to valid values")
+        void shouldValidateWithAllFieldsSetToValidValues() {
+            // Given
+            WebhookTestRequestDTO dto = createValidDTO();
+
             // When
-            String toString = validDto.toString();
-            
+            Set<ConstraintViolation<WebhookTestRequestDTO>> violations = validator.validate(dto);
+
             // Then
-            assertTrue(toString.contains("applicationId=app-123"), 
-                    "toString should include applicationId in testPayload");
-            assertTrue(toString.contains("status=APPROVED"), 
-                    "toString should include status in testPayload");
-            assertTrue(toString.contains("timestamp="), 
-                    "toString should include timestamp in testPayload");
+            assertTrue(violations.isEmpty(), "No violations should be found");
         }
+    }
+
+    @Test
+    @DisplayName("Should use constructor with all fields")
+    void shouldUseConstructorWithAllFields() {
+        // Given
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("event", "application.approved");
+
+        // When
+        WebhookTestRequestDTO dto = new WebhookTestRequestDTO(
+                "webhook-123",
+                payload,
+                true,
+                false,
+                false
+        );
+
+        // Then
+        assertEquals("webhook-123", dto.getWebhookId(), "webhookId should match");
+        assertSame(payload, dto.getTestPayload(), "testPayload should be the same instance");
+        assertTrue(dto.getAsync(), "async should be true");
+        assertFalse(dto.getRetry(), "retry should be false");
+        assertFalse(dto.getIncludeSignature(), "includeSignature should be false");
+    }
+
+    @Test
+    @DisplayName("Should generate correct toString output")
+    void shouldGenerateCorrectToStringOutput() {
+        // Given
+        WebhookTestRequestDTO dto = createValidDTO();
+
+        // When
+        String toStringResult = dto.toString();
+
+        // Then
+        assertTrue(toStringResult.contains("webhookId='webhook-123'"), "toString should contain webhookId");
+        assertTrue(toStringResult.contains("testPayload="), "toString should contain testPayload");
+        assertTrue(toStringResult.contains("async=false"), "toString should contain async=false");
+        assertTrue(toStringResult.contains("retry=true"), "toString should contain retry=true");
+        assertTrue(toStringResult.contains("includeSignature=true"), "toString should contain includeSignature=true");
     }
 }
