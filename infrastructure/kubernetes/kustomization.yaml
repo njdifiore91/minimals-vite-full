@@ -1,198 +1,96 @@
 # Root kustomization.yaml for MCA Application Processing System
-# This file orchestrates the deployment of all Kubernetes resources
-# across environments (development, staging, production)
+# This file orchestrates the deployment of all Kubernetes resources for the
+# Merchant Cash Advance (MCA) Application Processing System.
+#
+# This is the base configuration that will be extended by environment-specific overlays.
+# It defines common resources, labels, annotations, and configurations that apply to all environments.
+#
+# The deployment follows the environment promotion flow described in section 8.2.2 of the technical specification:
+# Development -> Staging -> Production
+#
+# Each environment has its own overlay that extends this base configuration with environment-specific settings.
 
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
 # Common labels applied to all resources
+# These labels help with resource organization, filtering, and management
 commonLabels:
   app.kubernetes.io/part-of: mca-application-system
   app.kubernetes.io/managed-by: kustomize
+  app.dollarfunding.com/system: mca-processing
+  app.dollarfunding.com/component: infrastructure
 
 # Common annotations applied to all resources
+# These annotations provide additional metadata for resources
 commonAnnotations:
   app.kubernetes.io/version: "1.0.0"
-  app.kubernetes.io/description: "MCA Application Processing System"
+  app.dollarfunding.com/system: "mca-processing"
+  app.dollarfunding.com/contact: "devops@dollarfunding.com"
+  app.dollarfunding.com/documentation: "https://github.com/dollarfunding/mca-application-system/docs"
 
 # Resources to be applied
 resources:
-  # Namespace definitions
-  - namespaces/development-namespace.yaml
-  - namespaces/staging-namespace.yaml
+  # Namespace definitions - must be created first
   - namespaces/production-namespace.yaml
-  - namespaces/rbac.yaml
-  - namespaces/network-policies.yaml
   - namespaces/resource-quotas.yaml
-
-  # Infrastructure operators
-  - infrastructure/postgresql-operator.yaml
-  - infrastructure/rabbitmq-operator.yaml
-  - infrastructure/redis-operator.yaml
-  - infrastructure/minio-operator.yaml
-
-  # Storage classes
-  - infrastructure/storage-classes.yaml
+  - namespaces/rbac.yaml
   
-  # Infrastructure instances
-  - infrastructure/postgresql-cluster.yaml
+  # Infrastructure components
   - infrastructure/rabbitmq-cluster.yaml
   - infrastructure/redis-cluster.yaml
   - infrastructure/minio-instance.yaml
+  
+  # Application services - defined in Helm charts
+  # These will be deployed using Helm in the environment-specific overlays
+  # See infrastructure/kubernetes/charts directory for the Helm charts
 
-# Configuration for Helm charts using helmCharts generator
-helmCharts:
-  # Backend microservices
-  - name: email-service
-    repo: https://dollarfunding.github.io/helm-charts
-    version: 1.0.0
-    releaseName: email-service
-    namespace: mca-system
-    valuesFile: config/common-values.yaml
-    
-  - name: document-service
-    repo: https://dollarfunding.github.io/helm-charts
-    version: 1.0.0
-    releaseName: document-service
-    namespace: mca-system
-    valuesFile: config/common-values.yaml
-    
-  - name: ocr-service
-    repo: https://dollarfunding.github.io/helm-charts
-    version: 1.0.0
-    releaseName: ocr-service
-    namespace: mca-system
-    valuesFile: config/common-values.yaml
-    
-  - name: data-service
-    repo: https://dollarfunding.github.io/helm-charts
-    version: 1.0.0
-    releaseName: data-service
-    namespace: mca-system
-    valuesFile: config/common-values.yaml
-    
-  - name: notification-service
-    repo: https://dollarfunding.github.io/helm-charts
-    version: 1.0.0
-    releaseName: notification-service
-    namespace: mca-system
-    valuesFile: config/common-values.yaml
-    
-  - name: api-gateway
-    repo: https://dollarfunding.github.io/helm-charts
-    version: 1.0.0
-    releaseName: api-gateway
-    namespace: mca-system
-    valuesFile: config/common-values.yaml
+# Configure namespace for all resources
+namespace: mca-system
 
-# Resource transformers for customizing resources
-transformers:
-  # Add resource requests/limits based on environment
-  - |-
-    apiVersion: builtin
-    kind: PatchTransformer
-    metadata:
-      name: resource-limits
-    patch: |-
-      - op: add
-        path: /spec/template/spec/containers/0/resources
-        value:
-          requests:
-            cpu: ${CPU_REQUEST}
-            memory: ${MEMORY_REQUEST}
-          limits:
-            cpu: ${CPU_LIMIT}
-            memory: ${MEMORY_LIMIT}
-    target:
-      kind: Deployment
+# Resource ordering to ensure dependencies are created in the correct sequence
+# Namespaces must be created before other resources
+# Infrastructure components must be created before application services
+priority:
+  - pattern: "*/namespace.yaml"
+    group: 0
+  - pattern: "*/rbac.yaml"
+    group: 1
+  - pattern: "infrastructure/*.yaml"
+    group: 2
+  - pattern: "*/*.yaml"
+    group: 3
 
-# Patches to apply to resources
-patches:
-  # Set namespace for all resources
-  - patch: |-
-      - op: replace
-        path: /metadata/namespace
-        value: ${NAMESPACE}
-    target:
-      kind: Deployment
-      labelSelector: "app.kubernetes.io/part-of=mca-application-system"
+# Configuration for environment-specific values
+# These will be overridden by environment-specific overlays
+configMapGenerator:
+  - name: mca-system-config
+    behavior: create
+    literals:
+      - ENVIRONMENT=base
+      - LOG_LEVEL=info
+      - ENABLE_MONITORING=false
+      - ENABLE_GPU=false
 
-# Environment-specific configurations
-configurations:
-  - kustomizeconfig.yaml
+# Reference to environment-specific configuration values
+# These values are defined in the environment-specific overlays
+# Each environment (development, staging, production) has its own values file
+# in the config directory: values-development.yaml, values-staging.yaml, values-production.yaml
 
-# Configures the order in which resources are applied
-# to ensure dependencies are created in the correct sequence
-vars:
-  - name: NAMESPACE
-    objref:
-      kind: Namespace
-      name: mca-system
-      apiVersion: v1
-    fieldref:
-      fieldpath: metadata.name
-  - name: CPU_REQUEST
-    objref:
-      kind: ConfigMap
-      name: resource-config
-      apiVersion: v1
-    fieldref:
-      fieldpath: data.cpuRequest
-  - name: MEMORY_REQUEST
-    objref:
-      kind: ConfigMap
-      name: resource-config
-      apiVersion: v1
-    fieldref:
-      fieldpath: data.memoryRequest
-  - name: CPU_LIMIT
-    objref:
-      kind: ConfigMap
-      name: resource-config
-      apiVersion: v1
-    fieldref:
-      fieldpath: data.cpuLimit
-  - name: MEMORY_LIMIT
-    objref:
-      kind: ConfigMap
-      name: resource-config
-      apiVersion: v1
-    fieldref:
-      fieldpath: data.memoryLimit
-
-# Environment-specific overlays
-# These directories contain environment-specific kustomization files
-# that override the base configuration
-bases:
-  - overlays/development
-  - overlays/staging
-  - overlays/production
-
-# The following directories should be created for environment-specific overlays:
+# Note: Environment-specific overlays are located in:
 # - overlays/development/kustomization.yaml
 # - overlays/staging/kustomization.yaml
 # - overlays/production/kustomization.yaml
+
+# Deployment instructions:
+# To deploy to a specific environment, use the following command:
+# kubectl apply -k overlays/{environment}
 #
-# Each overlay kustomization.yaml should reference this base kustomization
-# and apply environment-specific patches and configurations.
+# For example, to deploy to the development environment:
+# kubectl apply -k overlays/development
 #
-# Example overlay structure:
-# ```
-# apiVersion: kustomize.config.k8s.io/v1beta1
-# kind: Kustomization
+# To deploy to the staging environment:
+# kubectl apply -k overlays/staging
 #
-# resources:
-#   - ../../kustomization.yaml
-#
-# patchesStrategicMerge:
-#   - patches/resource-config.yaml
-#
-# configMapGenerator:
-#   - name: resource-config
-#     behavior: create
-#     literals:
-#       - cpuRequest=100m
-#       - memoryRequest=128Mi
-#       - cpuLimit=500m
-#       - memoryLimit=512Mi
-# ```
+# To deploy to the production environment:
+# kubectl apply -k overlays/production
