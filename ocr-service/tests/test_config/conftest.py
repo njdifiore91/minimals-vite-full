@@ -4,613 +4,547 @@
 """
 Pytest fixtures and utilities for testing OCR Service configuration modules.
 
-This module provides fixtures for mocking environment variables, configuration objects,
-and helper functions for testing configuration loading, validation, and defaults.
-It enables consistent test environments across all configuration test modules.
+This module provides fixtures and helper functions for testing configuration loading,
+validation, and defaults across different environments. It includes fixtures for
+mocking environment variables, creating sample configuration objects, and simulating
+different deployment environments.
 
-Fixtures:
-    - env_vars: Mock environment variables for testing
-    - clear_env_vars: Clear specific environment variables
-    - dev_env_vars: Environment variables for development environment
-    - staging_env_vars: Environment variables for staging environment
-    - prod_env_vars: Environment variables for production environment
-    - mock_app_config: Mock AppConfig object for testing
-    - mock_rabbitmq_config: Mock RabbitMQ configuration for testing
-    - mock_s3_config: Mock S3 configuration for testing
-    - mock_tensorflow_config: Mock TensorFlow configuration for testing
-    - mock_logging_config: Mock logging configuration for testing
-    - config_validator: Helper for testing configuration validation
-    - config_defaults: Helper for testing configuration defaults
+These fixtures ensure that configuration tests can run independently without external
+dependencies and provide a consistent test environment across all configuration test modules.
 """
 
 import os
 import pytest
-from unittest.mock import patch, MagicMock
-from typing import Dict, Any, List, Optional, Callable
-import json
-from pathlib import Path
+from typing import Dict, Any, Optional, List, Callable
+from enum import Enum
 
-# Import configuration classes for type hints
-from src.config.app_config import AppConfig, Environment, LogLevel
-
-
-# ===== Environment Variable Fixtures =====
-
-@pytest.fixture
-def env_vars(monkeypatch) -> Dict[str, str]:
-    """
-    Fixture to set and manage environment variables for testing.
-    
-    Args:
-        monkeypatch: pytest's monkeypatch fixture
-        
-    Returns:
-        A dictionary of environment variables that were set
-        
-    Example:
-        def test_config_loading(env_vars):
-            env_vars['RABBITMQ_HOST'] = 'test-host'
-            # Test code that uses RABBITMQ_HOST
-    """
-    test_env_vars = {}
-    
-    def _set_env_var(name: str, value: str) -> None:
-        test_env_vars[name] = value
-        monkeypatch.setenv(name, value)
-    
-    # Create a dictionary with a custom __setitem__ method
-    # to automatically call monkeypatch.setenv
-    class EnvVarDict(dict):
-        def __setitem__(self, key, value):
-            _set_env_var(key, value)
-            super().__setitem__(key, value)
-    
-    return EnvVarDict()
+# Import configuration types
+from types.config import (
+    ConfigDict,
+    ServiceConfig,
+    TensorFlowConfig,
+    RabbitMQConfig,
+    S3Config,
+    LoggingConfig,
+    EnvironmentType,
+    LogLevel
+)
 
 
-@pytest.fixture
-def clear_env_vars(monkeypatch) -> Callable[[List[str]], None]:
-    """
-    Fixture to clear specific environment variables for testing.
-    
-    Args:
-        monkeypatch: pytest's monkeypatch fixture
-        
-    Returns:
-        A function that clears the specified environment variables
-        
-    Example:
-        def test_missing_env_var(clear_env_vars):
-            clear_env_vars(['RABBITMQ_HOST'])
-            # Test code that should handle missing RABBITMQ_HOST
-    """
-    def _clear_vars(var_names: List[str]) -> None:
-        for name in var_names:
-            monkeypatch.delenv(name, raising=False)
-    
-    return _clear_vars
-
-
-@pytest.fixture
-def dev_env_vars(env_vars) -> Dict[str, str]:
-    """
-    Fixture to set environment variables for development environment.
-    
-    Args:
-        env_vars: The env_vars fixture
-        
-    Returns:
-        A dictionary of environment variables for development
-    """
-    # Set development environment
-    env_vars['ENVIRONMENT'] = 'development'
-    
-    # Server settings
-    env_vars['HOST'] = 'localhost'
-    env_vars['PORT'] = '8080'
-    
-    # RabbitMQ settings
-    env_vars['RABBITMQ_HOST'] = 'localhost'
-    env_vars['RABBITMQ_PORT'] = '5672'
-    env_vars['RABBITMQ_USERNAME'] = 'guest'
-    env_vars['RABBITMQ_PASSWORD'] = 'guest'
-    env_vars['RABBITMQ_VHOST'] = '/'
-    env_vars['RABBITMQ_EXCHANGE'] = 'mca.documents'
-    env_vars['RABBITMQ_QUEUE'] = 'data-extraction'
-    env_vars['RABBITMQ_USE_TLS'] = 'false'
-    
-    # S3 settings
-    env_vars['S3_ENDPOINT'] = 'localhost:4566'
-    env_vars['S3_REGION'] = 'us-east-1'
-    env_vars['S3_ACCESS_KEY'] = 'test'
-    env_vars['S3_SECRET_KEY'] = 'test'
-    env_vars['S3_BUCKET'] = 'mca-documents-development'
-    env_vars['S3_USE_SSL'] = 'false'
-    env_vars['S3_VERIFY_SSL'] = 'false'
-    
-    # TensorFlow settings
-    env_vars['TF_MODEL_PATH'] = './models'
-    env_vars['TF_USE_GPU'] = 'false'
-    env_vars['TF_CONFIDENCE_THRESHOLD'] = '0.75'
-    
-    # Logging settings
-    env_vars['LOG_LEVEL'] = 'DEBUG'
-    env_vars['LOG_FORMAT'] = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    
-    # Performance settings
-    env_vars['BATCH_SIZE'] = '10'
-    env_vars['MAX_WORKERS'] = '4'
-    env_vars['PROCESSING_TIMEOUT'] = '300'
-    
-    return env_vars
-
-
-@pytest.fixture
-def staging_env_vars(env_vars) -> Dict[str, str]:
-    """
-    Fixture to set environment variables for staging environment.
-    
-    Args:
-        env_vars: The env_vars fixture
-        
-    Returns:
-        A dictionary of environment variables for staging
-    """
-    # Set staging environment
-    env_vars['ENVIRONMENT'] = 'staging'
-    
-    # Server settings
-    env_vars['HOST'] = '0.0.0.0'
-    env_vars['PORT'] = '8080'
-    
-    # RabbitMQ settings
-    env_vars['RABBITMQ_HOST'] = 'rabbitmq.staging'
-    env_vars['RABBITMQ_PORT'] = '5671'
-    env_vars['RABBITMQ_USERNAME'] = 'mca-service'
-    env_vars['RABBITMQ_PASSWORD'] = 'staging-password'
-    env_vars['RABBITMQ_VHOST'] = '/mca'
-    env_vars['RABBITMQ_EXCHANGE'] = 'mca.documents'
-    env_vars['RABBITMQ_QUEUE'] = 'data-extraction'
-    env_vars['RABBITMQ_USE_TLS'] = 'true'
-    env_vars['RABBITMQ_CLIENT_CERT'] = '/etc/rabbitmq/certs/client.pem'
-    env_vars['RABBITMQ_CLIENT_KEY'] = '/etc/rabbitmq/certs/client.key'
-    env_vars['RABBITMQ_CA_CERT'] = '/etc/rabbitmq/certs/ca.pem'
-    
-    # S3 settings
-    env_vars['S3_ENDPOINT'] = 's3.amazonaws.com'
-    env_vars['S3_REGION'] = 'us-east-1'
-    env_vars['S3_ACCESS_KEY'] = 'staging-access-key'
-    env_vars['S3_SECRET_KEY'] = 'staging-secret-key'
-    env_vars['S3_BUCKET'] = 'mca-documents-staging'
-    env_vars['S3_USE_SSL'] = 'true'
-    env_vars['S3_VERIFY_SSL'] = 'true'
-    
-    # TensorFlow settings
-    env_vars['TF_MODEL_PATH'] = '/models'
-    env_vars['TF_USE_GPU'] = 'true'
-    env_vars['TF_GPU_MEMORY_LIMIT'] = '8192'
-    env_vars['TF_CONFIDENCE_THRESHOLD'] = '0.85'
-    
-    # Logging settings
-    env_vars['LOG_LEVEL'] = 'INFO'
-    env_vars['LOG_FORMAT'] = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    env_vars['LOG_FILE'] = '/var/log/ocr-service/service.log'
-    
-    # Performance settings
-    env_vars['BATCH_SIZE'] = '20'
-    env_vars['MAX_WORKERS'] = '8'
-    env_vars['PROCESSING_TIMEOUT'] = '300'
-    
-    return env_vars
-
-
-@pytest.fixture
-def prod_env_vars(env_vars) -> Dict[str, str]:
-    """
-    Fixture to set environment variables for production environment.
-    
-    Args:
-        env_vars: The env_vars fixture
-        
-    Returns:
-        A dictionary of environment variables for production
-    """
-    # Set production environment
-    env_vars['ENVIRONMENT'] = 'production'
-    
-    # Server settings
-    env_vars['HOST'] = '0.0.0.0'
-    env_vars['PORT'] = '8080'
-    
-    # RabbitMQ settings
-    env_vars['RABBITMQ_HOST'] = 'rabbitmq.production'
-    env_vars['RABBITMQ_PORT'] = '5671'
-    env_vars['RABBITMQ_USERNAME'] = 'mca-service'
-    env_vars['RABBITMQ_PASSWORD'] = 'production-password'
-    env_vars['RABBITMQ_VHOST'] = '/mca'
-    env_vars['RABBITMQ_EXCHANGE'] = 'mca.documents'
-    env_vars['RABBITMQ_QUEUE'] = 'data-extraction'
-    env_vars['RABBITMQ_USE_TLS'] = 'true'
-    env_vars['RABBITMQ_CLIENT_CERT'] = '/etc/rabbitmq/certs/client.pem'
-    env_vars['RABBITMQ_CLIENT_KEY'] = '/etc/rabbitmq/certs/client.key'
-    env_vars['RABBITMQ_CA_CERT'] = '/etc/rabbitmq/certs/ca.pem'
-    
-    # S3 settings
-    env_vars['S3_ENDPOINT'] = 's3.amazonaws.com'
-    env_vars['S3_REGION'] = 'us-east-1'
-    env_vars['S3_ACCESS_KEY'] = 'production-access-key'
-    env_vars['S3_SECRET_KEY'] = 'production-secret-key'
-    env_vars['S3_BUCKET'] = 'mca-documents-production'
-    env_vars['S3_USE_SSL'] = 'true'
-    env_vars['S3_VERIFY_SSL'] = 'true'
-    
-    # TensorFlow settings
-    env_vars['TF_MODEL_PATH'] = '/models'
-    env_vars['TF_USE_GPU'] = 'true'
-    env_vars['TF_GPU_MEMORY_LIMIT'] = '16384'
-    env_vars['TF_CONFIDENCE_THRESHOLD'] = '0.90'
-    
-    # Logging settings
-    env_vars['LOG_LEVEL'] = 'INFO'
-    env_vars['LOG_FORMAT'] = '%(asctime)s - %(name)s - %(levelname)s - [%(correlation_id)s] - %(message)s'
-    env_vars['LOG_FILE'] = '/var/log/ocr-service/service.log'
-    
-    # Performance settings
-    env_vars['BATCH_SIZE'] = '30'
-    env_vars['MAX_WORKERS'] = '16'
-    env_vars['PROCESSING_TIMEOUT'] = '300'
-    
-    return env_vars
-
-
-# ===== Mock Configuration Fixtures =====
-
-@pytest.fixture
-def mock_app_config() -> AppConfig:
-    """
-    Fixture to provide a mock AppConfig object for testing.
-    
-    Returns:
-        A mock AppConfig object with test values
-    """
-    config = MagicMock(spec=AppConfig)
-    
-    # Service information
-    config.SERVICE_NAME = 'ocr-service-test'
-    config.SERVICE_VERSION = '1.0.0-test'
-    
-    # Environment
-    config.ENVIRONMENT = Environment.DEVELOPMENT
-    
-    # Server settings
-    config.HOST = 'localhost'
-    config.PORT = 8080
-    
-    # RabbitMQ configuration
-    config.RABBITMQ_HOST = 'localhost'
-    config.RABBITMQ_PORT = 5672
-    config.RABBITMQ_USERNAME = 'guest'
-    config.RABBITMQ_PASSWORD = 'guest'
-    config.RABBITMQ_VHOST = '/'
-    config.RABBITMQ_EXCHANGE = 'mca.documents'
-    config.RABBITMQ_QUEUE = 'data-extraction'
-    config.RABBITMQ_USE_TLS = False
-    config.RABBITMQ_CLIENT_CERT = None
-    config.RABBITMQ_CLIENT_KEY = None
-    config.RABBITMQ_CA_CERT = None
-    
-    # S3 configuration
-    config.S3_ENDPOINT = 'localhost:4566'
-    config.S3_REGION = 'us-east-1'
-    config.S3_ACCESS_KEY = 'test'
-    config.S3_SECRET_KEY = 'test'
-    config.S3_BUCKET = 'mca-documents-development'
-    config.S3_USE_SSL = False
-    config.S3_VERIFY_SSL = False
+# Environment variable sets for different deployment environments
+DEV_ENV_VARS = {
+    # Service configuration
+    "OCR_SERVICE_ENV": "development",
+    "OCR_SERVICE_NAME": "ocr-service",
+    "OCR_SERVICE_VERSION": "1.0.0",
+    "OCR_SERVICE_PORT": "8080",
+    "OCR_SERVICE_DEBUG": "true",
+    "OCR_CORRELATION_ID_HEADER": "X-Correlation-ID",
+    "OCR_SERVICE_MAX_WORKERS": "4",
+    "OCR_SERVICE_SHUTDOWN_TIMEOUT": "30",
     
     # TensorFlow configuration
-    config.TF_MODEL_PATH = './models'
-    config.TF_USE_GPU = False
-    config.TF_GPU_MEMORY_LIMIT = None
-    config.TF_CONFIDENCE_THRESHOLD = 0.75
+    "OCR_MODELS_PATH": "/app/models",
+    "OCR_TYPED_MODEL_NAME": "typed_text_model",
+    "OCR_HANDWRITTEN_MODEL_NAME": "handwritten_text_model",
+    "OCR_HYBRID_MODEL_NAME": "hybrid_text_model",
+    "OCR_CONFIDENCE_THRESHOLD": "0.85",
+    "OCR_LOW_CONFIDENCE_THRESHOLD": "0.60",
+    "OCR_GPU_MEMORY_LIMIT": "0",
+    "OCR_USE_GPU": "false",  # Disabled in development
+    "OCR_BATCH_SIZE": "4",
+    "OCR_MODEL_VERSION": "1.0.0",
+    "OCR_ENABLE_OPTIMIZATION": "false",  # Disabled in development
+    
+    # RabbitMQ configuration
+    "RABBITMQ_HOST": "localhost",
+    "RABBITMQ_PORT": "5672",
+    "RABBITMQ_USERNAME": "guest",
+    "RABBITMQ_PASSWORD": "guest",
+    "RABBITMQ_VHOST": "/",
+    "RABBITMQ_EXCHANGE": "mca.documents",
+    "RABBITMQ_QUEUE": "data-extraction",
+    "RABBITMQ_ROUTING_KEY": "",
+    "RABBITMQ_USE_TLS": "false",  # Disabled in development
+    "RABBITMQ_CERT_PATH": "/app/certs/client.pem",
+    "RABBITMQ_KEY_PATH": "/app/certs/client.key",
+    "RABBITMQ_CA_PATH": "/app/certs/ca.pem",
+    "RABBITMQ_PREFETCH_COUNT": "10",
+    "RABBITMQ_CONNECTION_ATTEMPTS": "3",
+    "RABBITMQ_RETRY_DELAY": "5",
+    "RABBITMQ_HEARTBEAT": "60",
+    
+    # S3 configuration
+    "S3_ENDPOINT": "http://localhost:9000",
+    "S3_REGION": "us-east-1",
+    "S3_BUCKET": "mca-documents-staging",
+    "S3_ACCESS_KEY": "minioadmin",
+    "S3_SECRET_KEY": "minioadmin",
+    "S3_USE_SSL": "false",  # Disabled in development
+    "S3_VERIFY_SSL": "false",  # Disabled in development
+    "S3_ENCRYPTION": "AES256",
+    "S3_PRESIGNED_URL_EXPIRY": "3600",
+    "S3_MAX_POOL_CONNECTIONS": "10",
+    "S3_CONNECT_TIMEOUT": "5",
+    "S3_READ_TIMEOUT": "60",
     
     # Logging configuration
-    config.LOG_LEVEL = LogLevel.DEBUG
-    config.LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    config.LOG_FILE = None
+    "OCR_LOG_LEVEL": "DEBUG",
+    "OCR_LOG_FORMAT": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    "OCR_LOG_FILE": "",  # Empty means log to console only
+    "OCR_LOG_MAX_BYTES": "10485760",
+    "OCR_LOG_BACKUP_COUNT": "5",
+    "OCR_LOG_JSON": "false",
+    "OCR_LOG_INCLUDE_CORRELATION_ID": "true"
+}
+
+STAGING_ENV_VARS = {
+    # Service configuration
+    "OCR_SERVICE_ENV": "staging",
+    "OCR_SERVICE_NAME": "ocr-service",
+    "OCR_SERVICE_VERSION": "1.0.0",
+    "OCR_SERVICE_PORT": "8080",
+    "OCR_SERVICE_DEBUG": "false",
+    "OCR_CORRELATION_ID_HEADER": "X-Correlation-ID",
+    "OCR_SERVICE_MAX_WORKERS": "8",
+    "OCR_SERVICE_SHUTDOWN_TIMEOUT": "30",
     
-    # Performance settings
-    config.BATCH_SIZE = 10
-    config.MAX_WORKERS = 4
-    config.PROCESSING_TIMEOUT = 300
+    # TensorFlow configuration
+    "OCR_MODELS_PATH": "/app/models",
+    "OCR_TYPED_MODEL_NAME": "typed_text_model",
+    "OCR_HANDWRITTEN_MODEL_NAME": "handwritten_text_model",
+    "OCR_HYBRID_MODEL_NAME": "hybrid_text_model",
+    "OCR_CONFIDENCE_THRESHOLD": "0.80",  # Lower threshold for staging
+    "OCR_LOW_CONFIDENCE_THRESHOLD": "0.60",
+    "OCR_GPU_MEMORY_LIMIT": "4096",
+    "OCR_USE_GPU": "true",
+    "OCR_BATCH_SIZE": "8",
+    "OCR_MODEL_VERSION": "1.0.0",
+    "OCR_ENABLE_OPTIMIZATION": "true",
     
-    # Mock methods
-    config.as_dict.return_value = {
-        'SERVICE_NAME': 'ocr-service-test',
-        'SERVICE_VERSION': '1.0.0-test',
-        'ENVIRONMENT': Environment.DEVELOPMENT,
-        'HOST': 'localhost',
-        'PORT': 8080,
-        'RABBITMQ_HOST': 'localhost',
-        'RABBITMQ_PORT': 5672,
-        'RABBITMQ_USERNAME': 'guest',
-        'RABBITMQ_PASSWORD': 'guest',
-        'RABBITMQ_VHOST': '/',
-        'RABBITMQ_EXCHANGE': 'mca.documents',
-        'RABBITMQ_QUEUE': 'data-extraction',
-        'RABBITMQ_USE_TLS': False,
-        'RABBITMQ_CLIENT_CERT': None,
-        'RABBITMQ_CLIENT_KEY': None,
-        'RABBITMQ_CA_CERT': None,
-        'S3_ENDPOINT': 'localhost:4566',
-        'S3_REGION': 'us-east-1',
-        'S3_ACCESS_KEY': 'test',
-        'S3_SECRET_KEY': 'test',
-        'S3_BUCKET': 'mca-documents-development',
-        'S3_USE_SSL': False,
-        'S3_VERIFY_SSL': False,
-        'TF_MODEL_PATH': './models',
-        'TF_USE_GPU': False,
-        'TF_GPU_MEMORY_LIMIT': None,
-        'TF_CONFIDENCE_THRESHOLD': 0.75,
-        'LOG_LEVEL': LogLevel.DEBUG,
-        'LOG_FORMAT': '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        'LOG_FILE': None,
-        'BATCH_SIZE': 10,
-        'MAX_WORKERS': 4,
-        'PROCESSING_TIMEOUT': 300
-    }
+    # RabbitMQ configuration
+    "RABBITMQ_HOST": "rabbitmq.staging",
+    "RABBITMQ_PORT": "5671",
+    "RABBITMQ_USERNAME": "ocr-service",
+    "RABBITMQ_PASSWORD": "password",
+    "RABBITMQ_VHOST": "/mca",
+    "RABBITMQ_EXCHANGE": "mca.documents",
+    "RABBITMQ_QUEUE": "data-extraction",
+    "RABBITMQ_ROUTING_KEY": "",
+    "RABBITMQ_USE_TLS": "true",
+    "RABBITMQ_CERT_PATH": "/app/certs/client.pem",
+    "RABBITMQ_KEY_PATH": "/app/certs/client.key",
+    "RABBITMQ_CA_PATH": "/app/certs/ca.pem",
+    "RABBITMQ_PREFETCH_COUNT": "10",
+    "RABBITMQ_CONNECTION_ATTEMPTS": "3",
+    "RABBITMQ_RETRY_DELAY": "5",
+    "RABBITMQ_HEARTBEAT": "60",
     
-    return config
+    # S3 configuration
+    "S3_ENDPOINT": "https://s3.staging.dollarfunding.com",
+    "S3_REGION": "us-east-1",
+    "S3_BUCKET": "mca-documents-staging",
+    "S3_ACCESS_KEY": "ocr-service-staging",
+    "S3_SECRET_KEY": "password",
+    "S3_USE_SSL": "true",
+    "S3_VERIFY_SSL": "true",
+    "S3_ENCRYPTION": "AES256",
+    "S3_PRESIGNED_URL_EXPIRY": "3600",
+    "S3_MAX_POOL_CONNECTIONS": "10",
+    "S3_CONNECT_TIMEOUT": "5",
+    "S3_READ_TIMEOUT": "60",
+    
+    # Logging configuration
+    "OCR_LOG_LEVEL": "INFO",
+    "OCR_LOG_FORMAT": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    "OCR_LOG_FILE": "/var/log/ocr-service/service.log",
+    "OCR_LOG_MAX_BYTES": "10485760",
+    "OCR_LOG_BACKUP_COUNT": "5",
+    "OCR_LOG_JSON": "true",
+    "OCR_LOG_INCLUDE_CORRELATION_ID": "true"
+}
+
+PRODUCTION_ENV_VARS = {
+    # Service configuration
+    "OCR_SERVICE_ENV": "production",
+    "OCR_SERVICE_NAME": "ocr-service",
+    "OCR_SERVICE_VERSION": "1.0.0",
+    "OCR_SERVICE_PORT": "8080",
+    "OCR_SERVICE_DEBUG": "false",
+    "OCR_CORRELATION_ID_HEADER": "X-Correlation-ID",
+    "OCR_SERVICE_MAX_WORKERS": "16",
+    "OCR_SERVICE_SHUTDOWN_TIMEOUT": "30",
+    
+    # TensorFlow configuration
+    "OCR_MODELS_PATH": "/app/models",
+    "OCR_TYPED_MODEL_NAME": "typed_text_model",
+    "OCR_HANDWRITTEN_MODEL_NAME": "handwritten_text_model",
+    "OCR_HYBRID_MODEL_NAME": "hybrid_text_model",
+    "OCR_CONFIDENCE_THRESHOLD": "0.90",  # Higher threshold for production
+    "OCR_LOW_CONFIDENCE_THRESHOLD": "0.70",
+    "OCR_GPU_MEMORY_LIMIT": "8192",
+    "OCR_USE_GPU": "true",
+    "OCR_BATCH_SIZE": "16",
+    "OCR_MODEL_VERSION": "1.0.0",
+    "OCR_ENABLE_OPTIMIZATION": "true",
+    
+    # RabbitMQ configuration
+    "RABBITMQ_HOST": "rabbitmq.production",
+    "RABBITMQ_PORT": "5671",
+    "RABBITMQ_USERNAME": "ocr-service",
+    "RABBITMQ_PASSWORD": "password",
+    "RABBITMQ_VHOST": "/mca",
+    "RABBITMQ_EXCHANGE": "mca.documents",
+    "RABBITMQ_QUEUE": "data-extraction",
+    "RABBITMQ_ROUTING_KEY": "",
+    "RABBITMQ_USE_TLS": "true",
+    "RABBITMQ_CERT_PATH": "/app/certs/client.pem",
+    "RABBITMQ_KEY_PATH": "/app/certs/client.key",
+    "RABBITMQ_CA_PATH": "/app/certs/ca.pem",
+    "RABBITMQ_PREFETCH_COUNT": "20",  # Higher prefetch for production
+    "RABBITMQ_CONNECTION_ATTEMPTS": "5",
+    "RABBITMQ_RETRY_DELAY": "5",
+    "RABBITMQ_HEARTBEAT": "60",
+    
+    # S3 configuration
+    "S3_ENDPOINT": "https://s3.dollarfunding.com",
+    "S3_REGION": "us-east-1",
+    "S3_BUCKET": "mca-documents-production",
+    "S3_ACCESS_KEY": "ocr-service-production",
+    "S3_SECRET_KEY": "password",
+    "S3_USE_SSL": "true",
+    "S3_VERIFY_SSL": "true",
+    "S3_ENCRYPTION": "AES256",
+    "S3_PRESIGNED_URL_EXPIRY": "3600",
+    "S3_MAX_POOL_CONNECTIONS": "20",
+    "S3_CONNECT_TIMEOUT": "5",
+    "S3_READ_TIMEOUT": "60",
+    
+    # Logging configuration
+    "OCR_LOG_LEVEL": "WARNING",
+    "OCR_LOG_FORMAT": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    "OCR_LOG_FILE": "/var/log/ocr-service/service.log",
+    "OCR_LOG_MAX_BYTES": "10485760",
+    "OCR_LOG_BACKUP_COUNT": "10",
+    "OCR_LOG_JSON": "true",
+    "OCR_LOG_INCLUDE_CORRELATION_ID": "true"
+}
+
+
+# Environment fixture for different deployment environments
+class Environment(Enum):
+    """Test environments for configuration testing."""
+    DEVELOPMENT = "development"
+    STAGING = "staging"
+    PRODUCTION = "production"
+    EMPTY = "empty"  # For testing defaults
+    CUSTOM = "custom"  # For custom environment variables
 
 
 @pytest.fixture
-def mock_rabbitmq_config() -> Dict[str, Any]:
+def env_vars(request, monkeypatch) -> Dict[str, str]:
     """
-    Fixture to provide mock RabbitMQ configuration for testing.
-    
-    Returns:
-        A dictionary with RabbitMQ configuration values
-    """
-    return {
-        'host': 'localhost',
-        'port': 5672,
-        'username': 'guest',
-        'password': 'guest',
-        'vhost': '/',
-        'exchange': 'mca.documents',
-        'queue': 'data-extraction',
-        'routing_key': 'ocr.extraction',
-        'use_tls': False,
-        'client_cert': None,
-        'client_key': None,
-        'ca_cert': None,
-        'connection_attempts': 3,
-        'retry_delay': 5,
-        'heartbeat': 60
-    }
-
-
-@pytest.fixture
-def mock_s3_config() -> Dict[str, Any]:
-    """
-    Fixture to provide mock S3 configuration for testing.
-    
-    Returns:
-        A dictionary with S3 configuration values
-    """
-    return {
-        'endpoint': 'localhost:4566',
-        'region': 'us-east-1',
-        'access_key': 'test',
-        'secret_key': 'test',
-        'bucket': 'mca-documents-development',
-        'use_ssl': False,
-        'verify_ssl': False,
-        'encryption_key': 'test-encryption-key',
-        'timeout': 30,
-        'max_retries': 3,
-        'retry_mode': 'standard'
-    }
-
-
-@pytest.fixture
-def mock_tensorflow_config() -> Dict[str, Any]:
-    """
-    Fixture to provide mock TensorFlow configuration for testing.
-    
-    Returns:
-        A dictionary with TensorFlow configuration values
-    """
-    return {
-        'model_path': './models',
-        'use_gpu': False,
-        'gpu_memory_limit': None,
-        'confidence_threshold': 0.75,
-        'typed_model': 'typed_model_v1',
-        'handwritten_model': 'handwritten_model_v1',
-        'hybrid_model': 'hybrid_model_v1',
-        'batch_size': 10,
-        'image_size': (1024, 768),
-        'channels': 3,
-        'preprocessing_steps': ['resize', 'normalize'],
-        'language': 'en'
-    }
-
-
-@pytest.fixture
-def mock_logging_config() -> Dict[str, Any]:
-    """
-    Fixture to provide mock logging configuration for testing.
-    
-    Returns:
-        A dictionary with logging configuration values
-    """
-    return {
-        'level': 'DEBUG',
-        'format': '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        'file': None,
-        'console': True,
-        'json_format': False,
-        'include_correlation_id': False,
-        'include_request_id': False,
-        'include_timestamp': True
-    }
-
-
-# ===== Configuration Testing Utilities =====
-
-@pytest.fixture
-def config_validator() -> Callable[[Dict[str, Any], List[str]], None]:
-    """
-    Fixture to provide a helper function for testing configuration validation.
-    
-    Returns:
-        A function that validates configuration against required fields
-        
-    Example:
-        def test_config_validation(config_validator, mock_rabbitmq_config):
-            config_validator(mock_rabbitmq_config, ['host', 'port', 'username'])
-    """
-    def _validate_config(config: Dict[str, Any], required_fields: List[str]) -> None:
-        """
-        Validate that a configuration dictionary contains all required fields.
-        
-        Args:
-            config: The configuration dictionary to validate
-            required_fields: List of field names that must be present
-            
-        Raises:
-            AssertionError: If any required field is missing
-        """
-        for field in required_fields:
-            assert field in config, f"Required field '{field}' is missing from configuration"
-            assert config[field] is not None, f"Required field '{field}' is None"
-    
-    return _validate_config
-
-
-@pytest.fixture
-def config_defaults() -> Callable[[Dict[str, Any], Dict[str, Any]], None]:
-    """
-    Fixture to provide a helper function for testing configuration defaults.
-    
-    Returns:
-        A function that checks if configuration values match expected defaults
-        
-    Example:
-        def test_config_defaults(config_defaults, mock_rabbitmq_config):
-            expected_defaults = {'host': 'localhost', 'port': 5672}
-            config_defaults(mock_rabbitmq_config, expected_defaults)
-    """
-    def _check_defaults(config: Dict[str, Any], expected_defaults: Dict[str, Any]) -> None:
-        """
-        Check if configuration values match expected defaults.
-        
-        Args:
-            config: The configuration dictionary to check
-            expected_defaults: Dictionary of expected default values
-            
-        Raises:
-            AssertionError: If any default value doesn't match
-        """
-        for key, expected_value in expected_defaults.items():
-            assert key in config, f"Expected default field '{key}' is missing from configuration"
-            assert config[key] == expected_value, f"Default value for '{key}' is {config[key]}, expected {expected_value}"
-    
-    return _check_defaults
-
-
-@pytest.fixture
-def env_var_setter(monkeypatch) -> Callable[[Dict[str, str]], None]:
-    """
-    Fixture to provide a helper function for setting multiple environment variables at once.
+    Fixture to set environment variables for testing.
     
     Args:
-        monkeypatch: pytest's monkeypatch fixture
+        request: Pytest request object with the environment parameter
+        monkeypatch: Pytest monkeypatch fixture
         
     Returns:
-        A function that sets multiple environment variables
+        Dictionary of environment variables that were set
+    """
+    # Get the environment from the test parameter or default to development
+    env = getattr(request, "param", Environment.DEVELOPMENT)
+    
+    # Clear existing environment variables that might affect tests
+    for key in os.environ.keys():
+        if key.startswith(("OCR_", "RABBITMQ_", "S3_")):
+            monkeypatch.delenv(key, raising=False)
+    
+    # Set environment variables based on the requested environment
+    env_var_dict = {}
+    
+    if env == Environment.DEVELOPMENT:
+        env_var_dict = DEV_ENV_VARS
+    elif env == Environment.STAGING:
+        env_var_dict = STAGING_ENV_VARS
+    elif env == Environment.PRODUCTION:
+        env_var_dict = PRODUCTION_ENV_VARS
+    elif env == Environment.EMPTY:
+        # Empty environment for testing defaults
+        return {}
+    elif env == Environment.CUSTOM:
+        # Custom environment variables provided by the test
+        env_var_dict = getattr(request, "param", {})
+        if isinstance(env_var_dict, Environment):
+            env_var_dict = {}
+    
+    # Set the environment variables
+    for key, value in env_var_dict.items():
+        monkeypatch.setenv(key, value)
+    
+    return env_var_dict
+
+
+@pytest.fixture
+def mock_env_var(monkeypatch) -> Callable[[str, str], None]:
+    """
+    Fixture that provides a function to set individual environment variables.
+    
+    Args:
+        monkeypatch: Pytest monkeypatch fixture
         
-    Example:
-        def test_env_vars(env_var_setter):
-            env_var_setter({'RABBITMQ_HOST': 'test-host', 'RABBITMQ_PORT': '1234'})
-            # Test code that uses these environment variables
+    Returns:
+        Function to set an environment variable
+    """
+    def _set_env_var(key: str, value: str) -> None:
+        """
+        Set an environment variable for testing.
+        
+        Args:
+            key: Environment variable name
+            value: Environment variable value
+        """
+        monkeypatch.setenv(key, value)
+    
+    return _set_env_var
+
+
+@pytest.fixture
+def mock_env_vars(monkeypatch) -> Callable[[Dict[str, str]], None]:
+    """
+    Fixture that provides a function to set multiple environment variables.
+    
+    Args:
+        monkeypatch: Pytest monkeypatch fixture
+        
+    Returns:
+        Function to set multiple environment variables
     """
     def _set_env_vars(env_vars: Dict[str, str]) -> None:
         """
-        Set multiple environment variables at once.
+        Set multiple environment variables for testing.
         
         Args:
-            env_vars: Dictionary of environment variable names and values
+            env_vars: Dictionary of environment variables
         """
-        for name, value in env_vars.items():
-            monkeypatch.setenv(name, value)
+        for key, value in env_vars.items():
+            monkeypatch.setenv(key, value)
     
     return _set_env_vars
 
 
 @pytest.fixture
-def env_file_creator() -> Callable[[Dict[str, str], Path], Path]:
+def clear_env_vars(monkeypatch) -> Callable[[Optional[List[str]]], None]:
     """
-    Fixture to provide a helper function for creating .env files for testing.
+    Fixture that provides a function to clear environment variables.
     
-    Returns:
-        A function that creates a .env file with specified variables
+    Args:
+        monkeypatch: Pytest monkeypatch fixture
         
-    Example:
-        def test_env_file_loading(env_file_creator, tmp_path):
-            env_file = env_file_creator({'RABBITMQ_HOST': 'test-host'}, tmp_path)
-            # Test code that loads from this .env file
+    Returns:
+        Function to clear environment variables
     """
-    def _create_env_file(env_vars: Dict[str, str], directory: Path) -> Path:
+    def _clear_env_vars(prefixes: Optional[List[str]] = None) -> None:
         """
-        Create a .env file with specified variables.
+        Clear environment variables with specified prefixes.
         
         Args:
-            env_vars: Dictionary of environment variable names and values
-            directory: Directory where the .env file should be created
-            
-        Returns:
-            Path to the created .env file
+            prefixes: List of environment variable prefixes to clear
+                     If None, clears OCR_, RABBITMQ_, and S3_ variables
         """
-        env_file = directory / ".env"
-        with open(env_file, "w") as f:
-            for name, value in env_vars.items():
-                f.write(f"{name}={value}\n")
-        return env_file
+        if prefixes is None:
+            prefixes = ["OCR_", "RABBITMQ_", "S3_"]
+        
+        for key in list(os.environ.keys()):
+            if any(key.startswith(prefix) for prefix in prefixes):
+                monkeypatch.delenv(key, raising=False)
     
-    return _create_env_file
+    return _clear_env_vars
 
 
 @pytest.fixture
-def config_file_creator() -> Callable[[Dict[str, Any], Path, str], Path]:
+def mock_service_config() -> ServiceConfig:
     """
-    Fixture to provide a helper function for creating configuration files for testing.
+    Fixture that provides a sample ServiceConfig for testing.
     
     Returns:
-        A function that creates a configuration file with specified values
-        
-    Example:
-        def test_config_file_loading(config_file_creator, tmp_path):
-            config_file = config_file_creator({'rabbitmq': {'host': 'test-host'}}, tmp_path, 'config.json')
-            # Test code that loads from this config file
+        Sample ServiceConfig object
     """
-    def _create_config_file(config: Dict[str, Any], directory: Path, filename: str) -> Path:
+    return {
+        "name": "ocr-service",
+        "version": "1.0.0",
+        "port": 8080,
+        "environment": EnvironmentType.DEVELOPMENT,
+        "debug": True,
+        "correlation_id_header": "X-Correlation-ID",
+        "max_workers": 4,
+        "shutdown_timeout": 30
+    }
+
+
+@pytest.fixture
+def mock_tensorflow_config() -> TensorFlowConfig:
+    """
+    Fixture that provides a sample TensorFlowConfig for testing.
+    
+    Returns:
+        Sample TensorFlowConfig object
+    """
+    return {
+        "models_path": "/app/models",
+        "typed_model_name": "typed_text_model",
+        "handwritten_model_name": "handwritten_text_model",
+        "hybrid_model_name": "hybrid_text_model",
+        "confidence_threshold": 0.85,
+        "low_confidence_threshold": 0.60,
+        "gpu_memory_limit": 0,
+        "use_gpu": False,
+        "batch_size": 4,
+        "model_version": "1.0.0",
+        "enable_optimization": False
+    }
+
+
+@pytest.fixture
+def mock_rabbitmq_config() -> RabbitMQConfig:
+    """
+    Fixture that provides a sample RabbitMQConfig for testing.
+    
+    Returns:
+        Sample RabbitMQConfig object
+    """
+    return {
+        "host": "localhost",
+        "port": 5672,
+        "username": "guest",
+        "password": "guest",
+        "vhost": "/",
+        "exchange": "mca.documents",
+        "queue": "data-extraction",
+        "routing_key": "",
+        "use_tls": False,
+        "cert_path": "/app/certs/client.pem",
+        "key_path": "/app/certs/client.key",
+        "ca_path": "/app/certs/ca.pem",
+        "prefetch_count": 10,
+        "connection_attempts": 3,
+        "retry_delay": 5,
+        "heartbeat": 60
+    }
+
+
+@pytest.fixture
+def mock_s3_config() -> S3Config:
+    """
+    Fixture that provides a sample S3Config for testing.
+    
+    Returns:
+        Sample S3Config object
+    """
+    return {
+        "endpoint": "http://localhost:9000",
+        "region": "us-east-1",
+        "bucket": "mca-documents-staging",
+        "access_key": "minioadmin",
+        "secret_key": "minioadmin",
+        "use_ssl": False,
+        "verify_ssl": False,
+        "encryption": "AES256",
+        "presigned_url_expiry": 3600,
+        "max_pool_connections": 10,
+        "connect_timeout": 5,
+        "read_timeout": 60
+    }
+
+
+@pytest.fixture
+def mock_logging_config() -> LoggingConfig:
+    """
+    Fixture that provides a sample LoggingConfig for testing.
+    
+    Returns:
+        Sample LoggingConfig object
+    """
+    return {
+        "level": "DEBUG",
+        "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        "file_path": "",
+        "max_bytes": 10485760,
+        "backup_count": 5,
+        "json_format": False,
+        "include_correlation_id": True
+    }
+
+
+# Helper functions for testing configuration validation
+
+def assert_env_var_loaded(config_value: Any, env_var_value: str, converter: Callable = None) -> None:
+    """
+    Assert that an environment variable was correctly loaded into a configuration value.
+    
+    Args:
+        config_value: The configuration value to check
+        env_var_value: The environment variable value to compare against
+        converter: Optional function to convert the environment variable value
+                  to the expected type
+    """
+    if converter:
+        expected_value = converter(env_var_value)
+    else:
+        expected_value = env_var_value
+    
+    assert config_value == expected_value, f"Expected {expected_value}, got {config_value}"
+
+
+def assert_default_applied(config_value: Any, default_value: Any) -> None:
+    """
+    Assert that a default value was correctly applied to a configuration value.
+    
+    Args:
+        config_value: The configuration value to check
+        default_value: The default value to compare against
+    """
+    assert config_value == default_value, f"Expected default {default_value}, got {config_value}"
+
+
+def assert_env_specific_override(config_value: Any, expected_value: Any, env: str) -> None:
+    """
+    Assert that an environment-specific override was correctly applied.
+    
+    Args:
+        config_value: The configuration value to check
+        expected_value: The expected value after the override
+        env: The environment name for error messages
+    """
+    assert config_value == expected_value, f"Expected {expected_value} for {env}, got {config_value}"
+
+
+# Utility class for testing configuration validation errors
+class ValidationError(Exception):
+    """Exception raised for configuration validation errors."""
+    pass
+
+
+@pytest.fixture
+def expect_validation_error() -> Callable[[Callable, str], None]:
+    """
+    Fixture that provides a function to test for validation errors.
+    
+    Returns:
+        Function to test for validation errors
+    """
+    def _expect_validation_error(func: Callable, expected_message: str) -> None:
         """
-        Create a configuration file with specified values.
+        Test that a function raises a ValueError with the expected message.
         
         Args:
-            config: Dictionary of configuration values
-            directory: Directory where the config file should be created
-            filename: Name of the config file
-            
-        Returns:
-            Path to the created config file
+            func: Function that should raise a ValueError
+            expected_message: Expected error message
         """
-        config_file = directory / filename
-        with open(config_file, "w") as f:
-            json.dump(config, f, indent=2)
-        return config_file
+        with pytest.raises(ValueError) as excinfo:
+            func()
+        
+        assert expected_message in str(excinfo.value), f"Expected error message '{expected_message}', got '{str(excinfo.value)}'"
     
-    return _create_config_file
+    return _expect_validation_error
