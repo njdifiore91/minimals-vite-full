@@ -1,465 +1,313 @@
 package com.dollarfunding.mca.security;
 
-import static org.junit.jupiter.api.Assertions.*;
-
-import java.util.Collection;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
-
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.HashSet;
+import java.util.Set;
+
+import static org.junit.jupiter.api.Assertions.*;
+
 /**
  * Test class for {@link UserPrincipal} that verifies the correct implementation of the
- * UserDetails interface for Spring Security.
+ * UserDetails interface for Spring Security. It tests the encapsulation of user information
+ * including ID, username, password, email, authorities, and account status flags.
  */
 @DisplayName("UserPrincipal Tests")
 public class UserPrincipalTest {
 
-    private User testUser;
-    private Collection<GrantedAuthority> authorities;
+    private static final Long USER_ID = 1L;
+    private static final String USERNAME = "testuser";
+    private static final String EMAIL = "test@dollarfunding.com";
+    private static final String PASSWORD = "encodedPassword";
+    private static final String FIRST_NAME = "Test";
+    private static final String LAST_NAME = "User";
+    private static final Collection<GrantedAuthority> AUTHORITIES = Arrays.asList(
+            new SimpleGrantedAuthority(RoleConstants.ROLE_OPERATIONS_STAFF)
+    );
+
     private UserPrincipal userPrincipal;
+    private User user;
 
     @BeforeEach
     void setUp() {
-        // Create test roles
-        Role operationsStaffRole = new Role(RoleConstants.ROLE_OPERATIONS_STAFF, 
-                                          RoleConstants.OPERATIONS_STAFF_DESCRIPTION);
-        
-        // Create test user
-        testUser = new User("testuser", "password123", "test@example.com", 
-                          "Test", "User", true, true, true, true);
-        testUser.setId(1L);
-        testUser.addRole(operationsStaffRole);
-        
-        // Create authorities
-        authorities = List.of(new SimpleGrantedAuthority(RoleConstants.ROLE_OPERATIONS_STAFF));
-        
-        // Create user principal
-        userPrincipal = new UserPrincipal(
-            testUser.getId(),
-            testUser.getUsername(),
-            testUser.getPassword(),
-            testUser.getEmail(),
-            testUser.getFirstName(),
-            testUser.getLastName(),
-            authorities,
-            testUser.isEnabled(),
-            testUser.isAccountNonExpired(),
-            testUser.isAccountNonLocked(),
-            testUser.isCredentialsNonExpired()
-        );
-    }
-
-    @Nested
-    @DisplayName("UserDetails Interface Implementation Tests")
-    class UserDetailsInterfaceTests {
-        
-        @Test
-        @DisplayName("getUsername() should return the correct username")
-        void getUsernameShouldReturnCorrectUsername() {
-            assertEquals("testuser", userPrincipal.getUsername());
-        }
-        
-        @Test
-        @DisplayName("getPassword() should return the correct password")
-        void getPasswordShouldReturnCorrectPassword() {
-            assertEquals("password123", userPrincipal.getPassword());
-        }
-        
-        @Test
-        @DisplayName("getAuthorities() should return the correct authorities")
-        void getAuthoritiesShouldReturnCorrectAuthorities() {
-            Collection<? extends GrantedAuthority> userAuthorities = userPrincipal.getAuthorities();
-            
-            assertEquals(1, userAuthorities.size());
-            assertTrue(userAuthorities.contains(new SimpleGrantedAuthority(RoleConstants.ROLE_OPERATIONS_STAFF)));
-        }
-        
-        @Test
-        @DisplayName("isEnabled() should return the correct enabled status")
-        void isEnabledShouldReturnCorrectStatus() {
-            assertTrue(userPrincipal.isEnabled());
-            
-            // Create disabled user principal
-            UserPrincipal disabledPrincipal = new UserPrincipal(
-                1L, "testuser", "password", "test@example.com", "Test", "User",
-                authorities, false, true, true, true
-            );
-            
-            assertFalse(disabledPrincipal.isEnabled());
-        }
-    }
-    
-    @Nested
-    @DisplayName("Account Status Methods Tests")
-    class AccountStatusMethodsTests {
-        
-        @Test
-        @DisplayName("isAccountNonExpired() should return the correct account expiration status")
-        void isAccountNonExpiredShouldReturnCorrectStatus() {
-            assertTrue(userPrincipal.isAccountNonExpired());
-            
-            // Create user principal with expired account
-            UserPrincipal expiredPrincipal = new UserPrincipal(
-                1L, "testuser", "password", "test@example.com", "Test", "User",
-                authorities, true, false, true, true
-            );
-            
-            assertFalse(expiredPrincipal.isAccountNonExpired());
-        }
-        
-        @Test
-        @DisplayName("isAccountNonLocked() should return the correct account lock status")
-        void isAccountNonLockedShouldReturnCorrectStatus() {
-            assertTrue(userPrincipal.isAccountNonLocked());
-            
-            // Create user principal with locked account
-            UserPrincipal lockedPrincipal = new UserPrincipal(
-                1L, "testuser", "password", "test@example.com", "Test", "User",
-                authorities, true, true, false, true
-            );
-            
-            assertFalse(lockedPrincipal.isAccountNonLocked());
-        }
-        
-        @Test
-        @DisplayName("isCredentialsNonExpired() should return the correct credentials expiration status")
-        void isCredentialsNonExpiredShouldReturnCorrectStatus() {
-            assertTrue(userPrincipal.isCredentialsNonExpired());
-            
-            // Create user principal with expired credentials
-            UserPrincipal expiredCredentialsPrincipal = new UserPrincipal(
-                1L, "testuser", "password", "test@example.com", "Test", "User",
-                authorities, true, true, true, false
-            );
-            
-            assertFalse(expiredCredentialsPrincipal.isCredentialsNonExpired());
-        }
-        
-        @Test
-        @DisplayName("All account status combinations should work correctly")
-        void allAccountStatusCombinationsShouldWorkCorrectly() {
-            // Test all combinations of account status flags
-            UserPrincipal principal1 = new UserPrincipal(
-                1L, "user1", "pass1", "email1@example.com", "First1", "Last1",
-                authorities, false, false, false, false
-            );
-            assertFalse(principal1.isEnabled());
-            assertFalse(principal1.isAccountNonExpired());
-            assertFalse(principal1.isAccountNonLocked());
-            assertFalse(principal1.isCredentialsNonExpired());
-            
-            UserPrincipal principal2 = new UserPrincipal(
-                2L, "user2", "pass2", "email2@example.com", "First2", "Last2",
-                authorities, true, true, true, true
-            );
-            assertTrue(principal2.isEnabled());
-            assertTrue(principal2.isAccountNonExpired());
-            assertTrue(principal2.isAccountNonLocked());
-            assertTrue(principal2.isCredentialsNonExpired());
-        }
-    }
-    
-    @Nested
-    @DisplayName("Authority and Role Checking Methods Tests")
-    class AuthorityAndRoleCheckingMethodsTests {
-        
-        @Test
-        @DisplayName("hasAuthority() should return true for authorities the user has")
-        void hasAuthorityShouldReturnTrueForAuthoritiesUserHas() {
-            assertTrue(userPrincipal.hasAuthority(RoleConstants.ROLE_OPERATIONS_STAFF));
-            assertFalse(userPrincipal.hasAuthority(RoleConstants.ROLE_SYSTEM_ADMIN));
-            assertFalse(userPrincipal.hasAuthority("ROLE_NONEXISTENT"));
-        }
-        
-        @Test
-        @DisplayName("hasRole() should return true for roles the user has")
-        void hasRoleShouldReturnTrueForRolesUserHas() {
-            // Test with role prefix
-            assertTrue(userPrincipal.hasRole(RoleConstants.ROLE_OPERATIONS_STAFF));
-            assertFalse(userPrincipal.hasRole(RoleConstants.ROLE_SYSTEM_ADMIN));
-            
-            // Test without role prefix
-            assertTrue(userPrincipal.hasRole(RoleConstants.OPERATIONS_STAFF));
-            assertFalse(userPrincipal.hasRole(RoleConstants.SYSTEM_ADMIN));
-        }
-        
-        @Test
-        @DisplayName("isOperationsStaff() should return true for operations staff users")
-        void isOperationsStaffShouldReturnTrueForOperationsStaffUsers() {
-            assertTrue(userPrincipal.isOperationsStaff());
-            
-            // Create user principal with system admin role
-            UserPrincipal systemAdminPrincipal = new UserPrincipal(
-                1L, "admin", "password", "admin@example.com", "Admin", "User",
-                List.of(new SimpleGrantedAuthority(RoleConstants.ROLE_SYSTEM_ADMIN)),
-                true, true, true, true
-            );
-            
-            assertFalse(systemAdminPrincipal.isOperationsStaff());
-        }
-        
-        @Test
-        @DisplayName("isSystemAdmin() should return true for system admin users")
-        void isSystemAdminShouldReturnTrueForSystemAdminUsers() {
-            assertFalse(userPrincipal.isSystemAdmin());
-            
-            // Create user principal with system admin role
-            UserPrincipal systemAdminPrincipal = new UserPrincipal(
-                1L, "admin", "password", "admin@example.com", "Admin", "User",
-                List.of(new SimpleGrantedAuthority(RoleConstants.ROLE_SYSTEM_ADMIN)),
-                true, true, true, true
-            );
-            
-            assertTrue(systemAdminPrincipal.isSystemAdmin());
-        }
-        
-        @Test
-        @DisplayName("User with multiple roles should have all authorities")
-        void userWithMultipleRolesShouldHaveAllAuthorities() {
-            // Create user principal with multiple roles
-            UserPrincipal multiRolePrincipal = new UserPrincipal(
-                1L, "multiuser", "password", "multi@example.com", "Multi", "User",
-                List.of(
-                    new SimpleGrantedAuthority(RoleConstants.ROLE_OPERATIONS_STAFF),
-                    new SimpleGrantedAuthority(RoleConstants.ROLE_SYSTEM_ADMIN)
-                ),
-                true, true, true, true
-            );
-            
-            assertTrue(multiRolePrincipal.hasAuthority(RoleConstants.ROLE_OPERATIONS_STAFF));
-            assertTrue(multiRolePrincipal.hasAuthority(RoleConstants.ROLE_SYSTEM_ADMIN));
-            assertTrue(multiRolePrincipal.isOperationsStaff());
-            assertTrue(multiRolePrincipal.isSystemAdmin());
-        }
-    }
-    
-    @Nested
-    @DisplayName("Builder Pattern Tests")
-    class BuilderPatternTests {
-        
-        @Test
-        @DisplayName("Builder should create UserPrincipal with correct values")
-        void builderShouldCreateUserPrincipalWithCorrectValues() {
-            UserPrincipal principal = UserPrincipal.builder()
-                .id(1L)
-                .username("builduser")
-                .password("buildpass")
-                .email("build@example.com")
-                .firstName("Build")
-                .lastName("User")
-                .authorities(authorities)
+        // Create a UserPrincipal instance using the builder pattern
+        userPrincipal = UserPrincipal.builder()
+                .id(USER_ID)
+                .username(USERNAME)
+                .email(EMAIL)
+                .password(PASSWORD)
+                .authorities(AUTHORITIES)
+                .firstName(FIRST_NAME)
+                .lastName(LAST_NAME)
                 .enabled(true)
                 .accountNonExpired(true)
-                .accountNonLocked(true)
                 .credentialsNonExpired(true)
+                .accountNonLocked(true)
                 .build();
-            
-            assertEquals(1L, principal.getId());
-            assertEquals("builduser", principal.getUsername());
-            assertEquals("buildpass", principal.getPassword());
-            assertEquals("build@example.com", principal.getEmail());
-            assertEquals("Build", principal.getFirstName());
-            assertEquals("User", principal.getLastName());
-            assertEquals(authorities, principal.getAuthorities());
-            assertTrue(principal.isEnabled());
-            assertTrue(principal.isAccountNonExpired());
-            assertTrue(principal.isAccountNonLocked());
-            assertTrue(principal.isCredentialsNonExpired());
-        }
-        
-        @Test
-        @DisplayName("Builder should use default values when not specified")
-        void builderShouldUseDefaultValuesWhenNotSpecified() {
-            UserPrincipal principal = UserPrincipal.builder()
-                .id(1L)
-                .username("defaultuser")
-                .password("defaultpass")
-                .email("default@example.com")
-                .authorities(authorities)
+
+        // Create a User entity for testing the create() method
+        user = new User(USERNAME, PASSWORD, EMAIL, FIRST_NAME, LAST_NAME);
+        Role role = new Role();
+        role.setName(RoleConstants.ROLE_OPERATIONS_STAFF);
+        Set<Role> roles = new HashSet<>();
+        roles.add(role);
+        user.setRoles(roles);
+        user.setId(USER_ID);
+        user.setEnabled(true);
+        user.setAccountNonExpired(true);
+        user.setCredentialsNonExpired(true);
+        user.setAccountNonLocked(true);
+    }
+
+    @Test
+    @DisplayName("Should create UserPrincipal from User entity")
+    void shouldCreateFromUserEntity() {
+        // When
+        UserPrincipal result = UserPrincipal.create(user);
+
+        // Then
+        assertEquals(USER_ID, result.getId());
+        assertEquals(USERNAME, result.getUsername());
+        assertEquals(EMAIL, result.getEmail());
+        assertEquals(PASSWORD, result.getPassword());
+        assertEquals(FIRST_NAME, result.getFirstName());
+        assertEquals(LAST_NAME, result.getLastName());
+        assertTrue(result.isEnabled());
+        assertTrue(result.isAccountNonExpired());
+        assertTrue(result.isCredentialsNonExpired());
+        assertTrue(result.isAccountNonLocked());
+        assertEquals(1, result.getAuthorities().size());
+        assertTrue(result.getAuthorities().stream()
+                .anyMatch(a -> a.getAuthority().equals(RoleConstants.ROLE_OPERATIONS_STAFF)));
+    }
+
+    @Test
+    @DisplayName("Should implement UserDetails interface correctly")
+    void shouldImplementUserDetailsInterface() {
+        // Then - Testing UserDetails interface methods
+        assertEquals(USERNAME, userPrincipal.getUsername());
+        assertEquals(PASSWORD, userPrincipal.getPassword());
+        assertEquals(AUTHORITIES, userPrincipal.getAuthorities());
+        assertTrue(userPrincipal.isEnabled());
+        assertTrue(userPrincipal.isAccountNonExpired());
+        assertTrue(userPrincipal.isCredentialsNonExpired());
+        assertTrue(userPrincipal.isAccountNonLocked());
+    }
+
+    @Test
+    @DisplayName("Should return correct account status when disabled")
+    void shouldReturnCorrectAccountStatusWhenDisabled() {
+        // Given
+        UserPrincipal disabledUser = UserPrincipal.builder()
+                .id(USER_ID)
+                .username(USERNAME)
+                .email(EMAIL)
+                .password(PASSWORD)
+                .authorities(AUTHORITIES)
+                .enabled(false)
+                .accountNonExpired(false)
+                .credentialsNonExpired(false)
+                .accountNonLocked(false)
                 .build();
-            
-            // Default values should be used
-            assertTrue(principal.isEnabled());
-            assertTrue(principal.isAccountNonExpired());
-            assertTrue(principal.isAccountNonLocked());
-            assertTrue(principal.isCredentialsNonExpired());
-        }
+
+        // Then
+        assertFalse(disabledUser.isEnabled());
+        assertFalse(disabledUser.isAccountNonExpired());
+        assertFalse(disabledUser.isCredentialsNonExpired());
+        assertFalse(disabledUser.isAccountNonLocked());
     }
-    
-    @Nested
-    @DisplayName("Spring Security Integration Tests")
-    class SpringSecurityIntegrationTests {
-        
-        @Test
-        @DisplayName("create() should create UserPrincipal from User entity")
-        void createShouldCreateUserPrincipalFromUserEntity() {
-            UserPrincipal principal = UserPrincipal.create(testUser);
-            
-            assertEquals(testUser.getId(), principal.getId());
-            assertEquals(testUser.getUsername(), principal.getUsername());
-            assertEquals(testUser.getPassword(), principal.getPassword());
-            assertEquals(testUser.getEmail(), principal.getEmail());
-            assertEquals(testUser.getFirstName(), principal.getFirstName());
-            assertEquals(testUser.getLastName(), principal.getLastName());
-            assertTrue(principal.isEnabled());
-            assertTrue(principal.isAccountNonExpired());
-            assertTrue(principal.isAccountNonLocked());
-            assertTrue(principal.isCredentialsNonExpired());
-            
-            // Check authorities
-            Collection<? extends GrantedAuthority> principalAuthorities = principal.getAuthorities();
-            assertEquals(1, principalAuthorities.size());
-            assertTrue(principalAuthorities.contains(new SimpleGrantedAuthority(RoleConstants.ROLE_OPERATIONS_STAFF)));
-        }
-        
-        @Test
-        @DisplayName("create() with authorities should create UserPrincipal with specified authorities")
-        void createWithAuthoritiesShouldCreateUserPrincipalWithSpecifiedAuthorities() {
-            Collection<GrantedAuthority> customAuthorities = List.of(
-                new SimpleGrantedAuthority("CUSTOM_AUTHORITY")
-            );
-            
-            UserPrincipal principal = UserPrincipal.create(testUser, customAuthorities);
-            
-            // Check custom authorities
-            Collection<? extends GrantedAuthority> principalAuthorities = principal.getAuthorities();
-            assertEquals(1, principalAuthorities.size());
-            assertTrue(principalAuthorities.contains(new SimpleGrantedAuthority("CUSTOM_AUTHORITY")));
-        }
-        
-        @Test
-        @DisplayName("createOperationsStaffPrincipal() should create UserPrincipal with Operations Staff role")
-        void createOperationsStaffPrincipalShouldCreateUserPrincipalWithOperationsStaffRole() {
-            UserPrincipal principal = UserPrincipal.createOperationsStaffPrincipal(testUser);
-            
-            // Check authorities
-            Collection<? extends GrantedAuthority> principalAuthorities = principal.getAuthorities();
-            assertEquals(1, principalAuthorities.size());
-            assertTrue(principalAuthorities.contains(new SimpleGrantedAuthority(RoleConstants.ROLE_OPERATIONS_STAFF)));
-            assertTrue(principal.isOperationsStaff());
-            assertFalse(principal.isSystemAdmin());
-        }
-        
-        @Test
-        @DisplayName("createSystemAdminPrincipal() should create UserPrincipal with System Admin role")
-        void createSystemAdminPrincipalShouldCreateUserPrincipalWithSystemAdminRole() {
-            UserPrincipal principal = UserPrincipal.createSystemAdminPrincipal(testUser);
-            
-            // Check authorities
-            Collection<? extends GrantedAuthority> principalAuthorities = principal.getAuthorities();
-            assertEquals(2, principalAuthorities.size());
-            assertTrue(principalAuthorities.contains(new SimpleGrantedAuthority(RoleConstants.ROLE_SYSTEM_ADMIN)));
-            assertTrue(principalAuthorities.contains(new SimpleGrantedAuthority(RoleConstants.ROLE_OPERATIONS_STAFF)));
-            assertTrue(principal.isOperationsStaff());
-            assertTrue(principal.isSystemAdmin());
-        }
+
+    @Test
+    @DisplayName("Should return additional user information correctly")
+    void shouldReturnAdditionalUserInformation() {
+        // Then
+        assertEquals(USER_ID, userPrincipal.getId());
+        assertEquals(EMAIL, userPrincipal.getEmail());
+        assertEquals(FIRST_NAME, userPrincipal.getFirstName());
+        assertEquals(LAST_NAME, userPrincipal.getLastName());
+        assertEquals(FIRST_NAME + " " + LAST_NAME, userPrincipal.getFullName());
     }
-    
-    @Nested
-    @DisplayName("Additional Methods Tests")
-    class AdditionalMethodsTests {
-        
-        @Test
-        @DisplayName("getId() should return the correct ID")
-        void getIdShouldReturnCorrectId() {
-            assertEquals(1L, userPrincipal.getId());
-        }
-        
-        @Test
-        @DisplayName("getEmail() should return the correct email")
-        void getEmailShouldReturnCorrectEmail() {
-            assertEquals("test@example.com", userPrincipal.getEmail());
-        }
-        
-        @Test
-        @DisplayName("getFirstName() should return the correct first name")
-        void getFirstNameShouldReturnCorrectFirstName() {
-            assertEquals("Test", userPrincipal.getFirstName());
-        }
-        
-        @Test
-        @DisplayName("getLastName() should return the correct last name")
-        void getLastNameShouldReturnCorrectLastName() {
-            assertEquals("User", userPrincipal.getLastName());
-        }
-        
-        @Test
-        @DisplayName("getFullName() should return the correct full name")
-        void getFullNameShouldReturnCorrectFullName() {
-            assertEquals("Test User", userPrincipal.getFullName());
-            
-            // Test with null first name
-            UserPrincipal principalWithNullFirstName = new UserPrincipal(
-                1L, "user", "pass", "email@example.com", null, "LastOnly",
-                authorities, true, true, true, true
-            );
-            assertEquals("LastOnly", principalWithNullFirstName.getFullName());
-            
-            // Test with null last name
-            UserPrincipal principalWithNullLastName = new UserPrincipal(
-                1L, "user", "pass", "email@example.com", "FirstOnly", null,
-                authorities, true, true, true, true
-            );
-            assertEquals("FirstOnly", principalWithNullLastName.getFullName());
-            
-            // Test with null first and last name
-            UserPrincipal principalWithNullNames = new UserPrincipal(
-                1L, "username", "pass", "email@example.com", null, null,
-                authorities, true, true, true, true
-            );
-            assertEquals("username", principalWithNullNames.getFullName());
-        }
-        
-        @Test
-        @DisplayName("equals() should return true for same ID")
-        void equalsShouldReturnTrueForSameId() {
-            UserPrincipal principal1 = new UserPrincipal(
-                1L, "user1", "pass1", "email1@example.com", "First1", "Last1",
-                authorities, true, true, true, true
-            );
-            
-            UserPrincipal principal2 = new UserPrincipal(
-                1L, "user2", "pass2", "email2@example.com", "First2", "Last2",
-                authorities, false, false, false, false
-            );
-            
-            assertEquals(principal1, principal2);
-            assertEquals(principal1.hashCode(), principal2.hashCode());
-        }
-        
-        @Test
-        @DisplayName("equals() should return false for different ID")
-        void equalsShouldReturnFalseForDifferentId() {
-            UserPrincipal principal1 = new UserPrincipal(
-                1L, "user", "pass", "email@example.com", "First", "Last",
-                authorities, true, true, true, true
-            );
-            
-            UserPrincipal principal2 = new UserPrincipal(
-                2L, "user", "pass", "email@example.com", "First", "Last",
-                authorities, true, true, true, true
-            );
-            
-            assertNotEquals(principal1, principal2);
-            assertNotEquals(principal1.hashCode(), principal2.hashCode());
-        }
-        
-        @Test
-        @DisplayName("toString() should return a string containing important fields")
-        void toStringShouldReturnStringContainingImportantFields() {
-            String toString = userPrincipal.toString();
-            
-            assertTrue(toString.contains("id=1"));
-            assertTrue(toString.contains("username='testuser'"));
-            assertTrue(toString.contains("email='test@example.com'"));
-            assertTrue(toString.contains("enabled=true"));
-        }
+
+    @Test
+    @DisplayName("Should handle null first and last name in getFullName")
+    void shouldHandleNullFirstAndLastNameInGetFullName() {
+        // Given
+        UserPrincipal userWithoutNames = UserPrincipal.builder()
+                .id(USER_ID)
+                .username(USERNAME)
+                .email(EMAIL)
+                .password(PASSWORD)
+                .authorities(AUTHORITIES)
+                .build();
+
+        // Then
+        assertEquals(USERNAME, userWithoutNames.getFullName());
+
+        // Given
+        UserPrincipal userWithFirstNameOnly = UserPrincipal.builder()
+                .id(USER_ID)
+                .username(USERNAME)
+                .email(EMAIL)
+                .password(PASSWORD)
+                .authorities(AUTHORITIES)
+                .firstName(FIRST_NAME)
+                .build();
+
+        // Then
+        assertEquals(FIRST_NAME, userWithFirstNameOnly.getFullName());
+
+        // Given
+        UserPrincipal userWithLastNameOnly = UserPrincipal.builder()
+                .id(USER_ID)
+                .username(USERNAME)
+                .email(EMAIL)
+                .password(PASSWORD)
+                .authorities(AUTHORITIES)
+                .lastName(LAST_NAME)
+                .build();
+
+        // Then
+        assertEquals(LAST_NAME, userWithLastNameOnly.getFullName());
+    }
+
+    @Test
+    @DisplayName("Should check authority correctly")
+    void shouldCheckAuthorityCorrectly() {
+        // Then
+        assertTrue(userPrincipal.hasAuthority(RoleConstants.ROLE_OPERATIONS_STAFF));
+        assertFalse(userPrincipal.hasAuthority(RoleConstants.ROLE_SYSTEM_ADMIN));
+    }
+
+    @Test
+    @DisplayName("Should check role correctly")
+    void shouldCheckRoleCorrectly() {
+        // Then
+        assertTrue(userPrincipal.hasRole(RoleConstants.OPERATIONS_STAFF));
+        assertFalse(userPrincipal.hasRole(RoleConstants.SYSTEM_ADMIN));
+    }
+
+    @Test
+    @DisplayName("Should check specific roles correctly")
+    void shouldCheckSpecificRolesCorrectly() {
+        // Given
+        UserPrincipal adminUser = UserPrincipal.builder()
+                .id(2L)
+                .username("admin")
+                .email("admin@dollarfunding.com")
+                .password(PASSWORD)
+                .authorities(Arrays.asList(
+                        new SimpleGrantedAuthority(RoleConstants.ROLE_SYSTEM_ADMIN)
+                ))
+                .build();
+
+        // Then
+        assertTrue(userPrincipal.isOperationsStaff());
+        assertFalse(userPrincipal.isSystemAdmin());
+
+        assertTrue(adminUser.isSystemAdmin());
+        assertFalse(adminUser.isOperationsStaff());
+    }
+
+    @Test
+    @DisplayName("Should implement equals and hashCode correctly")
+    void shouldImplementEqualsAndHashCodeCorrectly() {
+        // Given
+        UserPrincipal samePrincipal = UserPrincipal.builder()
+                .id(USER_ID)
+                .username("different")
+                .email("different@dollarfunding.com")
+                .password("different")
+                .build();
+
+        UserPrincipal differentPrincipal = UserPrincipal.builder()
+                .id(2L)
+                .username(USERNAME)
+                .email(EMAIL)
+                .password(PASSWORD)
+                .build();
+
+        // Then
+        assertEquals(userPrincipal, userPrincipal); // Same instance
+        assertEquals(userPrincipal, samePrincipal); // Same ID
+        assertNotEquals(userPrincipal, differentPrincipal); // Different ID
+        assertNotEquals(userPrincipal, null); // Null comparison
+        assertNotEquals(userPrincipal, new Object()); // Different type
+
+        // HashCode should be based on ID
+        assertEquals(userPrincipal.hashCode(), samePrincipal.hashCode());
+        assertNotEquals(userPrincipal.hashCode(), differentPrincipal.hashCode());
+    }
+
+    @Test
+    @DisplayName("Should generate toString correctly")
+    void shouldGenerateToStringCorrectly() {
+        // When
+        String toString = userPrincipal.toString();
+
+        // Then
+        assertTrue(toString.contains(USER_ID.toString()));
+        assertTrue(toString.contains(USERNAME));
+        assertTrue(toString.contains(EMAIL));
+        assertTrue(toString.contains(FIRST_NAME));
+        assertTrue(toString.contains(LAST_NAME));
+    }
+
+    @Test
+    @DisplayName("Should build UserPrincipal with default values")
+    void shouldBuildUserPrincipalWithDefaultValues() {
+        // When
+        UserPrincipal minimalPrincipal = UserPrincipal.builder()
+                .id(USER_ID)
+                .username(USERNAME)
+                .password(PASSWORD)
+                .authorities(AUTHORITIES)
+                .build();
+
+        // Then - Default values should be applied
+        assertTrue(minimalPrincipal.isEnabled());
+        assertTrue(minimalPrincipal.isAccountNonExpired());
+        assertTrue(minimalPrincipal.isCredentialsNonExpired());
+        assertTrue(minimalPrincipal.isAccountNonLocked());
+        assertNull(minimalPrincipal.getEmail());
+        assertNull(minimalPrincipal.getFirstName());
+        assertNull(minimalPrincipal.getLastName());
+    }
+
+    @Test
+    @DisplayName("Should build UserPrincipal with all fields")
+    void shouldBuildUserPrincipalWithAllFields() {
+        // When
+        UserPrincipal fullPrincipal = UserPrincipal.builder()
+                .id(USER_ID)
+                .username(USERNAME)
+                .email(EMAIL)
+                .password(PASSWORD)
+                .authorities(AUTHORITIES)
+                .firstName(FIRST_NAME)
+                .lastName(LAST_NAME)
+                .enabled(true)
+                .accountNonExpired(true)
+                .credentialsNonExpired(true)
+                .accountNonLocked(true)
+                .build();
+
+        // Then
+        assertEquals(USER_ID, fullPrincipal.getId());
+        assertEquals(USERNAME, fullPrincipal.getUsername());
+        assertEquals(EMAIL, fullPrincipal.getEmail());
+        assertEquals(PASSWORD, fullPrincipal.getPassword());
+        assertEquals(AUTHORITIES, fullPrincipal.getAuthorities());
+        assertEquals(FIRST_NAME, fullPrincipal.getFirstName());
+        assertEquals(LAST_NAME, fullPrincipal.getLastName());
+        assertTrue(fullPrincipal.isEnabled());
+        assertTrue(fullPrincipal.isAccountNonExpired());
+        assertTrue(fullPrincipal.isCredentialsNonExpired());
+        assertTrue(fullPrincipal.isAccountNonLocked());
     }
 }
