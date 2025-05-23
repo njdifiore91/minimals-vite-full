@@ -5,943 +5,843 @@
 Unit tests for model serialization utilities.
 
 This module contains tests for the model_serialization.py module, which provides
-functions for saving and loading trained document classification models, with
-support for versioning, metadata storage, and model registry management.
-
-The tests verify that the serialization module correctly handles:
-- Model serialization using pickle and joblib
-- Model versioning system with metadata
-- Model registry for tracking deployed models
-- Secure model storage with integrity checks
-- Model metadata storage for tracking training parameters
+functions for saving, loading, and managing trained document classification models.
+Tests verify that the serialization module correctly handles model serialization,
+versioning, metadata storage, and model registry management.
 """
 
 import os
 import json
 import pickle
 import hashlib
-import tempfile
-import shutil
+import datetime
 from pathlib import Path
-from datetime import datetime
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, mock_open
 
 import pytest
 import numpy as np
 import joblib
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.svm import SVC
+from sklearn.base import BaseEstimator
 
-from src.models import model_serialization
-from src.models.model_serialization import (
-    calculate_checksum,
-    verify_checksum,
-    get_environment_info,
-    parse_version,
-    compare_versions,
-    increment_version,
-    create_model_metadata,
-    save_model_metadata,
-    load_model_metadata,
-    update_model_registry_index,
+# Fix the import path for tests
+import sys
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../src')))
+
+from models.model_serialization import (
     save_model,
-    get_latest_model_version,
     load_model,
     list_models,
-    list_model_versions,
-    get_model_info,
-    delete_model_version,
-    compare_model_versions,
-    find_models_by_tag,
-    export_model,
-    import_model,
+    get_model_metadata,
+    register_model,
+    delete_model,
     rollback_model,
-    ModelSerializationError,
-    ModelVersionError,
-    ModelIntegrityError,
-    ModelRegistryError
+    validate_model,
+    _calculate_file_hash,
+    _load_model_registry,
+    _save_model_registry,
+    _get_latest_model_version,
+    _get_active_model_version
 )
 
 
-# Test fixtures
-@pytest.fixture
-def test_model_registry_path(tmp_path):
-    """Create a temporary directory for model registry testing."""
-    registry_path = tmp_path / "model_registry"
-    registry_path.mkdir()
-    
-    # Patch the MODEL_REGISTRY_PATH constant
-    original_path = model_serialization.MODEL_REGISTRY_PATH
-    model_serialization.MODEL_REGISTRY_PATH = str(registry_path)
-    
-    yield str(registry_path)
-    
-    # Restore the original path
-    model_serialization.MODEL_REGISTRY_PATH = original_path
+# Test save_model function
+class TestSaveModel:
+    """Tests for the save_model function."""
 
-
-@pytest.fixture
-def sample_model():
-    """Create a simple SVM model for testing."""
-    return SVC(probability=True, random_state=42)
-
-
-@pytest.fixture
-def sample_model_metadata():
-    """Create sample model metadata for testing."""
-    return {
-        "name": "test_model",
-        "version": "1.0.0",
-        "model_type": "svm",
-        "created_at": datetime.now().isoformat(),
-        "training_parameters": {
-            "C": 1.0,
-            "kernel": "rbf",
-            "gamma": "scale",
-            "probability": True,
-            "random_state": 42
-        },
-        "performance_metrics": {
-            "accuracy": 0.95,
-            "precision": 0.94,
-            "recall": 0.93,
-            "f1": 0.935
-        },
-        "environment": get_environment_info(),
-        "description": "Test model for unit testing",
-        "author": "Test Author",
-        "tags": ["test", "svm", "classification"]
-    }
-
-
-# Tests for checksum calculation and verification
-class TestChecksumFunctions:
+    def test_save_model_success(self, trained_svm_classifier, temp_model_path, model_metadata, monkeypatch):
+        """Test successful model saving."""
+        # Mock model_config.MODEL_DIRECTORY
+        monkeypatch.setattr('models.model_serialization.model_config.MODEL_DIRECTORY', str(temp_model_path))
+        
+        # Mock register_model to avoid dependency
+        with patch('models.model_serialization.register_model') as mock_register:
+            model_name = "test_model"
+            model_version = "1.0.0"
+            
+            # Call save_model
+            result = save_model(
+                model=trained_svm_classifier,
+                model_name=model_name,
+                model_version=model_version,
+                metadata=model_metadata
+            )
+            
+            # Check that files were created
+            model_filename = f"{model_name}_{model_version}.joblib"
+            metadata_filename = f"{model_name}_{model_version}.meta.json"
+            hash_filename = f"{model_name}_{model_version}.sha256"
+            
+            assert (temp_model_path / model_filename).exists()
+            assert (temp_model_path / metadata_filename).exists()
+            assert (temp_model_path / hash_filename).exists()
+            
+            # Check that register_model was called
+            mock_register.assert_called_once()
+            
+            # Check that the function returned the correct path
+            assert result == str(temp_model_path / model_filename)
     
-    def test_calculate_checksum(self, tmp_path):
-        """Test that calculate_checksum correctly computes SHA-256 hash."""
-        # Create a test file with known content
-        test_file = tmp_path / "test_file.txt"
-        test_content = b"Test content for checksum calculation"
-        test_file.write_bytes(test_content)
+    def test_save_model_invalid_inputs(self, trained_svm_classifier, model_metadata):
+        """Test save_model with invalid inputs."""
+        # Test with empty model_name
+        with pytest.raises(ValueError, match="Model name and version must be provided"):
+            save_model(
+                model=trained_svm_classifier,
+                model_name="",
+                model_version="1.0.0",
+                metadata=model_metadata
+            )
         
-        # Calculate checksum
-        checksum = calculate_checksum(str(test_file))
-        
-        # Calculate expected checksum
-        expected_checksum = hashlib.sha256(test_content).hexdigest()
-        
-        assert checksum == expected_checksum
-    
-    def test_verify_checksum_valid(self, tmp_path):
-        """Test that verify_checksum returns True for valid checksums."""
-        # Create a test file with known content
-        test_file = tmp_path / "test_file.txt"
-        test_content = b"Test content for checksum verification"
-        test_file.write_bytes(test_content)
-        
-        # Calculate expected checksum
-        expected_checksum = hashlib.sha256(test_content).hexdigest()
-        
-        # Verify checksum
-        result = verify_checksum(str(test_file), expected_checksum)
-        
-        assert result is True
-    
-    def test_verify_checksum_invalid(self, tmp_path):
-        """Test that verify_checksum returns False for invalid checksums."""
-        # Create a test file with known content
-        test_file = tmp_path / "test_file.txt"
-        test_content = b"Test content for checksum verification"
-        test_file.write_bytes(test_content)
-        
-        # Use an invalid checksum
-        invalid_checksum = "invalid_checksum_value"
-        
-        # Verify checksum
-        result = verify_checksum(str(test_file), invalid_checksum)
-        
-        assert result is False
-    
-    def test_calculate_checksum_file_not_found(self):
-        """Test that calculate_checksum raises ModelIntegrityError for non-existent files."""
-        with pytest.raises(ModelIntegrityError):
-            calculate_checksum("/path/to/nonexistent/file")
-
-
-# Tests for version management functions
-class TestVersionManagement:
-    
-    def test_parse_version_valid(self):
-        """Test that parse_version correctly parses valid version strings."""
-        version = "1.2.3"
-        result = parse_version(version)
-        assert result == (1, 2, 3)
-    
-    def test_parse_version_invalid_format(self):
-        """Test that parse_version raises ModelVersionError for invalid format."""
-        with pytest.raises(ModelVersionError):
-            parse_version("1.2")
-        
-        with pytest.raises(ModelVersionError):
-            parse_version("1.2.3.4")
-        
-        with pytest.raises(ModelVersionError):
-            parse_version("invalid")
-    
-    def test_parse_version_invalid_numbers(self):
-        """Test that parse_version raises ModelVersionError for non-numeric components."""
-        with pytest.raises(ModelVersionError):
-            parse_version("1.a.3")
-    
-    def test_compare_versions(self):
-        """Test that compare_versions correctly compares version strings."""
-        # Equal versions
-        assert compare_versions("1.0.0", "1.0.0") == 0
-        
-        # First version greater
-        assert compare_versions("2.0.0", "1.0.0") == 1
-        assert compare_versions("1.1.0", "1.0.0") == 1
-        assert compare_versions("1.0.1", "1.0.0") == 1
-        
-        # First version less
-        assert compare_versions("1.0.0", "2.0.0") == -1
-        assert compare_versions("1.0.0", "1.1.0") == -1
-        assert compare_versions("1.0.0", "1.0.1") == -1
-    
-    def test_increment_version(self):
-        """Test that increment_version correctly increments version components."""
-        # Major increment
-        assert increment_version("1.0.0", "major") == "2.0.0"
-        
-        # Minor increment
-        assert increment_version("1.0.0", "minor") == "1.1.0"
-        
-        # Patch increment
-        assert increment_version("1.0.0", "patch") == "1.0.1"
-    
-    def test_increment_version_invalid_type(self):
-        """Test that increment_version raises ModelVersionError for invalid increment type."""
-        with pytest.raises(ModelVersionError):
-            increment_version("1.0.0", "invalid")
-
-
-# Tests for model metadata functions
-class TestModelMetadata:
-    
-    def test_create_model_metadata(self):
-        """Test that create_model_metadata creates valid metadata."""
-        # Create metadata
-        metadata = create_model_metadata(
-            model_name="test_model",
-            version="1.0.0",
-            model_type="svm",
-            training_parameters={"C": 1.0, "kernel": "rbf"},
-            performance_metrics={"accuracy": 0.95},
-            description="Test model",
-            author="Test Author",
-            tags=["test", "svm"]
-        )
-        
-        # Check required fields
-        assert metadata["name"] == "test_model"
-        assert metadata["version"] == "1.0.0"
-        assert metadata["model_type"] == "svm"
-        assert "created_at" in metadata
-        assert metadata["training_parameters"] == {"C": 1.0, "kernel": "rbf"}
-        assert metadata["performance_metrics"] == {"accuracy": 0.95}
-        assert "environment" in metadata
-        assert metadata["description"] == "Test model"
-        assert metadata["author"] == "Test Author"
-        assert metadata["tags"] == ["test", "svm"]
-    
-    def test_create_model_metadata_invalid_version(self):
-        """Test that create_model_metadata raises ModelVersionError for invalid version."""
-        with pytest.raises(ModelVersionError):
-            create_model_metadata(
+        # Test with empty model_version
+        with pytest.raises(ValueError, match="Model name and version must be provided"):
+            save_model(
+                model=trained_svm_classifier,
                 model_name="test_model",
-                version="invalid",
-                model_type="svm",
-                training_parameters={},
-                performance_metrics={}
+                model_version="",
+                metadata=model_metadata
+            )
+        
+        # Test with non-estimator model
+        with pytest.raises(ValueError, match="Model must be a scikit-learn estimator"):
+            save_model(
+                model={"not_a_model": True},
+                model_name="test_model",
+                model_version="1.0.0",
+                metadata=model_metadata
             )
     
-    def test_save_load_model_metadata(self, tmp_path):
-        """Test that save_model_metadata and load_model_metadata work correctly."""
-        # Create metadata
-        metadata = create_model_metadata(
-            model_name="test_model",
-            version="1.0.0",
-            model_type="svm",
-            training_parameters={"C": 1.0, "kernel": "rbf"},
-            performance_metrics={"accuracy": 0.95}
-        )
+    def test_save_model_io_error(self, trained_svm_classifier, temp_model_path, model_metadata, monkeypatch):
+        """Test save_model handling of IO errors."""
+        # Mock model_config.MODEL_DIRECTORY
+        monkeypatch.setattr('models.model_serialization.model_config.MODEL_DIRECTORY', str(temp_model_path))
         
-        # Save metadata
-        metadata_path = tmp_path / "metadata.json"
-        save_model_metadata(metadata, str(metadata_path))
-        
-        # Check that file exists
-        assert metadata_path.exists()
-        
-        # Load metadata
-        loaded_metadata = load_model_metadata(str(metadata_path))
-        
-        # Check that loaded metadata matches original
-        assert loaded_metadata == metadata
+        # Mock joblib.dump to raise an exception
+        with patch('joblib.dump', side_effect=IOError("Mock IO error")):
+            with pytest.raises(IOError, match="Mock IO error"):
+                save_model(
+                    model=trained_svm_classifier,
+                    model_name="test_model",
+                    model_version="1.0.0",
+                    metadata=model_metadata
+                )
     
-    def test_save_model_metadata_error(self, tmp_path):
-        """Test that save_model_metadata raises ModelSerializationError on failure."""
-        # Create metadata
-        metadata = create_model_metadata(
-            model_name="test_model",
-            version="1.0.0",
-            model_type="svm",
-            training_parameters={},
-            performance_metrics={}
-        )
+    def test_save_model_enhanced_metadata(self, trained_svm_classifier, temp_model_path, model_metadata, monkeypatch):
+        """Test that metadata is enhanced with additional information."""
+        # Mock model_config.MODEL_DIRECTORY
+        monkeypatch.setattr('models.model_serialization.model_config.MODEL_DIRECTORY', str(temp_model_path))
         
-        # Use a directory path instead of a file path
-        invalid_path = tmp_path
-        
-        with pytest.raises(ModelSerializationError):
-            save_model_metadata(metadata, str(invalid_path))
-    
-    def test_load_model_metadata_error(self):
-        """Test that load_model_metadata raises ModelSerializationError on failure."""
-        with pytest.raises(ModelSerializationError):
-            load_model_metadata("/path/to/nonexistent/metadata.json")
+        # Mock register_model to capture metadata
+        with patch('models.model_serialization.register_model') as mock_register:
+            model_name = "test_model"
+            model_version = "1.0.0"
+            
+            # Call save_model
+            save_model(
+                model=trained_svm_classifier,
+                model_name=model_name,
+                model_version=model_version,
+                metadata=model_metadata
+            )
+            
+            # Get the enhanced metadata from the register_model call
+            _, _, _, enhanced_metadata = mock_register.call_args[0]
+            
+            # Check that additional fields were added
+            assert "model_name" in enhanced_metadata
+            assert "model_version" in enhanced_metadata
+            assert "created_at" in enhanced_metadata
+            assert "scikit_learn_version" in enhanced_metadata
+            assert "python_version" in enhanced_metadata
+            assert "environment" in enhanced_metadata
+            
+            # Check that original metadata was preserved
+            for key, value in model_metadata.items():
+                assert enhanced_metadata[key] == value
 
 
-# Tests for model registry functions
-class TestModelRegistry:
+# Test load_model function
+class TestLoadModel:
+    """Tests for the load_model function."""
+
+    def test_load_model_success(self, trained_svm_classifier, temp_model_path, model_metadata, monkeypatch):
+        """Test successful model loading."""
+        # Mock model_config.MODEL_DIRECTORY
+        monkeypatch.setattr('models.model_serialization.model_config.MODEL_DIRECTORY', str(temp_model_path))
+        
+        # Save a model first
+        with patch('models.model_serialization.register_model'):
+            model_name = "test_model"
+            model_version = "1.0.0"
+            
+            save_model(
+                model=trained_svm_classifier,
+                model_name=model_name,
+                model_version=model_version,
+                metadata=model_metadata
+            )
+        
+        # Now load the model
+        loaded_model, loaded_metadata = load_model(model_name, model_version)
+        
+        # Check that the model was loaded correctly
+        assert isinstance(loaded_model, BaseEstimator)
+        
+        # Check that metadata was loaded correctly
+        assert loaded_metadata["model_name"] == model_name
+        assert loaded_metadata["model_version"] == model_version
+        
+        # Check that original metadata was preserved
+        for key, value in model_metadata.items():
+            assert loaded_metadata[key] == value
     
-    def test_update_model_registry_index(self, test_model_registry_path):
-        """Test that update_model_registry_index correctly updates the registry index."""
-        # Define test data
+    def test_load_model_latest_version(self, trained_svm_classifier, temp_model_path, model_metadata, monkeypatch):
+        """Test loading the latest model version when version is not specified."""
+        # Mock model_config.MODEL_DIRECTORY
+        monkeypatch.setattr('models.model_serialization.model_config.MODEL_DIRECTORY', str(temp_model_path))
+        
+        # Save multiple model versions
+        with patch('models.model_serialization.register_model'):
+            model_name = "test_model"
+            
+            # Save version 1.0.0
+            save_model(
+                model=trained_svm_classifier,
+                model_name=model_name,
+                model_version="1.0.0",
+                metadata=model_metadata
+            )
+            
+            # Save version 1.1.0
+            save_model(
+                model=trained_svm_classifier,
+                model_name=model_name,
+                model_version="1.1.0",
+                metadata=model_metadata
+            )
+            
+            # Save version 2.0.0
+            save_model(
+                model=trained_svm_classifier,
+                model_name=model_name,
+                model_version="2.0.0",
+                metadata=model_metadata
+            )
+        
+        # Mock _get_latest_model_version to return the latest version
+        with patch('models.model_serialization._get_latest_model_version', return_value="2.0.0"):
+            # Load the model without specifying a version
+            loaded_model, loaded_metadata = load_model(model_name)
+            
+            # Check that the latest version was loaded
+            assert loaded_metadata["model_version"] == "2.0.0"
+    
+    def test_load_model_file_not_found(self, temp_model_path, monkeypatch):
+        """Test load_model when the model file doesn't exist."""
+        # Mock model_config.MODEL_DIRECTORY
+        monkeypatch.setattr('models.model_serialization.model_config.MODEL_DIRECTORY', str(temp_model_path))
+        
+        # Mock _get_latest_model_version to return a version
+        with patch('models.model_serialization._get_latest_model_version', return_value="1.0.0"):
+            # Try to load a non-existent model
+            with pytest.raises(FileNotFoundError, match="Model file not found"):
+                load_model("non_existent_model", "1.0.0")
+    
+    def test_load_model_integrity_check(self, trained_svm_classifier, temp_model_path, model_metadata, monkeypatch):
+        """Test model integrity check during loading."""
+        # Mock model_config.MODEL_DIRECTORY
+        monkeypatch.setattr('models.model_serialization.model_config.MODEL_DIRECTORY', str(temp_model_path))
+        
+        # Save a model first
+        with patch('models.model_serialization.register_model'):
+            model_name = "test_model"
+            model_version = "1.0.0"
+            
+            save_model(
+                model=trained_svm_classifier,
+                model_name=model_name,
+                model_version=model_version,
+                metadata=model_metadata
+            )
+        
+        # Tamper with the model file to change its hash
+        model_filepath = temp_model_path / f"{model_name}_{model_version}.joblib"
+        with open(model_filepath, 'ab') as f:
+            f.write(b'tampered')
+        
+        # Try to load the model with integrity check
+        with pytest.raises(ValueError, match="Model integrity check failed"):
+            load_model(model_name, model_version)
+    
+    def test_load_model_no_metadata(self, trained_svm_classifier, temp_model_path, monkeypatch):
+        """Test loading a model when metadata file doesn't exist."""
+        # Mock model_config.MODEL_DIRECTORY
+        monkeypatch.setattr('models.model_serialization.model_config.MODEL_DIRECTORY', str(temp_model_path))
+        
         model_name = "test_model"
-        version = "1.0.0"
-        model_path = os.path.join(test_model_registry_path, "test_model.pkl")
-        metadata_path = os.path.join(test_model_registry_path, "test_model_metadata.json")
+        model_version = "1.0.0"
         
-        # Update registry index
-        update_model_registry_index(model_name, version, model_path, metadata_path)
+        # Save the model file directly without metadata
+        model_filepath = temp_model_path / f"{model_name}_{model_version}.joblib"
+        joblib.dump(trained_svm_classifier, model_filepath)
         
-        # Check that index file exists
-        index_path = os.path.join(test_model_registry_path, "model_registry_index.json")
-        assert os.path.exists(index_path)
+        # Create hash file
+        hash_filepath = temp_model_path / f"{model_name}_{model_version}.sha256"
+        with open(hash_filepath, 'w') as f:
+            f.write(_calculate_file_hash(model_filepath))
         
-        # Load index and check contents
-        with open(index_path, "r") as f:
-            index = json.load(f)
-        
-        assert model_name in index
-        assert "versions" in index[model_name]
-        assert version in index[model_name]["versions"]
-        assert index[model_name]["versions"][version]["model_path"] == model_path
-        assert index[model_name]["versions"][version]["metadata_path"] == metadata_path
-        assert "registered_at" in index[model_name]["versions"][version]
-        assert index[model_name]["latest_version"] == version
+        # Load the model
+        with patch('models.model_serialization.validate_model', return_value=True):
+            loaded_model, loaded_metadata = load_model(model_name, model_version)
+            
+            # Check that default metadata was created
+            assert loaded_metadata["model_name"] == model_name
+            assert loaded_metadata["model_version"] == model_version
+
+
+# Test list_models function
+class TestListModels:
+    """Tests for the list_models function."""
+
+    def test_list_models_empty(self, monkeypatch):
+        """Test listing models when registry is empty."""
+        # Mock _load_model_registry to return empty registry
+        with patch('models.model_serialization._load_model_registry', return_value={}):
+            models = list_models()
+            assert len(models) == 0
     
-    def test_update_model_registry_index_multiple_versions(self, test_model_registry_path):
-        """Test that update_model_registry_index correctly handles multiple versions."""
-        # Define test data
+    def test_list_models_with_entries(self, monkeypatch):
+        """Test listing models when registry has entries."""
+        # Create mock registry with entries
+        mock_registry = {
+            "model1_1.0.0": {"model_name": "model1", "model_version": "1.0.0"},
+            "model2_1.0.0": {"model_name": "model2", "model_version": "1.0.0"},
+            "model1_2.0.0": {"model_name": "model1", "model_version": "2.0.0"}
+        }
+        
+        # Mock _load_model_registry to return the mock registry
+        with patch('models.model_serialization._load_model_registry', return_value=mock_registry):
+            models = list_models()
+            
+            # Check that all entries were returned
+            assert len(models) == 3
+            
+            # Check that entries contain the expected data
+            model_names = [model["model_name"] for model in models]
+            assert "model1" in model_names
+            assert "model2" in model_names
+            
+            model_versions = [model["model_version"] for model in models]
+            assert "1.0.0" in model_versions
+            assert "2.0.0" in model_versions
+
+
+# Test get_model_metadata function
+class TestGetModelMetadata:
+    """Tests for the get_model_metadata function."""
+
+    def test_get_model_metadata_success(self, trained_svm_classifier, temp_model_path, model_metadata, monkeypatch):
+        """Test successful metadata retrieval."""
+        # Mock model_config.MODEL_DIRECTORY
+        monkeypatch.setattr('models.model_serialization.model_config.MODEL_DIRECTORY', str(temp_model_path))
+        
+        # Save a model first
+        with patch('models.model_serialization.register_model'):
+            model_name = "test_model"
+            model_version = "1.0.0"
+            
+            save_model(
+                model=trained_svm_classifier,
+                model_name=model_name,
+                model_version=model_version,
+                metadata=model_metadata
+            )
+        
+        # Get the metadata
+        retrieved_metadata = get_model_metadata(model_name, model_version)
+        
+        # Check that metadata was retrieved correctly
+        assert retrieved_metadata["model_name"] == model_name
+        assert retrieved_metadata["model_version"] == model_version
+        
+        # Check that original metadata was preserved
+        for key, value in model_metadata.items():
+            assert retrieved_metadata[key] == value
+    
+    def test_get_model_metadata_latest_version(self, trained_svm_classifier, temp_model_path, model_metadata, monkeypatch):
+        """Test getting metadata for the latest model version."""
+        # Mock model_config.MODEL_DIRECTORY
+        monkeypatch.setattr('models.model_serialization.model_config.MODEL_DIRECTORY', str(temp_model_path))
+        
+        # Save multiple model versions
+        with patch('models.model_serialization.register_model'):
+            model_name = "test_model"
+            
+            # Save version 1.0.0
+            save_model(
+                model=trained_svm_classifier,
+                model_name=model_name,
+                model_version="1.0.0",
+                metadata={**model_metadata, "version": "1.0.0"}
+            )
+            
+            # Save version 2.0.0
+            save_model(
+                model=trained_svm_classifier,
+                model_name=model_name,
+                model_version="2.0.0",
+                metadata={**model_metadata, "version": "2.0.0"}
+            )
+        
+        # Mock _get_latest_model_version to return the latest version
+        with patch('models.model_serialization._get_latest_model_version', return_value="2.0.0"):
+            # Get metadata without specifying a version
+            metadata = get_model_metadata(model_name)
+            
+            # Check that the latest version's metadata was retrieved
+            assert metadata["version"] == "2.0.0"
+    
+    def test_get_model_metadata_file_not_found(self, temp_model_path, monkeypatch):
+        """Test get_model_metadata when the metadata file doesn't exist."""
+        # Mock model_config.MODEL_DIRECTORY
+        monkeypatch.setattr('models.model_serialization.model_config.MODEL_DIRECTORY', str(temp_model_path))
+        
+        # Mock _get_latest_model_version to return a version
+        with patch('models.model_serialization._get_latest_model_version', return_value="1.0.0"):
+            # Try to get metadata for a non-existent model
+            with pytest.raises(FileNotFoundError, match="Metadata file not found"):
+                get_model_metadata("non_existent_model", "1.0.0")
+
+
+# Test register_model function
+class TestRegisterModel:
+    """Tests for the register_model function."""
+
+    def test_register_model_success(self, temp_model_path, model_metadata, monkeypatch):
+        """Test successful model registration."""
+        # Mock model_config.MODEL_DIRECTORY
+        monkeypatch.setattr('models.model_serialization.model_config.MODEL_DIRECTORY', str(temp_model_path))
+        
+        # Mock _load_model_registry and _save_model_registry
+        mock_registry = {}
+        
+        with patch('models.model_serialization._load_model_registry', return_value=mock_registry), \
+             patch('models.model_serialization._save_model_registry') as mock_save:
+            
+            model_name = "test_model"
+            model_version = "1.0.0"
+            model_path = "/path/to/model.joblib"
+            
+            # Register the model
+            register_model(model_name, model_version, model_path, model_metadata)
+            
+            # Check that _save_model_registry was called with updated registry
+            mock_save.assert_called_once()
+            updated_registry = mock_save.call_args[0][0]
+            
+            # Check that the registry was updated correctly
+            assert f"{model_name}_{model_version}" in updated_registry
+            entry = updated_registry[f"{model_name}_{model_version}"]
+            assert entry["model_name"] == model_name
+            assert entry["model_version"] == model_version
+            assert entry["model_path"] == model_path
+            assert "registered_at" in entry
+            assert entry["metadata"] == model_metadata
+    
+    def test_register_model_update_existing(self, temp_model_path, model_metadata, monkeypatch):
+        """Test updating an existing model registration."""
+        # Mock model_config.MODEL_DIRECTORY
+        monkeypatch.setattr('models.model_serialization.model_config.MODEL_DIRECTORY', str(temp_model_path))
+        
+        # Create mock registry with existing entry
         model_name = "test_model"
-        version1 = "1.0.0"
-        version2 = "1.1.0"
-        model_path1 = os.path.join(test_model_registry_path, "test_model_1.0.0.pkl")
-        model_path2 = os.path.join(test_model_registry_path, "test_model_1.1.0.pkl")
-        metadata_path1 = os.path.join(test_model_registry_path, "test_model_1.0.0_metadata.json")
-        metadata_path2 = os.path.join(test_model_registry_path, "test_model_1.1.0_metadata.json")
+        model_version = "1.0.0"
+        registry_key = f"{model_name}_{model_version}"
         
-        # Update registry index with first version
-        update_model_registry_index(model_name, version1, model_path1, metadata_path1)
+        mock_registry = {
+            registry_key: {
+                "model_name": model_name,
+                "model_version": model_version,
+                "model_path": "/old/path/to/model.joblib",
+                "registered_at": "2025-01-01T00:00:00",
+                "metadata": {"old": "metadata"}
+            }
+        }
         
-        # Update registry index with second version
-        update_model_registry_index(model_name, version2, model_path2, metadata_path2)
+        with patch('models.model_serialization._load_model_registry', return_value=mock_registry), \
+             patch('models.model_serialization._save_model_registry') as mock_save:
+            
+            new_path = "/new/path/to/model.joblib"
+            
+            # Register the model with updated information
+            register_model(model_name, model_version, new_path, model_metadata)
+            
+            # Check that _save_model_registry was called with updated registry
+            mock_save.assert_called_once()
+            updated_registry = mock_save.call_args[0][0]
+            
+            # Check that the registry entry was updated
+            assert registry_key in updated_registry
+            entry = updated_registry[registry_key]
+            assert entry["model_path"] == new_path
+            assert entry["metadata"] == model_metadata
+            assert entry["registered_at"] != "2025-01-01T00:00:00"  # Should be updated
+
+
+# Test delete_model function
+class TestDeleteModel:
+    """Tests for the delete_model function."""
+
+    def test_delete_model_success(self, trained_svm_classifier, temp_model_path, model_metadata, monkeypatch):
+        """Test successful model deletion."""
+        # Mock model_config.MODEL_DIRECTORY
+        monkeypatch.setattr('models.model_serialization.model_config.MODEL_DIRECTORY', str(temp_model_path))
         
-        # Load index and check contents
-        index_path = os.path.join(test_model_registry_path, "model_registry_index.json")
-        with open(index_path, "r") as f:
-            index = json.load(f)
+        # Save a model first
+        with patch('models.model_serialization.register_model'):
+            model_name = "test_model"
+            model_version = "1.0.0"
+            
+            save_model(
+                model=trained_svm_classifier,
+                model_name=model_name,
+                model_version=model_version,
+                metadata=model_metadata
+            )
         
-        assert model_name in index
-        assert "versions" in index[model_name]
-        assert version1 in index[model_name]["versions"]
-        assert version2 in index[model_name]["versions"]
-        assert index[model_name]["latest_version"] == version2  # Latest version should be updated
+        # Create mock registry with the model
+        registry_key = f"{model_name}_{model_version}"
+        mock_registry = {
+            registry_key: {
+                "model_name": model_name,
+                "model_version": model_version,
+                "model_path": str(temp_model_path / f"{model_name}_{model_version}.joblib"),
+                "metadata": model_metadata
+            }
+        }
+        
+        with patch('models.model_serialization._load_model_registry', return_value=mock_registry), \
+             patch('models.model_serialization._save_model_registry') as mock_save:
+            
+            # Delete the model
+            result = delete_model(model_name, model_version)
+            
+            # Check that the function returned success
+            assert result is True
+            
+            # Check that the files were deleted
+            assert not (temp_model_path / f"{model_name}_{model_version}.joblib").exists()
+            assert not (temp_model_path / f"{model_name}_{model_version}.meta.json").exists()
+            assert not (temp_model_path / f"{model_name}_{model_version}.sha256").exists()
+            
+            # Check that the registry was updated
+            mock_save.assert_called_once()
+            updated_registry = mock_save.call_args[0][0]
+            assert registry_key not in updated_registry
     
-    def test_get_latest_model_version(self, test_model_registry_path):
-        """Test that get_latest_model_version returns the correct version."""
-        # Define test data
+    def test_delete_model_invalid_inputs(self):
+        """Test delete_model with invalid inputs."""
+        # Test with empty model_name
+        with pytest.raises(ValueError, match="Model name and version must be provided"):
+            delete_model("", "1.0.0")
+        
+        # Test with empty model_version
+        with pytest.raises(ValueError, match="Model name and version must be provided"):
+            delete_model("test_model", "")
+    
+    def test_delete_model_not_found(self, temp_model_path, monkeypatch):
+        """Test delete_model when the model doesn't exist."""
+        # Mock model_config.MODEL_DIRECTORY
+        monkeypatch.setattr('models.model_serialization.model_config.MODEL_DIRECTORY', str(temp_model_path))
+        
+        # Mock _load_model_registry to return empty registry
+        with patch('models.model_serialization._load_model_registry', return_value={}), \
+             patch('models.model_serialization._save_model_registry'):
+            
+            # Try to delete a non-existent model
+            result = delete_model("non_existent_model", "1.0.0")
+            
+            # Check that the function returned failure
+            assert result is False
+
+
+# Test rollback_model function
+class TestRollbackModel:
+    """Tests for the rollback_model function."""
+
+    def test_rollback_model_success(self, trained_svm_classifier, temp_model_path, model_metadata, monkeypatch):
+        """Test successful model rollback."""
+        # Mock model_config.MODEL_DIRECTORY
+        monkeypatch.setattr('models.model_serialization.model_config.MODEL_DIRECTORY', str(temp_model_path))
+        
+        # Save multiple model versions
+        with patch('models.model_serialization.register_model'):
+            model_name = "test_model"
+            
+            # Save version 1.0.0
+            save_model(
+                model=trained_svm_classifier,
+                model_name=model_name,
+                model_version="1.0.0",
+                metadata=model_metadata
+            )
+            
+            # Save version 2.0.0
+            save_model(
+                model=trained_svm_classifier,
+                model_name=model_name,
+                model_version="2.0.0",
+                metadata=model_metadata
+            )
+        
+        # Create mock registry with both versions, with 2.0.0 as active
+        mock_registry = {
+            f"{model_name}_1.0.0": {
+                "model_name": model_name,
+                "model_version": "1.0.0",
+                "is_active": False,
+                "model_path": str(temp_model_path / f"{model_name}_1.0.0.joblib"),
+                "metadata": model_metadata
+            },
+            f"{model_name}_2.0.0": {
+                "model_name": model_name,
+                "model_version": "2.0.0",
+                "is_active": True,
+                "model_path": str(temp_model_path / f"{model_name}_2.0.0.joblib"),
+                "metadata": model_metadata
+            }
+        }
+        
+        with patch('models.model_serialization._load_model_registry', return_value=mock_registry), \
+             patch('models.model_serialization._save_model_registry') as mock_save:
+            
+            # Rollback to version 1.0.0
+            result = rollback_model(model_name, "1.0.0")
+            
+            # Check that the function returned success
+            assert result is True
+            
+            # Check that the registry was updated
+            mock_save.assert_called_once()
+            updated_registry = mock_save.call_args[0][0]
+            
+            # Check that version 1.0.0 is now active and 2.0.0 is inactive
+            assert updated_registry[f"{model_name}_1.0.0"]["is_active"] is True
+            assert updated_registry[f"{model_name}_2.0.0"]["is_active"] is False
+    
+    def test_rollback_model_target_not_found(self, temp_model_path, monkeypatch):
+        """Test rollback_model when the target version doesn't exist."""
+        # Mock model_config.MODEL_DIRECTORY
+        monkeypatch.setattr('models.model_serialization.model_config.MODEL_DIRECTORY', str(temp_model_path))
+        
         model_name = "test_model"
-        version1 = "1.0.0"
-        version2 = "1.1.0"
-        model_path1 = os.path.join(test_model_registry_path, "test_model_1.0.0.pkl")
-        model_path2 = os.path.join(test_model_registry_path, "test_model_1.1.0.pkl")
-        metadata_path1 = os.path.join(test_model_registry_path, "test_model_1.0.0_metadata.json")
-        metadata_path2 = os.path.join(test_model_registry_path, "test_model_1.1.0_metadata.json")
+        target_version = "1.0.0"
         
-        # Update registry index with both versions
-        update_model_registry_index(model_name, version1, model_path1, metadata_path1)
-        update_model_registry_index(model_name, version2, model_path2, metadata_path2)
-        
-        # Get latest version
-        latest_version = get_latest_model_version(model_name)
-        
-        assert latest_version == version2
+        # Mock Path.exists to return False for the target version
+        with patch.object(Path, 'exists', return_value=False):
+            # Try to rollback to a non-existent version
+            result = rollback_model(model_name, target_version)
+            
+            # Check that the function returned failure
+            assert result is False
     
-    def test_get_latest_model_version_nonexistent_model(self, test_model_registry_path):
-        """Test that get_latest_model_version returns None for nonexistent models."""
-        latest_version = get_latest_model_version("nonexistent_model")
-        assert latest_version is None
-    
-    def test_list_models(self, test_model_registry_path):
-        """Test that list_models returns all models in the registry."""
-        # Define test data
-        model1_name = "test_model_1"
-        model2_name = "test_model_2"
-        version = "1.0.0"
-        model1_path = os.path.join(test_model_registry_path, "test_model_1.pkl")
-        model2_path = os.path.join(test_model_registry_path, "test_model_2.pkl")
-        metadata1_path = os.path.join(test_model_registry_path, "test_model_1_metadata.json")
-        metadata2_path = os.path.join(test_model_registry_path, "test_model_2_metadata.json")
+    def test_rollback_model_already_active(self, temp_model_path, monkeypatch):
+        """Test rollback_model when the target version is already active."""
+        # Mock model_config.MODEL_DIRECTORY
+        monkeypatch.setattr('models.model_serialization.model_config.MODEL_DIRECTORY', str(temp_model_path))
         
-        # Update registry index with both models
-        update_model_registry_index(model1_name, version, model1_path, metadata1_path)
-        update_model_registry_index(model2_name, version, model2_path, metadata2_path)
-        
-        # List models
-        models = list_models()
-        
-        assert model1_name in models
-        assert model2_name in models
-    
-    def test_list_model_versions(self, test_model_registry_path):
-        """Test that list_model_versions returns all versions of a model."""
-        # Define test data
         model_name = "test_model"
-        version1 = "1.0.0"
-        version2 = "1.1.0"
-        version3 = "2.0.0"
-        model_path1 = os.path.join(test_model_registry_path, "test_model_1.0.0.pkl")
-        model_path2 = os.path.join(test_model_registry_path, "test_model_1.1.0.pkl")
-        model_path3 = os.path.join(test_model_registry_path, "test_model_2.0.0.pkl")
-        metadata_path1 = os.path.join(test_model_registry_path, "test_model_1.0.0_metadata.json")
-        metadata_path2 = os.path.join(test_model_registry_path, "test_model_1.1.0_metadata.json")
-        metadata_path3 = os.path.join(test_model_registry_path, "test_model_2.0.0_metadata.json")
+        target_version = "1.0.0"
         
-        # Update registry index with all versions
-        update_model_registry_index(model_name, version1, model_path1, metadata_path1)
-        update_model_registry_index(model_name, version2, model_path2, metadata_path2)
-        update_model_registry_index(model_name, version3, model_path3, metadata_path3)
-        
-        # List model versions
-        versions = list_model_versions(model_name)
-        
-        # Versions should be sorted in descending order (newest first)
-        assert versions == [version3, version2, version1]
-    
-    def test_list_model_versions_nonexistent_model(self, test_model_registry_path):
-        """Test that list_model_versions raises ModelRegistryError for nonexistent models."""
-        with pytest.raises(ModelRegistryError):
-            list_model_versions("nonexistent_model")
+        # Mock Path.exists to return True for the target version
+        with patch.object(Path, 'exists', return_value=True), \
+             patch('models.model_serialization._get_active_model_version', return_value=target_version):
+            
+            # Try to rollback to the already active version
+            result = rollback_model(model_name, target_version)
+            
+            # Check that the function returned success
+            assert result is True
 
 
-# Tests for model serialization and deserialization
-class TestModelSerialization:
-    
-    def test_save_model_joblib(self, test_model_registry_path, trained_svm_classifier):
-        """Test that save_model correctly saves a model using joblib."""
-        # Define test data
-        model_name = "svm_classifier"
-        version = "1.0.0"
-        model_type = "svm"
-        training_parameters = {"C": 1.0, "kernel": "rbf"}
-        performance_metrics = {"accuracy": 0.95}
-        
-        # Save model
-        model_path = save_model(
-            model=trained_svm_classifier,
-            model_name=model_name,
-            version=version,
-            model_type=model_type,
-            training_parameters=training_parameters,
-            performance_metrics=performance_metrics,
-            use_joblib=True
-        )
-        
-        # Check that model file exists
-        assert os.path.exists(model_path)
-        
-        # Check that metadata file exists
-        metadata_path = os.path.join(
-            test_model_registry_path,
-            model_name,
-            f"{model_name}-{version}.metadata.json"
-        )
-        assert os.path.exists(metadata_path)
-        
-        # Check that checksum file exists
-        checksum_path = os.path.join(
-            test_model_registry_path,
-            model_name,
-            f"{model_name}-{version}.checksum"
-        )
-        assert os.path.exists(checksum_path)
-        
-        # Check that model registry index is updated
-        index_path = os.path.join(test_model_registry_path, "model_registry_index.json")
-        with open(index_path, "r") as f:
-            index = json.load(f)
-        
-        assert model_name in index
-        assert version in index[model_name]["versions"]
-    
-    def test_save_model_pickle(self, test_model_registry_path, trained_svm_classifier):
-        """Test that save_model correctly saves a model using pickle."""
-        # Define test data
-        model_name = "svm_classifier_pickle"
-        version = "1.0.0"
-        model_type = "svm"
-        training_parameters = {"C": 1.0, "kernel": "rbf"}
-        performance_metrics = {"accuracy": 0.95}
-        
-        # Save model
-        model_path = save_model(
-            model=trained_svm_classifier,
-            model_name=model_name,
-            version=version,
-            model_type=model_type,
-            training_parameters=training_parameters,
-            performance_metrics=performance_metrics,
-            use_joblib=False
-        )
-        
-        # Check that model file exists
-        assert os.path.exists(model_path)
-    
-    def test_load_model_joblib(self, test_model_registry_path, trained_svm_classifier):
-        """Test that load_model correctly loads a model saved with joblib."""
-        # Define test data
-        model_name = "svm_classifier_load"
-        version = "1.0.0"
-        model_type = "svm"
-        training_parameters = {"C": 1.0, "kernel": "rbf"}
-        performance_metrics = {"accuracy": 0.95}
-        
-        # Save model
-        save_model(
-            model=trained_svm_classifier,
-            model_name=model_name,
-            version=version,
-            model_type=model_type,
-            training_parameters=training_parameters,
-            performance_metrics=performance_metrics,
-            use_joblib=True
-        )
-        
-        # Load model
-        loaded_model, metadata = load_model(model_name, version)
-        
-        # Check that loaded model is the correct type
-        assert isinstance(loaded_model, SVC)
-        
-        # Check that metadata is correct
-        assert metadata["name"] == model_name
-        assert metadata["version"] == version
-        assert metadata["model_type"] == model_type
-        assert metadata["training_parameters"] == training_parameters
-        assert metadata["performance_metrics"] == performance_metrics
-    
-    def test_load_model_latest_version(self, test_model_registry_path, trained_svm_classifier):
-        """Test that load_model correctly loads the latest version when version is None."""
-        # Define test data
-        model_name = "svm_classifier_versions"
-        version1 = "1.0.0"
-        version2 = "1.1.0"
-        model_type = "svm"
-        training_parameters = {"C": 1.0, "kernel": "rbf"}
-        performance_metrics = {"accuracy": 0.95}
-        
-        # Save model version 1.0.0
-        save_model(
-            model=trained_svm_classifier,
-            model_name=model_name,
-            version=version1,
-            model_type=model_type,
-            training_parameters=training_parameters,
-            performance_metrics=performance_metrics
-        )
-        
-        # Save model version 1.1.0
-        save_model(
-            model=trained_svm_classifier,
-            model_name=model_name,
-            version=version2,
-            model_type=model_type,
-            training_parameters=training_parameters,
-            performance_metrics=performance_metrics
-        )
-        
-        # Load latest model version
-        loaded_model, metadata = load_model(model_name)
-        
-        # Check that loaded model is from version 1.1.0
-        assert metadata["version"] == version2
-    
-    def test_load_model_integrity_check(self, test_model_registry_path, trained_svm_classifier):
-        """Test that load_model performs integrity check when requested."""
-        # Define test data
-        model_name = "svm_classifier_integrity"
-        version = "1.0.0"
-        model_type = "svm"
-        training_parameters = {"C": 1.0, "kernel": "rbf"}
-        performance_metrics = {"accuracy": 0.95}
-        
-        # Save model
-        model_path = save_model(
-            model=trained_svm_classifier,
-            model_name=model_name,
-            version=version,
-            model_type=model_type,
-            training_parameters=training_parameters,
-            performance_metrics=performance_metrics
-        )
-        
-        # Corrupt the model file
-        with open(model_path, "wb") as f:
-            f.write(b"corrupted data")
-        
-        # Load model with integrity check
-        with pytest.raises(ModelIntegrityError):
-            load_model(model_name, version, verify_integrity=True)
-    
-    def test_load_model_nonexistent(self, test_model_registry_path):
-        """Test that load_model raises ModelRegistryError for nonexistent models."""
-        with pytest.raises(ModelRegistryError):
-            load_model("nonexistent_model")
-    
-    def test_load_model_nonexistent_version(self, test_model_registry_path, trained_svm_classifier):
-        """Test that load_model raises ModelRegistryError for nonexistent versions."""
-        # Define test data
-        model_name = "svm_classifier_version_error"
-        version = "1.0.0"
-        model_type = "svm"
-        training_parameters = {"C": 1.0, "kernel": "rbf"}
-        performance_metrics = {"accuracy": 0.95}
-        
-        # Save model
-        save_model(
-            model=trained_svm_classifier,
-            model_name=model_name,
-            version=version,
-            model_type=model_type,
-            training_parameters=training_parameters,
-            performance_metrics=performance_metrics
-        )
-        
-        # Try to load nonexistent version
-        with pytest.raises(ModelRegistryError):
-            load_model(model_name, "2.0.0")
+# Test validate_model function
+class TestValidateModel:
+    """Tests for the validate_model function."""
 
-
-# Tests for model registry management
-class TestModelRegistryManagement:
-    
-    def test_get_model_info(self, test_model_registry_path, trained_svm_classifier):
-        """Test that get_model_info returns correct model information."""
-        # Define test data
-        model_name = "svm_classifier_info"
-        version = "1.0.0"
-        model_type = "svm"
-        training_parameters = {"C": 1.0, "kernel": "rbf"}
-        performance_metrics = {"accuracy": 0.95}
-        
-        # Save model
-        save_model(
-            model=trained_svm_classifier,
-            model_name=model_name,
-            version=version,
-            model_type=model_type,
-            training_parameters=training_parameters,
-            performance_metrics=performance_metrics
-        )
-        
-        # Get model info
-        info = get_model_info(model_name, version)
-        
-        # Check that info contains expected fields
-        assert info["name"] == model_name
-        assert info["version"] == version
-        assert info["model_type"] == model_type
-        assert info["training_parameters"] == training_parameters
-        assert info["performance_metrics"] == performance_metrics
-        assert "registry_info" in info
-    
-    def test_delete_model_version(self, test_model_registry_path, trained_svm_classifier):
-        """Test that delete_model_version correctly removes a model version."""
-        # Define test data
-        model_name = "svm_classifier_delete"
-        version = "1.0.0"
-        model_type = "svm"
-        training_parameters = {"C": 1.0, "kernel": "rbf"}
-        performance_metrics = {"accuracy": 0.95}
-        
-        # Save model
-        model_path = save_model(
-            model=trained_svm_classifier,
-            model_name=model_name,
-            version=version,
-            model_type=model_type,
-            training_parameters=training_parameters,
-            performance_metrics=performance_metrics
-        )
-        
-        # Delete model version
-        result = delete_model_version(model_name, version)
-        
-        # Check that deletion was successful
+    def test_validate_model_success(self, trained_svm_classifier):
+        """Test successful model validation."""
+        # Validate a valid scikit-learn model
+        result = validate_model(trained_svm_classifier)
         assert result is True
-        
-        # Check that model file is deleted
-        assert not os.path.exists(model_path)
-        
-        # Check that model is removed from registry
-        with pytest.raises(ModelRegistryError):
-            get_model_info(model_name, version)
     
-    def test_delete_model_version_multiple_versions(self, test_model_registry_path, trained_svm_classifier):
-        """Test that delete_model_version correctly handles multiple versions."""
-        # Define test data
-        model_name = "svm_classifier_delete_multi"
-        version1 = "1.0.0"
-        version2 = "1.1.0"
-        model_type = "svm"
-        training_parameters = {"C": 1.0, "kernel": "rbf"}
-        performance_metrics = {"accuracy": 0.95}
+    def test_validate_model_not_estimator(self):
+        """Test validate_model with a non-estimator object."""
+        # Test with a dictionary
+        with pytest.raises(ValueError, match="Model must be a scikit-learn estimator"):
+            validate_model({"not_a_model": True})
         
-        # Save model version 1.0.0
-        save_model(
-            model=trained_svm_classifier,
-            model_name=model_name,
-            version=version1,
-            model_type=model_type,
-            training_parameters=training_parameters,
-            performance_metrics=performance_metrics
-        )
-        
-        # Save model version 1.1.0
-        save_model(
-            model=trained_svm_classifier,
-            model_name=model_name,
-            version=version2,
-            model_type=model_type,
-            training_parameters=training_parameters,
-            performance_metrics=performance_metrics
-        )
-        
-        # Delete version 1.1.0
-        delete_model_version(model_name, version2)
-        
-        # Check that latest version is updated to 1.0.0
-        latest_version = get_latest_model_version(model_name)
-        assert latest_version == version1
+        # Test with None
+        with pytest.raises(ValueError, match="Model must be a scikit-learn estimator"):
+            validate_model(None)
     
-    def test_compare_model_versions(self, test_model_registry_path, trained_svm_classifier):
-        """Test that compare_model_versions correctly compares two model versions."""
-        # Define test data
-        model_name = "svm_classifier_compare"
-        version1 = "1.0.0"
-        version2 = "1.1.0"
-        model_type = "svm"
-        training_parameters1 = {"C": 1.0, "kernel": "rbf"}
-        training_parameters2 = {"C": 2.0, "kernel": "linear"}
-        performance_metrics1 = {"accuracy": 0.95}
-        performance_metrics2 = {"accuracy": 0.97}
+    def test_validate_model_missing_methods(self):
+        """Test validate_model with a model missing required methods."""
+        # Create a mock model missing required methods
+        class MockModel(BaseEstimator):
+            def fit(self, X, y):
+                return self
+            
+            def predict(self, X):
+                return [0] * len(X)
+            
+            # Missing predict_proba method
         
-        # Save model version 1.0.0
-        save_model(
-            model=trained_svm_classifier,
-            model_name=model_name,
-            version=version1,
-            model_type=model_type,
-            training_parameters=training_parameters1,
-            performance_metrics=performance_metrics1
-        )
+        mock_model = MockModel()
         
-        # Save model version 1.1.0
-        save_model(
-            model=trained_svm_classifier,
-            model_name=model_name,
-            version=version2,
-            model_type=model_type,
-            training_parameters=training_parameters2,
-            performance_metrics=performance_metrics2
-        )
+        # Validate the model
+        with pytest.raises(ValueError, match="Model missing required method: predict_proba"):
+            validate_model(mock_model)
+
+
+# Test helper functions
+class TestHelperFunctions:
+    """Tests for helper functions in the model_serialization module."""
+
+    def test_calculate_file_hash(self, tmp_path):
+        """Test _calculate_file_hash function."""
+        # Create a test file with known content
+        test_file = tmp_path / "test_file.txt"
+        test_content = b"test content for hashing"
         
-        # Compare model versions
-        comparison = compare_model_versions(model_name, version1, version2)
+        with open(test_file, "wb") as f:
+            f.write(test_content)
         
-        # Check that comparison contains expected fields
-        assert comparison["model_name"] == model_name
-        assert comparison["version1"] == version1
-        assert comparison["version2"] == version2
-        assert "performance_diff" in comparison
-        assert "parameter_diff" in comparison
-        assert "environment_diff" in comparison
+        # Calculate hash using the function
+        calculated_hash = _calculate_file_hash(test_file)
         
-        # Check performance difference
-        assert "accuracy" in comparison["performance_diff"]
-        assert comparison["performance_diff"]["accuracy"]["version1"] == 0.95
-        assert comparison["performance_diff"]["accuracy"]["version2"] == 0.97
-        assert comparison["performance_diff"]["accuracy"]["difference"] == 0.02
+        # Calculate expected hash
+        expected_hash = hashlib.sha256(test_content).hexdigest()
         
-        # Check parameter difference
-        assert "C" in comparison["parameter_diff"]
-        assert comparison["parameter_diff"]["C"]["version1"] == 1.0
-        assert comparison["parameter_diff"]["C"]["version2"] == 2.0
-        assert "kernel" in comparison["parameter_diff"]
-        assert comparison["parameter_diff"]["kernel"]["version1"] == "rbf"
-        assert comparison["parameter_diff"]["kernel"]["version2"] == "linear"
+        # Check that the hashes match
+        assert calculated_hash == expected_hash
     
-    def test_find_models_by_tag(self, test_model_registry_path, trained_svm_classifier, trained_random_forest_classifier):
-        """Test that find_models_by_tag correctly finds models with a specific tag."""
-        # Define test data
-        svm_model_name = "svm_classifier_tag"
-        rf_model_name = "rf_classifier_tag"
-        version = "1.0.0"
-        svm_tags = ["svm", "classification", "test"]
-        rf_tags = ["random_forest", "classification", "test"]
+    def test_load_model_registry_empty(self, temp_model_path, monkeypatch):
+        """Test _load_model_registry when registry file doesn't exist."""
+        # Mock model_config.MODEL_DIRECTORY
+        monkeypatch.setattr('models.model_serialization.model_config.MODEL_DIRECTORY', str(temp_model_path))
         
-        # Save SVM model
-        save_model(
-            model=trained_svm_classifier,
-            model_name=svm_model_name,
-            version=version,
-            model_type="svm",
-            training_parameters={"C": 1.0, "kernel": "rbf"},
-            performance_metrics={"accuracy": 0.95},
-            tags=svm_tags
-        )
+        # Load the registry
+        registry = _load_model_registry()
         
-        # Save Random Forest model
-        save_model(
-            model=trained_random_forest_classifier,
-            model_name=rf_model_name,
-            version=version,
-            model_type="random_forest",
-            training_parameters={"n_estimators": 100},
-            performance_metrics={"accuracy": 0.96},
-            tags=rf_tags
-        )
-        
-        # Find models with "classification" tag
-        results = find_models_by_tag("classification")
-        
-        # Check that both models are found
-        assert len(results) == 2
-        model_names = [result["model_name"] for result in results]
-        assert svm_model_name in model_names
-        assert rf_model_name in model_names
-        
-        # Find models with "svm" tag
-        results = find_models_by_tag("svm")
-        
-        # Check that only SVM model is found
-        assert len(results) == 1
-        assert results[0]["model_name"] == svm_model_name
+        # Check that an empty registry was returned
+        assert registry == {}
     
-    def test_export_import_model(self, test_model_registry_path, trained_svm_classifier, tmp_path):
-        """Test that export_model and import_model correctly export and import models."""
-        # Define test data
-        model_name = "svm_classifier_export"
-        version = "1.0.0"
-        model_type = "svm"
-        training_parameters = {"C": 1.0, "kernel": "rbf"}
-        performance_metrics = {"accuracy": 0.95}
-        export_dir = str(tmp_path / "export")
-        os.makedirs(export_dir, exist_ok=True)
+    def test_load_model_registry_existing(self, temp_model_path, monkeypatch):
+        """Test _load_model_registry when registry file exists."""
+        # Mock model_config.MODEL_DIRECTORY
+        monkeypatch.setattr('models.model_serialization.model_config.MODEL_DIRECTORY', str(temp_model_path))
         
-        # Save model
-        save_model(
-            model=trained_svm_classifier,
-            model_name=model_name,
-            version=version,
-            model_type=model_type,
-            training_parameters=training_parameters,
-            performance_metrics=performance_metrics
-        )
+        # Create a test registry file
+        registry_path = temp_model_path / "model_registry.json"
+        test_registry = {
+            "model1_1.0.0": {"model_name": "model1", "model_version": "1.0.0"},
+            "model2_1.0.0": {"model_name": "model2", "model_version": "1.0.0"}
+        }
         
-        # Export model
-        export_path = export_model(model_name, version, export_dir)
+        with open(registry_path, "w") as f:
+            json.dump(test_registry, f)
         
-        # Check that export directory exists
-        assert os.path.exists(export_path)
+        # Load the registry
+        loaded_registry = _load_model_registry()
         
-        # Check that exported files exist
-        assert os.path.exists(os.path.join(export_path, f"{model_name}-{version}.model"))
-        assert os.path.exists(os.path.join(export_path, f"{model_name}-{version}.metadata.json"))
-        assert os.path.exists(os.path.join(export_path, f"{model_name}-{version}.checksum"))
-        
-        # Delete original model
-        delete_model_version(model_name, version)
-        
-        # Import model with new name
-        new_model_name = "svm_classifier_import"
-        imported_name, imported_version = import_model(export_path, new_model_name)
-        
-        # Check that import was successful
-        assert imported_name == new_model_name
-        assert imported_version == version
-        
-        # Check that imported model exists in registry
-        info = get_model_info(new_model_name, version)
-        assert info["name"] == new_model_name
-        assert info["version"] == version
-        assert info["model_type"] == model_type
-        assert info["training_parameters"] == training_parameters
-        assert info["performance_metrics"] == performance_metrics
+        # Check that the registry was loaded correctly
+        assert loaded_registry == test_registry
     
-    def test_rollback_model(self, test_model_registry_path, trained_svm_classifier):
-        """Test that rollback_model correctly sets an older version as the latest version."""
-        # Define test data
-        model_name = "svm_classifier_rollback"
-        version1 = "1.0.0"
-        version2 = "1.1.0"
-        model_type = "svm"
-        training_parameters = {"C": 1.0, "kernel": "rbf"}
-        performance_metrics = {"accuracy": 0.95}
+    def test_save_model_registry(self, temp_model_path, monkeypatch):
+        """Test _save_model_registry function."""
+        # Mock model_config.MODEL_DIRECTORY
+        monkeypatch.setattr('models.model_serialization.model_config.MODEL_DIRECTORY', str(temp_model_path))
         
-        # Save model version 1.0.0
-        save_model(
-            model=trained_svm_classifier,
-            model_name=model_name,
-            version=version1,
-            model_type=model_type,
-            training_parameters=training_parameters,
-            performance_metrics=performance_metrics
-        )
+        # Create a test registry
+        test_registry = {
+            "model1_1.0.0": {"model_name": "model1", "model_version": "1.0.0"},
+            "model2_1.0.0": {"model_name": "model2", "model_version": "1.0.0"}
+        }
         
-        # Save model version 1.1.0
-        save_model(
-            model=trained_svm_classifier,
-            model_name=model_name,
-            version=version2,
-            model_type=model_type,
-            training_parameters=training_parameters,
-            performance_metrics=performance_metrics
-        )
+        # Save the registry
+        _save_model_registry(test_registry)
         
-        # Check that latest version is 1.1.0
-        latest_version = get_latest_model_version(model_name)
-        assert latest_version == version2
+        # Check that the registry file was created
+        registry_path = temp_model_path / "model_registry.json"
+        assert registry_path.exists()
         
-        # Rollback to version 1.0.0
-        result = rollback_model(model_name, version1)
+        # Load the saved registry and check its contents
+        with open(registry_path, "r") as f:
+            saved_registry = json.load(f)
         
-        # Check that rollback was successful
-        assert result is True
+        assert saved_registry == test_registry
+    
+    def test_get_latest_model_version(self):
+        """Test _get_latest_model_version function."""
+        # Create a mock registry with multiple versions
+        mock_registry = {
+            "model1_1.0.0": {"model_name": "model1", "model_version": "1.0.0"},
+            "model1_1.1.0": {"model_name": "model1", "model_version": "1.1.0"},
+            "model1_2.0.0": {"model_name": "model1", "model_version": "2.0.0"},
+            "model2_1.0.0": {"model_name": "model2", "model_version": "1.0.0"}
+        }
         
-        # Check that latest version is now 1.0.0
-        latest_version = get_latest_model_version(model_name)
-        assert latest_version == version1
+        with patch('models.model_serialization._load_model_registry', return_value=mock_registry):
+            # Get the latest version for model1
+            latest_version = _get_latest_model_version("model1")
+            
+            # Check that the correct version was returned
+            assert latest_version == "2.0.0"
+            
+            # Get the latest version for model2
+            latest_version = _get_latest_model_version("model2")
+            assert latest_version == "1.0.0"
+            
+            # Get the latest version for a non-existent model
+            latest_version = _get_latest_model_version("non_existent_model")
+            assert latest_version is None
+    
+    def test_get_active_model_version(self):
+        """Test _get_active_model_version function."""
+        # Create a mock registry with active and inactive versions
+        mock_registry = {
+            "model1_1.0.0": {"model_name": "model1", "model_version": "1.0.0", "is_active": False},
+            "model1_2.0.0": {"model_name": "model1", "model_version": "2.0.0", "is_active": True},
+            "model2_1.0.0": {"model_name": "model2", "model_version": "1.0.0", "is_active": True}
+        }
+        
+        with patch('models.model_serialization._load_model_registry', return_value=mock_registry):
+            # Get the active version for model1
+            active_version = _get_active_model_version("model1")
+            
+            # Check that the correct version was returned
+            assert active_version == "2.0.0"
+            
+            # Get the active version for model2
+            active_version = _get_active_model_version("model2")
+            assert active_version == "1.0.0"
+            
+            # Get the active version for a non-existent model
+            active_version = _get_active_model_version("non_existent_model")
+            assert active_version is None
+    
+    def test_get_active_model_version_fallback(self):
+        """Test _get_active_model_version fallback to latest version."""
+        # Create a mock registry with no active versions
+        mock_registry = {
+            "model1_1.0.0": {"model_name": "model1", "model_version": "1.0.0"},
+            "model1_2.0.0": {"model_name": "model1", "model_version": "2.0.0"}
+        }
+        
+        with patch('models.model_serialization._load_model_registry', return_value=mock_registry), \
+             patch('models.model_serialization._get_latest_model_version', return_value="2.0.0"):
+            
+            # Get the active version for model1
+            active_version = _get_active_model_version("model1")
+            
+            # Check that it fell back to the latest version
+            assert active_version == "2.0.0"
