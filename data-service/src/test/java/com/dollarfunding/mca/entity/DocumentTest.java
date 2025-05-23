@@ -6,512 +6,812 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
+import org.springframework.boot.test.autoconfigure.orm.jpa.TestEntityManager;
+import org.springframework.test.context.junit.jupiter.SpringExtension;
 
+import javax.validation.ConstraintViolation;
+import javax.validation.Validation;
+import javax.validation.Validator;
+import javax.validation.ValidatorFactory;
 import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Unit tests for the Document entity class.
+ * Unit tests for the Document entity.
  * 
  * These tests verify JPA mapping, field validation, and relationships for the Document entity.
- * Tests include validation of required fields, proper mapping of enum values for document type
- * and classification, JSON conversion for the metadata field, and the Many-to-One relationship
- * with the Application entity.
+ * The test suite ensures that the Document entity can be properly persisted and retrieved
+ * with all its attributes and relationships intact, and that validation constraints are properly enforced.
  */
-@DisplayName("Document Entity Tests")
-class DocumentTest {
+@ExtendWith(SpringExtension.class)
+@DataJpaTest
+public class DocumentTest {
 
-    private UUID applicationId;
-    private DocumentType documentType;
-    private String storagePath;
-    private String classification;
-    private LocalDateTime uploadedAt;
-    private Map<String, Object> metadata;
-
+    @Autowired
+    private TestEntityManager entityManager;
+    
+    private Validator validator;
+    
     @BeforeEach
     void setUp() {
-        applicationId = UUID.randomUUID();
-        documentType = DocumentType.BANK_STATEMENT;
-        storagePath = "s3://mca-documents-production/applications/" + applicationId + "/bank-statement.pdf";
-        classification = "Monthly Bank Statement";
-        uploadedAt = LocalDateTime.now();
-        metadata = new HashMap<>();
-        metadata.put("pageCount", 5);
-        metadata.put("fileSize", 1024567);
-        metadata.put("mimeType", "application/pdf");
-        
-        Map<String, Double> confidenceScores = new HashMap<>();
-        confidenceScores.put("accountNumber", 0.95);
-        confidenceScores.put("accountName", 0.98);
-        confidenceScores.put("bankName", 0.99);
-        metadata.put("confidenceScores", confidenceScores);
+        ValidatorFactory factory = Validation.buildDefaultValidatorFactory();
+        validator = factory.getValidator();
     }
-
+    
+    /**
+     * Tests for basic entity properties and validation.
+     */
     @Nested
-    @DisplayName("Constructor Tests")
-    class ConstructorTests {
-
+    @DisplayName("Basic Entity Tests")
+    class BasicEntityTests {
+        
         @Test
-        @DisplayName("Default constructor creates empty metadata map")
-        void defaultConstructorCreatesEmptyMetadataMap() {
+        @DisplayName("Should create document with default constructor")
+        void shouldCreateDocumentWithDefaultConstructor() {
+            // When
             Document document = new Document();
-            assertNotNull(document.getMetadata());
-            assertTrue(document.getMetadata().isEmpty());
-        }
-
-        @Test
-        @DisplayName("Required fields constructor sets fields correctly")
-        void requiredFieldsConstructorSetsFieldsCorrectly() {
-            Document document = new Document(applicationId, documentType, storagePath);
             
-            assertEquals(applicationId, document.getApplicationId());
-            assertEquals(documentType, document.getType());
-            assertEquals(storagePath, document.getStoragePath());
+            // Then
+            assertNotNull(document);
+            assertNull(document.getId());
+            assertNull(document.getApplicationId());
+            assertNull(document.getApplication());
+            assertNull(document.getType());
+            assertNull(document.getStoragePath());
+            assertEquals(DocumentClassification.UNCLASSIFIED, document.getClassification());
             assertNotNull(document.getUploadedAt());
             assertNotNull(document.getMetadata());
             assertTrue(document.getMetadata().isEmpty());
         }
-
+        
         @Test
-        @DisplayName("Full constructor sets all fields correctly")
-        void fullConstructorSetsAllFieldsCorrectly() {
-            Document document = new Document(applicationId, documentType, storagePath, 
-                                           classification, uploadedAt, metadata);
+        @DisplayName("Should create document with required fields constructor")
+        void shouldCreateDocumentWithRequiredFieldsConstructor() {
+            // Given
+            UUID applicationId = UUID.randomUUID();
+            DocumentType type = DocumentType.BANK_STATEMENT;
+            String storagePath = "mca-documents-production/applications/123/bank-statement.pdf";
             
+            // When
+            Document document = new Document(applicationId, type, storagePath);
+            
+            // Then
+            assertNotNull(document);
+            assertNull(document.getId());
             assertEquals(applicationId, document.getApplicationId());
-            assertEquals(documentType, document.getType());
+            assertNull(document.getApplication());
+            assertEquals(type, document.getType());
+            assertEquals(storagePath, document.getStoragePath());
+            assertEquals(DocumentClassification.UNCLASSIFIED, document.getClassification());
+            assertNotNull(document.getUploadedAt());
+            assertNotNull(document.getMetadata());
+            assertTrue(document.getMetadata().isEmpty());
+        }
+        
+        @Test
+        @DisplayName("Should create document with all fields constructor")
+        void shouldCreateDocumentWithAllFieldsConstructor() {
+            // Given
+            UUID applicationId = UUID.randomUUID();
+            DocumentType type = DocumentType.TAX_RETURN;
+            String storagePath = "mca-documents-production/applications/123/tax-return.pdf";
+            DocumentClassification classification = DocumentClassification.VERIFIED;
+            LocalDateTime uploadedAt = LocalDateTime.now().minusHours(1);
+            
+            Map<String, Object> metadata = new HashMap<>();
+            metadata.put("confidenceScore", 0.97);
+            metadata.put("pageCount", 5);
+            metadata.put("fileSize", 1024567);
+            
+            // When
+            Document document = new Document(applicationId, type, storagePath, classification, uploadedAt, metadata);
+            
+            // Then
+            assertNotNull(document);
+            assertNull(document.getId());
+            assertEquals(applicationId, document.getApplicationId());
+            assertNull(document.getApplication());
+            assertEquals(type, document.getType());
             assertEquals(storagePath, document.getStoragePath());
             assertEquals(classification, document.getClassification());
             assertEquals(uploadedAt, document.getUploadedAt());
-            assertEquals(metadata, document.getMetadata());
+            assertNotNull(document.getMetadata());
+            assertEquals(3, document.getMetadata().size());
+            assertEquals(0.97, document.getMetadata().get("confidenceScore"));
+            assertEquals(5, document.getMetadata().get("pageCount"));
+            assertEquals(1024567, document.getMetadata().get("fileSize"));
         }
-
+        
         @Test
-        @DisplayName("Builder creates document with all fields correctly")
-        void builderCreatesDocumentWithAllFieldsCorrectly() {
-            Document document = new Document.Builder(applicationId, documentType, storagePath)
-                    .withClassification(classification)
-                    .withUploadedAt(uploadedAt)
-                    .withMetadata(metadata)
-                    .build();
+        @DisplayName("Should validate required fields")
+        void shouldValidateRequiredFields() {
+            // Given
+            Document document = new Document();
             
+            // When
+            Set<ConstraintViolation<Document>> violations = validator.validate(document);
+            
+            // Then
+            assertEquals(3, violations.size());
+            assertTrue(violations.stream().anyMatch(v -> v.getPropertyPath().toString().equals("applicationId")));
+            assertTrue(violations.stream().anyMatch(v -> v.getPropertyPath().toString().equals("type")));
+            assertTrue(violations.stream().anyMatch(v -> v.getPropertyPath().toString().equals("storagePath")));
+        }
+        
+        @Test
+        @DisplayName("Should validate storage path size constraint")
+        void shouldValidateStoragePathSizeConstraint() {
+            // Given
+            Document document = new Document();
+            document.setApplicationId(UUID.randomUUID());
+            document.setType(DocumentType.BANK_STATEMENT);
+            
+            // Create a storage path that exceeds the 1024 character limit
+            StringBuilder longPath = new StringBuilder();
+            for (int i = 0; i < 1030; i++) {
+                longPath.append("a");
+            }
+            document.setStoragePath(longPath.toString());
+            
+            // When
+            Set<ConstraintViolation<Document>> violations = validator.validate(document);
+            
+            // Then
+            assertEquals(1, violations.size());
+            assertTrue(violations.stream().anyMatch(v -> v.getPropertyPath().toString().equals("storagePath")));
+        }
+        
+        @Test
+        @DisplayName("Should create document with builder")
+        void shouldCreateDocumentWithBuilder() {
+            // Given
+            UUID applicationId = UUID.randomUUID();
+            DocumentType type = DocumentType.INVOICE;
+            String storagePath = "mca-documents-production/applications/123/invoice.pdf";
+            
+            // When
+            Document document = new Document.Builder(applicationId, type, storagePath)
+                .withClassification(DocumentClassification.NEEDS_REVIEW)
+                .withConfidenceScore(0.85)
+                .addMetadata("pageCount", 3)
+                .build();
+            
+            // Then
+            assertNotNull(document);
             assertEquals(applicationId, document.getApplicationId());
-            assertEquals(documentType, document.getType());
+            assertEquals(type, document.getType());
             assertEquals(storagePath, document.getStoragePath());
-            assertEquals(classification, document.getClassification());
-            assertEquals(uploadedAt, document.getUploadedAt());
-            assertEquals(metadata, document.getMetadata());
+            assertEquals(DocumentClassification.NEEDS_REVIEW, document.getClassification());
+            assertEquals(0.85, document.getConfidenceScore());
+            assertEquals(3, document.getMetadataValue("pageCount"));
         }
     }
-
-    @Nested
-    @DisplayName("Field Validation Tests")
-    class FieldValidationTests {
-
-        @Test
-        @DisplayName("Document with null applicationId is invalid for processing")
-        void documentWithNullApplicationIdIsInvalidForProcessing() {
-            Document document = new Document(null, documentType, storagePath);
-            assertFalse(document.isValidForProcessing());
-        }
-
-        @Test
-        @DisplayName("Document with null type is invalid for processing")
-        void documentWithNullTypeIsInvalidForProcessing() {
-            Document document = new Document(applicationId, null, storagePath);
-            assertFalse(document.isValidForProcessing());
-        }
-
-        @Test
-        @DisplayName("Document with null storagePath is invalid for processing")
-        void documentWithNullStoragePathIsInvalidForProcessing() {
-            Document document = new Document(applicationId, documentType, null);
-            assertFalse(document.isValidForProcessing());
-        }
-
-        @Test
-        @DisplayName("Document with empty storagePath is invalid for processing")
-        void documentWithEmptyStoragePathIsInvalidForProcessing() {
-            Document document = new Document(applicationId, documentType, "");
-            assertFalse(document.isValidForProcessing());
-        }
-
-        @Test
-        @DisplayName("Document with null uploadedAt is invalid for processing")
-        void documentWithNullUploadedAtIsInvalidForProcessing() {
-            Document document = new Document(applicationId, documentType, storagePath);
-            document.setUploadedAt(null);
-            assertFalse(document.isValidForProcessing());
-        }
-
-        @Test
-        @DisplayName("Document with all required fields is valid for processing")
-        void documentWithAllRequiredFieldsIsValidForProcessing() {
-            Document document = new Document(applicationId, documentType, storagePath);
-            assertTrue(document.isValidForProcessing());
-        }
-
-        @Test
-        @DisplayName("Document with invalid storage path format is detected")
-        void documentWithInvalidStoragePathFormatIsDetected() {
-            Document document = new Document(applicationId, documentType, "invalid-path");
-            assertFalse(document.hasValidStorage());
-        }
-
-        @Test
-        @DisplayName("Document with valid S3 storage path is detected")
-        void documentWithValidS3StoragePathIsDetected() {
-            Document document = new Document(applicationId, documentType, storagePath);
-            assertTrue(document.hasValidStorage());
-        }
-    }
-
+    
+    /**
+     * Tests for enum mapping and classification.
+     */
     @Nested
     @DisplayName("Enum Mapping Tests")
     class EnumMappingTests {
-
+        
         @Test
-        @DisplayName("Document type is correctly mapped")
-        void documentTypeIsCorrectlyMapped() {
-            Document document = new Document(applicationId, DocumentType.BANK_STATEMENT, storagePath);
+        @DisplayName("Should map DocumentType enum values correctly")
+        void shouldMapDocumentTypeEnumValuesCorrectly() {
+            // Given
+            Document document = new Document();
+            
+            // When/Then - Test all enum values
+            document.setType(DocumentType.BANK_STATEMENT);
             assertEquals(DocumentType.BANK_STATEMENT, document.getType());
-            assertEquals("Bank Statement", document.getType().getDescription());
-        }
-
-        @Test
-        @DisplayName("Financial document is correctly identified")
-        void financialDocumentIsCorrectlyIdentified() {
-            Document bankStatement = new Document(applicationId, DocumentType.BANK_STATEMENT, storagePath);
-            Document taxReturn = new Document(applicationId, DocumentType.TAX_RETURN, storagePath);
-            Document invoice = new Document(applicationId, DocumentType.INVOICE, storagePath);
-            Document license = new Document(applicationId, DocumentType.BUSINESS_LICENSE, storagePath);
             
-            assertTrue(bankStatement.isFinancialDocument());
-            assertTrue(taxReturn.isFinancialDocument());
-            assertTrue(invoice.isFinancialDocument());
-            assertFalse(license.isFinancialDocument());
-        }
-
-        @Test
-        @DisplayName("Document with PII is correctly identified")
-        void documentWithPIIIsCorrectlyIdentified() {
-            Document idVerification = new Document(applicationId, DocumentType.ID_VERIFICATION, storagePath);
-            Document taxReturn = new Document(applicationId, DocumentType.TAX_RETURN, storagePath);
-            Document bankStatement = new Document(applicationId, DocumentType.BANK_STATEMENT, storagePath);
+            document.setType(DocumentType.TAX_RETURN);
+            assertEquals(DocumentType.TAX_RETURN, document.getType());
             
-            assertTrue(idVerification.containsPII());
-            assertTrue(taxReturn.containsPII());
-            assertFalse(bankStatement.containsPII());
-        }
-
-        @Test
-        @DisplayName("OCR confidence threshold is correctly determined by document type")
-        void ocrConfidenceThresholdIsCorrectlyDeterminedByDocumentType() {
-            Document bankStatement = new Document(applicationId, DocumentType.BANK_STATEMENT, storagePath);
-            Document taxReturn = new Document(applicationId, DocumentType.TAX_RETURN, storagePath);
-            Document idVerification = new Document(applicationId, DocumentType.ID_VERIFICATION, storagePath);
-            Document misc = new Document(applicationId, DocumentType.MISCELLANEOUS, storagePath);
+            document.setType(DocumentType.BUSINESS_LICENSE);
+            assertEquals(DocumentType.BUSINESS_LICENSE, document.getType());
             
-            assertEquals(0.85, bankStatement.getOcrConfidenceThreshold());
-            assertEquals(0.80, taxReturn.getOcrConfidenceThreshold());
-            assertEquals(0.90, idVerification.getOcrConfidenceThreshold());
-            assertEquals(0.65, misc.getOcrConfidenceThreshold());
+            document.setType(DocumentType.INVOICE);
+            assertEquals(DocumentType.INVOICE, document.getType());
+            
+            document.setType(DocumentType.ID_VERIFICATION);
+            assertEquals(DocumentType.ID_VERIFICATION, document.getType());
+            
+            document.setType(DocumentType.MISCELLANEOUS);
+            assertEquals(DocumentType.MISCELLANEOUS, document.getType());
+        }
+        
+        @Test
+        @DisplayName("Should map DocumentClassification enum values correctly")
+        void shouldMapDocumentClassificationEnumValuesCorrectly() {
+            // Given
+            Document document = new Document();
+            
+            // When/Then - Test all enum values
+            document.setClassification(DocumentClassification.VERIFIED);
+            assertEquals(DocumentClassification.VERIFIED, document.getClassification());
+            
+            document.setClassification(DocumentClassification.NEEDS_REVIEW);
+            assertEquals(DocumentClassification.NEEDS_REVIEW, document.getClassification());
+            
+            document.setClassification(DocumentClassification.FLAGGED);
+            assertEquals(DocumentClassification.FLAGGED, document.getClassification());
+            
+            document.setClassification(DocumentClassification.REJECTED);
+            assertEquals(DocumentClassification.REJECTED, document.getClassification());
+            
+            document.setClassification(DocumentClassification.UNCLASSIFIED);
+            assertEquals(DocumentClassification.UNCLASSIFIED, document.getClassification());
+        }
+        
+        @Test
+        @DisplayName("Should set classification based on confidence score")
+        void shouldSetClassificationBasedOnConfidenceScore() {
+            // Given
+            Document document = new Document();
+            
+            // When/Then - Test classification thresholds
+            document.setConfidenceScore(0.97);
+            assertEquals(DocumentClassification.VERIFIED, document.getClassification());
+            assertEquals(0.97, document.getConfidenceScore());
+            
+            document.setConfidenceScore(0.85);
+            assertEquals(DocumentClassification.NEEDS_REVIEW, document.getClassification());
+            assertEquals(0.85, document.getConfidenceScore());
+            
+            document.setConfidenceScore(0.65);
+            assertEquals(DocumentClassification.FLAGGED, document.getClassification());
+            assertEquals(0.65, document.getConfidenceScore());
+            
+            document.setConfidenceScore(0.45);
+            assertEquals(DocumentClassification.REJECTED, document.getClassification());
+            assertEquals(0.45, document.getConfidenceScore());
+            
+            document.setConfidenceScore(0.30);
+            assertEquals(DocumentClassification.REJECTED, document.getClassification());
+            assertEquals(0.30, document.getConfidenceScore());
+        }
+        
+        @Test
+        @DisplayName("Should identify document type from content")
+        void shouldIdentifyDocumentTypeFromContent() {
+            // When/Then - Test document type identification from file names
+            assertEquals(DocumentType.BANK_STATEMENT, 
+                DocumentType.identifyFromContent("application/pdf", "bank_statement_march_2023.pdf"));
+            
+            assertEquals(DocumentType.TAX_RETURN, 
+                DocumentType.identifyFromContent("application/pdf", "2022_tax_return.pdf"));
+            
+            assertEquals(DocumentType.BUSINESS_LICENSE, 
+                DocumentType.identifyFromContent("image/jpeg", "business_license.jpg"));
+            
+            assertEquals(DocumentType.INVOICE, 
+                DocumentType.identifyFromContent("application/pdf", "invoice_123456.pdf"));
+            
+            assertEquals(DocumentType.ID_VERIFICATION, 
+                DocumentType.identifyFromContent("image/jpeg", "drivers_license.jpg"));
+            
+            assertEquals(DocumentType.MISCELLANEOUS, 
+                DocumentType.identifyFromContent("application/pdf", "document.pdf"));
+            
+            assertEquals(DocumentType.MISCELLANEOUS, 
+                DocumentType.identifyFromContent("application/pdf", null));
         }
     }
-
+    
+    /**
+     * Tests for JSON metadata conversion.
+     */
     @Nested
     @DisplayName("JSON Metadata Tests")
     class JsonMetadataTests {
-
+        
         @Test
-        @DisplayName("Metadata is correctly converted to JSON")
-        void metadataIsCorrectlyConvertedToJson() throws JsonUtil.JsonConversionException {
-            Document document = new Document(applicationId, documentType, storagePath);
+        @DisplayName("Should convert metadata map to JSON string")
+        void shouldConvertMetadataMapToJsonString() throws Exception {
+            // Given
+            Document document = new Document();
+            Map<String, Object> metadata = new HashMap<>();
+            metadata.put("confidenceScore", 0.95);
+            metadata.put("pageCount", 3);
+            metadata.put("extractedFields", Map.of("name", "John Doe", "amount", 5000.00));
+            
+            // When
             document.setMetadata(metadata);
             
-            String metadataJson = document.getMetadataJson();
-            assertNotNull(metadataJson);
-            assertTrue(JsonUtil.isValidJson(metadataJson));
+            // Then
+            assertNotNull(document.getMetadataJson());
+            assertTrue(JsonUtil.isValidJson(document.getMetadataJson()));
             
-            Map<String, Object> deserializedMetadata = JsonUtil.fromJson(metadataJson, new TypeReference<Map<String, Object>>() {});
-            assertEquals(metadata.size(), deserializedMetadata.size());
-            assertEquals(metadata.get("pageCount"), deserializedMetadata.get("pageCount"));
-            assertEquals(metadata.get("fileSize"), deserializedMetadata.get("fileSize"));
-            assertEquals(metadata.get("mimeType"), deserializedMetadata.get("mimeType"));
+            // Verify the JSON contains the expected data
+            Map<String, Object> parsedMetadata = JsonUtil.fromJson(
+                document.getMetadataJson(), 
+                new TypeReference<Map<String, Object>>() {}
+            );
+            assertEquals(3, parsedMetadata.size());
+            assertEquals(0.95, parsedMetadata.get("confidenceScore"));
+            assertEquals(3, parsedMetadata.get("pageCount"));
+            
+            @SuppressWarnings("unchecked")
+            Map<String, Object> extractedFields = (Map<String, Object>) parsedMetadata.get("extractedFields");
+            assertEquals("John Doe", extractedFields.get("name"));
+            assertEquals(5000.00, extractedFields.get("amount"));
         }
-
+        
         @Test
-        @DisplayName("JSON is correctly converted to metadata")
-        void jsonIsCorrectlyConvertedToMetadata() throws JsonUtil.JsonConversionException {
-            Document document = new Document(applicationId, documentType, storagePath);
-            String metadataJson = JsonUtil.toJson(metadata);
+        @DisplayName("Should convert JSON string to metadata map")
+        void shouldConvertJsonStringToMetadataMap() throws Exception {
+            // Given
+            Document document = new Document();
+            String metadataJson = "{\"confidenceScore\":0.95,\"pageCount\":3,\"extractedFields\":{\"name\":\"John Doe\",\"amount\":5000.0}}";
+            
+            // When
             document.setMetadataJson(metadataJson);
             
-            Map<String, Object> retrievedMetadata = document.getMetadata();
-            assertNotNull(retrievedMetadata);
-            assertEquals(metadata.size(), retrievedMetadata.size());
-            assertEquals(metadata.get("pageCount"), retrievedMetadata.get("pageCount"));
-            assertEquals(metadata.get("fileSize"), retrievedMetadata.get("fileSize"));
-            assertEquals(metadata.get("mimeType"), retrievedMetadata.get("mimeType"));
+            // Then
+            assertNotNull(document.getMetadata());
+            assertEquals(3, document.getMetadata().size());
+            assertEquals(0.95, document.getMetadata().get("confidenceScore"));
+            assertEquals(3, document.getMetadata().get("pageCount"));
+            
+            @SuppressWarnings("unchecked")
+            Map<String, Object> extractedFields = (Map<String, Object>) document.getMetadata().get("extractedFields");
+            assertEquals("John Doe", extractedFields.get("name"));
+            assertEquals(5000.0, extractedFields.get("amount"));
         }
-
+        
         @Test
-        @DisplayName("Metadata can be added incrementally")
-        void metadataCanBeAddedIncrementally() {
-            Document document = new Document(applicationId, documentType, storagePath);
-            document.addMetadata("pageCount", 5);
-            document.addMetadata("fileSize", 1024567);
-            document.addMetadata("mimeType", "application/pdf");
+        @DisplayName("Should add individual metadata values")
+        void shouldAddIndividualMetadataValues() {
+            // Given
+            Document document = new Document();
             
-            Map<String, Object> retrievedMetadata = document.getMetadata();
-            assertEquals(3, retrievedMetadata.size());
-            assertEquals(5, retrievedMetadata.get("pageCount"));
-            assertEquals(1024567, retrievedMetadata.get("fileSize"));
-            assertEquals("application/pdf", retrievedMetadata.get("mimeType"));
+            // When
+            document.addMetadata("confidenceScore", 0.95);
+            document.addMetadata("pageCount", 3);
+            document.addMetadata("fileName", "bank_statement.pdf");
+            
+            // Then
+            Map<String, Object> metadata = document.getMetadata();
+            assertEquals(3, metadata.size());
+            assertEquals(0.95, metadata.get("confidenceScore"));
+            assertEquals(3, metadata.get("pageCount"));
+            assertEquals("bank_statement.pdf", metadata.get("fileName"));
         }
-
+        
         @Test
-        @DisplayName("Specific metadata value can be retrieved")
-        void specificMetadataValueCanBeRetrieved() {
-            Document document = new Document(applicationId, documentType, storagePath);
-            document.setMetadata(metadata);
+        @DisplayName("Should retrieve individual metadata values with correct type")
+        void shouldRetrieveIndividualMetadataValuesWithCorrectType() {
+            // Given
+            Document document = new Document();
+            document.addMetadata("confidenceScore", 0.95);
+            document.addMetadata("pageCount", 3);
+            document.addMetadata("fileName", "bank_statement.pdf");
             
-            Integer pageCount = document.getMetadataValue("pageCount");
-            assertEquals(5, pageCount);
-            
-            String mimeType = document.getMetadataValue("mimeType");
-            assertEquals("application/pdf", mimeType);
+            // When/Then
+            assertEquals(0.95, document.<Double>getMetadataValue("confidenceScore"));
+            assertEquals(3, document.<Integer>getMetadataValue("pageCount"));
+            assertEquals("bank_statement.pdf", document.<String>getMetadataValue("fileName"));
+            assertNull(document.getMetadataValue("nonExistentKey"));
         }
-
+        
         @Test
-        @DisplayName("Confidence scores can be added and retrieved")
-        void confidenceScoresCanBeAddedAndRetrieved() {
-            Document document = new Document(applicationId, documentType, storagePath);
+        @DisplayName("Should handle null or empty metadata")
+        void shouldHandleNullOrEmptyMetadata() {
+            // Given
+            Document document = new Document();
             
-            Map<String, Double> confidenceScores = new HashMap<>();
-            confidenceScores.put("accountNumber", 0.95);
-            confidenceScores.put("accountName", 0.98);
-            confidenceScores.put("bankName", 0.99);
+            // When
+            document.setMetadata(null);
             
-            document.addConfidenceScores(confidenceScores);
+            // Then
+            assertNotNull(document.getMetadata());
+            assertTrue(document.getMetadata().isEmpty());
+            assertEquals("{}", document.getMetadataJson());
             
-            Map<String, Double> retrievedScores = document.getConfidenceScores();
-            assertEquals(3, retrievedScores.size());
-            assertEquals(0.95, retrievedScores.get("accountNumber"));
-            assertEquals(0.98, retrievedScores.get("accountName"));
-            assertEquals(0.99, retrievedScores.get("bankName"));
-        }
-
-        @Test
-        @DisplayName("Specific confidence score can be retrieved")
-        void specificConfidenceScoreCanBeRetrieved() {
-            Document document = new Document(applicationId, documentType, storagePath);
+            // When
+            document.setMetadataJson(null);
             
-            Map<String, Double> confidenceScores = new HashMap<>();
-            confidenceScores.put("accountNumber", 0.95);
-            confidenceScores.put("accountName", 0.98);
-            confidenceScores.put("bankName", 0.99);
+            // Then
+            assertNotNull(document.getMetadata());
+            assertTrue(document.getMetadata().isEmpty());
             
-            document.addConfidenceScores(confidenceScores);
+            // When
+            document.setMetadataJson("");
             
-            Double accountNumberConfidence = document.getConfidenceScore("accountNumber");
-            assertEquals(0.95, accountNumberConfidence);
-        }
-
-        @Test
-        @DisplayName("Document classification confidence can be checked")
-        void documentClassificationConfidenceCanBeChecked() {
-            Document document = new Document(applicationId, documentType, storagePath);
-            
-            Map<String, Double> confidenceScores = new HashMap<>();
-            confidenceScores.put("classification", 0.95);
-            
-            document.addConfidenceScores(confidenceScores);
-            
-            assertTrue(document.isClassifiedWithHighConfidence());
-            
-            // Test with confidence below threshold
-            confidenceScores.put("classification", 0.60);
-            document.addConfidenceScores(confidenceScores);
-            
-            assertFalse(document.isClassifiedWithHighConfidence());
+            // Then
+            assertNotNull(document.getMetadata());
+            assertTrue(document.getMetadata().isEmpty());
         }
     }
-
+    
+    /**
+     * Tests for relationship with Application entity.
+     */
     @Nested
-    @DisplayName("Storage Path Tests")
-    class StoragePathTests {
-
+    @DisplayName("Relationship Tests")
+    class RelationshipTests {
+        
         @Test
-        @DisplayName("Bucket name is correctly extracted from storage path")
-        void bucketNameIsCorrectlyExtractedFromStoragePath() {
-            Document document = new Document(applicationId, documentType, 
-                                           "s3://mca-documents-production/applications/doc.pdf");
-            
-            assertEquals("mca-documents-production", document.getBucketName());
-        }
-
-        @Test
-        @DisplayName("Object key is correctly extracted from storage path")
-        void objectKeyIsCorrectlyExtractedFromStoragePath() {
-            Document document = new Document(applicationId, documentType, 
-                                           "s3://mca-documents-production/applications/doc.pdf");
-            
-            assertEquals("applications/doc.pdf", document.getObjectKey());
-        }
-
-        @Test
-        @DisplayName("Invalid storage path returns null bucket name")
-        void invalidStoragePathReturnsNullBucketName() {
-            Document document = new Document(applicationId, documentType, "invalid-path");
-            assertNull(document.getBucketName());
-        }
-
-        @Test
-        @DisplayName("Invalid storage path returns null object key")
-        void invalidStoragePathReturnsNullObjectKey() {
-            Document document = new Document(applicationId, documentType, "invalid-path");
-            assertNull(document.getObjectKey());
-        }
-
-        @Test
-        @DisplayName("Storage path without object key returns empty object key")
-        void storagePathWithoutObjectKeyReturnsEmptyObjectKey() {
-            Document document = new Document(applicationId, documentType, "s3://mca-documents-production");
-            assertEquals("", document.getObjectKey());
-        }
-    }
-
-    @Nested
-    @DisplayName("Application Relationship Tests")
-    class ApplicationRelationshipTests {
-
-        @Test
-        @DisplayName("Application can be set and retrieved")
-        void applicationCanBeSetAndRetrieved() {
-            Document document = new Document(applicationId, documentType, storagePath);
+        @DisplayName("Should maintain bidirectional relationship with Application entity")
+        void shouldMaintainBidirectionalRelationshipWithApplicationEntity() {
+            // Given
+            Document document = new Document(UUID.randomUUID(), DocumentType.BANK_STATEMENT, "mca-documents-production/applications/123/bank-statement.pdf");
             Application application = new Application();
-            application.setId(applicationId);
+            application.setId(UUID.randomUUID());
             
+            // When
             document.setApplication(application);
             
+            // Then
             assertSame(application, document.getApplication());
-            assertEquals(applicationId, document.getApplicationId());
+            assertEquals(application.getId(), document.getApplicationId());
         }
-
+        
         @Test
-        @DisplayName("Setting application updates applicationId")
-        void settingApplicationUpdatesApplicationId() {
+        @DisplayName("Should update applicationId when application is set")
+        void shouldUpdateApplicationIdWhenApplicationIsSet() {
+            // Given
             Document document = new Document();
             Application application = new Application();
-            UUID newApplicationId = UUID.randomUUID();
-            application.setId(newApplicationId);
+            UUID applicationId = UUID.randomUUID();
+            application.setId(applicationId);
             
+            // When
             document.setApplication(application);
             
-            assertEquals(newApplicationId, document.getApplicationId());
+            // Then
+            assertEquals(applicationId, document.getApplicationId());
         }
-
+        
         @Test
-        @DisplayName("Setting null application does not change applicationId")
-        void settingNullApplicationDoesNotChangeApplicationId() {
-            Document document = new Document(applicationId, documentType, storagePath);
-            UUID originalApplicationId = document.getApplicationId();
+        @DisplayName("Should not update applicationId when application has no ID")
+        void shouldNotUpdateApplicationIdWhenApplicationHasNoId() {
+            // Given
+            UUID originalApplicationId = UUID.randomUUID();
+            Document document = new Document(originalApplicationId, DocumentType.BANK_STATEMENT, "mca-documents-production/applications/123/bank-statement.pdf");
+            Application application = new Application();
             
-            document.setApplication(null);
+            // When
+            document.setApplication(application);
             
+            // Then
             assertEquals(originalApplicationId, document.getApplicationId());
         }
     }
-
+    
+    /**
+     * Tests for persistence and retrieval of Document entity.
+     */
     @Nested
-    @DisplayName("Timestamp Tests")
-    class TimestampTests {
-
+    @DisplayName("Persistence Tests")
+    class PersistenceTests {
+        
         @Test
-        @DisplayName("UploadedAt is automatically set in constructor")
-        void uploadedAtIsAutomaticallySetInConstructor() {
-            Document document = new Document(applicationId, documentType, storagePath);
-            assertNotNull(document.getUploadedAt());
+        @DisplayName("Should persist and retrieve document with all fields")
+        void shouldPersistAndRetrieveDocumentWithAllFields() {
+            // Given
+            UUID applicationId = UUID.randomUUID();
+            DocumentType type = DocumentType.BANK_STATEMENT;
+            String storagePath = "mca-documents-production/applications/123/bank-statement.pdf";
+            DocumentClassification classification = DocumentClassification.VERIFIED;
+            LocalDateTime uploadedAt = LocalDateTime.now().minusHours(1);
             
-            // Should be very close to now
-            LocalDateTime now = LocalDateTime.now();
-            LocalDateTime uploadedAt = document.getUploadedAt();
+            Map<String, Object> metadata = new HashMap<>();
+            metadata.put("confidenceScore", 0.97);
+            metadata.put("pageCount", 5);
             
-            // Difference should be less than 1 second
-            long secondsDifference = java.time.Duration.between(uploadedAt, now).getSeconds();
-            assertTrue(secondsDifference < 1);
+            Document document = new Document(applicationId, type, storagePath, classification, uploadedAt, metadata);
+            
+            // When
+            Document savedDocument = entityManager.persistAndFlush(document);
+            entityManager.clear();
+            Document retrievedDocument = entityManager.find(Document.class, savedDocument.getId());
+            
+            // Then
+            assertNotNull(retrievedDocument);
+            assertEquals(savedDocument.getId(), retrievedDocument.getId());
+            assertEquals(applicationId, retrievedDocument.getApplicationId());
+            assertEquals(type, retrievedDocument.getType());
+            assertEquals(storagePath, retrievedDocument.getStoragePath());
+            assertEquals(classification, retrievedDocument.getClassification());
+            assertEquals(uploadedAt, retrievedDocument.getUploadedAt());
+            
+            // Verify metadata was persisted correctly
+            Map<String, Object> retrievedMetadata = retrievedDocument.getMetadata();
+            assertEquals(2, retrievedMetadata.size());
+            assertEquals(0.97, retrievedMetadata.get("confidenceScore"));
+            assertEquals(5, retrievedMetadata.get("pageCount"));
         }
-
+        
         @Test
-        @DisplayName("UploadedAt can be manually set")
-        void uploadedAtCanBeManuallySet() {
-            Document document = new Document(applicationId, documentType, storagePath);
-            LocalDateTime customTime = LocalDateTime.of(2023, 1, 1, 12, 0);
+        @DisplayName("Should persist and retrieve document with application relationship")
+        void shouldPersistAndRetrieveDocumentWithApplicationRelationship() {
+            // Given
+            Application application = new Application();
+            entityManager.persistAndFlush(application);
             
-            document.setUploadedAt(customTime);
+            Document document = new Document(application.getId(), DocumentType.BANK_STATEMENT, "mca-documents-production/applications/123/bank-statement.pdf");
+            document.setApplication(application);
             
-            assertEquals(customTime, document.getUploadedAt());
+            // When
+            Document savedDocument = entityManager.persistAndFlush(document);
+            entityManager.clear();
+            Document retrievedDocument = entityManager.find(Document.class, savedDocument.getId());
+            
+            // Then
+            assertNotNull(retrievedDocument);
+            assertEquals(application.getId(), retrievedDocument.getApplicationId());
+            assertNotNull(retrievedDocument.getApplication());
+            assertEquals(application.getId(), retrievedDocument.getApplication().getId());
+        }
+        
+        @Test
+        @DisplayName("Should persist and retrieve document with enum values")
+        void shouldPersistAndRetrieveDocumentWithEnumValues() {
+            // Given
+            Document document = new Document(
+                UUID.randomUUID(),
+                DocumentType.TAX_RETURN,
+                "mca-documents-production/applications/123/tax-return.pdf",
+                DocumentClassification.NEEDS_REVIEW,
+                LocalDateTime.now(),
+                Map.of("confidenceScore", 0.85)
+            );
+            
+            // When
+            Document savedDocument = entityManager.persistAndFlush(document);
+            entityManager.clear();
+            Document retrievedDocument = entityManager.find(Document.class, savedDocument.getId());
+            
+            // Then
+            assertNotNull(retrievedDocument);
+            assertEquals(DocumentType.TAX_RETURN, retrievedDocument.getType());
+            assertEquals(DocumentClassification.NEEDS_REVIEW, retrievedDocument.getClassification());
+            assertEquals(0.85, retrievedDocument.getConfidenceScore());
         }
     }
-
+    
+    /**
+     * Tests for utility methods in the Document entity.
+     */
     @Nested
     @DisplayName("Utility Method Tests")
     class UtilityMethodTests {
-
+        
         @Test
-        @DisplayName("toString returns expected format")
-        void toStringReturnsExpectedFormat() {
-            Document document = new Document(applicationId, documentType, storagePath, classification, uploadedAt, metadata);
-            document.setId(UUID.randomUUID());
+        @DisplayName("Should extract file name from storage path")
+        void shouldExtractFileNameFromStoragePath() {
+            // Given
+            Document document = new Document();
             
+            // When/Then
+            document.setStoragePath("mca-documents-production/applications/123/bank-statement.pdf");
+            assertEquals("bank-statement.pdf", document.getFileName());
+            
+            document.setStoragePath("mca-documents-production/bank-statement.pdf");
+            assertEquals("bank-statement.pdf", document.getFileName());
+            
+            document.setStoragePath("bank-statement.pdf");
+            assertEquals("bank-statement.pdf", document.getFileName());
+            
+            document.setStoragePath("");
+            assertEquals("", document.getFileName());
+            
+            document.setStoragePath(null);
+            assertEquals("", document.getFileName());
+        }
+        
+        @Test
+        @DisplayName("Should extract file extension from storage path")
+        void shouldExtractFileExtensionFromStoragePath() {
+            // Given
+            Document document = new Document();
+            
+            // When/Then
+            document.setStoragePath("mca-documents-production/applications/123/bank-statement.pdf");
+            assertEquals("pdf", document.getFileExtension());
+            
+            document.setStoragePath("mca-documents-production/applications/123/invoice.jpg");
+            assertEquals("jpg", document.getFileExtension());
+            
+            document.setStoragePath("mca-documents-production/applications/123/document");
+            assertEquals("", document.getFileExtension());
+            
+            document.setStoragePath("");
+            assertEquals("", document.getFileExtension());
+            
+            document.setStoragePath(null);
+            assertEquals("", document.getFileExtension());
+        }
+        
+        @Test
+        @DisplayName("Should determine MIME type from file extension")
+        void shouldDetermineMimeTypeFromFileExtension() {
+            // Given
+            Document document = new Document();
+            
+            // When/Then
+            document.setStoragePath("mca-documents-production/applications/123/document.pdf");
+            assertEquals("application/pdf", document.getMimeType());
+            
+            document.setStoragePath("mca-documents-production/applications/123/image.jpg");
+            assertEquals("image/jpeg", document.getMimeType());
+            
+            document.setStoragePath("mca-documents-production/applications/123/image.jpeg");
+            assertEquals("image/jpeg", document.getMimeType());
+            
+            document.setStoragePath("mca-documents-production/applications/123/image.png");
+            assertEquals("image/png", document.getMimeType());
+            
+            document.setStoragePath("mca-documents-production/applications/123/image.tiff");
+            assertEquals("image/tiff", document.getMimeType());
+            
+            document.setStoragePath("mca-documents-production/applications/123/document.doc");
+            assertEquals("application/msword", document.getMimeType());
+            
+            document.setStoragePath("mca-documents-production/applications/123/document.docx");
+            assertEquals("application/vnd.openxmlformats-officedocument.wordprocessingml.document", document.getMimeType());
+            
+            document.setStoragePath("mca-documents-production/applications/123/spreadsheet.xls");
+            assertEquals("application/vnd.ms-excel", document.getMimeType());
+            
+            document.setStoragePath("mca-documents-production/applications/123/spreadsheet.xlsx");
+            assertEquals("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", document.getMimeType());
+            
+            document.setStoragePath("mca-documents-production/applications/123/unknown.xyz");
+            assertEquals("application/octet-stream", document.getMimeType());
+        }
+        
+        @Test
+        @DisplayName("Should determine if document requires manual review")
+        void shouldDetermineIfDocumentRequiresManualReview() {
+            // Given
+            Document document = new Document();
+            
+            // When/Then
+            document.setClassification(DocumentClassification.VERIFIED);
+            assertFalse(document.requiresManualReview());
+            
+            document.setClassification(DocumentClassification.NEEDS_REVIEW);
+            assertTrue(document.requiresManualReview());
+            
+            document.setClassification(DocumentClassification.FLAGGED);
+            assertTrue(document.requiresManualReview());
+            
+            document.setClassification(DocumentClassification.REJECTED);
+            assertFalse(document.requiresManualReview());
+            
+            document.setClassification(DocumentClassification.UNCLASSIFIED);
+            assertFalse(document.requiresManualReview());
+        }
+        
+        @Test
+        @DisplayName("Should determine if document is acceptable")
+        void shouldDetermineIfDocumentIsAcceptable() {
+            // Given
+            Document document = new Document();
+            
+            // When/Then
+            document.setClassification(DocumentClassification.VERIFIED);
+            assertTrue(document.isAcceptable());
+            
+            document.setClassification(DocumentClassification.NEEDS_REVIEW);
+            assertTrue(document.isAcceptable());
+            
+            document.setClassification(DocumentClassification.FLAGGED);
+            assertFalse(document.isAcceptable());
+            
+            document.setClassification(DocumentClassification.REJECTED);
+            assertFalse(document.isAcceptable());
+            
+            document.setClassification(DocumentClassification.UNCLASSIFIED);
+            assertFalse(document.isAcceptable());
+        }
+        
+        @Test
+        @DisplayName("Should extract bucket name from storage path")
+        void shouldExtractBucketNameFromStoragePath() {
+            // Given
+            Document document = new Document();
+            
+            // When/Then
+            document.setStoragePath("mca-documents-production/applications/123/bank-statement.pdf");
+            assertEquals("mca-documents-production", document.getBucketName());
+            
+            document.setStoragePath("bucket/file.pdf");
+            assertEquals("bucket", document.getBucketName());
+            
+            document.setStoragePath("file.pdf");
+            assertEquals("", document.getBucketName());
+            
+            document.setStoragePath("");
+            assertEquals("", document.getBucketName());
+            
+            document.setStoragePath(null);
+            assertEquals("", document.getBucketName());
+        }
+        
+        @Test
+        @DisplayName("Should extract object key from storage path")
+        void shouldExtractObjectKeyFromStoragePath() {
+            // Given
+            Document document = new Document();
+            
+            // When/Then
+            document.setStoragePath("mca-documents-production/applications/123/bank-statement.pdf");
+            assertEquals("applications/123/bank-statement.pdf", document.getObjectKey());
+            
+            document.setStoragePath("bucket/file.pdf");
+            assertEquals("file.pdf", document.getObjectKey());
+            
+            document.setStoragePath("file.pdf");
+            assertEquals("file.pdf", document.getObjectKey());
+            
+            document.setStoragePath("");
+            assertEquals("", document.getObjectKey());
+            
+            document.setStoragePath(null);
+            assertEquals("", document.getObjectKey());
+        }
+        
+        @Test
+        @DisplayName("Should generate proper toString representation")
+        void shouldGenerateProperToStringRepresentation() {
+            // Given
+            UUID id = UUID.randomUUID();
+            UUID applicationId = UUID.randomUUID();
+            Document document = new Document(applicationId, DocumentType.BANK_STATEMENT, "mca-documents-production/applications/123/bank-statement.pdf");
+            document.setId(id);
+            document.setClassification(DocumentClassification.VERIFIED);
+            document.setConfidenceScore(0.97);
+            
+            // When
             String toString = document.toString();
             
-            assertTrue(toString.contains("id="));
-            assertTrue(toString.contains("applicationId="));
-            assertTrue(toString.contains("type="));
-            assertTrue(toString.contains("classification="));
-            assertTrue(toString.contains("uploadedAt="));
-            assertTrue(toString.contains("hasMetadata=true"));
-            assertTrue(toString.contains("hasValidStorage=true"));
+            // Then
+            assertNotNull(toString);
+            assertTrue(toString.contains(id.toString()));
+            assertTrue(toString.contains(applicationId.toString()));
+            assertTrue(toString.contains("BANK_STATEMENT"));
+            assertTrue(toString.contains("bank-statement.pdf"));
+            assertTrue(toString.contains("VERIFIED"));
+            assertTrue(toString.contains("0.97"));
         }
-
+        
         @Test
-        @DisplayName("equals and hashCode are based on id")
-        void equalsAndHashCodeAreBasedOnId() {
-            Document document1 = new Document(applicationId, documentType, storagePath);
-            Document document2 = new Document(applicationId, documentType, storagePath);
-            
-            // Different objects with null ids should not be equal
-            assertNotEquals(document1, document2);
-            
-            // Same id should make them equal
+        @DisplayName("Should implement equals and hashCode correctly")
+        void shouldImplementEqualsAndHashCodeCorrectly() {
+            // Given
             UUID id = UUID.randomUUID();
+            
+            Document document1 = new Document();
             document1.setId(id);
+            
+            Document document2 = new Document();
             document2.setId(id);
             
-            assertEquals(document1, document2);
-            assertEquals(document1.hashCode(), document2.hashCode());
+            Document document3 = new Document();
+            document3.setId(UUID.randomUUID());
             
-            // Different ids should make them not equal
-            document2.setId(UUID.randomUUID());
-            assertNotEquals(document1, document2);
-            assertNotEquals(document1.hashCode(), document2.hashCode());
-        }
-
-        @Test
-        @DisplayName("hasMetadata correctly identifies documents with metadata")
-        void hasMetadataCorrectlyIdentifiesDocumentsWithMetadata() {
-            Document emptyDocument = new Document(applicationId, documentType, storagePath);
-            assertFalse(emptyDocument.hasMetadata());
+            // When/Then - equals
+            assertEquals(document1, document1); // Same instance
+            assertEquals(document1, document2); // Same ID
+            assertNotEquals(document1, document3); // Different ID
+            assertNotEquals(document1, null); // Null comparison
+            assertNotEquals(document1, new Object()); // Different type
             
-            Document documentWithMetadata = new Document(applicationId, documentType, storagePath);
-            documentWithMetadata.addMetadata("key", "value");
-            assertTrue(documentWithMetadata.hasMetadata());
+            // When/Then - hashCode
+            assertEquals(document1.hashCode(), document2.hashCode()); // Same ID
+            assertNotEquals(document1.hashCode(), document3.hashCode()); // Different ID
         }
     }
 }
