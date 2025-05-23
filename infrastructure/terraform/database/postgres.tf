@@ -1,410 +1,393 @@
-# PostgreSQL 14 Configuration for MCA Application Processing System
-# This file defines the PostgreSQL resources in a primary-replica configuration
-# with environment-specific settings (2 read replicas for production, 1 for staging)
+# PostgreSQL 14 RDS Configuration for MCA Application Processing System
+# This file defines PostgreSQL resources in a primary-replica configuration with
+# environment-specific settings (2 read replicas for production, 1 for staging)
 
-# Local variables for database configuration
-locals {
-  # Environment-specific settings
-  is_production = var.environment == "production"
-  replica_count = local.is_production ? 2 : 1
+# AWS KMS key for RDS encryption
+resource "aws_kms_key" "rds_encryption_key" {
+  description             = "KMS key for RDS encryption"
+  deletion_window_in_days = 30
+  enable_key_rotation     = true
+  key_usage               = "ENCRYPT_DECRYPT"
   
-  # Instance sizing based on environment
-  instance_class = local.is_production ? "db.r6g.2xlarge" : "db.r6g.large"
-  
-  # Storage configuration
-  allocated_storage     = local.is_production ? 500 : 200
-  max_allocated_storage = local.is_production ? 1000 : 500
-  
-  # Backup retention period (days)
-  backup_retention_period = local.is_production ? 30 : 7
-  
-  # Database name and credentials
-  db_name  = "mca_application_db"
-  db_port  = 5432
-  
-  # Connection pooling settings
-  min_connections = 10
-  max_connections = local.is_production ? 50 : 30
-  
-  # Availability zones for replica distribution
-  azs = slice(data.aws_availability_zones.available.names, 0, local.replica_count + 1)
+  tags = {
+    Name        = "${var.environment}-rds-encryption-key"
+    Environment = var.environment
+    Application = "mca-application-processing"
+  }
 }
 
-# Data source to get available availability zones
-data "aws_availability_zones" "available" {}
-
-# Primary PostgreSQL database instance
-module "postgres_primary" {
-  source = "../modules/database/main"
-  
-  # Basic configuration
-  identifier        = "mca-postgres-${var.environment}"
-  engine            = "postgres"
-  engine_version    = "14.7"
-  instance_class    = local.instance_class
-  allocated_storage = local.allocated_storage
-  max_allocated_storage = local.max_allocated_storage
-  
-  # Database settings
-  db_name  = local.db_name
-  port     = local.db_port
-  username = var.db_master_username
-  password = var.db_master_password
-  
-  # Network settings
-  vpc_security_group_ids = [module.postgres_security.security_group_id]
-  subnet_ids             = var.database_subnet_ids
-  multi_az               = true
-  availability_zone      = local.azs[0]
-  
-  # Performance settings
-  performance_insights_enabled          = true
-  performance_insights_retention_period = 7
-  
-  # Storage settings
-  storage_type      = "gp3"
-  iops              = 3000
-  storage_encrypted = true
-  kms_key_id        = module.postgres_security.kms_key_id
-  
-  # Maintenance settings
-  maintenance_window = "Sun:00:00-Sun:03:00"
-  backup_window      = "03:00-06:00"
-  
-  # Backup settings
-  backup_retention_period = local.backup_retention_period
-  delete_automated_backups = false
-  skip_final_snapshot = false
-  final_snapshot_identifier = "mca-postgres-${var.environment}-final-snapshot"
-  
-  # Parameter group settings
-  parameter_group_name = aws_db_parameter_group.postgres_params.name
-  
-  # Connection pooling
-  connection_pooling_enabled = true
-  connection_pooling_min     = local.min_connections
-  connection_pooling_max     = local.max_connections
-  
-  # Tags
-  tags = merge(var.common_tags, {
-    Name = "MCA PostgreSQL Primary - ${var.environment}"
-    Role = "Primary Database"
-  })
+# AWS KMS key alias
+resource "aws_kms_key_alias" "rds_encryption_key_alias" {
+  name          = "alias/${var.environment}-rds-encryption-key"
+  target_key_id = aws_kms_key.rds_encryption_key.key_id
 }
 
-# Read replicas for PostgreSQL
-module "postgres_replicas" {
-  source = "../modules/database/replicas"
+# DB Subnet Group for RDS instances
+resource "aws_db_subnet_group" "postgres" {
+  name        = "${var.environment}-postgres-subnet-group"
+  description = "Subnet group for PostgreSQL RDS instances"
+  subnet_ids  = var.database_subnet_ids
   
-  # Number of replicas based on environment
-  replica_count = local.replica_count
-  
-  # Primary database reference
-  primary_db_instance_id = module.postgres_primary.db_instance_id
-  
-  # Basic configuration
-  instance_class = local.is_production ? local.instance_class : "db.r6g.medium"
-  
-  # Replica distribution across AZs
-  availability_zones = slice(local.azs, 1, length(local.azs))
-  
-  # Performance settings
-  performance_insights_enabled          = true
-  performance_insights_retention_period = 7
-  
-  # Storage settings
-  storage_encrypted = true
-  kms_key_id        = module.postgres_security.kms_key_id
-  
-  # Parameter group settings
-  parameter_group_name = aws_db_parameter_group.postgres_params.name
-  
-  # Tags
-  environment = var.environment
-  common_tags = var.common_tags
+  tags = {
+    Name        = "${var.environment}-postgres-subnet-group"
+    Environment = var.environment
+    Application = "mca-application-processing"
+  }
 }
 
-# Security configuration for PostgreSQL
-module "postgres_security" {
-  source = "../modules/database/security"
+# DB Parameter Group for PostgreSQL 14
+resource "aws_db_parameter_group" "postgres14" {
+  name        = "${var.environment}-postgres14-params"
+  family      = "postgres14"
+  description = "Parameter group for PostgreSQL 14 instances"
   
-  # Basic configuration
-  name        = "mca-postgres-${var.environment}"
-  environment = var.environment
-  
-  # Network settings
-  vpc_id             = var.vpc_id
-  allowed_cidr_blocks = var.allowed_cidr_blocks
-  
-  # Encryption settings
-  enable_encryption = true
-  key_rotation_period = 90 # days
-  
-  # Tags
-  common_tags = var.common_tags
-}
-
-# Backup and recovery configuration
-module "postgres_backup" {
-  source = "../modules/database/backup"
-  
-  # Basic configuration
-  name        = "mca-postgres-${var.environment}"
-  environment = var.environment
-  
-  # Primary database reference
-  db_instance_id = module.postgres_primary.db_instance_id
-  
-  # Backup settings
-  backup_retention_period = local.backup_retention_period
-  point_in_time_recovery  = true
-  backup_window           = "03:00-06:00"
-  
-  # Long-term backup settings (7-year retention for compliance)
-  enable_long_term_backup = true
-  long_term_retention_period = 2555 # days (7 years)
-  
-  # Disaster recovery settings
-  enable_cross_region_backup = local.is_production
-  cross_region               = var.dr_region
-  
-  # Recovery point objective (RPO) and recovery time objective (RTO)
-  rpo_minutes = 15
-  rto_minutes = 30
-  
-  # Tags
-  common_tags = var.common_tags
-}
-
-# Monitoring configuration for PostgreSQL
-module "postgres_monitoring" {
-  source = "../modules/database/monitoring"
-  
-  # Basic configuration
-  name        = "mca-postgres-${var.environment}"
-  environment = var.environment
-  
-  # Database references
-  primary_db_instance_id = module.postgres_primary.db_instance_id
-  replica_db_instance_ids = module.postgres_replicas.replica_instance_ids
-  
-  # Monitoring settings
-  enhanced_monitoring_interval = 15 # seconds
-  create_alarms                = true
-  
-  # Alarm thresholds
-  cpu_utilization_threshold    = 80
-  memory_utilization_threshold = 80
-  storage_threshold_percent    = 85
-  connection_threshold_percent = 80
-  
-  # Integration with monitoring systems
-  enable_datadog_integration = var.enable_datadog
-  datadog_api_key           = var.datadog_api_key
-  
-  # Tags
-  common_tags = var.common_tags
-}
-
-# Parameter group for PostgreSQL configuration
-resource "aws_db_parameter_group" "postgres_params" {
-  name   = "mca-postgres-params-${var.environment}"
-  family = "postgres14"
-  
-  # Connection settings
+  # Enable connection pooling parameters
   parameter {
     name  = "max_connections"
-    value = local.is_production ? "500" : "200"
+    value = var.environment == "production" ? "500" : "200"
   }
   
-  # Memory settings
+  # Enable logging parameters
   parameter {
-    name  = "shared_buffers"
-    value = local.is_production ? "8GB" : "4GB"
+    name  = "log_connections"
+    value = "1"
   }
   
   parameter {
-    name  = "work_mem"
-    value = local.is_production ? "64MB" : "32MB"
-  }
-  
-  # Query optimization
-  parameter {
-    name  = "effective_cache_size"
-    value = local.is_production ? "24GB" : "12GB"
-  }
-  
-  # Logging settings
-  parameter {
-    name  = "log_min_duration_statement"
-    value = "1000" # ms
+    name  = "log_disconnections"
+    value = "1"
   }
   
   parameter {
     name  = "log_statement"
-    value = "ddl" # Log all DDL statements
+    value = "ddl"
   }
   
-  # Partitioning settings
+  # Enable table partitioning parameters
   parameter {
     name  = "max_locks_per_transaction"
     value = "128"
   }
   
-  # Field-level encryption settings
-  parameter {
-    name  = "pgcrypto.enable"
-    value = "1"
-  }
-  
-  # Tags
-  tags = merge(var.common_tags, {
-    Name = "MCA PostgreSQL Parameters - ${var.environment}"
-  })
-}
-
-# Option group for PostgreSQL extensions
-resource "aws_db_option_group" "postgres_options" {
-  name                 = "mca-postgres-options-${var.environment}"
-  engine_name          = "postgres"
-  major_engine_version = "14"
-  
-  # Enable pgcrypto extension for field-level encryption
-  option {
-    option_name = "PGCRYPTO"
-  }
-  
-  # Enable pg_partman extension for table partitioning
-  option {
-    option_name = "PG_PARTMAN"
-  }
-  
-  # Tags
-  tags = merge(var.common_tags, {
-    Name = "MCA PostgreSQL Options - ${var.environment}"
-  })
-}
-
-# SQL script to create partitioned tables for large datasets
-resource "null_resource" "create_partitioned_tables" {
-  depends_on = [module.postgres_primary]
-  
-  # Only run this in production and staging environments
-  count = var.environment == "development" ? 0 : 1
-  
-  provisioner "local-exec" {
-    command = <<-EOT
-      PGPASSWORD=${var.db_master_password} psql \
-        -h ${module.postgres_primary.db_instance_endpoint} \
-        -U ${var.db_master_username} \
-        -d ${local.db_name} \
-        -c "CREATE EXTENSION IF NOT EXISTS pg_partman;"
-      
-      # Create partitioned applications table by created_at date
-      PGPASSWORD=${var.db_master_password} psql \
-        -h ${module.postgres_primary.db_instance_endpoint} \
-        -U ${var.db_master_username} \
-        -d ${local.db_name} \
-        -c "CREATE TABLE IF NOT EXISTS applications (
-          id UUID PRIMARY KEY,
-          status VARCHAR(50) NOT NULL,
-          metadata JSONB,
-          created_at TIMESTAMP NOT NULL,
-          updated_at TIMESTAMP NOT NULL,
-          review_status VARCHAR(50)
-        ) PARTITION BY RANGE (created_at);"
-      
-      # Create partitioned documents table by uploaded_at date
-      PGPASSWORD=${var.db_master_password} psql \
-        -h ${module.postgres_primary.db_instance_endpoint} \
-        -U ${var.db_master_username} \
-        -d ${local.db_name} \
-        -c "CREATE TABLE IF NOT EXISTS documents (
-          id UUID PRIMARY KEY,
-          application_id UUID NOT NULL,
-          type VARCHAR(100) NOT NULL,
-          storage_path VARCHAR(255) NOT NULL,
-          classification VARCHAR(100),
-          uploaded_at TIMESTAMP NOT NULL,
-          metadata JSONB,
-          FOREIGN KEY (application_id) REFERENCES applications(id)
-        ) PARTITION BY RANGE (uploaded_at);"
-      
-      # Create merchant_details table with encrypted PII fields
-      PGPASSWORD=${var.db_master_password} psql \
-        -h ${module.postgres_primary.db_instance_endpoint} \
-        -U ${var.db_master_username} \
-        -d ${local.db_name} \
-        -c "CREATE TABLE IF NOT EXISTS merchant_details (
-          id UUID PRIMARY KEY,
-          application_id UUID NOT NULL,
-          legal_name VARCHAR(255) NOT NULL,
-          dba_name VARCHAR(255),
-          ein VARCHAR(255) NOT NULL,
-          address JSONB NOT NULL,
-          industry VARCHAR(100) NOT NULL,
-          revenue NUMERIC(15,2),
-          FOREIGN KEY (application_id) REFERENCES applications(id)
-        );"
-      
-      # Create function for field-level encryption
-      PGPASSWORD=${var.db_master_password} psql \
-        -h ${module.postgres_primary.db_instance_endpoint} \
-        -U ${var.db_master_username} \
-        -d ${local.db_name} \
-        -c "CREATE OR REPLACE FUNCTION encrypt_pii(data TEXT, key TEXT) RETURNS TEXT AS $$
-          BEGIN
-            RETURN pgp_sym_encrypt(data, key);
-          END;
-        $$ LANGUAGE plpgsql SECURITY DEFINER;"
-      
-      # Create function for field-level decryption
-      PGPASSWORD=${var.db_master_password} psql \
-        -h ${module.postgres_primary.db_instance_endpoint} \
-        -U ${var.db_master_username} \
-        -d ${local.db_name} \
-        -c "CREATE OR REPLACE FUNCTION decrypt_pii(data TEXT, key TEXT) RETURNS TEXT AS $$
-          BEGIN
-            RETURN pgp_sym_decrypt(data, key);
-          END;
-        $$ LANGUAGE plpgsql SECURITY DEFINER;"
-      
-      # Set up partitioning for applications table
-      PGPASSWORD=${var.db_master_password} psql \
-        -h ${module.postgres_primary.db_instance_endpoint} \
-        -U ${var.db_master_username} \
-        -d ${local.db_name} \
-        -c "SELECT create_parent('public.applications', 'created_at', 'native', 'monthly');"
-      
-      # Set up partitioning for documents table
-      PGPASSWORD=${var.db_master_password} psql \
-        -h ${module.postgres_primary.db_instance_endpoint} \
-        -U ${var.db_master_username} \
-        -d ${local.db_name} \
-        -c "SELECT create_parent('public.documents', 'uploaded_at', 'native', 'monthly');"
-    EOT
+  tags = {
+    Name        = "${var.environment}-postgres14-params"
+    Environment = var.environment
+    Application = "mca-application-processing"
   }
 }
 
-# Output the PostgreSQL connection information
-output "postgres_primary_endpoint" {
-  description = "The connection endpoint for the primary PostgreSQL instance"
-  value       = module.postgres_primary.db_instance_endpoint
+# Primary PostgreSQL RDS Instance
+resource "aws_db_instance" "postgres_primary" {
+  identifier              = "${var.environment}-postgres-primary"
+  engine                  = "postgres"
+  engine_version          = "14"
+  instance_class          = var.db_instance_class
+  allocated_storage       = var.allocated_storage
+  max_allocated_storage   = var.max_allocated_storage
+  storage_type            = "gp2"
+  storage_encrypted       = true
+  kms_key_id              = aws_kms_key.rds_encryption_key.arn
+  db_name                 = var.database_name
+  username                = var.database_username
+  password                = var.database_password
+  port                    = 5432
+  multi_az                = true
+  publicly_accessible     = false
+  db_subnet_group_name    = aws_db_subnet_group.postgres.name
+  vpc_security_group_ids  = [var.database_security_group_id]
+  parameter_group_name    = aws_db_parameter_group.postgres14.name
+  backup_retention_period = 30
+  backup_window           = "03:00-05:00"
+  maintenance_window      = "sun:05:00-sun:07:00"
+  skip_final_snapshot     = false
+  final_snapshot_identifier = "${var.environment}-postgres-final-snapshot"
+  deletion_protection     = true
+  enabled_cloudwatch_logs_exports = ["postgresql", "upgrade"]
+  performance_insights_enabled = true
+  performance_insights_retention_period = 7
+  monitoring_interval     = 15
+  monitoring_role_arn     = var.monitoring_role_arn
+  copy_tags_to_snapshot   = true
+  auto_minor_version_upgrade = true
+  
+  tags = {
+    Name        = "${var.environment}-postgres-primary"
+    Environment = var.environment
+    Application = "mca-application-processing"
+    Role        = "primary"
+  }
+  
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
-output "postgres_replica_endpoints" {
-  description = "The connection endpoints for the PostgreSQL read replicas"
-  value       = module.postgres_replicas.replica_endpoints
+# Read Replica instances - count based on environment
+resource "aws_db_instance" "postgres_replica" {
+  count                   = var.environment == "production" ? 2 : 1
+  identifier              = "${var.environment}-postgres-replica-${count.index + 1}"
+  instance_class          = var.db_instance_class
+  replicate_source_db     = aws_db_instance.postgres_primary.identifier
+  availability_zone       = element(var.availability_zones, count.index)
+  publicly_accessible     = false
+  vpc_security_group_ids  = [var.database_security_group_id]
+  parameter_group_name    = aws_db_parameter_group.postgres14.name
+  storage_encrypted       = true
+  kms_key_id              = aws_kms_key.rds_encryption_key.arn
+  skip_final_snapshot     = true
+  backup_retention_period = 0
+  copy_tags_to_snapshot   = true
+  auto_minor_version_upgrade = true
+  enabled_cloudwatch_logs_exports = ["postgresql", "upgrade"]
+  performance_insights_enabled = true
+  performance_insights_retention_period = 7
+  monitoring_interval     = 15
+  monitoring_role_arn     = var.monitoring_role_arn
+  
+  tags = {
+    Name        = "${var.environment}-postgres-replica-${count.index + 1}"
+    Environment = var.environment
+    Application = "mca-application-processing"
+    Role        = "replica"
+  }
 }
 
-output "postgres_connection_string" {
-  description = "The connection string for the PostgreSQL database"
-  value       = "postgresql://${var.db_master_username}:${var.db_master_password}@${module.postgres_primary.db_instance_endpoint}:${local.db_port}/${local.db_name}"
+# PgBouncer Configuration for Connection Pooling
+resource "aws_instance" "pgbouncer" {
+  count                  = var.environment == "production" ? 2 : 1
+  ami                    = var.pgbouncer_ami_id
+  instance_type          = "t3.medium"
+  subnet_id              = element(var.application_subnet_ids, count.index)
+  vpc_security_group_ids = [var.pgbouncer_security_group_id]
+  key_name               = var.key_name
+  availability_zone      = element(var.availability_zones, count.index)
+  
+  user_data = <<-EOF
+    #!/bin/bash
+    apt-get update
+    apt-get install -y pgbouncer
+    
+    # Configure PgBouncer
+    cat > /etc/pgbouncer/pgbouncer.ini <<EOL
+    [databases]
+    * = host=${aws_db_instance.postgres_primary.endpoint} port=5432 dbname=mca
+    
+    [pgbouncer]
+    listen_addr = 0.0.0.0
+    listen_port = 6432
+    auth_type = md5
+    auth_file = /etc/pgbouncer/userlist.txt
+    admin_users = postgres
+    stats_users = postgres
+    pool_mode = transaction
+    server_reset_query = DISCARD ALL
+    max_client_conn = 10000
+    default_pool_size = 50
+    min_pool_size = 10
+    reserve_pool_size = 5
+    reserve_pool_timeout = 3
+    server_lifetime = 3600
+    server_idle_timeout = 600
+    log_connections = 1
+    log_disconnections = 1
+    application_name_add_host = 1
+    EOL
+    
+    # Create user list file
+    cat > /etc/pgbouncer/userlist.txt <<EOL
+    "postgres" "${var.database_password}"
+    EOL
+    
+    # Set proper permissions
+    chmod 640 /etc/pgbouncer/pgbouncer.ini
+    chmod 640 /etc/pgbouncer/userlist.txt
+    chown postgres:postgres /etc/pgbouncer/pgbouncer.ini
+    chown postgres:postgres /etc/pgbouncer/userlist.txt
+    
+    # Enable and start PgBouncer service
+    systemctl enable pgbouncer
+    systemctl restart pgbouncer
+  EOF
+  
+  tags = {
+    Name        = "${var.environment}-pgbouncer-${count.index + 1}"
+    Environment = var.environment
+    Application = "mca-application-processing"
+    Role        = "connection-pooler"
+  }
+}
+
+# CloudWatch Alarms for PostgreSQL monitoring
+resource "aws_cloudwatch_metric_alarm" "postgres_cpu_utilization_high" {
+  alarm_name          = "${var.environment}-postgres-cpu-utilization-high"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = "2"
+  metric_name         = "CPUUtilization"
+  namespace           = "AWS/RDS"
+  period              = "60"
+  statistic           = "Average"
+  threshold           = "80"
+  alarm_description   = "This metric monitors RDS CPU utilization"
+  alarm_actions       = [var.sns_topic_arn]
+  ok_actions          = [var.sns_topic_arn]
+  
+  dimensions = {
+    DBInstanceIdentifier = aws_db_instance.postgres_primary.id
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "postgres_freeable_memory_low" {
+  alarm_name          = "${var.environment}-postgres-freeable-memory-low"
+  comparison_operator = "LessThanThreshold"
+  evaluation_periods  = "2"
+  metric_name         = "FreeableMemory"
+  namespace           = "AWS/RDS"
+  period              = "60"
+  statistic           = "Average"
+  threshold           = "1073741824" # 1 GB in bytes
+  alarm_description   = "This metric monitors RDS freeable memory"
+  alarm_actions       = [var.sns_topic_arn]
+  ok_actions          = [var.sns_topic_arn]
+  
+  dimensions = {
+    DBInstanceIdentifier = aws_db_instance.postgres_primary.id
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "postgres_connection_count_high" {
+  alarm_name          = "${var.environment}-postgres-connection-count-high"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = "2"
+  metric_name         = "DatabaseConnections"
+  namespace           = "AWS/RDS"
+  period              = "60"
+  statistic           = "Average"
+  threshold           = var.environment == "production" ? "400" : "150"
+  alarm_description   = "This metric monitors RDS connection count"
+  alarm_actions       = [var.sns_topic_arn]
+  ok_actions          = [var.sns_topic_arn]
+  
+  dimensions = {
+    DBInstanceIdentifier = aws_db_instance.postgres_primary.id
+  }
+}
+
+# Variables file
+variable "environment" {
+  description = "Environment name (e.g., production, staging)"
+  type        = string
+}
+
+variable "database_subnet_ids" {
+  description = "List of subnet IDs for the database subnet group"
+  type        = list(string)
+}
+
+variable "application_subnet_ids" {
+  description = "List of subnet IDs for the application tier"
+  type        = list(string)
+}
+
+variable "availability_zones" {
+  description = "List of availability zones for read replicas"
+  type        = list(string)
+}
+
+variable "database_security_group_id" {
+  description = "Security group ID for the database instances"
+  type        = string
+}
+
+variable "pgbouncer_security_group_id" {
+  description = "Security group ID for the PgBouncer instances"
+  type        = string
+}
+
+variable "db_instance_class" {
+  description = "Instance class for the RDS instances"
+  type        = string
+  default     = "db.r6g.2xlarge"
+}
+
+variable "allocated_storage" {
+  description = "Allocated storage for the RDS instances in GB"
+  type        = number
+  default     = 100
+}
+
+variable "max_allocated_storage" {
+  description = "Maximum allocated storage for the RDS instances in GB"
+  type        = number
+  default     = 1000
+}
+
+variable "database_name" {
+  description = "Name of the database to create"
+  type        = string
+  default     = "mca"
+}
+
+variable "database_username" {
+  description = "Username for the database"
+  type        = string
+  default     = "postgres"
+}
+
+variable "database_password" {
+  description = "Password for the database"
+  type        = string
   sensitive   = true
 }
 
-output "postgres_read_connection_string" {
-  description = "The connection string for the PostgreSQL read replicas"
-  value       = [for endpoint in module.postgres_replicas.replica_endpoints : "postgresql://${var.db_master_username}:${var.db_master_password}@${endpoint}:${local.db_port}/${local.db_name}"]
+variable "monitoring_role_arn" {
+  description = "ARN of the IAM role for enhanced monitoring"
+  type        = string
+}
+
+variable "sns_topic_arn" {
+  description = "ARN of the SNS topic for CloudWatch alarms"
+  type        = string
+}
+
+variable "pgbouncer_ami_id" {
+  description = "AMI ID for the PgBouncer instances"
+  type        = string
+}
+
+variable "key_name" {
+  description = "Key pair name for the PgBouncer instances"
+  type        = string
+}
+
+# Outputs
+output "primary_endpoint" {
+  description = "Endpoint of the primary PostgreSQL instance"
+  value       = aws_db_instance.postgres_primary.endpoint
+}
+
+output "primary_address" {
+  description = "Address of the primary PostgreSQL instance"
+  value       = aws_db_instance.postgres_primary.address
+}
+
+output "replica_endpoints" {
+  description = "Endpoints of the PostgreSQL read replicas"
+  value       = aws_db_instance.postgres_replica[*].endpoint
+}
+
+output "pgbouncer_endpoints" {
+  description = "Endpoints of the PgBouncer instances"
+  value       = aws_instance.pgbouncer[*].private_ip
+}
+
+output "connection_string" {
+  description = "PostgreSQL connection string for the primary instance"
+  value       = "postgresql://${var.database_username}:${var.database_password}@${aws_db_instance.postgres_primary.endpoint}/${var.database_name}"
+  sensitive   = true
+}
+
+output "pgbouncer_connection_string" {
+  description = "PgBouncer connection string"
+  value       = "postgresql://${var.database_username}:${var.database_password}@${aws_instance.pgbouncer[0].private_ip}:6432/${var.database_name}"
   sensitive   = true
 }
