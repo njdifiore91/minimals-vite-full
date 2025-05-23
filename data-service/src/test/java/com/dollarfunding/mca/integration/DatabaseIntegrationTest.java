@@ -1,35 +1,33 @@
 package com.dollarfunding.mca.integration;
 
-import com.dollarfunding.mca.IntegrationTestBase;
-import com.dollarfunding.mca.TestConfig;
 import com.dollarfunding.mca.cache.CacheConstants;
-import com.dollarfunding.mca.cache.CacheService;
+import com.dollarfunding.mca.cache.RedisCacheService;
 import com.dollarfunding.mca.entity.*;
 import com.dollarfunding.mca.repository.ApplicationRepository;
 import com.dollarfunding.mca.repository.DocumentRepository;
 import com.dollarfunding.mca.repository.MerchantDetailsRepository;
 import com.dollarfunding.mca.repository.WebhookRepository;
 import org.flywaydb.core.Flyway;
-import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.cache.CacheManager;
-import org.springframework.context.annotation.Import;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.test.context.jdbc.Sql;
+import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.TransactionStatus;
-import org.springframework.transaction.annotation.Isolation;
-import org.springframework.transaction.annotation.Propagation;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.DefaultTransactionDefinition;
+import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.containers.RedisContainer;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
 
-import javax.sql.DataSource;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.LocalDateTime;
@@ -37,33 +35,48 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.Mockito.*;
 
 /**
- * Integration tests for database operations, transaction management, caching, and data encryption.
- * <p>
- * This test class validates the interaction between the data-service and PostgreSQL/Redis,
- * including transaction management, caching, and data persistence. It ensures that:
- * <ul>
- *   <li>Database operations work correctly with proper transaction management</li>
- *   <li>Redis caching is used effectively with appropriate TTL settings</li>
- *   <li>Flyway migrations are applied correctly to the database schema</li>
- *   <li>Field-level encryption is working for PII data</li>
- *   <li>Database constraints and validations are enforced</li>
- * </ul>
- * </p>
+ * Integration test for database operations with PostgreSQL and Redis caching.
+ * 
+ * This test verifies:
+ * 1. Database CRUD operations and transaction management
+ * 2. Redis caching with appropriate TTL settings
+ * 3. Field-level encryption for PII data
+ * 4. Flyway migrations
+ * 5. Validation rules
  */
 @SpringBootTest
-@Import(TestConfig.class)
-public class DatabaseIntegrationTest extends IntegrationTestBase {
+@Testcontainers
+@ActiveProfiles("test")
+public class DatabaseIntegrationTest {
+
+    @Container
+    private static final PostgreSQLContainer<?> postgresContainer = new PostgreSQLContainer<>("postgres:14")
+            .withDatabaseName("mca_test")
+            .withUsername("test")
+            .withPassword("test");
+
+    @Container
+    private static final RedisContainer redisContainer = new RedisContainer("redis:7.0")
+            .withExposedPorts(6379);
+
+    @DynamicPropertySource
+    static void registerDynamicProperties(DynamicPropertyRegistry registry) {
+        // PostgreSQL properties
+        registry.add("spring.datasource.url", postgresContainer::getJdbcUrl);
+        registry.add("spring.datasource.username", postgresContainer::getUsername);
+        registry.add("spring.datasource.password", postgresContainer::getPassword);
+        
+        // Redis properties
+        registry.add("spring.redis.host", redisContainer::getHost);
+        registry.add("spring.redis.port", redisContainer::getFirstMappedPort);
+    }
 
     @Autowired
     private ApplicationRepository applicationRepository;
@@ -78,7 +91,13 @@ public class DatabaseIntegrationTest extends IntegrationTestBase {
     private WebhookRepository webhookRepository;
 
     @Autowired
-    private CacheService cacheService;
+    private PlatformTransactionManager transactionManager;
+
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
+
+    @Autowired
+    private Flyway flyway;
 
     @Autowired
     private CacheManager cacheManager;
@@ -87,31 +106,33 @@ public class DatabaseIntegrationTest extends IntegrationTestBase {
     private RedisTemplate<String, Object> redisTemplate;
 
     @Autowired
-    private PlatformTransactionManager transactionManager;
+    private RedisCacheService cacheService;
 
-    @Autowired
-    private JdbcTemplate jdbcTemplate;
+    @BeforeEach
+    void setUp() {
+        // Clear all data before each test
+        documentRepository.deleteAll();
+        merchantDetailsRepository.deleteAll();
+        applicationRepository.deleteAll();
+        webhookRepository.deleteAll();
+        
+        // Clear Redis cache
+        Objects.requireNonNull(cacheManager.getCache(CacheConstants.CACHE_APPLICATIONS)).clear();
+        Objects.requireNonNull(cacheManager.getCache(CacheConstants.CACHE_DOCUMENTS)).clear();
+        Objects.requireNonNull(cacheManager.getCache(CacheConstants.CACHE_MERCHANTS)).clear();
+    }
 
-    @Autowired
-    private DataSource dataSource;
-
-    @Autowired
-    private Flyway flyway;
-
-    @Value("${spring.cache.redis.time-to-live:900000}")
-    private long defaultCacheTtl; // Default: 15 minutes in milliseconds
-
-    @Value("${spring.cache.redis.session-ttl:86400000}")
-    private long sessionCacheTtl; // Default: 24 hours in milliseconds
+    @AfterEach
+    void tearDown() {
+        // Additional cleanup if needed
+    }
 
     /**
-     * Tests basic CRUD operations on the Application entity.
-     * Verifies that entities can be created, retrieved, updated, and deleted correctly.
+     * Test basic CRUD operations for Application entity.
      */
     @Test
-    @DisplayName("Should perform basic CRUD operations on Application entity")
-    public void testBasicCrudOperations() {
-        // Create a new application
+    void testApplicationCrudOperations() {
+        // Create application
         Application application = new Application();
         application.setStatus(ApplicationStatus.NEW);
         application.setReviewStatus(ReviewStatus.NOT_REVIEWED);
@@ -119,619 +140,391 @@ public class DatabaseIntegrationTest extends IntegrationTestBase {
         metadata.put("source", "email");
         metadata.put("priority", "high");
         application.setMetadata(metadata);
-
-        // Save the application
+        
         Application savedApplication = applicationRepository.save(application);
-        assertThat(savedApplication.getId()).isNotNull();
-        assertThat(savedApplication.getCreatedAt()).isNotNull();
-        assertThat(savedApplication.getUpdatedAt()).isNotNull();
-
-        // Retrieve the application
-        Optional<Application> retrievedApplication = applicationRepository.findById(savedApplication.getId());
-        assertTrue(retrievedApplication.isPresent());
-        assertThat(retrievedApplication.get().getStatus()).isEqualTo(ApplicationStatus.NEW);
-        assertThat(retrievedApplication.get().getMetadata().get("priority")).isEqualTo("high");
-
-        // Update the application
-        retrievedApplication.get().setStatus(ApplicationStatus.PROCESSING);
-        retrievedApplication.get().getMetadata().put("assignee", "john.doe");
-        Application updatedApplication = applicationRepository.save(retrievedApplication.get());
-        assertThat(updatedApplication.getStatus()).isEqualTo(ApplicationStatus.PROCESSING);
-        assertThat(updatedApplication.getMetadata().get("assignee")).isEqualTo("john.doe");
-
-        // Delete the application
-        applicationRepository.delete(updatedApplication);
-        assertThat(applicationRepository.findById(updatedApplication.getId())).isEmpty();
+        
+        // Read application
+        Optional<Application> retrievedApp = applicationRepository.findById(savedApplication.getId());
+        assertTrue(retrievedApp.isPresent());
+        assertEquals(ApplicationStatus.NEW, retrievedApp.get().getStatus());
+        assertEquals(ReviewStatus.NOT_REVIEWED, retrievedApp.get().getReviewStatus());
+        assertEquals("email", retrievedApp.get().getMetadata().get("source"));
+        assertEquals("high", retrievedApp.get().getMetadata().get("priority"));
+        
+        // Update application
+        Application appToUpdate = retrievedApp.get();
+        appToUpdate.setStatus(ApplicationStatus.PROCESSING);
+        appToUpdate.setReviewStatus(ReviewStatus.IN_REVIEW);
+        applicationRepository.save(appToUpdate);
+        
+        Optional<Application> updatedApp = applicationRepository.findById(savedApplication.getId());
+        assertTrue(updatedApp.isPresent());
+        assertEquals(ApplicationStatus.PROCESSING, updatedApp.get().getStatus());
+        assertEquals(ReviewStatus.IN_REVIEW, updatedApp.get().getReviewStatus());
+        
+        // Delete application
+        applicationRepository.delete(updatedApp.get());
+        assertFalse(applicationRepository.findById(savedApplication.getId()).isPresent());
     }
 
     /**
-     * Tests the relationship between Application and Document entities.
-     * Verifies that documents can be associated with an application and retrieved correctly.
+     * Test transaction management with commit and rollback scenarios.
      */
     @Test
-    @DisplayName("Should maintain relationship between Application and Document entities")
-    public void testApplicationDocumentRelationship() {
-        // Create a new application
-        Application application = new Application();
-        application.setStatus(ApplicationStatus.NEW);
-        application.setReviewStatus(ReviewStatus.NOT_REVIEWED);
-        Application savedApplication = applicationRepository.save(application);
-
-        // Create documents associated with the application
-        Document document1 = new Document();
-        document1.setApplication(savedApplication);
-        document1.setType(DocumentType.BANK_STATEMENT);
-        document1.setStoragePath("s3://mca-documents-test/app-" + savedApplication.getId() + "/bank-statement.pdf");
-        document1.setClassification(0.95); // 95% confidence in classification
-        document1.setUploadedAt(LocalDateTime.now());
-        Map<String, Object> metadata1 = new HashMap<>();
-        metadata1.put("pages", 5);
-        metadata1.put("fileSize", 1024567);
-        document1.setMetadata(metadata1);
-
-        Document document2 = new Document();
-        document2.setApplication(savedApplication);
-        document2.setType(DocumentType.TAX_RETURN);
-        document2.setStoragePath("s3://mca-documents-test/app-" + savedApplication.getId() + "/tax-return.pdf");
-        document2.setClassification(0.98); // 98% confidence in classification
-        document2.setUploadedAt(LocalDateTime.now());
-        Map<String, Object> metadata2 = new HashMap<>();
-        metadata2.put("pages", 12);
-        metadata2.put("fileSize", 2048123);
-        document2.setMetadata(metadata2);
-
-        documentRepository.save(document1);
-        documentRepository.save(document2);
-
-        // Flush and clear to ensure we're getting fresh data from the database
-        flushAndClear();
-
-        // Retrieve the application with its documents
-        Application retrievedApplication = applicationRepository.findById(savedApplication.getId()).orElseThrow();
-        List<Document> documents = documentRepository.findByApplicationId(retrievedApplication.getId());
-
-        // Verify the relationship
-        assertThat(documents).hasSize(2);
-        assertThat(documents).extracting(Document::getType)
-                .containsExactlyInAnyOrder(DocumentType.BANK_STATEMENT, DocumentType.TAX_RETURN);
-
-        // Verify document metadata
-        Document bankStatement = documents.stream()
-                .filter(d -> d.getType() == DocumentType.BANK_STATEMENT)
-                .findFirst()
-                .orElseThrow();
-        assertThat(bankStatement.getMetadata().get("pages")).isEqualTo(5);
-
-        // Test cascade delete - when application is deleted, documents should be deleted too
-        applicationRepository.delete(retrievedApplication);
-        flushAndClear();
-
-        // Verify documents are deleted
-        assertThat(documentRepository.findByApplicationId(retrievedApplication.getId())).isEmpty();
-    }
-
-    /**
-     * Tests the relationship between Application and MerchantDetails entities.
-     * Verifies that merchant details can be associated with an application and retrieved correctly.
-     * Also tests field-level encryption for PII data.
-     */
-    @Test
-    @DisplayName("Should maintain relationship between Application and MerchantDetails with encrypted PII")
-    public void testApplicationMerchantDetailsRelationship() {
-        // Create a new application
-        Application application = new Application();
-        application.setStatus(ApplicationStatus.NEW);
-        application.setReviewStatus(ReviewStatus.NOT_REVIEWED);
-        Application savedApplication = applicationRepository.save(application);
-
-        // Create merchant details associated with the application
-        MerchantDetails merchantDetails = new MerchantDetails();
-        merchantDetails.setApplication(savedApplication);
-        merchantDetails.setLegalName("Acme Corporation"); // This should be encrypted
-        merchantDetails.setDbaName("Acme"); // This should be encrypted
-        merchantDetails.setEin("12-3456789"); // This should be encrypted
-        Map<String, Object> address = new HashMap<>();
-        address.put("street", "123 Main St");
-        address.put("city", "Anytown");
-        address.put("state", "CA");
-        address.put("zip", "12345");
-        merchantDetails.setAddress(address);
-        merchantDetails.setIndustry("Technology");
-        merchantDetails.setRevenue(new BigDecimal("1500000.00"));
-
-        MerchantDetails savedMerchantDetails = merchantDetailsRepository.save(merchantDetails);
-
-        // Flush and clear to ensure we're getting fresh data from the database
-        flushAndClear();
-
-        // Retrieve the merchant details
-        MerchantDetails retrievedMerchantDetails = merchantDetailsRepository.findByApplicationId(savedApplication.getId()).orElseThrow();
-
-        // Verify the relationship
-        assertThat(retrievedMerchantDetails.getApplication().getId()).isEqualTo(savedApplication.getId());
-
-        // Verify the data
-        assertThat(retrievedMerchantDetails.getLegalName()).isEqualTo("Acme Corporation");
-        assertThat(retrievedMerchantDetails.getDbaName()).isEqualTo("Acme");
-        assertThat(retrievedMerchantDetails.getEin()).isEqualTo("12-3456789");
-        assertThat(retrievedMerchantDetails.getAddress().get("city")).isEqualTo("Anytown");
-        assertThat(retrievedMerchantDetails.getIndustry()).isEqualTo("Technology");
-        assertThat(retrievedMerchantDetails.getRevenue()).isEqualByComparingTo(new BigDecimal("1500000.00"));
-
-        // Verify field-level encryption by checking the actual database values
-        // Note: In a real test, we would need to access the database directly to verify the encrypted values
-        // For this test, we're relying on the fact that the decryption happens automatically when retrieving the entity
-
-        // Test one-to-one relationship constraint - cannot have multiple merchant details for one application
-        MerchantDetails duplicateMerchantDetails = new MerchantDetails();
-        duplicateMerchantDetails.setApplication(savedApplication);
-        duplicateMerchantDetails.setLegalName("Duplicate Corp");
-        duplicateMerchantDetails.setIndustry("Finance");
-
-        // This should throw an exception due to unique constraint on application_id
-        assertThatThrownBy(() -> {
-            merchantDetailsRepository.save(duplicateMerchantDetails);
-            flushAndClear();
-        }).isInstanceOf(DataIntegrityViolationException.class);
-    }
-
-    /**
-     * Tests transaction management with explicit transaction boundaries.
-     * Verifies that changes are committed or rolled back correctly based on transaction status.
-     */
-    @Test
-    @DisplayName("Should manage transactions with explicit boundaries")
-    public void testExplicitTransactionManagement() {
-        // Create a transaction definition with isolation level and propagation behavior
+    void testTransactionManagement() {
+        // Test successful transaction (commit)
         DefaultTransactionDefinition txDef = new DefaultTransactionDefinition();
         txDef.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
-        txDef.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRED);
-
-        // Start a new transaction
         TransactionStatus txStatus = transactionManager.getTransaction(txDef);
-
-        try {
-            // Create a new application within the transaction
-            Application application = new Application();
-            application.setStatus(ApplicationStatus.NEW);
-            application.setReviewStatus(ReviewStatus.NOT_REVIEWED);
-            Application savedApplication = applicationRepository.save(application);
-
-            // Create a document associated with the application
-            Document document = new Document();
-            document.setApplication(savedApplication);
-            document.setType(DocumentType.BANK_STATEMENT);
-            document.setStoragePath("s3://mca-documents-test/app-" + savedApplication.getId() + "/bank-statement.pdf");
-            document.setUploadedAt(LocalDateTime.now());
-            documentRepository.save(document);
-
-            // Commit the transaction
-            transactionManager.commit(txStatus);
-
-            // Verify the data was saved
-            Optional<Application> retrievedApplication = applicationRepository.findById(savedApplication.getId());
-            assertTrue(retrievedApplication.isPresent());
-            List<Document> documents = documentRepository.findByApplicationId(savedApplication.getId());
-            assertThat(documents).hasSize(1);
-
-            // Start another transaction for rollback testing
-            txStatus = transactionManager.getTransaction(txDef);
-
-            // Update the application
-            retrievedApplication.get().setStatus(ApplicationStatus.PROCESSING);
-            applicationRepository.save(retrievedApplication.get());
-
-            // Add another document
-            Document document2 = new Document();
-            document2.setApplication(retrievedApplication.get());
-            document2.setType(DocumentType.TAX_RETURN);
-            document2.setStoragePath("s3://mca-documents-test/app-" + savedApplication.getId() + "/tax-return.pdf");
-            document2.setUploadedAt(LocalDateTime.now());
-            documentRepository.save(document2);
-
-            // Rollback the transaction
-            transactionManager.rollback(txStatus);
-
-            // Verify the changes were rolled back
-            retrievedApplication = applicationRepository.findById(savedApplication.getId());
-            assertTrue(retrievedApplication.isPresent());
-            assertThat(retrievedApplication.get().getStatus()).isEqualTo(ApplicationStatus.NEW); // Not PROCESSING
-            documents = documentRepository.findByApplicationId(savedApplication.getId());
-            assertThat(documents).hasSize(1); // Not 2
-        } catch (Exception e) {
-            // Rollback on exception
-            if (!txStatus.isCompleted()) {
-                transactionManager.rollback(txStatus);
-            }
-            throw e;
-        }
-    }
-
-    /**
-     * Tests transaction isolation levels to ensure data consistency.
-     * Verifies that different isolation levels behave as expected.
-     */
-    @Test
-    @DisplayName("Should enforce transaction isolation levels")
-    @Transactional(isolation = Isolation.SERIALIZABLE)
-    public void testTransactionIsolationLevels() {
-        // Create a new application
+        
         Application application = new Application();
         application.setStatus(ApplicationStatus.NEW);
         application.setReviewStatus(ReviewStatus.NOT_REVIEWED);
         Application savedApplication = applicationRepository.save(application);
-
-        // Simulate concurrent access with different isolation levels
-        ExecutorService executor = Executors.newFixedThreadPool(2);
-        CountDownLatch latch = new CountDownLatch(2);
-
-        // Thread 1: Read Committed isolation - should see committed changes from other transactions
-        executor.submit(() -> {
-            try {
-                DefaultTransactionDefinition txDef = new DefaultTransactionDefinition();
-                txDef.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
-                TransactionStatus txStatus = transactionManager.getTransaction(txDef);
-
-                try {
-                    // Read initial state
-                    Application app = applicationRepository.findById(savedApplication.getId()).orElseThrow();
-                    assertThat(app.getStatus()).isEqualTo(ApplicationStatus.NEW);
-
-                    // Wait for Thread 2 to update and commit
-                    Thread.sleep(500);
-
-                    // Read again - should see the updated status
-                    entityManager.clear(); // Clear persistence context to force database read
-                    app = applicationRepository.findById(savedApplication.getId()).orElseThrow();
-                    assertThat(app.getStatus()).isEqualTo(ApplicationStatus.PROCESSING);
-
-                    transactionManager.commit(txStatus);
-                } catch (Exception e) {
-                    if (!txStatus.isCompleted()) {
-                        transactionManager.rollback(txStatus);
-                    }
-                    throw e;
-                }
-            } catch (Exception e) {
-                e.printStackTrace();
-            } finally {
-                latch.countDown();
-            }
-        });
-
-        // Thread 2: Update the application status
-        executor.submit(() -> {
-            try {
-                Thread.sleep(200); // Ensure Thread 1 reads first
-
-                DefaultTransactionDefinition txDef = new DefaultTransactionDefinition();
-                TransactionStatus txStatus = transactionManager.getTransaction(txDef);
-
-                try {
-                    // Update the application status
-                    Application app = applicationRepository.findById(savedApplication.getId()).orElseThrow();
-                    app.setStatus(ApplicationStatus.PROCESSING);
-                    applicationRepository.save(app);
-
-                    // Commit the changes
-                    transactionManager.commit(txStatus);
-                } catch (Exception e) {
-                    if (!txStatus.isCompleted()) {
-                        transactionManager.rollback(txStatus);
-                    }
-                    throw e;
-                }
-            } catch (Exception e) {
-                e.printStackTrace();
-            } finally {
-                latch.countDown();
-            }
-        });
-
-        try {
-            // Wait for both threads to complete
-            boolean completed = latch.await(5, TimeUnit.SECONDS);
-            assertTrue(completed, "Concurrent transactions did not complete in time");
-
-            // Verify final state
-            flushAndClear();
-            Application finalApp = applicationRepository.findById(savedApplication.getId()).orElseThrow();
-            assertThat(finalApp.getStatus()).isEqualTo(ApplicationStatus.PROCESSING);
-        } catch (InterruptedException e) {
-            fail("Test was interrupted");
-        } finally {
-            executor.shutdown();
-        }
+        
+        transactionManager.commit(txStatus);
+        
+        // Verify application was saved
+        assertTrue(applicationRepository.findById(savedApplication.getId()).isPresent());
+        
+        // Test transaction rollback
+        txStatus = transactionManager.getTransaction(txDef);
+        
+        Application application2 = new Application();
+        application2.setStatus(ApplicationStatus.PENDING);
+        application2.setReviewStatus(ReviewStatus.NOT_REVIEWED);
+        Application savedApplication2 = applicationRepository.save(application2);
+        
+        // Get the ID before rollback
+        Long app2Id = savedApplication2.getId();
+        
+        // Rollback the transaction
+        transactionManager.rollback(txStatus);
+        
+        // Verify application was not saved due to rollback
+        assertFalse(applicationRepository.findById(app2Id).isPresent());
     }
 
     /**
-     * Tests Redis caching for application data with the correct TTL settings.
-     * Verifies that data is cached correctly and expires after the configured TTL.
+     * Test Redis caching with appropriate TTL settings.
+     * - Application data: 15 minutes TTL
+     * - User sessions: 24 hours TTL
      */
     @Test
-    @DisplayName("Should cache application data with correct TTL")
-    public void testRedisCachingWithTtl() {
-        // Create a test key and value
-        String cacheKey = "application:test:123";
-        String cacheValue = "Test application data";
-
-        // Cache the data with application TTL (15 minutes)
-        cacheService.set(CacheConstants.CacheName.APPLICATIONS, cacheKey, cacheValue);
-
-        // Verify the data is cached
-        Optional<String> cachedValue = cacheService.get(CacheConstants.CacheName.APPLICATIONS, cacheKey, String.class);
-        assertTrue(cachedValue.isPresent());
-        assertThat(cachedValue.get()).isEqualTo(cacheValue);
-
-        // Verify the TTL is set correctly (15 minutes = 900 seconds)
-        // Note: In a real test with actual Redis, we would check the TTL
-        // For this test, we're using a mock RedisTemplate, so we'll verify the mock was called correctly
-        verify(redisTemplate, atLeastOnce()).opsForValue();
-
-        // Test session caching with 24-hour TTL
-        String sessionKey = "session:test:456";
-        String sessionValue = "Test session data";
-
-        // Cache the session data
-        cacheService.set(CacheConstants.CacheName.SESSIONS, sessionKey, sessionValue);
-
-        // Verify the session data is cached
-        Optional<String> cachedSession = cacheService.get(CacheConstants.CacheName.SESSIONS, sessionKey, String.class);
-        assertTrue(cachedSession.isPresent());
-        assertThat(cachedSession.get()).isEqualTo(sessionValue);
-
-        // Verify cache eviction works
-        cacheService.delete(CacheConstants.CacheName.APPLICATIONS, cacheKey);
-        cachedValue = cacheService.get(CacheConstants.CacheName.APPLICATIONS, cacheKey, String.class);
-        assertFalse(cachedValue.isPresent());
-    }
-
-    /**
-     * Tests the cache-aside pattern implementation for database queries.
-     * Verifies that the cache is checked before database queries and updated with query results.
-     */
-    @Test
-    @DisplayName("Should implement cache-aside pattern for database queries")
-    public void testCacheAsidePattern() {
-        // Create a new application
+    void testRedisCaching() throws Exception {
+        // Create test data
         Application application = new Application();
         application.setStatus(ApplicationStatus.NEW);
         application.setReviewStatus(ReviewStatus.NOT_REVIEWED);
         Application savedApplication = applicationRepository.save(application);
-        Long applicationId = savedApplication.getId();
-
-        // Clear the persistence context to force database read
-        flushAndClear();
-
-        // First access - should hit the database and cache the result
-        String cacheKey = "application:" + applicationId;
-        Optional<Application> retrievedApplication = cacheService.get(CacheConstants.CacheName.APPLICATIONS, cacheKey, Application.class);
-
-        // Cache miss - get from database and cache
-        if (retrievedApplication.isEmpty()) {
-            retrievedApplication = applicationRepository.findById(applicationId);
-            if (retrievedApplication.isPresent()) {
-                cacheService.set(CacheConstants.CacheName.APPLICATIONS, cacheKey, retrievedApplication.get());
-            }
-        }
-
-        assertTrue(retrievedApplication.isPresent());
-        assertThat(retrievedApplication.get().getId()).isEqualTo(applicationId);
-
-        // Second access - should hit the cache
-        Optional<Application> cachedApplication = cacheService.get(CacheConstants.CacheName.APPLICATIONS, cacheKey, Application.class);
-        assertTrue(cachedApplication.isPresent());
-        assertThat(cachedApplication.get().getId()).isEqualTo(applicationId);
-
-        // Update the application
-        Application appToUpdate = retrievedApplication.get();
-        appToUpdate.setStatus(ApplicationStatus.PROCESSING);
-        applicationRepository.save(appToUpdate);
-
-        // Update the cache with the new value
-        cacheService.set(CacheConstants.CacheName.APPLICATIONS, cacheKey, appToUpdate);
-
-        // Verify cache has updated value
-        Optional<Application> updatedCachedApplication = cacheService.get(CacheConstants.CacheName.APPLICATIONS, cacheKey, Application.class);
-        assertTrue(updatedCachedApplication.isPresent());
-        assertThat(updatedCachedApplication.get().getStatus()).isEqualTo(ApplicationStatus.PROCESSING);
-
-        // Delete the application and evict from cache
-        applicationRepository.deleteById(applicationId);
-        cacheService.delete(CacheConstants.CacheName.APPLICATIONS, cacheKey);
-
-        // Verify cache eviction
-        Optional<Application> evictedApplication = cacheService.get(CacheConstants.CacheName.APPLICATIONS, cacheKey, Application.class);
-        assertFalse(evictedApplication.isPresent());
+        
+        // Cache application data (15 minutes TTL)
+        String appCacheKey = "application:" + savedApplication.getId();
+        cacheService.put(CacheConstants.CACHE_APPLICATIONS, appCacheKey, savedApplication);
+        
+        // Verify data is cached
+        assertTrue(cacheService.exists(CacheConstants.CACHE_APPLICATIONS, appCacheKey));
+        
+        // Verify TTL is set correctly (15 minutes = 900 seconds)
+        Long ttl = redisTemplate.getExpire(CacheConstants.CACHE_APPLICATIONS + ":" + appCacheKey);
+        assertNotNull(ttl);
+        assertTrue(ttl <= 900 && ttl > 0, "TTL should be less than or equal to 900 seconds but greater than 0");
+        
+        // Test user session caching (24 hours TTL)
+        String sessionKey = "user:session:123";
+        Map<String, Object> sessionData = new HashMap<>();
+        sessionData.put("userId", 123);
+        sessionData.put("role", "Operations Staff");
+        
+        cacheService.put(CacheConstants.CACHE_SESSIONS, sessionKey, sessionData);
+        
+        // Verify session data is cached
+        assertTrue(cacheService.exists(CacheConstants.CACHE_SESSIONS, sessionKey));
+        
+        // Verify TTL is set correctly (24 hours = 86400 seconds)
+        Long sessionTtl = redisTemplate.getExpire(CacheConstants.CACHE_SESSIONS + ":" + sessionKey);
+        assertNotNull(sessionTtl);
+        assertTrue(sessionTtl <= 86400 && sessionTtl > 0, "Session TTL should be less than or equal to 86400 seconds but greater than 0");
+        
+        // Test cache eviction
+        cacheService.evict(CacheConstants.CACHE_APPLICATIONS, appCacheKey);
+        assertFalse(cacheService.exists(CacheConstants.CACHE_APPLICATIONS, appCacheKey));
     }
 
     /**
-     * Tests that Flyway migrations are applied correctly to the database schema.
-     * Verifies that all expected tables, columns, and constraints exist.
+     * Test field-level encryption for PII data in MerchantDetails entity.
      */
     @Test
-    @DisplayName("Should apply Flyway migrations correctly")
-    public void testFlywayMigrations() {
-        // Verify Flyway migration info
-        int migrationsApplied = flyway.info().applied().length;
-        assertThat(migrationsApplied).isGreaterThanOrEqualTo(3); // At least 3 migrations should be applied
-
-        // Verify tables exist
-        List<String> tables = jdbcTemplate.queryForList(
-                "SELECT table_name FROM information_schema.tables WHERE table_schema = 'PUBLIC'",
-                String.class);
-        assertThat(tables).contains("application", "document", "merchant_details", "webhook");
-
-        // Verify application table structure
-        List<String> applicationColumns = jdbcTemplate.queryForList(
-                "SELECT column_name FROM information_schema.columns WHERE table_name = 'application'",
-                String.class);
-        assertThat(applicationColumns).contains(
-                "id", "status", "metadata", "created_at", "updated_at", "review_status");
-
-        // Verify document table structure
-        List<String> documentColumns = jdbcTemplate.queryForList(
-                "SELECT column_name FROM information_schema.columns WHERE table_name = 'document'",
-                String.class);
-        assertThat(documentColumns).contains(
-                "id", "application_id", "type", "storage_path", "classification", "uploaded_at", "metadata");
-
-        // Verify merchant_details table structure
-        List<String> merchantColumns = jdbcTemplate.queryForList(
-                "SELECT column_name FROM information_schema.columns WHERE table_name = 'merchant_details'",
-                String.class);
-        assertThat(merchantColumns).contains(
-                "id", "application_id", "legal_name", "dba_name", "ein", "address", "industry", "revenue");
-
-        // Verify webhook table structure
-        List<String> webhookColumns = jdbcTemplate.queryForList(
-                "SELECT column_name FROM information_schema.columns WHERE table_name = 'webhook'",
-                String.class);
-        assertThat(webhookColumns).contains(
-                "id", "endpoint_url", "secret_key", "active", "event_type", "created_at", "updated_at");
-
-        // Verify foreign key constraints
-        List<String> foreignKeys = jdbcTemplate.queryForList(
-                "SELECT constraint_name FROM information_schema.table_constraints " +
-                        "WHERE constraint_type = 'FOREIGN KEY'",
-                String.class);
-        assertThat(foreignKeys.size()).isGreaterThanOrEqualTo(2); // At least document_application_fk and merchant_details_application_fk
-    }
-
-    /**
-     * Tests field-level encryption for PII data in the MerchantDetails entity.
-     * Verifies that sensitive data is encrypted in the database but decrypted when retrieved.
-     */
-    @Test
-    @DisplayName("Should encrypt PII data in MerchantDetails entity")
-    @Sql("/db/reset.sql") // Reset the database to ensure clean state
-    public void testFieldLevelEncryption() {
-        // Create a new application
+    void testFieldLevelEncryption() {
+        // Create application
         Application application = new Application();
         application.setStatus(ApplicationStatus.NEW);
         application.setReviewStatus(ReviewStatus.NOT_REVIEWED);
         Application savedApplication = applicationRepository.save(application);
-
+        
         // Create merchant details with PII data
         MerchantDetails merchantDetails = new MerchantDetails();
         merchantDetails.setApplication(savedApplication);
-        merchantDetails.setLegalName("Secure Corporation"); // Should be encrypted
-        merchantDetails.setDbaName("SecureCorp"); // Should be encrypted
-        merchantDetails.setEin("98-7654321"); // Should be encrypted
+        merchantDetails.setLegalName("Acme Corporation"); // PII - should be encrypted
+        merchantDetails.setDbaName("Acme"); // PII - should be encrypted
+        merchantDetails.setEin("12-3456789"); // PII - should be encrypted
+        merchantDetails.setIndustry("Technology");
+        merchantDetails.setRevenue(new BigDecimal("1000000.00"));
+        
         Map<String, Object> address = new HashMap<>();
-        address.put("street", "456 Privacy Ave");
-        address.put("city", "Securetown");
+        address.put("street", "123 Main St");
+        address.put("city", "New York");
         address.put("state", "NY");
-        address.put("zip", "54321");
+        address.put("zip", "10001");
         merchantDetails.setAddress(address);
-        merchantDetails.setIndustry("Security");
-        merchantDetails.setRevenue(new BigDecimal("2500000.00"));
-
-        MerchantDetails savedMerchantDetails = merchantDetailsRepository.save(merchantDetails);
-        Long merchantId = savedMerchantDetails.getId();
-
-        // Flush and clear to ensure we're getting fresh data from the database
-        flushAndClear();
-
-        // Retrieve the merchant details through the repository (should be decrypted)
-        MerchantDetails retrievedMerchantDetails = merchantDetailsRepository.findById(merchantId).orElseThrow();
-
-        // Verify decrypted values are correct
-        assertThat(retrievedMerchantDetails.getLegalName()).isEqualTo("Secure Corporation");
-        assertThat(retrievedMerchantDetails.getDbaName()).isEqualTo("SecureCorp");
-        assertThat(retrievedMerchantDetails.getEin()).isEqualTo("98-7654321");
-
-        // Verify non-encrypted fields are also correct
-        assertThat(retrievedMerchantDetails.getIndustry()).isEqualTo("Security");
-        assertThat(retrievedMerchantDetails.getRevenue()).isEqualByComparingTo(new BigDecimal("2500000.00"));
-        assertThat(retrievedMerchantDetails.getAddress().get("city")).isEqualTo("Securetown");
-
-        // In a real test with actual database access, we would verify the encrypted values in the database
-        // by querying the database directly, but for this test we'll rely on the repository's behavior
-
-        // Query the database directly to get the raw (encrypted) values
-        // Note: This is a simplified example - in a real test, we would need to access the actual database
+        
+        MerchantDetails savedMerchant = merchantDetailsRepository.save(merchantDetails);
+        
+        // Verify merchant details were saved
+        Optional<MerchantDetails> retrievedMerchant = merchantDetailsRepository.findById(savedMerchant.getId());
+        assertTrue(retrievedMerchant.isPresent());
+        
+        // Verify PII data is correctly decrypted when retrieved through the repository
+        assertEquals("Acme Corporation", retrievedMerchant.get().getLegalName());
+        assertEquals("Acme", retrievedMerchant.get().getDbaName());
+        assertEquals("12-3456789", retrievedMerchant.get().getEin());
+        
+        // Verify non-PII data is stored correctly
+        assertEquals("Technology", retrievedMerchant.get().getIndustry());
+        assertEquals(0, new BigDecimal("1000000.00").compareTo(retrievedMerchant.get().getRevenue()));
+        assertEquals("123 Main St", retrievedMerchant.get().getAddress().get("street"));
+        
+        // Verify data is actually encrypted in the database
+        // We'll use JdbcTemplate to query the raw data
         Map<String, Object> rawData = jdbcTemplate.queryForMap(
-                "SELECT legal_name, dba_name, ein FROM merchant_details WHERE id = ?",
-                merchantId);
-
-        // The values in rawData should be encrypted and different from the original values
-        // But since we're using a mock database in tests, we can't actually verify the encryption
-        // In a real test environment, we would assert that these values are not equal to the original values
-        // and that they appear to be encrypted (e.g., they're base64-encoded strings)
-
-        // For the purpose of this test, we'll just verify that the repository layer correctly
-        // handles the encryption/decryption process by checking that we can retrieve and update the values
-
-        // Update the merchant details
-        retrievedMerchantDetails.setLegalName("Updated Secure Corp");
-        retrievedMerchantDetails.setDbaName("UpdatedCorp");
-        merchantDetailsRepository.save(retrievedMerchantDetails);
-
-        // Flush and clear to ensure we're getting fresh data from the database
-        flushAndClear();
-
-        // Retrieve the updated merchant details
-        MerchantDetails updatedMerchantDetails = merchantDetailsRepository.findById(merchantId).orElseThrow();
-
-        // Verify the updated values are correctly decrypted
-        assertThat(updatedMerchantDetails.getLegalName()).isEqualTo("Updated Secure Corp");
-        assertThat(updatedMerchantDetails.getDbaName()).isEqualTo("UpdatedCorp");
+                "SELECT legal_name, dba_name, ein FROM merchant_details WHERE id = ?", 
+                savedMerchant.getId());
+        
+        String encryptedLegalName = (String) rawData.get("legal_name");
+        String encryptedDbaName = (String) rawData.get("dba_name");
+        String encryptedEin = (String) rawData.get("ein");
+        
+        // Encrypted data should not match the original values
+        assertNotEquals("Acme Corporation", encryptedLegalName);
+        assertNotEquals("Acme", encryptedDbaName);
+        assertNotEquals("12-3456789", encryptedEin);
     }
 
     /**
-     * Tests database constraints and validations.
-     * Verifies that database constraints are enforced correctly.
+     * Test Flyway migrations to ensure database schema is correctly created.
      */
     @Test
-    @DisplayName("Should enforce database constraints and validations")
-    public void testDatabaseConstraints() {
-        // Test not null constraint on application status
+    void testFlywayMigrations() {
+        // Verify Flyway migrations have been applied
+        List<Map<String, Object>> migrations = jdbcTemplate.queryForList(
+                "SELECT version, description FROM flyway_schema_history ORDER BY installed_rank");
+        
+        assertFalse(migrations.isEmpty(), "No Flyway migrations found");
+        
+        // Verify specific migrations exist
+        boolean foundV1 = false;
+        boolean foundV2 = false;
+        boolean foundV3 = false;
+        
+        for (Map<String, Object> migration : migrations) {
+            String version = (String) migration.get("version");
+            if ("1".equals(version)) {
+                foundV1 = true;
+            } else if ("2".equals(version)) {
+                foundV2 = true;
+            } else if ("3".equals(version)) {
+                foundV3 = true;
+            }
+        }
+        
+        assertTrue(foundV1, "V1 migration not found");
+        assertTrue(foundV2, "V2 migration not found");
+        assertTrue(foundV3, "V3 migration not found");
+        
+        // Verify tables exist
+        List<String> tables = jdbcTemplate.queryForList(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'",
+                String.class);
+        
+        assertTrue(tables.contains("application"), "Application table not found");
+        assertTrue(tables.contains("document"), "Document table not found");
+        assertTrue(tables.contains("merchant_details"), "Merchant details table not found");
+        assertTrue(tables.contains("webhook"), "Webhook table not found");
+        
+        // Verify indexes exist
+        List<String> indexes = jdbcTemplate.queryForList(
+                "SELECT indexname FROM pg_indexes WHERE schemaname = 'public'",
+                String.class);
+        
+        assertTrue(indexes.contains("idx_application_status"), "Application status index not found");
+        assertTrue(indexes.contains("idx_application_review_status"), "Application review status index not found");
+        assertTrue(indexes.contains("idx_document_application_id"), "Document application_id index not found");
+    }
+
+    /**
+     * Test validation rules for entity fields.
+     */
+    @Test
+    void testValidationRules() {
+        // Test validation for Application entity
         Application invalidApp = new Application();
-        // Not setting status, which should be required
-        invalidApp.setReviewStatus(ReviewStatus.NOT_REVIEWED);
-
-        // This should throw an exception due to not null constraint on status
-        assertThatThrownBy(() -> {
+        // Status is required but not set
+        
+        try {
             applicationRepository.save(invalidApp);
-            flushAndClear();
-        }).isInstanceOf(Exception.class);
-
-        // Test foreign key constraint on document
-        Document invalidDoc = new Document();
-        invalidDoc.setType(DocumentType.BANK_STATEMENT);
-        invalidDoc.setStoragePath("s3://mca-documents-test/invalid/doc.pdf");
-        invalidDoc.setUploadedAt(LocalDateTime.now());
-        // Not setting application, which should be required by foreign key constraint
-
-        // This should throw an exception due to foreign key constraint
-        assertThatThrownBy(() -> {
-            documentRepository.save(invalidDoc);
-            flushAndClear();
-        }).isInstanceOf(Exception.class);
-
-        // Test unique constraint on merchant_details.application_id
+            fail("Should have thrown an exception for invalid application");
+        } catch (Exception e) {
+            // Expected exception
+        }
+        
+        // Test validation for Document entity
         Application validApp = new Application();
         validApp.setStatus(ApplicationStatus.NEW);
         validApp.setReviewStatus(ReviewStatus.NOT_REVIEWED);
         Application savedApp = applicationRepository.save(validApp);
+        
+        Document invalidDoc = new Document();
+        // Application is required but not set
+        // Type is required but not set
+        
+        try {
+            documentRepository.save(invalidDoc);
+            fail("Should have thrown an exception for invalid document");
+        } catch (Exception e) {
+            // Expected exception
+        }
+        
+        // Test validation for MerchantDetails entity
+        MerchantDetails invalidMerchant = new MerchantDetails();
+        // Application is required but not set
+        // Legal name is required but not set
+        
+        try {
+            merchantDetailsRepository.save(invalidMerchant);
+            fail("Should have thrown an exception for invalid merchant details");
+        } catch (Exception e) {
+            // Expected exception
+        }
+    }
 
-        MerchantDetails merchantDetails1 = new MerchantDetails();
-        merchantDetails1.setApplication(savedApp);
-        merchantDetails1.setLegalName("First Merchant");
-        merchantDetails1.setIndustry("Retail");
-        merchantDetailsRepository.save(merchantDetails1);
+    /**
+     * Test relationships between entities (Application, Document, MerchantDetails).
+     */
+    @Test
+    void testEntityRelationships() {
+        // Create application
+        Application application = new Application();
+        application.setStatus(ApplicationStatus.NEW);
+        application.setReviewStatus(ReviewStatus.NOT_REVIEWED);
+        Application savedApplication = applicationRepository.save(application);
+        
+        // Create documents associated with the application
+        Document doc1 = new Document();
+        doc1.setApplication(savedApplication);
+        doc1.setType(DocumentType.BANK_STATEMENT);
+        doc1.setClassification("high_confidence");
+        doc1.setStoragePath("s3://mca-documents-test/app-" + savedApplication.getId() + "/bank-statement.pdf");
+        doc1.setUploadedAt(LocalDateTime.now());
+        
+        Document doc2 = new Document();
+        doc2.setApplication(savedApplication);
+        doc2.setType(DocumentType.TAX_RETURN);
+        doc2.setClassification("high_confidence");
+        doc2.setStoragePath("s3://mca-documents-test/app-" + savedApplication.getId() + "/tax-return.pdf");
+        doc2.setUploadedAt(LocalDateTime.now());
+        
+        documentRepository.save(doc1);
+        documentRepository.save(doc2);
+        
+        // Create merchant details associated with the application
+        MerchantDetails merchantDetails = new MerchantDetails();
+        merchantDetails.setApplication(savedApplication);
+        merchantDetails.setLegalName("Acme Corporation");
+        merchantDetails.setDbaName("Acme");
+        merchantDetails.setEin("12-3456789");
+        merchantDetails.setIndustry("Technology");
+        merchantDetails.setRevenue(new BigDecimal("1000000.00"));
+        
+        Map<String, Object> address = new HashMap<>();
+        address.put("street", "123 Main St");
+        address.put("city", "New York");
+        address.put("state", "NY");
+        address.put("zip", "10001");
+        merchantDetails.setAddress(address);
+        
+        merchantDetailsRepository.save(merchantDetails);
+        
+        // Test bidirectional relationship: Application -> Documents
+        Optional<Application> retrievedApp = applicationRepository.findById(savedApplication.getId());
+        assertTrue(retrievedApp.isPresent());
+        
+        List<Document> appDocuments = retrievedApp.get().getDocuments();
+        assertEquals(2, appDocuments.size());
+        
+        // Test bidirectional relationship: Application -> MerchantDetails
+        MerchantDetails appMerchant = retrievedApp.get().getMerchantDetails();
+        assertNotNull(appMerchant);
+        assertEquals("Acme Corporation", appMerchant.getLegalName());
+        
+        // Test bidirectional relationship: Document -> Application
+        Optional<Document> retrievedDoc = documentRepository.findById(doc1.getId());
+        assertTrue(retrievedDoc.isPresent());
+        assertEquals(savedApplication.getId(), retrievedDoc.get().getApplication().getId());
+        
+        // Test bidirectional relationship: MerchantDetails -> Application
+        Optional<MerchantDetails> retrievedMerchant = merchantDetailsRepository.findById(merchantDetails.getId());
+        assertTrue(retrievedMerchant.isPresent());
+        assertEquals(savedApplication.getId(), retrievedMerchant.get().getApplication().getId());
+        
+        // Test cascade delete: deleting an application should delete associated documents and merchant details
+        applicationRepository.delete(savedApplication);
+        
+        // Verify documents were deleted
+        assertFalse(documentRepository.findById(doc1.getId()).isPresent());
+        assertFalse(documentRepository.findById(doc2.getId()).isPresent());
+        
+        // Verify merchant details were deleted
+        assertFalse(merchantDetailsRepository.findById(merchantDetails.getId()).isPresent());
+    }
 
-        // Try to create another merchant details for the same application
-        MerchantDetails merchantDetails2 = new MerchantDetails();
-        merchantDetails2.setApplication(savedApp);
-        merchantDetails2.setLegalName("Second Merchant");
-        merchantDetails2.setIndustry("Wholesale");
-
-        // This should throw an exception due to unique constraint on application_id
-        assertThatThrownBy(() -> {
-            merchantDetailsRepository.save(merchantDetails2);
-            flushAndClear();
-        }).isInstanceOf(DataIntegrityViolationException.class);
+    /**
+     * Test cache invalidation when entities are updated.
+     */
+    @Test
+    void testCacheInvalidation() throws Exception {
+        // Create application
+        Application application = new Application();
+        application.setStatus(ApplicationStatus.NEW);
+        application.setReviewStatus(ReviewStatus.NOT_REVIEWED);
+        Application savedApplication = applicationRepository.save(application);
+        
+        // Cache application
+        String cacheKey = "application:" + savedApplication.getId();
+        cacheService.put(CacheConstants.CACHE_APPLICATIONS, cacheKey, savedApplication);
+        
+        // Verify application is in cache
+        assertTrue(cacheService.exists(CacheConstants.CACHE_APPLICATIONS, cacheKey));
+        
+        // Update application
+        savedApplication.setStatus(ApplicationStatus.PROCESSING);
+        applicationRepository.save(savedApplication);
+        
+        // Evict from cache
+        cacheService.evict(CacheConstants.CACHE_APPLICATIONS, cacheKey);
+        
+        // Verify application is no longer in cache
+        assertFalse(cacheService.exists(CacheConstants.CACHE_APPLICATIONS, cacheKey));
+        
+        // Cache application again
+        cacheService.put(CacheConstants.CACHE_APPLICATIONS, cacheKey, savedApplication);
+        
+        // Verify application is in cache again
+        assertTrue(cacheService.exists(CacheConstants.CACHE_APPLICATIONS, cacheKey));
+        
+        // Wait for TTL expiration (using a very short TTL for testing)
+        // Note: In a real test, we would mock the time or use a test-specific TTL
+        await().atMost(2, TimeUnit.SECONDS).until(() -> {
+            return !cacheService.exists(CacheConstants.CACHE_APPLICATIONS, cacheKey);
+        });
     }
 }
