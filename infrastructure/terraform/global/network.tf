@@ -1,171 +1,165 @@
 # Global Network Infrastructure for MCA Application Processing System
+# This file defines the global network infrastructure including VPCs, subnets, transit gateways,
+# and peering connections that enable communication between environments.
 
-# -----------------------------------------------------------------------------
-# Global VPC for shared resources
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------------------------------------------------
+# GLOBAL VPC
+# Creates a shared VPC for global resources that need to be accessed from all environments
+# ---------------------------------------------------------------------------------------------------------------------
 resource "aws_vpc" "global" {
   cidr_block           = var.global_vpc_cidr
   enable_dns_support   = true
   enable_dns_hostnames = true
-  instance_tenancy     = "default"
-
+  
   tags = merge(
-    var.global_tags,
+    var.tags,
     {
-      Name = "${var.resource_prefix}-global-vpc"
+      Name = "global-vpc"
+      Environment = "global"
     }
   )
 }
 
-# -----------------------------------------------------------------------------
-# Global Subnets (across multiple availability zones)
-# -----------------------------------------------------------------------------
-resource "aws_subnet" "global_public" {
-  count             = length(var.availability_zones)
-  vpc_id            = aws_vpc.global.id
-  cidr_block        = cidrsubnet(var.global_vpc_cidr, 8, count.index)
-  availability_zone = var.availability_zones[count.index]
-
+# ---------------------------------------------------------------------------------------------------------------------
+# GLOBAL VPC SUBNETS
+# Creates subnets in multiple availability zones for global resources
+# ---------------------------------------------------------------------------------------------------------------------
+resource "aws_subnet" "global" {
+  count                   = length(var.availability_zones)
+  vpc_id                  = aws_vpc.global.id
+  cidr_block              = var.global_subnet_cidrs[count.index]
+  availability_zone       = var.availability_zones[count.index]
+  map_public_ip_on_launch = false
+  
   tags = merge(
-    var.global_tags,
+    var.tags,
     {
-      Name = "${var.resource_prefix}-global-public-${var.availability_zones[count.index]}"
-      Tier = "public"
+      Name = "global-subnet-${var.availability_zones[count.index]}"
+      Environment = "global"
     }
   )
 }
 
-resource "aws_subnet" "global_private" {
-  count             = length(var.availability_zones)
-  vpc_id            = aws_vpc.global.id
-  cidr_block        = cidrsubnet(var.global_vpc_cidr, 8, count.index + length(var.availability_zones))
-  availability_zone = var.availability_zones[count.index]
-
-  tags = merge(
-    var.global_tags,
-    {
-      Name = "${var.resource_prefix}-global-private-${var.availability_zones[count.index]}"
-      Tier = "private"
-    }
-  )
-}
-
-# -----------------------------------------------------------------------------
-# Internet Gateway for global VPC
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------------------------------------------------
+# INTERNET GATEWAY FOR GLOBAL VPC
+# ---------------------------------------------------------------------------------------------------------------------
 resource "aws_internet_gateway" "global" {
   vpc_id = aws_vpc.global.id
-
+  
   tags = merge(
-    var.global_tags,
+    var.tags,
     {
-      Name = "${var.resource_prefix}-global-igw"
+      Name = "global-igw"
+      Environment = "global"
     }
   )
 }
 
-# -----------------------------------------------------------------------------
-# NAT Gateways for private subnet internet access
-# -----------------------------------------------------------------------------
-resource "aws_eip" "nat" {
-  count  = length(var.availability_zones)
-  domain = "vpc"
-
-  tags = merge(
-    var.global_tags,
-    {
-      Name = "${var.resource_prefix}-global-nat-eip-${count.index}"
-    }
-  )
-}
-
-resource "aws_nat_gateway" "global" {
-  count         = length(var.availability_zones)
-  allocation_id = aws_eip.nat[count.index].id
-  subnet_id     = aws_subnet.global_public[count.index].id
-
-  tags = merge(
-    var.global_tags,
-    {
-      Name = "${var.resource_prefix}-global-nat-${var.availability_zones[count.index]}"
-    }
-  )
-
-  depends_on = [aws_internet_gateway.global]
-}
-
-# -----------------------------------------------------------------------------
-# Route Tables for global VPC
-# -----------------------------------------------------------------------------
-resource "aws_route_table" "global_public" {
+# ---------------------------------------------------------------------------------------------------------------------
+# ROUTE TABLE FOR GLOBAL VPC
+# ---------------------------------------------------------------------------------------------------------------------
+resource "aws_route_table" "global" {
   vpc_id = aws_vpc.global.id
-
+  
   route {
     cidr_block = "0.0.0.0/0"
     gateway_id = aws_internet_gateway.global.id
   }
-
+  
   tags = merge(
-    var.global_tags,
+    var.tags,
     {
-      Name = "${var.resource_prefix}-global-public-rt"
+      Name = "global-route-table"
+      Environment = "global"
     }
   )
 }
 
-resource "aws_route_table" "global_private" {
-  count  = length(var.availability_zones)
-  vpc_id = aws_vpc.global.id
-
-  route {
-    cidr_block     = "0.0.0.0/0"
-    nat_gateway_id = aws_nat_gateway.global[count.index].id
-  }
-
-  tags = merge(
-    var.global_tags,
-    {
-      Name = "${var.resource_prefix}-global-private-rt-${var.availability_zones[count.index]}"
-    }
-  )
-}
-
-# -----------------------------------------------------------------------------
-# Route Table Associations
-# -----------------------------------------------------------------------------
-resource "aws_route_table_association" "global_public" {
+resource "aws_route_table_association" "global" {
   count          = length(var.availability_zones)
-  subnet_id      = aws_subnet.global_public[count.index].id
-  route_table_id = aws_route_table.global_public.id
+  subnet_id      = aws_subnet.global[count.index].id
+  route_table_id = aws_route_table.global.id
 }
 
-resource "aws_route_table_association" "global_private" {
-  count          = length(var.availability_zones)
-  subnet_id      = aws_subnet.global_private[count.index].id
-  route_table_id = aws_route_table.global_private[count.index].id
-}
-
-# -----------------------------------------------------------------------------
-# Transit Gateway for inter-environment communication
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------------------------------------------------
+# TRANSIT GATEWAY
+# Creates a transit gateway to enable communication between different environment VPCs
+# ---------------------------------------------------------------------------------------------------------------------
 resource "aws_ec2_transit_gateway" "main" {
-  description                     = "Transit Gateway for MCA Application environments"
+  description                     = "Transit Gateway for MCA Application Processing System"
   default_route_table_association = "enable"
   default_route_table_propagation = "enable"
   dns_support                     = "enable"
   vpn_ecmp_support                = "enable"
   
   tags = merge(
-    var.global_tags,
+    var.tags,
     {
-      Name = "${var.resource_prefix}-transit-gateway"
+      Name = "mca-transit-gateway"
     }
   )
 }
 
-# Attach global VPC to Transit Gateway
+# ---------------------------------------------------------------------------------------------------------------------
+# TRANSIT GATEWAY ATTACHMENTS
+# Attaches each environment VPC to the transit gateway
+# ---------------------------------------------------------------------------------------------------------------------
+resource "aws_ec2_transit_gateway_vpc_attachment" "development" {
+  subnet_ids         = data.terraform_remote_state.development.outputs.private_subnet_ids
+  transit_gateway_id = aws_ec2_transit_gateway.main.id
+  vpc_id             = data.terraform_remote_state.development.outputs.vpc_id
+  
+  dns_support                                     = "enable"
+  transit_gateway_default_route_table_association = true
+  transit_gateway_default_route_table_propagation = true
+  
+  tags = merge(
+    var.tags,
+    {
+      Name = "development-tgw-attachment"
+      Environment = "development"
+    }
+  )
+}
+
+resource "aws_ec2_transit_gateway_vpc_attachment" "staging" {
+  subnet_ids         = data.terraform_remote_state.staging.outputs.private_subnet_ids
+  transit_gateway_id = aws_ec2_transit_gateway.main.id
+  vpc_id             = data.terraform_remote_state.staging.outputs.vpc_id
+  
+  dns_support                                     = "enable"
+  transit_gateway_default_route_table_association = true
+  transit_gateway_default_route_table_propagation = true
+  
+  tags = merge(
+    var.tags,
+    {
+      Name = "staging-tgw-attachment"
+      Environment = "staging"
+    }
+  )
+}
+
+resource "aws_ec2_transit_gateway_vpc_attachment" "production" {
+  subnet_ids         = data.terraform_remote_state.production.outputs.private_subnet_ids
+  transit_gateway_id = aws_ec2_transit_gateway.main.id
+  vpc_id             = data.terraform_remote_state.production.outputs.vpc_id
+  
+  dns_support                                     = "enable"
+  transit_gateway_default_route_table_association = true
+  transit_gateway_default_route_table_propagation = true
+  
+  tags = merge(
+    var.tags,
+    {
+      Name = "production-tgw-attachment"
+      Environment = "production"
+    }
+  )
+}
+
 resource "aws_ec2_transit_gateway_vpc_attachment" "global" {
-  subnet_ids         = [for subnet in aws_subnet.global_private : subnet.id]
+  subnet_ids         = aws_subnet.global[*].id
   transit_gateway_id = aws_ec2_transit_gateway.main.id
   vpc_id             = aws_vpc.global.id
   
@@ -174,188 +168,488 @@ resource "aws_ec2_transit_gateway_vpc_attachment" "global" {
   transit_gateway_default_route_table_propagation = true
   
   tags = merge(
-    var.global_tags,
+    var.tags,
     {
-      Name = "${var.resource_prefix}-global-tgw-attachment"
+      Name = "global-tgw-attachment"
+      Environment = "global"
     }
   )
 }
 
-# -----------------------------------------------------------------------------
-# CIDR Block Allocations for Environments
-# -----------------------------------------------------------------------------
-# These CIDR blocks are reserved for each environment to avoid IP conflicts
-# They will be used in environment-specific Terraform configurations
-
-resource "aws_vpc_ipv4_cidr_block_association" "development" {
-  vpc_id     = aws_vpc.global.id
-  cidr_block = var.development_cidr
+# ---------------------------------------------------------------------------------------------------------------------
+# TRANSIT GATEWAY ROUTE TABLE
+# Creates a route table for the transit gateway and adds routes for each environment VPC
+# ---------------------------------------------------------------------------------------------------------------------
+resource "aws_ec2_transit_gateway_route_table" "main" {
+  transit_gateway_id = aws_ec2_transit_gateway.main.id
+  
+  tags = merge(
+    var.tags,
+    {
+      Name = "mca-transit-gateway-route-table"
+    }
+  )
 }
 
-resource "aws_vpc_ipv4_cidr_block_association" "staging" {
-  vpc_id     = aws_vpc.global.id
-  cidr_block = var.staging_cidr
+# ---------------------------------------------------------------------------------------------------------------------
+# VPC PEERING CONNECTIONS (ALTERNATIVE TO TRANSIT GATEWAY)
+# Creates peering connections between environment VPCs for direct communication
+# ---------------------------------------------------------------------------------------------------------------------
+resource "aws_vpc_peering_connection" "dev_staging" {
+  vpc_id      = data.terraform_remote_state.development.outputs.vpc_id
+  peer_vpc_id = data.terraform_remote_state.staging.outputs.vpc_id
+  auto_accept = true
+  
+  accepter {
+    allow_remote_vpc_dns_resolution = true
+  }
+  
+  requester {
+    allow_remote_vpc_dns_resolution = true
+  }
+  
+  tags = merge(
+    var.tags,
+    {
+      Name = "dev-staging-peering"
+      Side = "Requester"
+    }
+  )
 }
 
-resource "aws_vpc_ipv4_cidr_block_association" "production" {
-  vpc_id     = aws_vpc.global.id
-  cidr_block = var.production_cidr
+resource "aws_vpc_peering_connection" "staging_production" {
+  vpc_id      = data.terraform_remote_state.staging.outputs.vpc_id
+  peer_vpc_id = data.terraform_remote_state.production.outputs.vpc_id
+  auto_accept = true
+  
+  accepter {
+    allow_remote_vpc_dns_resolution = true
+  }
+  
+  requester {
+    allow_remote_vpc_dns_resolution = true
+  }
+  
+  tags = merge(
+    var.tags,
+    {
+      Name = "staging-production-peering"
+      Side = "Requester"
+    }
+  )
 }
 
-# -----------------------------------------------------------------------------
-# VPC Peering for direct environment communication (if needed)
-# -----------------------------------------------------------------------------
-# These resources will be created when environment-specific VPCs are created
-# They are commented out here as they depend on environment VPCs that are defined
-# in their respective environment directories
+resource "aws_vpc_peering_connection" "dev_production" {
+  vpc_id      = data.terraform_remote_state.development.outputs.vpc_id
+  peer_vpc_id = data.terraform_remote_state.production.outputs.vpc_id
+  auto_accept = true
+  
+  accepter {
+    allow_remote_vpc_dns_resolution = true
+  }
+  
+  requester {
+    allow_remote_vpc_dns_resolution = true
+  }
+  
+  tags = merge(
+    var.tags,
+    {
+      Name = "dev-production-peering"
+      Side = "Requester"
+    }
+  )
+}
 
-# resource "aws_vpc_peering_connection" "dev_to_staging" {
-#   vpc_id      = var.development_vpc_id
-#   peer_vpc_id = var.staging_vpc_id
-#   auto_accept = true
-#
-#   tags = merge(
-#     var.global_tags,
-#     {
-#       Name = "${var.resource_prefix}-dev-to-staging-peering"
-#     }
-#   )
-# }
-#
-# resource "aws_vpc_peering_connection" "staging_to_prod" {
-#   vpc_id      = var.staging_vpc_id
-#   peer_vpc_id = var.production_vpc_id
-#   auto_accept = true
-#
-#   tags = merge(
-#     var.global_tags,
-#     {
-#       Name = "${var.resource_prefix}-staging-to-prod-peering"
-#     }
-#   )
-# }
+# ---------------------------------------------------------------------------------------------------------------------
+# ROUTE TABLE ENTRIES FOR VPC PEERING
+# Adds routes to each environment's route tables for the peering connections
+# ---------------------------------------------------------------------------------------------------------------------
+# Development to Staging
+resource "aws_route" "dev_to_staging" {
+  count                     = length(data.terraform_remote_state.development.outputs.private_route_table_ids)
+  route_table_id            = data.terraform_remote_state.development.outputs.private_route_table_ids[count.index]
+  destination_cidr_block    = data.terraform_remote_state.staging.outputs.vpc_cidr_block
+  vpc_peering_connection_id = aws_vpc_peering_connection.dev_staging.id
+}
 
-# -----------------------------------------------------------------------------
-# Network ACLs for enhanced security
-# -----------------------------------------------------------------------------
-resource "aws_network_acl" "global_public" {
+# Staging to Development
+resource "aws_route" "staging_to_dev" {
+  count                     = length(data.terraform_remote_state.staging.outputs.private_route_table_ids)
+  route_table_id            = data.terraform_remote_state.staging.outputs.private_route_table_ids[count.index]
+  destination_cidr_block    = data.terraform_remote_state.development.outputs.vpc_cidr_block
+  vpc_peering_connection_id = aws_vpc_peering_connection.dev_staging.id
+}
+
+# Staging to Production
+resource "aws_route" "staging_to_production" {
+  count                     = length(data.terraform_remote_state.staging.outputs.private_route_table_ids)
+  route_table_id            = data.terraform_remote_state.staging.outputs.private_route_table_ids[count.index]
+  destination_cidr_block    = data.terraform_remote_state.production.outputs.vpc_cidr_block
+  vpc_peering_connection_id = aws_vpc_peering_connection.staging_production.id
+}
+
+# Production to Staging
+resource "aws_route" "production_to_staging" {
+  count                     = length(data.terraform_remote_state.production.outputs.private_route_table_ids)
+  route_table_id            = data.terraform_remote_state.production.outputs.private_route_table_ids[count.index]
+  destination_cidr_block    = data.terraform_remote_state.staging.outputs.vpc_cidr_block
+  vpc_peering_connection_id = aws_vpc_peering_connection.staging_production.id
+}
+
+# Development to Production
+resource "aws_route" "dev_to_production" {
+  count                     = length(data.terraform_remote_state.development.outputs.private_route_table_ids)
+  route_table_id            = data.terraform_remote_state.development.outputs.private_route_table_ids[count.index]
+  destination_cidr_block    = data.terraform_remote_state.production.outputs.vpc_cidr_block
+  vpc_peering_connection_id = aws_vpc_peering_connection.dev_production.id
+}
+
+# Production to Development
+resource "aws_route" "production_to_dev" {
+  count                     = length(data.terraform_remote_state.production.outputs.private_route_table_ids)
+  route_table_id            = data.terraform_remote_state.production.outputs.private_route_table_ids[count.index]
+  destination_cidr_block    = data.terraform_remote_state.development.outputs.vpc_cidr_block
+  vpc_peering_connection_id = aws_vpc_peering_connection.dev_production.id
+}
+
+# ---------------------------------------------------------------------------------------------------------------------
+# ROUTE TABLE ENTRIES FOR TRANSIT GATEWAY
+# Adds routes to each environment's route tables for the transit gateway
+# ---------------------------------------------------------------------------------------------------------------------
+# Development to Transit Gateway (for global VPC)
+resource "aws_route" "dev_to_global_via_tgw" {
+  count                  = length(data.terraform_remote_state.development.outputs.private_route_table_ids)
+  route_table_id         = data.terraform_remote_state.development.outputs.private_route_table_ids[count.index]
+  destination_cidr_block = var.global_vpc_cidr
+  transit_gateway_id     = aws_ec2_transit_gateway.main.id
+  
+  depends_on = [aws_ec2_transit_gateway_vpc_attachment.development]
+}
+
+# Development to Staging via Transit Gateway
+resource "aws_route" "dev_to_staging_via_tgw" {
+  count                  = length(data.terraform_remote_state.development.outputs.private_route_table_ids)
+  route_table_id         = data.terraform_remote_state.development.outputs.private_route_table_ids[count.index]
+  destination_cidr_block = data.terraform_remote_state.staging.outputs.vpc_cidr_block
+  transit_gateway_id     = aws_ec2_transit_gateway.main.id
+  
+  depends_on = [aws_ec2_transit_gateway_vpc_attachment.development]
+}
+
+# Development to Production via Transit Gateway
+resource "aws_route" "dev_to_production_via_tgw" {
+  count                  = length(data.terraform_remote_state.development.outputs.private_route_table_ids)
+  route_table_id         = data.terraform_remote_state.development.outputs.private_route_table_ids[count.index]
+  destination_cidr_block = data.terraform_remote_state.production.outputs.vpc_cidr_block
+  transit_gateway_id     = aws_ec2_transit_gateway.main.id
+  
+  depends_on = [aws_ec2_transit_gateway_vpc_attachment.development]
+}
+
+# Staging to Transit Gateway (for global VPC)
+resource "aws_route" "staging_to_global_via_tgw" {
+  count                  = length(data.terraform_remote_state.staging.outputs.private_route_table_ids)
+  route_table_id         = data.terraform_remote_state.staging.outputs.private_route_table_ids[count.index]
+  destination_cidr_block = var.global_vpc_cidr
+  transit_gateway_id     = aws_ec2_transit_gateway.main.id
+  
+  depends_on = [aws_ec2_transit_gateway_vpc_attachment.staging]
+}
+
+# Staging to Development via Transit Gateway
+resource "aws_route" "staging_to_dev_via_tgw" {
+  count                  = length(data.terraform_remote_state.staging.outputs.private_route_table_ids)
+  route_table_id         = data.terraform_remote_state.staging.outputs.private_route_table_ids[count.index]
+  destination_cidr_block = data.terraform_remote_state.development.outputs.vpc_cidr_block
+  transit_gateway_id     = aws_ec2_transit_gateway.main.id
+  
+  depends_on = [aws_ec2_transit_gateway_vpc_attachment.staging]
+}
+
+# Staging to Production via Transit Gateway
+resource "aws_route" "staging_to_production_via_tgw" {
+  count                  = length(data.terraform_remote_state.staging.outputs.private_route_table_ids)
+  route_table_id         = data.terraform_remote_state.staging.outputs.private_route_table_ids[count.index]
+  destination_cidr_block = data.terraform_remote_state.production.outputs.vpc_cidr_block
+  transit_gateway_id     = aws_ec2_transit_gateway.main.id
+  
+  depends_on = [aws_ec2_transit_gateway_vpc_attachment.staging]
+}
+
+# Production to Transit Gateway (for global VPC)
+resource "aws_route" "production_to_global_via_tgw" {
+  count                  = length(data.terraform_remote_state.production.outputs.private_route_table_ids)
+  route_table_id         = data.terraform_remote_state.production.outputs.private_route_table_ids[count.index]
+  destination_cidr_block = var.global_vpc_cidr
+  transit_gateway_id     = aws_ec2_transit_gateway.main.id
+  
+  depends_on = [aws_ec2_transit_gateway_vpc_attachment.production]
+}
+
+# Production to Development via Transit Gateway
+resource "aws_route" "production_to_dev_via_tgw" {
+  count                  = length(data.terraform_remote_state.production.outputs.private_route_table_ids)
+  route_table_id         = data.terraform_remote_state.production.outputs.private_route_table_ids[count.index]
+  destination_cidr_block = data.terraform_remote_state.development.outputs.vpc_cidr_block
+  transit_gateway_id     = aws_ec2_transit_gateway.main.id
+  
+  depends_on = [aws_ec2_transit_gateway_vpc_attachment.production]
+}
+
+# Production to Staging via Transit Gateway
+resource "aws_route" "production_to_staging_via_tgw" {
+  count                  = length(data.terraform_remote_state.production.outputs.private_route_table_ids)
+  route_table_id         = data.terraform_remote_state.production.outputs.private_route_table_ids[count.index]
+  destination_cidr_block = data.terraform_remote_state.staging.outputs.vpc_cidr_block
+  transit_gateway_id     = aws_ec2_transit_gateway.main.id
+  
+  depends_on = [aws_ec2_transit_gateway_vpc_attachment.production]
+}
+
+# Global to Transit Gateway
+resource "aws_route" "global_to_tgw" {
+  route_table_id         = aws_route_table.global.id
+  destination_cidr_block = "0.0.0.0/0"
+  transit_gateway_id     = aws_ec2_transit_gateway.main.id
+  
+  depends_on = [aws_ec2_transit_gateway_vpc_attachment.global]
+}
+
+# ---------------------------------------------------------------------------------------------------------------------
+# NETWORK ACLs FOR GLOBAL VPC
+# Creates network ACLs for the global VPC to control traffic at the subnet level
+# ---------------------------------------------------------------------------------------------------------------------
+resource "aws_network_acl" "global" {
   vpc_id     = aws_vpc.global.id
-  subnet_ids = [for subnet in aws_subnet.global_public : subnet.id]
-
-  # Allow all inbound HTTP/HTTPS traffic
+  subnet_ids = aws_subnet.global[*].id
+  
+  # Allow all inbound traffic from environment VPCs
   ingress {
-    protocol   = "tcp"
+    protocol   = -1
     rule_no    = 100
     action     = "allow"
-    cidr_block = "0.0.0.0/0"
-    from_port  = 80
-    to_port    = 80
+    cidr_block = data.terraform_remote_state.development.outputs.vpc_cidr_block
+    from_port  = 0
+    to_port    = 0
   }
-
+  
   ingress {
-    protocol   = "tcp"
+    protocol   = -1
     rule_no    = 110
     action     = "allow"
-    cidr_block = "0.0.0.0/0"
-    from_port  = 443
-    to_port    = 443
+    cidr_block = data.terraform_remote_state.staging.outputs.vpc_cidr_block
+    from_port  = 0
+    to_port    = 0
   }
-
-  # Allow all return traffic
+  
   ingress {
-    protocol   = "tcp"
+    protocol   = -1
     rule_no    = 120
     action     = "allow"
-    cidr_block = "0.0.0.0/0"
-    from_port  = 1024
-    to_port    = 65535
+    cidr_block = data.terraform_remote_state.production.outputs.vpc_cidr_block
+    from_port  = 0
+    to_port    = 0
   }
-
+  
   # Allow all outbound traffic
   egress {
-    protocol   = "-1"
+    protocol   = -1
     rule_no    = 100
     action     = "allow"
     cidr_block = "0.0.0.0/0"
     from_port  = 0
     to_port    = 0
   }
-
+  
   tags = merge(
-    var.global_tags,
+    var.tags,
     {
-      Name = "${var.resource_prefix}-global-public-nacl"
+      Name = "global-network-acl"
+      Environment = "global"
     }
   )
 }
 
-resource "aws_network_acl" "global_private" {
-  vpc_id     = aws_vpc.global.id
-  subnet_ids = [for subnet in aws_subnet.global_private : subnet.id]
-
-  # Allow inbound traffic from public subnets
+# ---------------------------------------------------------------------------------------------------------------------
+# SECURITY GROUPS FOR GLOBAL VPC
+# Creates security groups for the global VPC to control traffic at the instance level
+# ---------------------------------------------------------------------------------------------------------------------
+resource "aws_security_group" "global" {
+  name        = "global-sg"
+  description = "Security group for global VPC resources"
+  vpc_id      = aws_vpc.global.id
+  
+  # Allow all inbound traffic from environment VPCs
   ingress {
-    protocol   = "-1"
-    rule_no    = 100
-    action     = "allow"
-    cidr_block = var.global_vpc_cidr
-    from_port  = 0
-    to_port    = 0
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = [
+      data.terraform_remote_state.development.outputs.vpc_cidr_block,
+      data.terraform_remote_state.staging.outputs.vpc_cidr_block,
+      data.terraform_remote_state.production.outputs.vpc_cidr_block
+    ]
+    description = "Allow all traffic from environment VPCs"
   }
-
+  
   # Allow all outbound traffic
   egress {
-    protocol   = "-1"
-    rule_no    = 100
-    action     = "allow"
-    cidr_block = "0.0.0.0/0"
-    from_port  = 0
-    to_port    = 0
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+    description = "Allow all outbound traffic"
   }
-
+  
   tags = merge(
-    var.global_tags,
+    var.tags,
     {
-      Name = "${var.resource_prefix}-global-private-nacl"
+      Name = "global-security-group"
+      Environment = "global"
     }
   )
 }
 
-# -----------------------------------------------------------------------------
-# VPC Flow Logs for network traffic monitoring
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------------------------------------------------
+# FLOW LOGS FOR GLOBAL VPC
+# Enables flow logs for the global VPC to monitor network traffic
+# ---------------------------------------------------------------------------------------------------------------------
 resource "aws_flow_log" "global" {
-  iam_role_arn    = var.flow_log_role_arn
-  log_destination = var.flow_log_destination
-  traffic_type    = "ALL"
-  vpc_id          = aws_vpc.global.id
-
+  log_destination      = var.flow_log_destination_arn
+  log_destination_type = "s3"
+  traffic_type         = "ALL"
+  vpc_id               = aws_vpc.global.id
+  
   tags = merge(
-    var.global_tags,
+    var.tags,
     {
-      Name = "${var.resource_prefix}-global-vpc-flow-log"
+      Name = "global-vpc-flow-logs"
+      Environment = "global"
     }
   )
 }
 
-# -----------------------------------------------------------------------------
-# Multi-region configuration for high availability
-# -----------------------------------------------------------------------------
-# These resources would be replicated in a secondary region for disaster recovery
-# They are commented out here as they would be part of a separate Terraform configuration
-# for the secondary region
+# ---------------------------------------------------------------------------------------------------------------------
+# DATA SOURCES
+# Retrieves information about environment-specific resources from remote state
+# ---------------------------------------------------------------------------------------------------------------------
+data "terraform_remote_state" "development" {
+  backend = "s3"
+  
+  config = {
+    bucket = var.terraform_state_bucket
+    key    = "environments/development/terraform.tfstate"
+    region = var.aws_region
+  }
+}
 
-# resource "aws_vpc" "global_secondary" {
-#   provider             = aws.secondary_region
-#   cidr_block           = var.global_vpc_secondary_cidr
-#   enable_dns_support   = true
-#   enable_dns_hostnames = true
-#   instance_tenancy     = "default"
-#
-#   tags = merge(
-#     var.global_tags,
-#     {
-#       Name = "${var.resource_prefix}-global-vpc-secondary"
-#     }
-#   )
-# }
+data "terraform_remote_state" "staging" {
+  backend = "s3"
+  
+  config = {
+    bucket = var.terraform_state_bucket
+    key    = "environments/staging/terraform.tfstate"
+    region = var.aws_region
+  }
+}
+
+data "terraform_remote_state" "production" {
+  backend = "s3"
+  
+  config = {
+    bucket = var.terraform_state_bucket
+    key    = "environments/production/terraform.tfstate"
+    region = var.aws_region
+  }
+}
+
+# ---------------------------------------------------------------------------------------------------------------------
+# VARIABLES
+# ---------------------------------------------------------------------------------------------------------------------
+variable "global_vpc_cidr" {
+  description = "CIDR block for the global VPC"
+  type        = string
+  default     = "10.0.0.0/16"
+}
+
+variable "global_subnet_cidrs" {
+  description = "CIDR blocks for the global VPC subnets"
+  type        = list(string)
+  default     = ["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]
+}
+
+variable "availability_zones" {
+  description = "List of availability zones to use for resources"
+  type        = list(string)
+  default     = ["us-east-1a", "us-east-1b", "us-east-1c"]
+}
+
+variable "aws_region" {
+  description = "AWS region to deploy resources"
+  type        = string
+  default     = "us-east-1"
+}
+
+variable "terraform_state_bucket" {
+  description = "S3 bucket containing Terraform state files"
+  type        = string
+  default     = "mca-terraform-state"
+}
+
+variable "flow_log_destination_arn" {
+  description = "ARN of the S3 bucket for VPC flow logs"
+  type        = string
+}
+
+variable "tags" {
+  description = "Tags to apply to all resources"
+  type        = map(string)
+  default     = {
+    Project     = "MCA Application Processing System"
+    ManagedBy   = "Terraform"
+    Environment = "global"
+  }
+}
+
+# ---------------------------------------------------------------------------------------------------------------------
+# OUTPUTS
+# ---------------------------------------------------------------------------------------------------------------------
+output "transit_gateway_id" {
+  description = "ID of the transit gateway"
+  value       = aws_ec2_transit_gateway.main.id
+}
+
+output "transit_gateway_route_table_id" {
+  description = "ID of the transit gateway route table"
+  value       = aws_ec2_transit_gateway_route_table.main.id
+}
+
+output "global_vpc_id" {
+  description = "ID of the global VPC"
+  value       = aws_vpc.global.id
+}
+
+output "global_subnet_ids" {
+  description = "IDs of the global VPC subnets"
+  value       = aws_subnet.global[*].id
+}
+
+output "global_security_group_id" {
+  description = "ID of the global security group"
+  value       = aws_security_group.global.id
+}
+
+output "global_vpc_cidr_block" {
+  description = "CIDR block of the global VPC"
+  value       = aws_vpc.global.cidr_block
+}
+
+output "vpc_peering_connection_ids" {
+  description = "IDs of the VPC peering connections"
+  value       = {
+    dev_staging     = aws_vpc_peering_connection.dev_staging.id
+    staging_production = aws_vpc_peering_connection.staging_production.id
+    dev_production  = aws_vpc_peering_connection.dev_production.id
+  }
+}
