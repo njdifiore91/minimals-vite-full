@@ -1,1098 +1,806 @@
-#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+"""Unit tests for the S3 storage utilities in the Document Service.
 
-"""
-Unit tests for S3 storage utilities in the Document Service.
+This module contains tests that verify the S3 connection management, document upload/download,
+metadata management, and error handling functions work correctly. It also ensures that
+AES-256 encryption is properly applied to stored documents.
 
-This module contains tests for the S3 connection management, document upload/download,
-metadata management, and error handling functions in the s3_utils module.
-
-All tests use mocking to avoid making actual S3 calls during testing.
+These tests verify:
+1. S3 connection management functions work correctly
+2. Document upload with encryption verification functions properly
+3. Document download and metadata management works as expected
+4. Error handling for S3 operations is implemented correctly
+5. Signed URL generation for secure access functions properly
 """
 
 import os
-import io
 import json
+import tempfile
+from datetime import datetime, timedelta
+from unittest.mock import patch, MagicMock, ANY
+
 import pytest
-import datetime
-from unittest.mock import MagicMock, patch, call, ANY
+import boto3
 from botocore.exceptions import ClientError
-from pathlib import Path
-from typing import Dict, Any
+from moto import mock_s3
 
 # Import the module to test
-from document_service.utils import s3_utils
+from document_service.src.utils import s3_utils
+from document_service.src.config import s3_config
 
 
-# ============================================================================
-# Test Connection Management Functions
-# ============================================================================
+class TestS3Utils:
+    """Test class for the Document Service S3 storage utilities."""
 
-class TestConnectionManagement:
-    """Tests for S3 connection management functions."""
+    def test_generate_document_key(self):
+        """Test that document keys are generated correctly.
+        
+        This test verifies that the generate_document_key function creates unique keys
+        with the correct format, including document type and optional file extension.
+        """
+        # Test with document type only
+        key = s3_utils.generate_document_key('loan_application')
+        assert key.startswith('documents/loan_application/')
+        assert '-' in key  # Should contain timestamp and UUID separator
+        
+        # Test with document type and file extension
+        key = s3_utils.generate_document_key('tax_return', '.pdf')
+        assert key.startswith('documents/tax_return/')
+        assert key.endswith('.pdf')
+        
+        # Test with document type and file extension without dot
+        key = s3_utils.generate_document_key('bank_statement', 'pdf')
+        assert key.startswith('documents/bank_statement/')
+        assert key.endswith('.pdf')
+        
+        # Test uniqueness
+        key1 = s3_utils.generate_document_key('invoice')
+        key2 = s3_utils.generate_document_key('invoice')
+        assert key1 != key2
 
-    def test_get_s3_client(self):
-        """Test creating an S3 client with custom parameters."""
-        with patch('boto3.client') as mock_boto3_client:
-            # Set up the mock
-            mock_client = MagicMock()
-            mock_boto3_client.return_value = mock_client
-            
-            # Call the function
-            result = s3_utils.get_s3_client(
-                region_name='us-west-2',
-                endpoint_url='https://custom-endpoint.com',
-                aws_access_key_id='test-key',
-                aws_secret_access_key='test-secret'
+    @mock_s3
+    def test_upload_document(self, sample_document_file, sample_classification_metadata):
+        """Test uploading a document to S3 with metadata and encryption.
+        
+        This test verifies that the upload_document function correctly uploads a document
+        to S3 with the specified metadata and AES-256 encryption.
+        """
+        # Set up test bucket
+        s3_client = boto3.client('s3', region_name='us-east-1')
+        bucket_name = 'test-mca-documents'
+        s3_client.create_bucket(Bucket=bucket_name)
+        
+        # Mock the get_bucket_name function to return our test bucket
+        with patch('document_service.src.config.s3_config.get_bucket_name', return_value=bucket_name):
+            # Upload the document
+            success, object_key = s3_utils.upload_document(
+                sample_document_file,
+                'loan_application',
+                sample_classification_metadata
             )
             
-            # Verify the result
-            assert result == mock_client
+            # Verify success and object key
+            assert success is True
+            assert object_key is not None
+            assert object_key.startswith('documents/loan_application/')
             
-            # Verify boto3.client was called with the correct parameters
-            mock_boto3_client.assert_called_once_with(
-                's3',
-                region_name='us-west-2',
-                endpoint_url='https://custom-endpoint.com',
-                aws_access_key_id='test-key',
-                aws_secret_access_key='test-secret',
-                config=ANY
+            # Verify the document was uploaded with encryption
+            response = s3_client.head_object(Bucket=bucket_name, Key=object_key)
+            assert response['ServerSideEncryption'] == 'AES256'
+            
+            # Verify metadata was set correctly
+            metadata = response['Metadata']
+            assert metadata['document_type'] == 'loan_application'
+            assert 'upload_timestamp' in metadata
+            
+            # Verify complex metadata was serialized to JSON
+            assert 'extracted_fields' in metadata
+            extracted_fields = json.loads(metadata['extracted_fields'])
+            assert extracted_fields['applicant_name'] == 'John Doe'
+
+    @mock_s3
+    def test_upload_document_from_bytes(self, sample_document_bytes, sample_classification_metadata):
+        """Test uploading a document from bytes to S3 with metadata and encryption.
+        
+        This test verifies that the upload_document_from_bytes function correctly uploads
+        a document from bytes to S3 with the specified metadata and AES-256 encryption.
+        """
+        # Set up test bucket
+        s3_client = boto3.client('s3', region_name='us-east-1')
+        bucket_name = 'test-mca-documents'
+        s3_client.create_bucket(Bucket=bucket_name)
+        
+        # Mock the get_bucket_name function to return our test bucket
+        with patch('document_service.src.config.s3_config.get_bucket_name', return_value=bucket_name):
+            # Upload the document
+            success, object_key = s3_utils.upload_document_from_bytes(
+                sample_document_bytes,
+                'tax_return',
+                'test_document.pdf',
+                sample_classification_metadata
             )
-    
-    def test_get_s3_client_with_default_config(self):
-        """Test creating an S3 client with default configuration."""
-        with patch('boto3.client') as mock_boto3_client:
-            # Set up the mock
-            mock_client = MagicMock()
-            mock_boto3_client.return_value = mock_client
             
-            # Call the function
-            result = s3_utils.get_s3_client()
+            # Verify success and object key
+            assert success is True
+            assert object_key is not None
+            assert object_key.startswith('documents/tax_return/')
             
-            # Verify the result
-            assert result == mock_client
+            # Verify the document was uploaded with encryption
+            response = s3_client.head_object(Bucket=bucket_name, Key=object_key)
+            assert response['ServerSideEncryption'] == 'AES256'
             
-            # Verify boto3.client was called with the default configuration
-            mock_boto3_client.assert_called_once_with(
-                's3',
-                region_name=None,
-                endpoint_url=None,
-                aws_access_key_id=None,
-                aws_secret_access_key=None,
-                config=ANY
+            # Verify metadata was set correctly
+            metadata = response['Metadata']
+            assert metadata['document_type'] == 'tax_return'
+            assert metadata['original_filename'] == 'test_document.pdf'
+            assert 'upload_timestamp' in metadata
+            
+            # Verify complex metadata was serialized to JSON
+            assert 'extracted_fields' in metadata
+            extracted_fields = json.loads(metadata['extracted_fields'])
+            assert extracted_fields['applicant_name'] == 'John Doe'
+            
+            # Verify content was uploaded correctly
+            response = s3_client.get_object(Bucket=bucket_name, Key=object_key)
+            content = response['Body'].read()
+            assert content == sample_document_bytes
+
+    @mock_s3
+    def test_download_document(self, sample_document_file, sample_classification_metadata):
+        """Test downloading a document from S3 to a local file.
+        
+        This test verifies that the download_document function correctly downloads
+        a document from S3 to a local file path.
+        """
+        # Set up test bucket and upload a document
+        s3_client = boto3.client('s3', region_name='us-east-1')
+        bucket_name = 'test-mca-documents'
+        s3_client.create_bucket(Bucket=bucket_name)
+        
+        # Mock the get_bucket_name function to return our test bucket
+        with patch('document_service.src.config.s3_config.get_bucket_name', return_value=bucket_name):
+            # Upload a document first
+            success, object_key = s3_utils.upload_document(
+                sample_document_file,
+                'loan_application',
+                sample_classification_metadata
             )
-    
-    def test_get_s3_client_error_handling(self):
-        """Test error handling when creating an S3 client fails."""
-        with patch('boto3.client') as mock_boto3_client:
-            # Set up the mock to raise an exception
-            mock_boto3_client.side_effect = Exception("Connection error")
+            assert success is True
             
-            # Call the function and verify it raises the exception
-            with pytest.raises(Exception) as excinfo:
-                s3_utils.get_s3_client()
+            # Create a temporary download path
+            with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+                download_path = temp_file.name
             
-            # Verify the exception message
-            assert "Connection error" in str(excinfo.value)
-    
-    def test_get_default_s3_client(self):
-        """Test getting a default S3 client using environment variables."""
-        with patch('document_service.utils.s3_utils.get_s3_client') as mock_get_s3_client:
-            # Set up the mock
-            mock_client = MagicMock()
-            mock_get_s3_client.return_value = mock_client
+            # Download the document
+            success = s3_utils.download_document(object_key, download_path)
             
-            # Set environment variables for testing
-            with patch.object(s3_utils, 'S3_REGION_NAME', 'us-east-1'), \
-                 patch.object(s3_utils, 'S3_ENDPOINT_URL', 'http://localhost:9000'), \
-                 patch.object(s3_utils, 'S3_ACCESS_KEY_ID', 'test-key'), \
-                 patch.object(s3_utils, 'S3_SECRET_ACCESS_KEY', 'test-secret'):
-                
-                # Call the function
-                result = s3_utils.get_default_s3_client()
-                
-                # Verify the result
-                assert result == mock_client
-                
-                # Verify get_s3_client was called with the correct parameters
-                mock_get_s3_client.assert_called_once_with(
-                    region_name='us-east-1',
-                    endpoint_url='http://localhost:9000',
-                    aws_access_key_id='test-key',
-                    aws_secret_access_key='test-secret'
+            # Verify success
+            assert success is True
+            assert os.path.exists(download_path)
+            
+            # Verify file content
+            with open(download_path, 'rb') as f:
+                downloaded_content = f.read()
+            with open(sample_document_file, 'rb') as f:
+                original_content = f.read()
+            assert downloaded_content == original_content
+            
+            # Clean up
+            os.unlink(download_path)
+
+    @mock_s3
+    def test_download_document_to_bytes(self, sample_document_bytes, sample_classification_metadata):
+        """Test downloading a document from S3 to bytes.
+        
+        This test verifies that the download_document_to_bytes function correctly downloads
+        a document from S3 and returns it as bytes along with its metadata.
+        """
+        # Set up test bucket
+        s3_client = boto3.client('s3', region_name='us-east-1')
+        bucket_name = 'test-mca-documents'
+        s3_client.create_bucket(Bucket=bucket_name)
+        
+        # Mock the get_bucket_name function to return our test bucket
+        with patch('document_service.src.config.s3_config.get_bucket_name', return_value=bucket_name):
+            # Upload a document first
+            success, object_key = s3_utils.upload_document_from_bytes(
+                sample_document_bytes,
+                'tax_return',
+                'test_document.pdf',
+                sample_classification_metadata
+            )
+            assert success is True
+            
+            # Download the document to bytes
+            success, content, metadata = s3_utils.download_document_to_bytes(object_key)
+            
+            # Verify success, content, and metadata
+            assert success is True
+            assert content == sample_document_bytes
+            assert metadata is not None
+            assert metadata['document_type'] == 'tax_return'
+            assert metadata['original_filename'] == 'test_document.pdf'
+
+    @mock_s3
+    def test_get_document_metadata(self, sample_document_file, sample_classification_metadata):
+        """Test retrieving metadata for a document stored in S3.
+        
+        This test verifies that the get_document_metadata function correctly retrieves
+        metadata for a document stored in S3.
+        """
+        # Set up test bucket
+        s3_client = boto3.client('s3', region_name='us-east-1')
+        bucket_name = 'test-mca-documents'
+        s3_client.create_bucket(Bucket=bucket_name)
+        
+        # Mock the get_bucket_name function to return our test bucket
+        with patch('document_service.src.config.s3_config.get_bucket_name', return_value=bucket_name):
+            # Upload a document first
+            success, object_key = s3_utils.upload_document(
+                sample_document_file,
+                'loan_application',
+                sample_classification_metadata
+            )
+            assert success is True
+            
+            # Get document metadata
+            success, metadata = s3_utils.get_document_metadata(object_key)
+            
+            # Verify success and metadata
+            assert success is True
+            assert metadata is not None
+            assert metadata['document_type'] == 'loan_application'
+            assert 'upload_timestamp' in metadata
+            assert 'content_type' in metadata
+            assert 'content_length' in metadata
+            assert 'last_modified' in metadata
+            assert 'e_tag' in metadata
+            assert metadata['server_side_encryption'] == 'AES256'
+            
+            # Verify complex metadata was deserialized from JSON
+            assert 'extracted_fields' in metadata
+            extracted_fields = json.loads(metadata['extracted_fields'])
+            assert extracted_fields['applicant_name'] == 'John Doe'
+
+    @mock_s3
+    def test_update_document_metadata(self, sample_document_file, sample_classification_metadata):
+        """Test updating metadata for a document stored in S3.
+        
+        This test verifies that the update_document_metadata function correctly updates
+        metadata for a document stored in S3.
+        """
+        # Set up test bucket
+        s3_client = boto3.client('s3', region_name='us-east-1')
+        bucket_name = 'test-mca-documents'
+        s3_client.create_bucket(Bucket=bucket_name)
+        
+        # Mock the get_bucket_name function to return our test bucket
+        with patch('document_service.src.config.s3_config.get_bucket_name', return_value=bucket_name):
+            # Upload a document first
+            success, object_key = s3_utils.upload_document(
+                sample_document_file,
+                'loan_application',
+                sample_classification_metadata
+            )
+            assert success is True
+            
+            # Update document metadata
+            new_metadata = {
+                'document_type': 'loan_application',
+                'classification_confidence': '0.98',
+                'review_status': 'approved',
+                'reviewer': 'John Smith',
+                'review_date': datetime.now().isoformat()
+            }
+            success = s3_utils.update_document_metadata(object_key, new_metadata)
+            
+            # Verify success
+            assert success is True
+            
+            # Get updated metadata
+            success, metadata = s3_utils.get_document_metadata(object_key)
+            assert success is True
+            
+            # Verify metadata was updated
+            assert metadata['classification_confidence'] == '0.98'
+            assert metadata['review_status'] == 'approved'
+            assert metadata['reviewer'] == 'John Smith'
+            assert 'review_date' in metadata
+
+    @mock_s3
+    def test_generate_presigned_url(self, sample_document_file, sample_classification_metadata):
+        """Test generating a presigned URL for secure access to a document.
+        
+        This test verifies that the generate_presigned_url function correctly generates
+        a presigned URL for secure access to a document stored in S3.
+        """
+        # Set up test bucket
+        s3_client = boto3.client('s3', region_name='us-east-1')
+        bucket_name = 'test-mca-documents'
+        s3_client.create_bucket(Bucket=bucket_name)
+        
+        # Mock the get_bucket_name function to return our test bucket
+        with patch('document_service.src.config.s3_config.get_bucket_name', return_value=bucket_name):
+            # Upload a document first
+            success, object_key = s3_utils.upload_document(
+                sample_document_file,
+                'loan_application',
+                sample_classification_metadata
+            )
+            assert success is True
+            
+            # Generate a presigned URL
+            success, url = s3_utils.generate_presigned_url(object_key, expiration=3600)
+            
+            # Verify success and URL
+            assert success is True
+            assert url is not None
+            assert url.startswith('https://') or url.startswith('http://')
+            assert bucket_name in url
+            assert object_key in url
+            
+            # Test with custom expiration and HTTP method
+            success, url = s3_utils.generate_presigned_url(object_key, expiration=1800, http_method='PUT')
+            assert success is True
+            assert url is not None
+            assert 'X-Amz-Expires=1800' in url or 'Expires=' in url
+
+    @mock_s3
+    def test_list_documents_by_type(self, sample_document_file, sample_classification_metadata):
+        """Test listing documents of a specific type stored in S3.
+        
+        This test verifies that the list_documents_by_type function correctly lists
+        documents of a specific type stored in S3.
+        """
+        # Set up test bucket
+        s3_client = boto3.client('s3', region_name='us-east-1')
+        bucket_name = 'test-mca-documents'
+        s3_client.create_bucket(Bucket=bucket_name)
+        
+        # Mock the get_bucket_name function to return our test bucket
+        with patch('document_service.src.config.s3_config.get_bucket_name', return_value=bucket_name):
+            # Upload multiple documents
+            document_type = 'loan_application'
+            for i in range(3):
+                success, _ = s3_utils.upload_document(
+                    sample_document_file,
+                    document_type,
+                    sample_classification_metadata
                 )
+                assert success is True
+            
+            # List documents by type
+            success, documents = s3_utils.list_documents_by_type(document_type)
+            
+            # Verify success and documents
+            assert success is True
+            assert documents is not None
+            assert len(documents) == 3
+            
+            # Verify document information
+            for doc in documents:
+                assert 'key' in doc
+                assert doc['key'].startswith(f'documents/{document_type}/')
+                assert 'size' in doc
+                assert 'last_modified' in doc
+                assert 'e_tag' in doc
+                assert 'metadata' in doc
 
-
-# ============================================================================
-# Test Document Upload Functions
-# ============================================================================
-
-class TestDocumentUpload:
-    """Tests for document upload functions."""
-
-    def test_upload_document(self, mock_s3_client):
-        """Test uploading a document with AES-256 encryption."""
-        # Set up the mock
-        mock_s3_client.put_object.return_value = {'ETag': '"123456789"'}
+    @mock_s3
+    def test_delete_document(self, sample_document_file, sample_classification_metadata):
+        """Test deleting a document from S3.
         
-        # Test data
-        bucket_name = 'test-bucket'
-        object_key = 'test-document.pdf'
-        file_obj = io.BytesIO(b'test content')
-        metadata = {'original_filename': 'test.pdf'}
-        content_type = 'application/pdf'
-        document_classification = 'application_form'
-        classification_confidence = 0.95
+        This test verifies that the delete_document function correctly deletes
+        a document from S3.
+        """
+        # Set up test bucket
+        s3_client = boto3.client('s3', region_name='us-east-1')
+        bucket_name = 'test-mca-documents'
+        s3_client.create_bucket(Bucket=bucket_name)
         
-        # Call the function
-        result = s3_utils.upload_document(
-            s3_client=mock_s3_client,
-            bucket_name=bucket_name,
-            object_key=object_key,
-            file_obj=file_obj,
-            metadata=metadata,
-            content_type=content_type,
-            document_classification=document_classification,
-            classification_confidence=classification_confidence
-        )
-        
-        # Verify the result
-        assert result == {'ETag': '"123456789"'}
-        
-        # Verify put_object was called with the correct parameters
-        mock_s3_client.put_object.assert_called_once_with(
-            Bucket=bucket_name,
-            Key=object_key,
-            Body=file_obj,
-            ServerSideEncryption='AES256',  # Verify AES-256 encryption is used
-            Metadata={
-                'original_filename': 'test.pdf',
-                'document-classification': 'application_form',
-                'classification-confidence': '0.95'
-            },
-            ContentType='application/pdf'
-        )
-    
-    def test_upload_document_without_optional_params(self, mock_s3_client):
-        """Test uploading a document without optional parameters."""
-        # Set up the mock
-        mock_s3_client.put_object.return_value = {'ETag': '"123456789"'}
-        
-        # Test data
-        bucket_name = 'test-bucket'
-        object_key = 'test-document.pdf'
-        file_obj = io.BytesIO(b'test content')
-        
-        # Call the function
-        result = s3_utils.upload_document(
-            s3_client=mock_s3_client,
-            bucket_name=bucket_name,
-            object_key=object_key,
-            file_obj=file_obj
-        )
-        
-        # Verify the result
-        assert result == {'ETag': '"123456789"'}
-        
-        # Verify put_object was called with the correct parameters
-        mock_s3_client.put_object.assert_called_once_with(
-            Bucket=bucket_name,
-            Key=object_key,
-            Body=file_obj,
-            ServerSideEncryption='AES256',  # Verify AES-256 encryption is still used
-            Metadata={}
-        )
-    
-    def test_upload_document_error_handling(self, mock_s3_client):
-        """Test error handling when uploading a document fails."""
-        # Set up the mock to raise a ClientError
-        error_response = {'Error': {'Code': 'AccessDenied', 'Message': 'Access Denied'}}
-        mock_s3_client.put_object.side_effect = ClientError(error_response, 'PutObject')
-        
-        # Test data
-        bucket_name = 'test-bucket'
-        object_key = 'test-document.pdf'
-        file_obj = io.BytesIO(b'test content')
-        
-        # Call the function and verify it raises the exception
-        with pytest.raises(ClientError) as excinfo:
-            s3_utils.upload_document(
-                s3_client=mock_s3_client,
-                bucket_name=bucket_name,
-                object_key=object_key,
-                file_obj=file_obj
+        # Mock the get_bucket_name function to return our test bucket
+        with patch('document_service.src.config.s3_config.get_bucket_name', return_value=bucket_name):
+            # Upload a document first
+            success, object_key = s3_utils.upload_document(
+                sample_document_file,
+                'loan_application',
+                sample_classification_metadata
             )
-        
-        # Verify the exception details
-        assert 'AccessDenied' in str(excinfo.value)
-        assert 'Access Denied' in str(excinfo.value)
-    
-    def test_upload_document_with_transfer_manager(self, mock_s3_client, sample_document_path):
-        """Test uploading a large document using the transfer manager."""
-        # Set up the mocks
-        mock_s3_resource = MagicMock()
-        mock_s3_client.meta.region_name = 'us-east-1'
-        mock_s3_client.meta.endpoint_url = 'http://localhost:9000'
-        mock_s3_client.head_object.return_value = {
-            'ContentType': 'application/pdf',
-            'ContentLength': 1024,
-            'Metadata': {'document-classification': 'application_form'}
-        }
-        
-        with patch('boto3.resource') as mock_boto3_resource:
-            # Set up the resource mock
-            mock_boto3_resource.return_value = mock_s3_resource
+            assert success is True
             
-            # Test data
-            bucket_name = 'test-bucket'
-            object_key = 'test-document.pdf'
-            file_path = str(sample_document_path)
-            metadata = {'original_filename': 'test.pdf'}
-            content_type = 'application/pdf'
-            document_classification = 'application_form'
-            classification_confidence = 0.95
+            # Verify document exists
+            assert s3_utils.check_document_exists(object_key) is True
             
-            # Call the function
-            result = s3_utils.upload_document_with_transfer_manager(
-                s3_client=mock_s3_client,
-                bucket_name=bucket_name,
-                object_key=object_key,
-                file_path=file_path,
-                metadata=metadata,
-                content_type=content_type,
-                document_classification=document_classification,
-                classification_confidence=classification_confidence
+            # Delete the document
+            success = s3_utils.delete_document(object_key)
+            
+            # Verify success and document deletion
+            assert success is True
+            assert s3_utils.check_document_exists(object_key) is False
+
+    @mock_s3
+    def test_copy_document(self, sample_document_file, sample_classification_metadata):
+        """Test copying a document within S3, optionally updating its metadata.
+        
+        This test verifies that the copy_document function correctly copies a document
+        within S3, optionally updating its metadata.
+        """
+        # Set up test bucket
+        s3_client = boto3.client('s3', region_name='us-east-1')
+        bucket_name = 'test-mca-documents'
+        s3_client.create_bucket(Bucket=bucket_name)
+        
+        # Mock the get_bucket_name function to return our test bucket
+        with patch('document_service.src.config.s3_config.get_bucket_name', return_value=bucket_name):
+            # Upload a document first
+            success, source_key = s3_utils.upload_document(
+                sample_document_file,
+                'loan_application',
+                sample_classification_metadata
             )
+            assert success is True
             
-            # Verify the result
-            assert result == {
-                'ContentType': 'application/pdf',
-                'ContentLength': 1024,
-                'Metadata': {'document-classification': 'application_form'}
+            # Copy the document without changing metadata
+            dest_key = 'documents/loan_application/copy_test.pdf'
+            success = s3_utils.copy_document(source_key, dest_key)
+            
+            # Verify success and document copy
+            assert success is True
+            assert s3_utils.check_document_exists(dest_key) is True
+            
+            # Get metadata of copied document
+            success, metadata = s3_utils.get_document_metadata(dest_key)
+            assert success is True
+            assert metadata['document_type'] == 'loan_application'
+            
+            # Copy the document with new metadata
+            new_dest_key = 'documents/loan_application/copy_test_with_metadata.pdf'
+            new_metadata = {
+                'document_type': 'loan_application',
+                'classification_confidence': '0.99',
+                'review_status': 'approved',
+                'reviewer': 'Jane Smith'
             }
+            success = s3_utils.copy_document(source_key, new_dest_key, new_metadata)
             
-            # Verify boto3.resource was called with the correct parameters
-            mock_boto3_resource.assert_called_once_with(
-                's3',
-                region_name='us-east-1',
-                endpoint_url='http://localhost:9000'
-            )
+            # Verify success and document copy with new metadata
+            assert success is True
+            assert s3_utils.check_document_exists(new_dest_key) is True
             
-            # Verify upload_file was called with the correct parameters
-            mock_s3_resource.meta.client.upload_file.assert_called_once_with(
-                Filename=file_path,
-                Bucket=bucket_name,
-                Key=object_key,
-                ExtraArgs={
-                    'ServerSideEncryption': 'AES256',  # Verify AES-256 encryption is used
-                    'Metadata': {
-                        'original_filename': 'test.pdf',
-                        'document-classification': 'application_form',
-                        'classification-confidence': '0.95'
-                    },
-                    'ContentType': 'application/pdf'
-                },
-                Config=ANY
+            # Get metadata of copied document with new metadata
+            success, metadata = s3_utils.get_document_metadata(new_dest_key)
+            assert success is True
+            assert metadata['document_type'] == 'loan_application'
+            assert metadata['classification_confidence'] == '0.99'
+            assert metadata['review_status'] == 'approved'
+            assert metadata['reviewer'] == 'Jane Smith'
+
+    @mock_s3
+    def test_check_document_exists(self, sample_document_file, sample_classification_metadata):
+        """Test checking if a document exists in S3.
+        
+        This test verifies that the check_document_exists function correctly checks
+        if a document exists in S3.
+        """
+        # Set up test bucket
+        s3_client = boto3.client('s3', region_name='us-east-1')
+        bucket_name = 'test-mca-documents'
+        s3_client.create_bucket(Bucket=bucket_name)
+        
+        # Mock the get_bucket_name function to return our test bucket
+        with patch('document_service.src.config.s3_config.get_bucket_name', return_value=bucket_name):
+            # Upload a document first
+            success, object_key = s3_utils.upload_document(
+                sample_document_file,
+                'loan_application',
+                sample_classification_metadata
             )
+            assert success is True
             
-            # Verify head_object was called to get the metadata
-            mock_s3_client.head_object.assert_called_once_with(
-                Bucket=bucket_name,
-                Key=object_key
+            # Check if document exists
+            exists = s3_utils.check_document_exists(object_key)
+            assert exists is True
+            
+            # Check if non-existent document exists
+            non_existent_key = 'documents/loan_application/non_existent.pdf'
+            exists = s3_utils.check_document_exists(non_existent_key)
+            assert exists is False
+
+    @mock_s3
+    def test_get_document_classification(self, sample_document_file, sample_classification_metadata):
+        """Test getting the classification type and confidence score for a document.
+        
+        This test verifies that the get_document_classification function correctly gets
+        the classification type and confidence score for a document stored in S3.
+        """
+        # Set up test bucket
+        s3_client = boto3.client('s3', region_name='us-east-1')
+        bucket_name = 'test-mca-documents'
+        s3_client.create_bucket(Bucket=bucket_name)
+        
+        # Mock the get_bucket_name function to return our test bucket
+        with patch('document_service.src.config.s3_config.get_bucket_name', return_value=bucket_name):
+            # Upload a document first with classification metadata
+            metadata = sample_classification_metadata.copy()
+            metadata['classification_confidence'] = '0.95'
+            success, object_key = s3_utils.upload_document(
+                sample_document_file,
+                'loan_application',
+                metadata
             )
+            assert success is True
+            
+            # Get document classification
+            success, doc_type, confidence = s3_utils.get_document_classification(object_key)
+            
+            # Verify success, document type, and confidence
+            assert success is True
+            assert doc_type == 'loan_application'
+            assert confidence == 0.95
 
-
-# ============================================================================
-# Test Document Download Functions
-# ============================================================================
-
-class TestDocumentDownload:
-    """Tests for document download functions."""
-
-    def test_download_document(self, mock_s3_client):
-        """Test downloading a document from S3."""
-        # Set up the mock
-        mock_body = MagicMock()
-        mock_body.read.return_value = b'test content'
-        mock_s3_client.get_object.return_value = {
-            'Body': mock_body,
-            'ContentType': 'application/pdf',
-            'ContentLength': 12,
-            'LastModified': datetime.datetime.now(),
-            'ETag': '"123456789"',
-            'ServerSideEncryption': 'AES256',
-            'Metadata': {
-                'document-classification': 'application_form',
-                'classification-confidence': '0.95'
+    @mock_s3
+    def test_add_classification_metadata(self, sample_document_file, sample_classification_metadata):
+        """Test adding or updating classification metadata for a document.
+        
+        This test verifies that the add_classification_metadata function correctly adds
+        or updates classification metadata for a document stored in S3.
+        """
+        # Set up test bucket
+        s3_client = boto3.client('s3', region_name='us-east-1')
+        bucket_name = 'test-mca-documents'
+        s3_client.create_bucket(Bucket=bucket_name)
+        
+        # Mock the get_bucket_name function to return our test bucket
+        with patch('document_service.src.config.s3_config.get_bucket_name', return_value=bucket_name):
+            # Upload a document first without classification metadata
+            metadata = {}
+            success, object_key = s3_utils.upload_document(
+                sample_document_file,
+                'unknown',
+                metadata
+            )
+            assert success is True
+            
+            # Add classification metadata
+            document_type = 'loan_application'
+            confidence = 0.95
+            additional_metadata = {
+                'requires_review': 'false',
+                'page_count': '3',
+                'contains_signature': 'true'
             }
-        }
-        
-        # Test data
-        bucket_name = 'test-bucket'
-        object_key = 'test-document.pdf'
-        
-        # Call the function
-        content, metadata = s3_utils.download_document(
-            s3_client=mock_s3_client,
-            bucket_name=bucket_name,
-            object_key=object_key
-        )
-        
-        # Verify the result
-        assert content == b'test content'
-        assert metadata['ContentType'] == 'application/pdf'
-        assert metadata['ContentLength'] == 12
-        assert 'LastModified' in metadata
-        assert metadata['ETag'] == '"123456789"'
-        assert metadata['ServerSideEncryption'] == 'AES256'
-        assert metadata['Metadata']['document-classification'] == 'application_form'
-        assert metadata['Metadata']['classification-confidence'] == '0.95'
-        
-        # Verify get_object was called with the correct parameters
-        mock_s3_client.get_object.assert_called_once_with(
-            Bucket=bucket_name,
-            Key=object_key
-        )
-    
-    def test_download_document_error_handling(self, mock_s3_client):
-        """Test error handling when downloading a document fails."""
-        # Set up the mock to raise a ClientError
-        error_response = {'Error': {'Code': 'NoSuchKey', 'Message': 'The specified key does not exist.'}}
-        mock_s3_client.get_object.side_effect = ClientError(error_response, 'GetObject')
-        
-        # Test data
-        bucket_name = 'test-bucket'
-        object_key = 'non-existent-document.pdf'
-        
-        # Call the function and verify it raises the exception
-        with pytest.raises(ClientError) as excinfo:
-            s3_utils.download_document(
-                s3_client=mock_s3_client,
-                bucket_name=bucket_name,
-                object_key=object_key
-            )
-        
-        # Verify the exception details
-        assert 'NoSuchKey' in str(excinfo.value)
-        assert 'The specified key does not exist' in str(excinfo.value)
-    
-    def test_download_document_to_file(self, mock_s3_client, tmp_path):
-        """Test downloading a document directly to a file."""
-        # Set up the mocks
-        mock_s3_resource = MagicMock()
-        mock_s3_client.meta.region_name = 'us-east-1'
-        mock_s3_client.meta.endpoint_url = 'http://localhost:9000'
-        mock_s3_client.head_object.return_value = {
-            'ContentType': 'application/pdf',
-            'ContentLength': 1024,
-            'LastModified': datetime.datetime.now(),
-            'ETag': '"123456789"',
-            'ServerSideEncryption': 'AES256',
-            'Metadata': {
-                'document-classification': 'application_form',
-                'classification-confidence': '0.95'
-            }
-        }
-        
-        with patch('boto3.resource') as mock_boto3_resource:
-            # Set up the resource mock
-            mock_boto3_resource.return_value = mock_s3_resource
-            
-            # Test data
-            bucket_name = 'test-bucket'
-            object_key = 'test-document.pdf'
-            file_path = str(tmp_path / 'downloaded-document.pdf')
-            
-            # Call the function
-            result = s3_utils.download_document_to_file(
-                s3_client=mock_s3_client,
-                bucket_name=bucket_name,
-                object_key=object_key,
-                file_path=file_path
+            success = s3_utils.add_classification_metadata(
+                object_key,
+                document_type,
+                confidence,
+                additional_metadata
             )
             
-            # Verify the result
-            assert result['ContentType'] == 'application/pdf'
-            assert result['ContentLength'] == 1024
-            assert 'LastModified' in result
-            assert result['ETag'] == '"123456789"'
-            assert result['ServerSideEncryption'] == 'AES256'
-            assert result['Metadata']['document-classification'] == 'application_form'
-            assert result['Metadata']['classification-confidence'] == '0.95'
+            # Verify success
+            assert success is True
             
-            # Verify boto3.resource was called with the correct parameters
-            mock_boto3_resource.assert_called_once_with(
-                's3',
-                region_name='us-east-1',
-                endpoint_url='http://localhost:9000'
+            # Get document classification
+            success, doc_type, conf = s3_utils.get_document_classification(object_key)
+            assert success is True
+            assert doc_type == document_type
+            assert conf == confidence
+            
+            # Get document metadata
+            success, metadata = s3_utils.get_document_metadata(object_key)
+            assert success is True
+            assert metadata['document_type'] == document_type
+            assert metadata['classification_confidence'] == str(confidence)
+            assert 'classification_timestamp' in metadata
+            assert metadata['requires_review'] == 'false'
+            assert metadata['page_count'] == '3'
+            assert metadata['contains_signature'] == 'true'
+
+    def test_upload_document_error(self, sample_document_file, sample_classification_metadata, s3_client_error_factory):
+        """Test error handling when uploading a document to S3.
+        
+        This test verifies that the upload_document function correctly handles errors
+        when uploading a document to S3.
+        """
+        # Mock the S3 client to raise an error
+        error = s3_client_error_factory('AccessDenied', 'PutObject')
+        with patch('document_service.src.config.s3_config.s3_client.upload_file', side_effect=error):
+            # Attempt to upload the document
+            success, object_key = s3_utils.upload_document(
+                sample_document_file,
+                'loan_application',
+                sample_classification_metadata
             )
             
-            # Verify download_file was called with the correct parameters
-            mock_s3_resource.meta.client.download_file.assert_called_once_with(
-                Bucket=bucket_name,
-                Key=object_key,
-                Filename=file_path,
-                Config=ANY
+            # Verify failure
+            assert success is False
+            assert object_key is None
+
+    def test_upload_document_from_bytes_error(self, sample_document_bytes, sample_classification_metadata, s3_client_error_factory):
+        """Test error handling when uploading a document from bytes to S3.
+        
+        This test verifies that the upload_document_from_bytes function correctly handles errors
+        when uploading a document from bytes to S3.
+        """
+        # Mock the S3 client to raise an error
+        error = s3_client_error_factory('AccessDenied', 'PutObject')
+        with patch('document_service.src.config.s3_config.s3_client.put_object', side_effect=error):
+            # Attempt to upload the document
+            success, object_key = s3_utils.upload_document_from_bytes(
+                sample_document_bytes,
+                'tax_return',
+                'test_document.pdf',
+                sample_classification_metadata
             )
             
-            # Verify head_object was called to get the metadata
-            mock_s3_client.head_object.assert_called_once_with(
-                Bucket=bucket_name,
-                Key=object_key
-            )
+            # Verify failure
+            assert success is False
+            assert object_key is None
 
-
-# ============================================================================
-# Test Metadata Management Functions
-# ============================================================================
-
-class TestMetadataManagement:
-    """Tests for metadata management functions."""
-
-    def test_get_document_metadata(self, mock_s3_client):
-        """Test getting metadata for a document without downloading the content."""
-        # Set up the mock
-        mock_s3_client.head_object.return_value = {
-            'ContentType': 'application/pdf',
-            'ContentLength': 1024,
-            'LastModified': datetime.datetime.now(),
-            'ETag': '"123456789"',
-            'ServerSideEncryption': 'AES256',
-            'Metadata': {
-                'document-classification': 'application_form',
-                'classification-confidence': '0.95'
-            }
-        }
+    def test_download_document_error(self, s3_client_error_factory):
+        """Test error handling when downloading a document from S3.
         
-        # Test data
-        bucket_name = 'test-bucket'
-        object_key = 'test-document.pdf'
-        
-        # Call the function
-        result = s3_utils.get_document_metadata(
-            s3_client=mock_s3_client,
-            bucket_name=bucket_name,
-            object_key=object_key
-        )
-        
-        # Verify the result
-        assert result['ContentType'] == 'application/pdf'
-        assert result['ContentLength'] == 1024
-        assert 'LastModified' in result
-        assert result['ETag'] == '"123456789"'
-        assert result['ServerSideEncryption'] == 'AES256'
-        assert result['Metadata']['document-classification'] == 'application_form'
-        assert result['Metadata']['classification-confidence'] == '0.95'
-        
-        # Verify head_object was called with the correct parameters
-        mock_s3_client.head_object.assert_called_once_with(
-            Bucket=bucket_name,
-            Key=object_key
-        )
-    
-    def test_get_document_classification(self, mock_s3_client):
-        """Test getting the classification and confidence score for a document."""
-        # Set up the mock
-        mock_s3_client.head_object.return_value = {
-            'ContentType': 'application/pdf',
-            'ContentLength': 1024,
-            'LastModified': datetime.datetime.now(),
-            'ETag': '"123456789"',
-            'ServerSideEncryption': 'AES256',
-            'Metadata': {
-                'document-classification': 'application_form',
-                'classification-confidence': '0.95'
-            }
-        }
-        
-        # Test data
-        bucket_name = 'test-bucket'
-        object_key = 'test-document.pdf'
-        
-        # Call the function
-        classification, confidence = s3_utils.get_document_classification(
-            s3_client=mock_s3_client,
-            bucket_name=bucket_name,
-            object_key=object_key
-        )
-        
-        # Verify the result
-        assert classification == 'application_form'
-        assert confidence == 0.95
-        
-        # Verify head_object was called with the correct parameters
-        mock_s3_client.head_object.assert_called_once_with(
-            Bucket=bucket_name,
-            Key=object_key
-        )
-    
-    def test_update_document_metadata(self, mock_s3_client):
-        """Test updating metadata for an existing document."""
-        # Set up the mocks
-        mock_s3_client.head_object.return_value = {
-            'ContentType': 'application/pdf',
-            'ContentLength': 1024,
-            'LastModified': datetime.datetime.now(),
-            'ETag': '"123456789"',
-            'ServerSideEncryption': 'AES256',
-            'Metadata': {
-                'document-classification': 'application_form',
-                'classification-confidence': '0.95',
-                'original-filename': 'test.pdf'
-            }
-        }
-        mock_s3_client.copy_object.return_value = {
-            'CopyObjectResult': {
-                'ETag': '"987654321"',
-                'LastModified': datetime.datetime.now()
-            }
-        }
-        
-        # Test data
-        bucket_name = 'test-bucket'
-        object_key = 'test-document.pdf'
-        new_metadata = {
-            'document-classification': 'tax_return',
-            'classification-confidence': '0.98'
-        }
-        
-        # Call the function
-        result = s3_utils.update_document_metadata(
-            s3_client=mock_s3_client,
-            bucket_name=bucket_name,
-            object_key=object_key,
-            metadata=new_metadata
-        )
-        
-        # Verify the result
-        assert 'CopyObjectResult' in result
-        assert result['CopyObjectResult']['ETag'] == '"987654321"'
-        
-        # Verify head_object was called to get the current metadata
-        mock_s3_client.head_object.assert_called_once_with(
-            Bucket=bucket_name,
-            Key=object_key
-        )
-        
-        # Verify copy_object was called with the correct parameters
-        mock_s3_client.copy_object.assert_called_once_with(
-            Bucket=bucket_name,
-            CopySource={'Bucket': bucket_name, 'Key': object_key},
-            Key=object_key,
-            Metadata={
-                'document-classification': 'tax_return',
-                'classification-confidence': '0.98',
-                'original-filename': 'test.pdf'
-            },
-            MetadataDirective='REPLACE',
-            ServerSideEncryption='AES256'  # Verify AES-256 encryption is maintained
-        )
-    
-    def test_update_document_classification(self, mock_s3_client):
-        """Test updating the classification and confidence score for a document."""
-        # Set up the mocks for update_document_metadata which is called by update_document_classification
-        with patch('document_service.utils.s3_utils.update_document_metadata') as mock_update_metadata:
-            mock_update_metadata.return_value = {
-                'CopyObjectResult': {
-                    'ETag': '"987654321"',
-                    'LastModified': datetime.datetime.now()
-                }
-            }
+        This test verifies that the download_document function correctly handles errors
+        when downloading a document from S3.
+        """
+        # Mock the S3 client to raise an error
+        error = s3_client_error_factory('NoSuchKey', 'GetObject')
+        with patch('document_service.src.config.s3_config.s3_client.download_file', side_effect=error):
+            # Attempt to download the document
+            success = s3_utils.download_document('non_existent_key', '/tmp/test.pdf')
             
-            # Test data
-            bucket_name = 'test-bucket'
-            object_key = 'test-document.pdf'
-            document_classification = 'tax_return'
-            classification_confidence = 0.98
+            # Verify failure
+            assert success is False
+
+    def test_download_document_to_bytes_error(self, s3_client_error_factory):
+        """Test error handling when downloading a document from S3 to bytes.
+        
+        This test verifies that the download_document_to_bytes function correctly handles errors
+        when downloading a document from S3 to bytes.
+        """
+        # Mock the S3 client to raise an error
+        error = s3_client_error_factory('NoSuchKey', 'GetObject')
+        with patch('document_service.src.config.s3_config.s3_client.get_object', side_effect=error):
+            # Attempt to download the document
+            success, content, metadata = s3_utils.download_document_to_bytes('non_existent_key')
             
-            # Call the function
-            result = s3_utils.update_document_classification(
-                s3_client=mock_s3_client,
-                bucket_name=bucket_name,
-                object_key=object_key,
-                document_classification=document_classification,
-                classification_confidence=classification_confidence
-            )
+            # Verify failure
+            assert success is False
+            assert content is None
+            assert metadata is None
+
+    def test_get_document_metadata_error(self, s3_client_error_factory):
+        """Test error handling when retrieving metadata for a document stored in S3.
+        
+        This test verifies that the get_document_metadata function correctly handles errors
+        when retrieving metadata for a document stored in S3.
+        """
+        # Mock the S3 client to raise an error
+        error = s3_client_error_factory('NoSuchKey', 'HeadObject')
+        with patch('document_service.src.config.s3_config.s3_client.head_object', side_effect=error):
+            # Attempt to get document metadata
+            success, metadata = s3_utils.get_document_metadata('non_existent_key')
             
-            # Verify the result
-            assert 'CopyObjectResult' in result
-            assert result['CopyObjectResult']['ETag'] == '"987654321"'
+            # Verify failure
+            assert success is False
+            assert metadata is None
+
+    def test_update_document_metadata_error(self, s3_client_error_factory):
+        """Test error handling when updating metadata for a document stored in S3.
+        
+        This test verifies that the update_document_metadata function correctly handles errors
+        when updating metadata for a document stored in S3.
+        """
+        # Mock the get_document_metadata function to return failure
+        with patch('document_service.src.utils.s3_utils.get_document_metadata', return_value=(False, None)):
+            # Attempt to update document metadata
+            success = s3_utils.update_document_metadata('non_existent_key', {'test': 'value'})
             
-            # Verify update_document_metadata was called with the correct parameters
-            mock_update_metadata.assert_called_once_with(
-                s3_client=mock_s3_client,
-                bucket_name=bucket_name,
-                object_key=object_key,
-                metadata={
-                    'document-classification': 'tax_return',
-                    'classification-confidence': '0.98'
-                }
-            )
+            # Verify failure
+            assert success is False
 
-
-# ============================================================================
-# Test URL Generation Functions
-# ============================================================================
-
-class TestUrlGeneration:
-    """Tests for URL generation functions."""
-
-    def test_generate_presigned_url(self, mock_s3_client):
-        """Test generating a presigned URL for secure access to an S3 object."""
-        # Set up the mock
-        mock_s3_client.generate_presigned_url.return_value = 'https://test-bucket.s3.amazonaws.com/test-document.pdf?signature=abc123'
+    def test_generate_presigned_url_error(self, s3_client_error_factory):
+        """Test error handling when generating a presigned URL for secure access to a document.
         
-        # Test data
-        bucket_name = 'test-bucket'
-        object_key = 'test-document.pdf'
-        expiration = 3600  # 1 hour
-        http_method = 'GET'
-        
-        # Call the function
-        result = s3_utils.generate_presigned_url(
-            s3_client=mock_s3_client,
-            bucket_name=bucket_name,
-            object_key=object_key,
-            expiration=expiration,
-            http_method=http_method
-        )
-        
-        # Verify the result
-        assert result == 'https://test-bucket.s3.amazonaws.com/test-document.pdf?signature=abc123'
-        
-        # Verify generate_presigned_url was called with the correct parameters
-        mock_s3_client.generate_presigned_url.assert_called_once_with(
-            ClientMethod='get_object',
-            Params={
-                'Bucket': bucket_name,
-                'Key': object_key
-            },
-            ExpiresIn=expiration
-        )
-    
-    def test_generate_presigned_url_put_method(self, mock_s3_client):
-        """Test generating a presigned URL for uploading an object to S3."""
-        # Set up the mock
-        mock_s3_client.generate_presigned_url.return_value = 'https://test-bucket.s3.amazonaws.com/test-document.pdf?signature=abc123'
-        
-        # Test data
-        bucket_name = 'test-bucket'
-        object_key = 'test-document.pdf'
-        expiration = 3600  # 1 hour
-        http_method = 'PUT'
-        
-        # Call the function
-        result = s3_utils.generate_presigned_url(
-            s3_client=mock_s3_client,
-            bucket_name=bucket_name,
-            object_key=object_key,
-            expiration=expiration,
-            http_method=http_method
-        )
-        
-        # Verify the result
-        assert result == 'https://test-bucket.s3.amazonaws.com/test-document.pdf?signature=abc123'
-        
-        # Verify generate_presigned_url was called with the correct parameters
-        mock_s3_client.generate_presigned_url.assert_called_once_with(
-            ClientMethod='put_object',
-            Params={
-                'Bucket': bucket_name,
-                'Key': object_key
-            },
-            ExpiresIn=expiration
-        )
-    
-    def test_generate_presigned_url_invalid_method(self, mock_s3_client):
-        """Test error handling for invalid HTTP method."""
-        # Test data
-        bucket_name = 'test-bucket'
-        object_key = 'test-document.pdf'
-        http_method = 'DELETE'  # Invalid method
-        
-        # Call the function and verify it raises a ValueError
-        with pytest.raises(ValueError) as excinfo:
-            s3_utils.generate_presigned_url(
-                s3_client=mock_s3_client,
-                bucket_name=bucket_name,
-                object_key=object_key,
-                http_method=http_method
-            )
-        
-        # Verify the exception message
-        assert "Unsupported HTTP method: DELETE" in str(excinfo.value)
-    
-    def test_generate_presigned_post(self, mock_s3_client):
-        """Test generating a presigned POST policy for uploading objects to S3."""
-        # Set up the mock
-        mock_s3_client.generate_presigned_post.return_value = {
-            'url': 'https://test-bucket.s3.amazonaws.com/',
-            'fields': {
-                'key': 'test-document.pdf',
-                'AWSAccessKeyId': 'test-key',
-                'policy': 'base64-encoded-policy',
-                'signature': 'signature',
-                'x-amz-server-side-encryption': 'AES256'
-            }
-        }
-        
-        # Test data
-        bucket_name = 'test-bucket'
-        object_key = 'test-document.pdf'
-        fields = {'success_action_redirect': 'https://example.com/success'}
-        conditions = [{'acl': 'private'}]
-        expiration = 3600  # 1 hour
-        
-        # Call the function
-        result = s3_utils.generate_presigned_post(
-            s3_client=mock_s3_client,
-            bucket_name=bucket_name,
-            object_key=object_key,
-            fields=fields,
-            conditions=conditions,
-            expiration=expiration
-        )
-        
-        # Verify the result
-        assert result['url'] == 'https://test-bucket.s3.amazonaws.com/'
-        assert result['fields']['key'] == 'test-document.pdf'
-        assert result['fields']['x-amz-server-side-encryption'] == 'AES256'
-        
-        # Verify generate_presigned_post was called with the correct parameters
-        mock_s3_client.generate_presigned_post.assert_called_once_with(
-            Bucket=bucket_name,
-            Key=object_key,
-            Fields={
-                'success_action_redirect': 'https://example.com/success',
-                'x-amz-server-side-encryption': 'AES256'
-            },
-            Conditions=[
-                {'acl': 'private'},
-                {'x-amz-server-side-encryption': 'AES256'}
-            ],
-            ExpiresIn=expiration
-        )
-    
-    def test_get_document_url(self, mock_s3_client):
-        """Test getting a direct URL to a document in S3."""
-        # Set up the mock
-        mock_s3_client.meta.region_name = 'us-east-1'
-        mock_s3_client.meta.endpoint_url = None  # Standard AWS S3
-        
-        # Test data
-        bucket_name = 'test-bucket'
-        object_key = 'test-document.pdf'
-        
-        # Call the function
-        result = s3_utils.get_document_url(
-            s3_client=mock_s3_client,
-            bucket_name=bucket_name,
-            object_key=object_key
-        )
-        
-        # Verify the result for standard AWS S3
-        assert result == 'https://test-bucket.s3.us-east-1.amazonaws.com/test-document.pdf'
-        
-        # Test with custom endpoint
-        mock_s3_client.meta.endpoint_url = 'http://localhost:9000'
-        
-        # Call the function again
-        result = s3_utils.get_document_url(
-            s3_client=mock_s3_client,
-            bucket_name=bucket_name,
-            object_key=object_key
-        )
-        
-        # Verify the result for custom endpoint
-        assert result == 'http://localhost:9000/test-bucket/test-document.pdf'
-
-
-# ============================================================================
-# Test Bucket Operations Functions
-# ============================================================================
-
-class TestBucketOperations:
-    """Tests for bucket operations functions."""
-
-    def test_check_bucket_encryption_enabled(self, mock_s3_client):
-        """Test checking if a bucket has AES-256 encryption enabled (positive case)."""
-        # Set up the mock
-        mock_s3_client.get_bucket_encryption.return_value = {
-            'ServerSideEncryptionConfiguration': {
-                'Rules': [
-                    {
-                        'ApplyServerSideEncryptionByDefault': {
-                            'SSEAlgorithm': 'AES256'
-                        },
-                        'BucketKeyEnabled': True
-                    }
-                ]
-            }
-        }
-        
-        # Test data
-        bucket_name = 'test-bucket'
-        
-        # Call the function
-        result = s3_utils.check_bucket_encryption(mock_s3_client, bucket_name)
-        
-        # Verify the result
-        assert result is True
-        
-        # Verify get_bucket_encryption was called with the correct parameters
-        mock_s3_client.get_bucket_encryption.assert_called_once_with(Bucket=bucket_name)
-    
-    def test_check_bucket_encryption_disabled(self, mock_s3_client):
-        """Test checking if a bucket has AES-256 encryption enabled (negative case)."""
-        # Set up the mock
-        mock_s3_client.get_bucket_encryption.return_value = {
-            'ServerSideEncryptionConfiguration': {
-                'Rules': [
-                    {
-                        'ApplyServerSideEncryptionByDefault': {
-                            'SSEAlgorithm': 'KMS'
-                        },
-                        'BucketKeyEnabled': True
-                    }
-                ]
-            }
-        }
-        
-        # Test data
-        bucket_name = 'test-bucket'
-        
-        # Call the function
-        result = s3_utils.check_bucket_encryption(mock_s3_client, bucket_name)
-        
-        # Verify the result
-        assert result is False
-        
-        # Verify get_bucket_encryption was called with the correct parameters
-        mock_s3_client.get_bucket_encryption.assert_called_once_with(Bucket=bucket_name)
-    
-    def test_check_bucket_encryption_not_configured(self, mock_s3_client):
-        """Test checking if a bucket has encryption when it's not configured."""
-        # Set up the mock to raise a ClientError for no encryption configuration
-        error_response = {'Error': {'Code': 'ServerSideEncryptionConfigurationNotFoundError', 'Message': 'The server side encryption configuration was not found'}}
-        mock_s3_client.get_bucket_encryption.side_effect = ClientError(error_response, 'GetBucketEncryption')
-        
-        # Test data
-        bucket_name = 'test-bucket'
-        
-        # Call the function
-        result = s3_utils.check_bucket_encryption(mock_s3_client, bucket_name)
-        
-        # Verify the result
-        assert result is False
-        
-        # Verify get_bucket_encryption was called with the correct parameters
-        mock_s3_client.get_bucket_encryption.assert_called_once_with(Bucket=bucket_name)
-    
-    def test_enable_bucket_encryption(self, mock_s3_client):
-        """Test enabling AES-256 encryption for a bucket."""
-        # Set up the mock
-        mock_s3_client.put_bucket_encryption.return_value = {}
-        
-        # Test data
-        bucket_name = 'test-bucket'
-        
-        # Call the function
-        result = s3_utils.enable_bucket_encryption(mock_s3_client, bucket_name)
-        
-        # Verify the result
-        assert result == {}
-        
-        # Verify put_bucket_encryption was called with the correct parameters
-        mock_s3_client.put_bucket_encryption.assert_called_once_with(
-            Bucket=bucket_name,
-            ServerSideEncryptionConfiguration={
-                'Rules': [
-                    {
-                        'ApplyServerSideEncryptionByDefault': {
-                            'SSEAlgorithm': 'AES256'
-                        },
-                        'BucketKeyEnabled': True
-                    }
-                ]
-            }
-        )
-
-
-# ============================================================================
-# Test Document Operations Functions
-# ============================================================================
-
-class TestDocumentOperations:
-    """Tests for document operations functions."""
-
-    def test_delete_document(self, mock_s3_client):
-        """Test deleting a document from S3."""
-        # Set up the mock
-        mock_s3_client.delete_object.return_value = {}
-        
-        # Test data
-        bucket_name = 'test-bucket'
-        object_key = 'test-document.pdf'
-        
-        # Call the function
-        result = s3_utils.delete_document(mock_s3_client, bucket_name, object_key)
-        
-        # Verify the result
-        assert result == {}
-        
-        # Verify delete_object was called with the correct parameters
-        mock_s3_client.delete_object.assert_called_once_with(
-            Bucket=bucket_name,
-            Key=object_key
-        )
-    
-    def test_list_documents(self, mock_s3_client):
-        """Test listing documents in an S3 bucket."""
-        # Set up the mock
-        mock_s3_client.list_objects_v2.return_value = {
-            'Contents': [
-                {
-                    'Key': 'document1.pdf',
-                    'Size': 1024,
-                    'LastModified': datetime.datetime.now(),
-                    'ETag': '"123456789"',
-                    'StorageClass': 'STANDARD'
-                },
-                {
-                    'Key': 'document2.pdf',
-                    'Size': 2048,
-                    'LastModified': datetime.datetime.now(),
-                    'ETag': '"987654321"',
-                    'StorageClass': 'STANDARD'
-                }
-            ]
-        }
-        
-        # Test data
-        bucket_name = 'test-bucket'
-        prefix = 'documents/'
-        max_keys = 10
-        
-        # Call the function
-        result = s3_utils.list_documents(
-            s3_client=mock_s3_client,
-            bucket_name=bucket_name,
-            prefix=prefix,
-            max_keys=max_keys
-        )
-        
-        # Verify the result
-        assert len(result) == 2
-        assert result[0]['Key'] == 'document1.pdf'
-        assert result[0]['Size'] == 1024
-        assert 'LastModified' in result[0]
-        assert result[0]['ETag'] == '"123456789"'
-        assert result[0]['StorageClass'] == 'STANDARD'
-        
-        # Verify list_objects_v2 was called with the correct parameters
-        mock_s3_client.list_objects_v2.assert_called_once_with(
-            Bucket=bucket_name,
-            Prefix=prefix,
-            MaxKeys=max_keys
-        )
-    
-    def test_list_documents_by_classification(self, mock_s3_client):
-        """Test listing documents in an S3 bucket with a specific classification."""
-        # Set up the mocks
-        mock_s3_client.list_objects_v2.return_value = {
-            'Contents': [
-                {'Key': 'document1.pdf', 'Size': 1024, 'LastModified': datetime.datetime.now()},
-                {'Key': 'document2.pdf', 'Size': 2048, 'LastModified': datetime.datetime.now()}
-            ]
-        }
-        
-        # Mock the get_document_classification function
-        with patch('document_service.utils.s3_utils.get_document_classification') as mock_get_classification:
-            # First document is an application form, second is a tax return
-            mock_get_classification.side_effect = [
-                ('application_form', 0.95),
-                ('tax_return', 0.98)
-            ]
+        This test verifies that the generate_presigned_url function correctly handles errors
+        when generating a presigned URL for secure access to a document stored in S3.
+        """
+        # Mock the S3 client to raise an error
+        error = s3_client_error_factory('InvalidRequest', 'GetObject')
+        with patch('document_service.src.config.s3_config.s3_client.generate_presigned_url', side_effect=error):
+            # Attempt to generate a presigned URL
+            success, url = s3_utils.generate_presigned_url('non_existent_key')
             
-            # Test data
-            bucket_name = 'test-bucket'
-            classification = 'application_form'
-            prefix = 'documents/'
-            max_keys = 10
-            
-            # Call the function
-            result = s3_utils.list_documents_by_classification(
-                s3_client=mock_s3_client,
-                bucket_name=bucket_name,
-                classification=classification,
-                prefix=prefix,
-                max_keys=max_keys
-            )
-            
-            # Verify the result
-            assert len(result) == 1
-            assert result[0]['Key'] == 'document1.pdf'
-            
-            # Verify list_documents was called with the correct parameters
-            mock_s3_client.list_objects_v2.assert_called_once_with(
-                Bucket=bucket_name,
-                Prefix=prefix,
-                MaxKeys=max_keys
-            )
-            
-            # Verify get_document_classification was called for each document
-            assert mock_get_classification.call_count == 2
-            mock_get_classification.assert_has_calls([
-                call(mock_s3_client, bucket_name, 'document1.pdf'),
-                call(mock_s3_client, bucket_name, 'document2.pdf')
-            ])
-    
-    def test_document_exists(self, mock_s3_client):
-        """Test checking if a document exists in S3 (positive case)."""
-        # Set up the mock
-        mock_s3_client.head_object.return_value = {
-            'ContentType': 'application/pdf',
-            'ContentLength': 1024
-        }
-        
-        # Test data
-        bucket_name = 'test-bucket'
-        object_key = 'test-document.pdf'
-        
-        # Call the function
-        result = s3_utils.document_exists(mock_s3_client, bucket_name, object_key)
-        
-        # Verify the result
-        assert result is True
-        
-        # Verify head_object was called with the correct parameters
-        mock_s3_client.head_object.assert_called_once_with(
-            Bucket=bucket_name,
-            Key=object_key
-        )
-    
-    def test_document_does_not_exist(self, mock_s3_client):
-        """Test checking if a document exists in S3 (negative case)."""
-        # Set up the mock to raise a ClientError for non-existent object
-        error_response = {'Error': {'Code': '404', 'Message': 'Not Found'}}
-        mock_s3_client.head_object.side_effect = ClientError(error_response, 'HeadObject')
-        
-        # Test data
-        bucket_name = 'test-bucket'
-        object_key = 'non-existent-document.pdf'
-        
-        # Call the function
-        result = s3_utils.document_exists(mock_s3_client, bucket_name, object_key)
-        
-        # Verify the result
-        assert result is False
-        
-        # Verify head_object was called with the correct parameters
-        mock_s3_client.head_object.assert_called_once_with(
-            Bucket=bucket_name,
-            Key=object_key
-        )
+            # Verify failure
+            assert success is False
+            assert url is None
 
+    def test_list_documents_by_type_error(self, s3_client_error_factory):
+        """Test error handling when listing documents of a specific type stored in S3.
+        
+        This test verifies that the list_documents_by_type function correctly handles errors
+        when listing documents of a specific type stored in S3.
+        """
+        # Mock the S3 client to raise an error
+        error = s3_client_error_factory('AccessDenied', 'ListObjects')
+        with patch('document_service.src.config.s3_config.s3_client.get_paginator', side_effect=error):
+            # Attempt to list documents by type
+            success, documents = s3_utils.list_documents_by_type('loan_application')
+            
+            # Verify failure
+            assert success is False
+            assert documents is None
 
-if __name__ == '__main__':
-    pytest.main(['-xvs', __file__])
+    def test_delete_document_error(self, s3_client_error_factory):
+        """Test error handling when deleting a document from S3.
+        
+        This test verifies that the delete_document function correctly handles errors
+        when deleting a document from S3.
+        """
+        # Mock the S3 client to raise an error
+        error = s3_client_error_factory('AccessDenied', 'DeleteObject')
+        with patch('document_service.src.config.s3_config.s3_client.delete_object', side_effect=error):
+            # Attempt to delete the document
+            success = s3_utils.delete_document('non_existent_key')
+            
+            # Verify failure
+            assert success is False
+
+    def test_copy_document_error(self, s3_client_error_factory):
+        """Test error handling when copying a document within S3.
+        
+        This test verifies that the copy_document function correctly handles errors
+        when copying a document within S3.
+        """
+        # Mock the S3 client to raise an error
+        error = s3_client_error_factory('AccessDenied', 'CopyObject')
+        with patch('document_service.src.config.s3_config.s3_client.copy_object', side_effect=error):
+            # Attempt to copy the document
+            success = s3_utils.copy_document('source_key', 'dest_key')
+            
+            # Verify failure
+            assert success is False
+
+    def test_check_document_exists_error(self, s3_client_error_factory):
+        """Test error handling when checking if a document exists in S3.
+        
+        This test verifies that the check_document_exists function correctly handles errors
+        when checking if a document exists in S3.
+        """
+        # Mock the S3 client to raise an error other than 404
+        error = s3_client_error_factory('AccessDenied', 'HeadObject')
+        with patch('document_service.src.config.s3_config.s3_client.head_object', side_effect=error):
+            # Attempt to check if document exists
+            exists = s3_utils.check_document_exists('test_key')
+            
+            # Verify failure
+            assert exists is False
+
+    def test_get_document_classification_error(self):
+        """Test error handling when getting the classification type and confidence score for a document.
+        
+        This test verifies that the get_document_classification function correctly handles errors
+        when getting the classification type and confidence score for a document stored in S3.
+        """
+        # Mock the get_document_metadata function to return failure
+        with patch('document_service.src.utils.s3_utils.get_document_metadata', return_value=(False, None)):
+            # Attempt to get document classification
+            success, doc_type, confidence = s3_utils.get_document_classification('non_existent_key')
+            
+            # Verify failure
+            assert success is False
+            assert doc_type is None
+            assert confidence is None
+
+    def test_add_classification_metadata_error(self):
+        """Test error handling when adding or updating classification metadata for a document.
+        
+        This test verifies that the add_classification_metadata function correctly handles errors
+        when adding or updating classification metadata for a document stored in S3.
+        """
+        # Mock the get_document_metadata function to return failure
+        with patch('document_service.src.utils.s3_utils.get_document_metadata', return_value=(False, None)):
+            # Attempt to add classification metadata
+            success = s3_utils.add_classification_metadata('non_existent_key', 'loan_application', 0.95)
+            
+            # Verify failure
+            assert success is False
