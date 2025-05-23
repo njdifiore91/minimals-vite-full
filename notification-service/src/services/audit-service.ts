@@ -1,1056 +1,785 @@
-/**
- * Audit Service
- * 
- * This service logs and stores audit records for all notification activities.
- * It captures detailed information about notification attempts, delivery status,
- * and error conditions for compliance, troubleshooting, and monitoring purposes.
- */
-
-import { v4 as uuidv4 } from 'uuid';
+import { createHash } from 'crypto';
 import { Logger } from 'winston';
-import { Pool, PoolClient } from 'pg';
+import { Redis } from 'ioredis';
 
-// Import types
-import { 
-  ILogContext, 
-  IServiceStatus,
-  IDateValue 
-} from '../types/common';
-import { 
-  NotificationType, 
+import { config } from '../config';
+import {
+  INotification,
+  INotificationResult,
+  NotificationChannel,
   NotificationStatus,
-  NotificationPriority 
-} from '../types/notification';
-import { MessageChannel, MessageStatus } from '../types/message';
-import { WebhookStatus } from '../types/webhook';
-
-// Import configuration
-import { logger } from '../config/logger';
-import { appConfig } from '../config/app';
-
-// Import utilities
-import { formatTime } from '../utils/format-time';
+  NotificationType,
+  IDateValue,
+  ILogContext,
+} from '../types';
+import { formatTime } from '../utils';
 
 /**
- * Enum representing the types of audit events
+ * Enum representing the types of audit events that can be logged.
  */
 export enum AuditEventType {
-  // Notification events
-  NOTIFICATION_RECEIVED = 'NOTIFICATION_RECEIVED',
-  NOTIFICATION_PROCESSED = 'NOTIFICATION_PROCESSED',
-  NOTIFICATION_COMPLETED = 'NOTIFICATION_COMPLETED',
+  NOTIFICATION_CREATED = 'NOTIFICATION_CREATED',
+  NOTIFICATION_DELIVERED = 'NOTIFICATION_DELIVERED',
   NOTIFICATION_FAILED = 'NOTIFICATION_FAILED',
-  
-  // Webhook events
-  WEBHOOK_DELIVERY_ATTEMPTED = 'WEBHOOK_DELIVERY_ATTEMPTED',
-  WEBHOOK_DELIVERY_SUCCEEDED = 'WEBHOOK_DELIVERY_SUCCEEDED',
-  WEBHOOK_DELIVERY_FAILED = 'WEBHOOK_DELIVERY_FAILED',
+  NOTIFICATION_RETRYING = 'NOTIFICATION_RETRYING',
+  WEBHOOK_REQUEST_SENT = 'WEBHOOK_REQUEST_SENT',
   WEBHOOK_RESPONSE_RECEIVED = 'WEBHOOK_RESPONSE_RECEIVED',
-  
-  // Retry events
+  EMAIL_SENT = 'EMAIL_SENT',
+  SMS_SENT = 'SMS_SENT',
+  PUSH_SENT = 'PUSH_SENT',
   RETRY_SCHEDULED = 'RETRY_SCHEDULED',
   RETRY_ATTEMPTED = 'RETRY_ATTEMPTED',
-  RETRY_SUCCEEDED = 'RETRY_SUCCEEDED',
-  RETRY_FAILED = 'RETRY_FAILED',
   RETRY_EXHAUSTED = 'RETRY_EXHAUSTED',
-  
-  // Message events
-  MESSAGE_CREATED = 'MESSAGE_CREATED',
-  MESSAGE_SENT = 'MESSAGE_SENT',
-  MESSAGE_DELIVERED = 'MESSAGE_DELIVERED',
-  MESSAGE_FAILED = 'MESSAGE_FAILED',
-  
-  // System events
-  SYSTEM_ERROR = 'SYSTEM_ERROR',
   CONFIGURATION_CHANGED = 'CONFIGURATION_CHANGED',
-  SERVICE_STARTED = 'SERVICE_STARTED',
-  SERVICE_STOPPED = 'SERVICE_STOPPED'
+  SECURITY_EVENT = 'SECURITY_EVENT',
+  SYSTEM_ERROR = 'SYSTEM_ERROR'
 }
 
 /**
- * Enum representing the outcome status of audit events
- */
-export enum AuditStatus {
-  SUCCESS = 'SUCCESS',
-  FAILURE = 'FAILURE',
-  WARNING = 'WARNING',
-  INFO = 'INFO'
-}
-
-/**
- * Interface representing an audit record
+ * Interface for audit record data structure.
+ * Captures comprehensive information about notification activities for compliance and troubleshooting.
  */
 export interface IAuditRecord {
+  /** Unique identifier for the audit record */
   id: string;
-  timestamp: Date;
+  /** Type of audit event */
   eventType: AuditEventType;
-  status: AuditStatus;
-  channel?: MessageChannel;
-  recipientId?: string;
+  /** Timestamp when the event occurred */
+  timestamp: IDateValue;
+  /** Associated notification ID if applicable */
   notificationId?: string;
-  messageId?: string;
-  duration?: number;
-  errorCode?: string;
+  /** Associated recipient ID if applicable */
+  recipientId?: string;
+  /** Notification type if applicable */
+  notificationType?: NotificationType;
+  /** Notification channel if applicable */
+  channel?: NotificationChannel;
+  /** Current status of the notification */
+  status?: NotificationStatus;
+  /** User or system that initiated the action */
+  actor: string;
+  /** IP address where the action originated */
+  sourceIp?: string;
+  /** HTTP status code for webhook responses */
+  statusCode?: number;
+  /** Error message if applicable */
   errorMessage?: string;
-  metadata: Record<string, any>;
+  /** Duration of the operation in milliseconds */
+  duration?: number;
+  /** Number of retry attempts if applicable */
+  retryCount?: number;
+  /** Correlation ID for cross-service tracing */
   correlationId: string;
-  createdAt: Date;
-  updatedAt: Date;
-}
-
-/**
- * Interface for audit record creation
- */
-export interface IAuditRecordCreate {
-  eventType: AuditEventType;
-  status: AuditStatus;
-  channel?: MessageChannel;
-  recipientId?: string;
-  notificationId?: string;
-  messageId?: string;
-  duration?: number;
-  errorCode?: string;
-  errorMessage?: string;
+  /** Additional context-specific data */
   metadata?: Record<string, any>;
-  correlationId?: string;
 }
 
 /**
- * Interface for audit query filters
+ * Interface for audit record query parameters.
+ * Used to filter audit records for reporting and compliance purposes.
  */
-export interface IAuditQueryFilters {
-  eventTypes?: AuditEventType[];
-  statuses?: AuditStatus[];
-  channels?: MessageChannel[];
-  recipientId?: string;
+export interface IAuditQueryParams {
+  /** Filter by event type */
+  eventType?: AuditEventType | AuditEventType[];
+  /** Filter by notification ID */
   notificationId?: string;
-  messageId?: string;
+  /** Filter by recipient ID */
+  recipientId?: string;
+  /** Filter by notification type */
+  notificationType?: NotificationType;
+  /** Filter by notification channel */
+  channel?: NotificationChannel;
+  /** Filter by notification status */
+  status?: NotificationStatus;
+  /** Filter by actor (user or system) */
+  actor?: string;
+  /** Filter by start timestamp */
+  startTime?: IDateValue;
+  /** Filter by end timestamp */
+  endTime?: IDateValue;
+  /** Filter by correlation ID */
   correlationId?: string;
-  startDate?: Date;
-  endDate?: Date;
+  /** Pagination: number of records to skip */
+  skip?: number;
+  /** Pagination: number of records to return */
   limit?: number;
-  offset?: number;
-  sortBy?: string;
-  sortDirection?: 'ASC' | 'DESC';
+  /** Sorting field */
+  sortBy?: keyof IAuditRecord;
+  /** Sorting direction */
+  sortDirection?: 'asc' | 'desc';
 }
 
 /**
- * Interface for audit metrics filters
+ * Interface for audit record storage options.
+ * Configures how audit records are stored and retained.
  */
-export interface IAuditMetricsFilters {
-  eventTypes?: AuditEventType[];
-  channels?: MessageChannel[];
-  startDate?: Date;
-  endDate?: Date;
-  groupBy?: 'hour' | 'day' | 'week' | 'month';
+export interface IAuditStorageOptions {
+  /** Whether to store audit records in the database */
+  persistToDatabase: boolean;
+  /** Whether to store audit records in Redis cache */
+  cacheInRedis: boolean;
+  /** TTL for Redis cache entries in seconds */
+  redisTTL: number;
+  /** Whether to include sensitive data in audit records */
+  includeSensitiveData: boolean;
+  /** Whether to compress audit records for storage */
+  compressRecords: boolean;
 }
 
 /**
- * Interface for audit metrics results
+ * Interface for audit service configuration.
  */
-export interface IAuditMetrics {
-  totalCount: number;
-  successCount: number;
-  failureCount: number;
-  warningCount: number;
-  averageDuration: number;
-  successRate: number;
-  timePoints: Array<{
-    timePoint: Date;
-    count: number;
-    successCount: number;
-    failureCount: number;
-    averageDuration: number;
-  }>;
+export interface IAuditServiceConfig {
+  /** Whether the audit service is enabled */
+  enabled: boolean;
+  /** Default storage options */
+  storageOptions: IAuditStorageOptions;
+  /** Events that should be excluded from auditing */
+  excludedEvents?: AuditEventType[];
+  /** Maximum size of metadata to store (in bytes) */
+  maxMetadataSize: number;
+  /** Whether to redact sensitive information */
+  redactSensitiveInfo: boolean;
+  /** Fields to consider sensitive */
+  sensitiveFields: string[];
 }
 
 /**
- * Interface for the Audit Service
+ * Service that logs and stores audit records for all notification activities.
+ * Captures detailed information about notification attempts, delivery status, and error conditions
+ * for compliance, troubleshooting, and monitoring purposes.
  */
-export interface IAuditService {
-  createAuditRecord(record: IAuditRecordCreate): Promise<IAuditRecord>;
-  queryAuditRecords(filters: IAuditQueryFilters): Promise<IAuditRecord[]>;
-  getAuditRecordById(id: string): Promise<IAuditRecord | null>;
-  getAuditRecordsByNotificationId(notificationId: string): Promise<IAuditRecord[]>;
-  getAuditRecordsByRecipientId(recipientId: string): Promise<IAuditRecord[]>;
-  getAuditRecordsByDateRange(startDate: Date, endDate: Date): Promise<IAuditRecord[]>;
-  getAuditRecordsByStatus(status: AuditStatus): Promise<IAuditRecord[]>;
-  getAuditRecordsByEventType(eventType: AuditEventType): Promise<IAuditRecord[]>;
-  getAuditRecordsByChannel(channel: MessageChannel): Promise<IAuditRecord[]>;
-  getAuditMetrics(filters: IAuditMetricsFilters): Promise<IAuditMetrics>;
-  getServiceStatus(): Promise<IServiceStatus>;
-}
+export class AuditService {
+  private readonly logger: Logger;
+  private readonly redis?: Redis;
+  private readonly config: IAuditServiceConfig;
+  private readonly defaultStorageOptions: IAuditStorageOptions;
 
-/**
- * Implementation of the Audit Service
- */
-export class AuditService implements IAuditService {
-  private logger: Logger;
-  private dbPool: Pool;
-  private initialized: boolean = false;
-  private serviceStartTime: Date;
-  private storageType: 'postgres' | 'memory' | 'file';
-  private memoryStorage: IAuditRecord[] = [];
-  private filePath?: string;
-  
   /**
-   * Constructor for the AuditService
-   * @param dbPool - PostgreSQL connection pool
-   * @param logger - Winston logger instance
-   * @param storageType - Storage backend type (postgres, memory, or file)
-   * @param filePath - Path to file storage (if using file storage)
+   * Creates a new instance of the AuditService.
+   * 
+   * @param logger Winston logger instance for logging
+   * @param redis Optional Redis client for caching audit records
    */
-  constructor(
-    dbPool?: Pool,
-    logger?: Logger,
-    storageType: 'postgres' | 'memory' | 'file' = 'postgres',
-    filePath?: string
-  ) {
-    this.logger = logger || global.logger || console;
-    this.dbPool = dbPool;
-    this.serviceStartTime = new Date();
-    this.storageType = storageType;
-    this.filePath = filePath;
+  constructor(logger: Logger, redis?: Redis) {
+    this.logger = logger;
+    this.redis = redis;
     
-    // Log service initialization
-    this.logger.info('Audit Service initialized', {
-      service: 'AuditService',
-      storageType: this.storageType,
-      timestamp: this.serviceStartTime
-    });
+    // Load configuration from environment or defaults
+    this.config = {
+      enabled: config.audit?.enabled ?? true,
+      storageOptions: {
+        persistToDatabase: config.audit?.persistToDatabase ?? true,
+        cacheInRedis: config.audit?.cacheInRedis ?? !!redis,
+        redisTTL: config.audit?.redisTTL ?? 86400, // 24 hours default
+        includeSensitiveData: config.audit?.includeSensitiveData ?? false,
+        compressRecords: config.audit?.compressRecords ?? false,
+      },
+      excludedEvents: config.audit?.excludedEvents ?? [],
+      maxMetadataSize: config.audit?.maxMetadataSize ?? 10240, // 10KB default
+      redactSensitiveInfo: config.audit?.redactSensitiveInfo ?? true,
+      sensitiveFields: config.audit?.sensitiveFields ?? [
+        'password', 'token', 'secret', 'key', 'authorization', 'credential'
+      ],
+    };
     
-    // Create an initial audit record for service start
-    this.createAuditRecord({
-      eventType: AuditEventType.SERVICE_STARTED,
-      status: AuditStatus.INFO,
-      metadata: {
-        version: appConfig.version,
-        environment: appConfig.environment,
-        storageType: this.storageType
-      }
-    }).catch(err => {
-      this.logger.error('Failed to create service start audit record', {
-        service: 'AuditService',
-        error: err.message,
-        stack: err.stack
-      });
+    this.defaultStorageOptions = this.config.storageOptions;
+    
+    this.logger.info('AuditService initialized', { 
+      enabled: this.config.enabled,
+      persistToDatabase: this.defaultStorageOptions.persistToDatabase,
+      cacheInRedis: this.defaultStorageOptions.cacheInRedis,
     });
   }
-  
+
   /**
-   * Initialize the audit service
+   * Creates and stores an audit record for a notification event.
+   * 
+   * @param eventType Type of audit event
+   * @param data Additional data for the audit record
+   * @param options Storage options for this specific audit record
+   * @returns The created audit record ID
    */
-  public async initialize(): Promise<void> {
-    if (this.initialized) {
-      return;
-    }
-    
+  public async createAuditRecord(
+    eventType: AuditEventType,
+    data: Partial<IAuditRecord>,
+    options?: Partial<IAuditStorageOptions>
+  ): Promise<string> {
     try {
-      if (this.storageType === 'postgres' && this.dbPool) {
-        // Ensure the audit_records table exists
-        await this.ensureTableExists();
-      } else if (this.storageType === 'file' && this.filePath) {
-        // Ensure the file storage is ready
-        await this.ensureFileStorageReady();
+      // Skip if auditing is disabled or this event type is excluded
+      if (!this.config.enabled || this.config.excludedEvents?.includes(eventType)) {
+        return '';
       }
+
+      const timestamp = formatTime(new Date());
+      const id = this.generateAuditId(eventType, timestamp, data.correlationId || '');
       
-      this.initialized = true;
-      this.logger.info('Audit Service successfully initialized', {
-        service: 'AuditService',
-        storageType: this.storageType
-      });
-    } catch (error) {
-      this.logger.error('Failed to initialize Audit Service', {
-        service: 'AuditService',
-        error: error.message,
-        stack: error.stack
-      });
-      throw error;
-    }
-  }
-  
-  /**
-   * Create a new audit record
-   * @param record - The audit record to create
-   * @returns The created audit record
-   */
-  public async createAuditRecord(record: IAuditRecordCreate): Promise<IAuditRecord> {
-    try {
-      // Ensure the service is initialized
-      if (!this.initialized) {
-        await this.initialize();
-      }
-      
-      const now = new Date();
+      // Create the audit record
       const auditRecord: IAuditRecord = {
-        id: uuidv4(),
-        timestamp: now,
-        eventType: record.eventType,
-        status: record.status,
-        channel: record.channel,
-        recipientId: record.recipientId,
-        notificationId: record.notificationId,
-        messageId: record.messageId,
-        duration: record.duration,
-        errorCode: record.errorCode,
-        errorMessage: record.errorMessage,
-        metadata: record.metadata || {},
-        correlationId: record.correlationId || uuidv4(),
-        createdAt: now,
-        updatedAt: now
+        id,
+        eventType,
+        timestamp,
+        actor: data.actor || 'system',
+        correlationId: data.correlationId || 'unknown',
+        ...data,
       };
+
+      // Process sensitive data if needed
+      const processedRecord = this.config.redactSensitiveInfo 
+        ? this.redactSensitiveData(auditRecord) 
+        : auditRecord;
       
-      // Store the audit record based on the configured storage type
-      if (this.storageType === 'postgres' && this.dbPool) {
-        return await this.storeAuditRecordInPostgres(auditRecord);
-      } else if (this.storageType === 'file' && this.filePath) {
-        return await this.storeAuditRecordInFile(auditRecord);
-      } else {
-        // Default to memory storage
-        return this.storeAuditRecordInMemory(auditRecord);
+      // Trim metadata if it exceeds the maximum size
+      if (processedRecord.metadata && 
+          JSON.stringify(processedRecord.metadata).length > this.config.maxMetadataSize) {
+        processedRecord.metadata = {
+          _truncated: true,
+          _originalSize: JSON.stringify(processedRecord.metadata).length,
+          _message: 'Metadata exceeded maximum size and was truncated',
+        };
       }
+
+      // Determine storage options by merging defaults with provided options
+      const storageOptions: IAuditStorageOptions = {
+        ...this.defaultStorageOptions,
+        ...options,
+      };
+
+      // Store the audit record based on configuration
+      await this.storeAuditRecord(processedRecord, storageOptions);
+
+      // Log the audit event at the appropriate level
+      this.logAuditEvent(processedRecord);
+
+      return id;
     } catch (error) {
+      // Log the error but don't throw to avoid disrupting the main flow
       this.logger.error('Failed to create audit record', {
-        service: 'AuditService',
-        eventType: record.eventType,
-        error: error.message,
-        stack: error.stack
+        eventType,
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
       });
       
-      // Even if storage fails, return a valid audit record
-      // This ensures the calling code can continue without errors
-      const fallbackRecord: IAuditRecord = {
-        id: uuidv4(),
-        timestamp: new Date(),
-        eventType: record.eventType,
-        status: record.status,
-        channel: record.channel,
-        recipientId: record.recipientId,
-        notificationId: record.notificationId,
-        messageId: record.messageId,
-        duration: record.duration,
-        errorCode: record.errorCode || 'AUDIT_STORAGE_ERROR',
-        errorMessage: record.errorMessage || `Failed to store audit record: ${error.message}`,
-        metadata: record.metadata || {},
-        correlationId: record.correlationId || uuidv4(),
-        createdAt: new Date(),
-        updatedAt: new Date()
-      };
-      
-      // Store the error in memory as a fallback
-      this.memoryStorage.push(fallbackRecord);
-      
-      return fallbackRecord;
+      return '';
     }
   }
-  
+
   /**
-   * Query audit records based on filters
-   * @param filters - The filters to apply to the query
-   * @returns An array of matching audit records
+   * Logs a notification creation event.
+   * 
+   * @param notification The notification that was created
+   * @param context Additional context information
+   * @returns The created audit record ID
    */
-  public async queryAuditRecords(filters: IAuditQueryFilters): Promise<IAuditRecord[]> {
+  public async logNotificationCreated(
+    notification: INotification,
+    context: ILogContext
+  ): Promise<string> {
+    return this.createAuditRecord(AuditEventType.NOTIFICATION_CREATED, {
+      notificationId: notification.id,
+      notificationType: notification.type,
+      status: notification.status,
+      correlationId: context.correlationId,
+      actor: context.userId || 'system',
+      metadata: {
+        recipientCount: notification.recipients.length,
+        priority: notification.priority,
+        channels: notification.recipients.map(r => r.channel),
+      },
+    });
+  }
+
+  /**
+   * Logs a notification delivery event.
+   * 
+   * @param result The notification delivery result
+   * @param context Additional context information
+   * @returns The created audit record ID
+   */
+  public async logNotificationDelivered(
+    result: INotificationResult,
+    notification: INotification,
+    context: ILogContext
+  ): Promise<string> {
+    const recipient = notification.recipients.find(r => r.id === result.recipientId);
+    
+    return this.createAuditRecord(AuditEventType.NOTIFICATION_DELIVERED, {
+      notificationId: result.notificationId,
+      recipientId: result.recipientId,
+      notificationType: notification.type,
+      channel: recipient?.channel,
+      status: NotificationStatus.DELIVERED,
+      statusCode: result.statusCode,
+      duration: result.duration,
+      correlationId: context.correlationId,
+      actor: context.userId || 'system',
+      metadata: {
+        responseBody: result.responseBody ? this.truncateResponseBody(result.responseBody) : undefined,
+        attemptedAt: result.attemptedAt,
+      },
+    });
+  }
+
+  /**
+   * Logs a notification failure event.
+   * 
+   * @param result The notification delivery result
+   * @param notification The notification that failed
+   * @param context Additional context information
+   * @returns The created audit record ID
+   */
+  public async logNotificationFailed(
+    result: INotificationResult,
+    notification: INotification,
+    context: ILogContext
+  ): Promise<string> {
+    const recipient = notification.recipients.find(r => r.id === result.recipientId);
+    
+    return this.createAuditRecord(AuditEventType.NOTIFICATION_FAILED, {
+      notificationId: result.notificationId,
+      recipientId: result.recipientId,
+      notificationType: notification.type,
+      channel: recipient?.channel,
+      status: NotificationStatus.FAILED,
+      statusCode: result.statusCode,
+      errorMessage: result.errorMessage,
+      duration: result.duration,
+      retryCount: notification.metadata.retryCount,
+      correlationId: context.correlationId,
+      actor: context.userId || 'system',
+      metadata: {
+        responseBody: result.responseBody ? this.truncateResponseBody(result.responseBody) : undefined,
+        attemptedAt: result.attemptedAt,
+        maxRetries: notification.metadata.maxRetries,
+      },
+    });
+  }
+
+  /**
+   * Logs a notification retry event.
+   * 
+   * @param result The notification delivery result
+   * @param notification The notification being retried
+   * @param nextRetryAt When the next retry will be attempted
+   * @param context Additional context information
+   * @returns The created audit record ID
+   */
+  public async logNotificationRetrying(
+    result: INotificationResult,
+    notification: INotification,
+    nextRetryAt: IDateValue,
+    context: ILogContext
+  ): Promise<string> {
+    const recipient = notification.recipients.find(r => r.id === result.recipientId);
+    
+    return this.createAuditRecord(AuditEventType.NOTIFICATION_RETRYING, {
+      notificationId: result.notificationId,
+      recipientId: result.recipientId,
+      notificationType: notification.type,
+      channel: recipient?.channel,
+      status: NotificationStatus.RETRYING,
+      statusCode: result.statusCode,
+      errorMessage: result.errorMessage,
+      duration: result.duration,
+      retryCount: notification.metadata.retryCount,
+      correlationId: context.correlationId,
+      actor: context.userId || 'system',
+      metadata: {
+        responseBody: result.responseBody ? this.truncateResponseBody(result.responseBody) : undefined,
+        attemptedAt: result.attemptedAt,
+        nextRetryAt,
+        maxRetries: notification.metadata.maxRetries,
+      },
+    });
+  }
+
+  /**
+   * Logs a webhook request event.
+   * 
+   * @param notificationId The notification ID
+   * @param recipientId The recipient ID
+   * @param url The webhook URL
+   * @param context Additional context information
+   * @returns The created audit record ID
+   */
+  public async logWebhookRequest(
+    notificationId: string,
+    recipientId: string,
+    url: string,
+    context: ILogContext
+  ): Promise<string> {
+    return this.createAuditRecord(AuditEventType.WEBHOOK_REQUEST_SENT, {
+      notificationId,
+      recipientId,
+      channel: NotificationChannel.WEBHOOK,
+      correlationId: context.correlationId,
+      actor: context.userId || 'system',
+      metadata: {
+        url: this.redactUrlCredentials(url),
+        timestamp: formatTime(new Date()),
+      },
+    });
+  }
+
+  /**
+   * Logs a webhook response event.
+   * 
+   * @param notificationId The notification ID
+   * @param recipientId The recipient ID
+   * @param statusCode The HTTP status code
+   * @param responseBody The response body
+   * @param duration The request duration in milliseconds
+   * @param context Additional context information
+   * @returns The created audit record ID
+   */
+  public async logWebhookResponse(
+    notificationId: string,
+    recipientId: string,
+    statusCode: number,
+    responseBody: string,
+    duration: number,
+    context: ILogContext
+  ): Promise<string> {
+    return this.createAuditRecord(AuditEventType.WEBHOOK_RESPONSE_RECEIVED, {
+      notificationId,
+      recipientId,
+      channel: NotificationChannel.WEBHOOK,
+      statusCode,
+      duration,
+      correlationId: context.correlationId,
+      actor: context.userId || 'system',
+      metadata: {
+        responseBody: this.truncateResponseBody(responseBody),
+        timestamp: formatTime(new Date()),
+      },
+    });
+  }
+
+  /**
+   * Logs a system error event.
+   * 
+   * @param error The error that occurred
+   * @param context Additional context information
+   * @returns The created audit record ID
+   */
+  public async logSystemError(
+    error: Error,
+    context: ILogContext,
+    additionalData?: Record<string, any>
+  ): Promise<string> {
+    return this.createAuditRecord(AuditEventType.SYSTEM_ERROR, {
+      errorMessage: error.message,
+      correlationId: context.correlationId,
+      actor: context.userId || 'system',
+      metadata: {
+        stack: error.stack,
+        name: error.name,
+        ...additionalData,
+      },
+    });
+  }
+
+  /**
+   * Queries audit records based on the provided parameters.
+   * 
+   * @param params Query parameters to filter audit records
+   * @returns Array of matching audit records
+   */
+  public async queryAuditRecords(params: IAuditQueryParams): Promise<IAuditRecord[]> {
     try {
-      // Ensure the service is initialized
-      if (!this.initialized) {
-        await this.initialize();
-      }
+      // This is a placeholder implementation
+      // In a real implementation, this would query a database or other storage
+      this.logger.info('Querying audit records', { params });
       
-      // Query the audit records based on the configured storage type
-      if (this.storageType === 'postgres' && this.dbPool) {
-        return await this.queryAuditRecordsFromPostgres(filters);
-      } else if (this.storageType === 'file' && this.filePath) {
-        return await this.queryAuditRecordsFromFile(filters);
-      } else {
-        // Default to memory storage
-        return this.queryAuditRecordsFromMemory(filters);
-      }
+      // For now, just return an empty array
+      // In a real implementation, this would return actual audit records
+      return [];
     } catch (error) {
       this.logger.error('Failed to query audit records', {
-        service: 'AuditService',
-        filters,
-        error: error.message,
-        stack: error.stack
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
       });
       
-      // Return an empty array on error to prevent calling code from breaking
       return [];
     }
   }
-  
+
   /**
-   * Get an audit record by ID
-   * @param id - The ID of the audit record to retrieve
-   * @returns The audit record or null if not found
+   * Gets audit statistics for the specified time period.
+   * 
+   * @param startTime Start of the time period
+   * @param endTime End of the time period
+   * @returns Audit statistics
    */
-  public async getAuditRecordById(id: string): Promise<IAuditRecord | null> {
+  public async getAuditStats(
+    startTime: IDateValue,
+    endTime: IDateValue
+  ): Promise<Record<string, any>> {
     try {
-      const records = await this.queryAuditRecords({ limit: 1 });
-      return records.find(record => record.id === id) || null;
-    } catch (error) {
-      this.logger.error('Failed to get audit record by ID', {
-        service: 'AuditService',
-        id,
-        error: error.message,
-        stack: error.stack
-      });
-      return null;
-    }
-  }
-  
-  /**
-   * Get audit records by notification ID
-   * @param notificationId - The notification ID to filter by
-   * @returns An array of matching audit records
-   */
-  public async getAuditRecordsByNotificationId(notificationId: string): Promise<IAuditRecord[]> {
-    return this.queryAuditRecords({ notificationId });
-  }
-  
-  /**
-   * Get audit records by recipient ID
-   * @param recipientId - The recipient ID to filter by
-   * @returns An array of matching audit records
-   */
-  public async getAuditRecordsByRecipientId(recipientId: string): Promise<IAuditRecord[]> {
-    return this.queryAuditRecords({ recipientId });
-  }
-  
-  /**
-   * Get audit records by date range
-   * @param startDate - The start date of the range
-   * @param endDate - The end date of the range
-   * @returns An array of matching audit records
-   */
-  public async getAuditRecordsByDateRange(startDate: Date, endDate: Date): Promise<IAuditRecord[]> {
-    return this.queryAuditRecords({ startDate, endDate });
-  }
-  
-  /**
-   * Get audit records by status
-   * @param status - The status to filter by
-   * @returns An array of matching audit records
-   */
-  public async getAuditRecordsByStatus(status: AuditStatus): Promise<IAuditRecord[]> {
-    return this.queryAuditRecords({ statuses: [status] });
-  }
-  
-  /**
-   * Get audit records by event type
-   * @param eventType - The event type to filter by
-   * @returns An array of matching audit records
-   */
-  public async getAuditRecordsByEventType(eventType: AuditEventType): Promise<IAuditRecord[]> {
-    return this.queryAuditRecords({ eventTypes: [eventType] });
-  }
-  
-  /**
-   * Get audit records by channel
-   * @param channel - The channel to filter by
-   * @returns An array of matching audit records
-   */
-  public async getAuditRecordsByChannel(channel: MessageChannel): Promise<IAuditRecord[]> {
-    return this.queryAuditRecords({ channels: [channel] });
-  }
-  
-  /**
-   * Get audit metrics based on filters
-   * @param filters - The filters to apply to the metrics calculation
-   * @returns Audit metrics
-   */
-  public async getAuditMetrics(filters: IAuditMetricsFilters): Promise<IAuditMetrics> {
-    try {
-      // Ensure the service is initialized
-      if (!this.initialized) {
-        await this.initialize();
-      }
+      // This is a placeholder implementation
+      // In a real implementation, this would query a database or other storage
+      this.logger.info('Getting audit statistics', { startTime, endTime });
       
-      // Set default dates if not provided
-      const startDate = filters.startDate || new Date(Date.now() - 24 * 60 * 60 * 1000); // Default to last 24 hours
-      const endDate = filters.endDate || new Date();
-      const groupBy = filters.groupBy || 'hour';
-      
-      // Query audit records for the specified period
-      const records = await this.queryAuditRecords({
-        eventTypes: filters.eventTypes,
-        channels: filters.channels,
-        startDate,
-        endDate,
-        sortBy: 'timestamp',
-        sortDirection: 'ASC'
-      });
-      
-      // Calculate basic metrics
-      const totalCount = records.length;
-      const successCount = records.filter(r => r.status === AuditStatus.SUCCESS).length;
-      const failureCount = records.filter(r => r.status === AuditStatus.FAILURE).length;
-      const warningCount = records.filter(r => r.status === AuditStatus.WARNING).length;
-      
-      // Calculate average duration (only for records that have duration)
-      const recordsWithDuration = records.filter(r => r.duration !== undefined && r.duration !== null);
-      const totalDuration = recordsWithDuration.reduce((sum, record) => sum + (record.duration || 0), 0);
-      const averageDuration = recordsWithDuration.length > 0 ? totalDuration / recordsWithDuration.length : 0;
-      
-      // Calculate success rate
-      const successRate = totalCount > 0 ? (successCount / totalCount) * 100 : 0;
-      
-      // Group records by time points based on the groupBy parameter
-      const timePoints = this.groupRecordsByTimePoints(records, startDate, endDate, groupBy);
-      
+      // For now, just return an empty object
+      // In a real implementation, this would return actual statistics
       return {
-        totalCount,
-        successCount,
-        failureCount,
-        warningCount,
-        averageDuration,
-        successRate,
-        timePoints
+        period: {
+          start: startTime,
+          end: endTime,
+        },
+        counts: {
+          total: 0,
+          byEventType: {},
+          byStatus: {},
+          byChannel: {},
+        },
+        performance: {
+          averageDuration: 0,
+          maxDuration: 0,
+          p95Duration: 0,
+        },
+        errors: {
+          count: 0,
+          topErrors: [],
+        },
       };
     } catch (error) {
-      this.logger.error('Failed to get audit metrics', {
-        service: 'AuditService',
-        filters,
-        error: error.message,
-        stack: error.stack
+      this.logger.error('Failed to get audit statistics', {
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
       });
       
-      // Return default metrics on error
-      return {
-        totalCount: 0,
-        successCount: 0,
-        failureCount: 0,
-        warningCount: 0,
-        averageDuration: 0,
-        successRate: 0,
-        timePoints: []
-      };
+      return {};
     }
   }
-  
+
   /**
-   * Get the service status
-   * @returns The service status
+   * Exports audit records to a file or stream.
+   * 
+   * @param params Query parameters to filter audit records
+   * @param format Export format (json, csv, etc.)
+   * @returns Path to the exported file or stream
    */
-  public async getServiceStatus(): Promise<IServiceStatus> {
-    const uptime = Date.now() - this.serviceStartTime.getTime();
-    let status: 'healthy' | 'degraded' | 'unhealthy' = 'healthy';
-    let message = 'Audit service is healthy';
-    
+  public async exportAuditRecords(
+    params: IAuditQueryParams,
+    format: 'json' | 'csv' = 'json'
+  ): Promise<string> {
     try {
-      // Check storage health
-      if (this.storageType === 'postgres' && this.dbPool) {
-        const client = await this.dbPool.connect();
-        try {
-          await client.query('SELECT 1');
-        } finally {
-          client.release();
-        }
-      }
+      // This is a placeholder implementation
+      // In a real implementation, this would export audit records to a file or stream
+      this.logger.info('Exporting audit records', { params, format });
+      
+      // For now, just return an empty string
+      // In a real implementation, this would return the path to the exported file or stream
+      return '';
     } catch (error) {
-      status = 'degraded';
-      message = `Audit service is degraded: ${error.message}`;
-      
-      this.logger.warn('Audit service health check failed', {
-        service: 'AuditService',
-        error: error.message,
-        stack: error.stack
+      this.logger.error('Failed to export audit records', {
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
       });
+      
+      return '';
     }
-    
-    return {
-      service: 'AuditService',
-      status,
-      message,
-      version: appConfig.version,
-      uptime,
-      timestamp: new Date()
-    };
   }
-  
+
   /**
-   * Ensure the audit_records table exists in PostgreSQL
-   * @private
+   * Purges audit records older than the specified retention period.
+   * 
+   * @param retentionDays Number of days to retain audit records
+   * @returns Number of purged records
    */
-  private async ensureTableExists(): Promise<void> {
-    if (!this.dbPool) {
-      throw new Error('Database pool is not initialized');
-    }
-    
-    const client = await this.dbPool.connect();
+  public async purgeOldAuditRecords(retentionDays: number): Promise<number> {
     try {
-      // Create the audit_records table if it doesn't exist
-      await client.query(`
-        CREATE TABLE IF NOT EXISTS audit_records (
-          id UUID PRIMARY KEY,
-          timestamp TIMESTAMP WITH TIME ZONE NOT NULL,
-          event_type VARCHAR(50) NOT NULL,
-          status VARCHAR(20) NOT NULL,
-          channel VARCHAR(20),
-          recipient_id VARCHAR(100),
-          notification_id VARCHAR(100),
-          message_id VARCHAR(100),
-          duration INTEGER,
-          error_code VARCHAR(50),
-          error_message TEXT,
-          metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
-          correlation_id VARCHAR(100) NOT NULL,
-          created_at TIMESTAMP WITH TIME ZONE NOT NULL,
-          updated_at TIMESTAMP WITH TIME ZONE NOT NULL
+      // This is a placeholder implementation
+      // In a real implementation, this would purge old audit records from storage
+      this.logger.info('Purging old audit records', { retentionDays });
+      
+      // For now, just return 0
+      // In a real implementation, this would return the number of purged records
+      return 0;
+    } catch (error) {
+      this.logger.error('Failed to purge old audit records', {
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      });
+      
+      return 0;
+    }
+  }
+
+  /**
+   * Generates a unique ID for an audit record.
+   * 
+   * @param eventType Type of audit event
+   * @param timestamp Timestamp of the event
+   * @param correlationId Correlation ID for cross-service tracing
+   * @returns Unique audit record ID
+   */
+  private generateAuditId(eventType: AuditEventType, timestamp: IDateValue, correlationId: string): string {
+    const hash = createHash('sha256')
+      .update(`${eventType}-${timestamp}-${correlationId}-${Date.now()}-${Math.random()}`)
+      .digest('hex');
+    
+    return hash.substring(0, 24); // Return first 24 characters of the hash
+  }
+
+  /**
+   * Stores an audit record based on the provided storage options.
+   * 
+   * @param record The audit record to store
+   * @param options Storage options for this specific audit record
+   */
+  private async storeAuditRecord(
+    record: IAuditRecord,
+    options: IAuditStorageOptions
+  ): Promise<void> {
+    try {
+      // Store in Redis cache if enabled
+      if (options.cacheInRedis && this.redis) {
+        const key = `audit:${record.id}`;
+        await this.redis.set(
+          key,
+          JSON.stringify(record),
+          'EX',
+          options.redisTTL
         );
-        
-        -- Create indexes for common query patterns
-        CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON audit_records(timestamp);
-        CREATE INDEX IF NOT EXISTS idx_audit_event_type ON audit_records(event_type);
-        CREATE INDEX IF NOT EXISTS idx_audit_status ON audit_records(status);
-        CREATE INDEX IF NOT EXISTS idx_audit_correlation_id ON audit_records(correlation_id);
-        CREATE INDEX IF NOT EXISTS idx_audit_notification_id ON audit_records(notification_id);
-        CREATE INDEX IF NOT EXISTS idx_audit_recipient_id ON audit_records(recipient_id);
-      `);
-      
-      this.logger.info('Audit records table ensured', {
-        service: 'AuditService'
-      });
+      }
+
+      // Persist to database if enabled
+      if (options.persistToDatabase) {
+        // This is a placeholder for database persistence
+        // In a real implementation, this would store the record in a database
+        this.logger.debug('Would persist audit record to database', { recordId: record.id });
+      }
     } catch (error) {
-      this.logger.error('Failed to ensure audit_records table exists', {
-        service: 'AuditService',
-        error: error.message,
-        stack: error.stack
+      this.logger.error('Failed to store audit record', {
+        recordId: record.id,
+        error: error instanceof Error ? error.message : String(error),
       });
-      throw error;
-    } finally {
-      client.release();
     }
   }
-  
+
   /**
-   * Ensure file storage is ready
-   * @private
+   * Logs an audit event at the appropriate log level.
+   * 
+   * @param record The audit record to log
    */
-  private async ensureFileStorageReady(): Promise<void> {
-    // Implementation would depend on the file system access library
-    // For simplicity, we'll just log a message
-    this.logger.info('File storage ready for audit records', {
-      service: 'AuditService',
-      filePath: this.filePath
+  private logAuditEvent(record: IAuditRecord): void {
+    // Determine the appropriate log level based on the event type
+    let logLevel: 'error' | 'warn' | 'info' | 'debug' = 'info';
+    
+    if (record.eventType === AuditEventType.SYSTEM_ERROR) {
+      logLevel = 'error';
+    } else if (
+      record.eventType === AuditEventType.NOTIFICATION_FAILED ||
+      record.eventType === AuditEventType.RETRY_EXHAUSTED ||
+      record.eventType === AuditEventType.SECURITY_EVENT
+    ) {
+      logLevel = 'warn';
+    } else if (
+      record.eventType === AuditEventType.CONFIGURATION_CHANGED
+    ) {
+      logLevel = 'debug';
+    }
+
+    // Log the audit event
+    this.logger[logLevel]('Audit event', {
+      eventType: record.eventType,
+      notificationId: record.notificationId,
+      status: record.status,
+      correlationId: record.correlationId,
     });
   }
-  
+
   /**
-   * Store an audit record in PostgreSQL
-   * @param record - The audit record to store
-   * @returns The stored audit record
-   * @private
+   * Redacts sensitive data from an audit record.
+   * 
+   * @param record The audit record to process
+   * @returns The processed audit record with sensitive data redacted
    */
-  private async storeAuditRecordInPostgres(record: IAuditRecord): Promise<IAuditRecord> {
-    if (!this.dbPool) {
-      throw new Error('Database pool is not initialized');
+  private redactSensitiveData(record: IAuditRecord): IAuditRecord {
+    // Create a deep copy of the record to avoid modifying the original
+    const processedRecord = JSON.parse(JSON.stringify(record)) as IAuditRecord;
+    
+    // Process metadata if present
+    if (processedRecord.metadata) {
+      processedRecord.metadata = this.redactSensitiveFields(processedRecord.metadata);
     }
     
-    const client = await this.dbPool.connect();
-    try {
-      const result = await client.query(
-        `INSERT INTO audit_records (
-          id, timestamp, event_type, status, channel, recipient_id, notification_id, 
-          message_id, duration, error_code, error_message, metadata, correlation_id, 
-          created_at, updated_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) 
-        RETURNING *`,
-        [
-          record.id,
-          record.timestamp,
-          record.eventType,
-          record.status,
-          record.channel,
-          record.recipientId,
-          record.notificationId,
-          record.messageId,
-          record.duration,
-          record.errorCode,
-          record.errorMessage,
-          JSON.stringify(record.metadata),
-          record.correlationId,
-          record.createdAt,
-          record.updatedAt
-        ]
+    return processedRecord;
+  }
+
+  /**
+   * Redacts sensitive fields from an object.
+   * 
+   * @param obj The object to process
+   * @returns The processed object with sensitive fields redacted
+   */
+  private redactSensitiveFields(obj: Record<string, any>): Record<string, any> {
+    const result: Record<string, any> = {};
+    
+    for (const [key, value] of Object.entries(obj)) {
+      // Check if this is a sensitive field
+      const isSensitive = this.config.sensitiveFields.some(field => 
+        key.toLowerCase().includes(field.toLowerCase())
       );
       
-      // Map the database record back to our interface
-      const dbRecord = result.rows[0];
-      return {
-        id: dbRecord.id,
-        timestamp: dbRecord.timestamp,
-        eventType: dbRecord.event_type,
-        status: dbRecord.status,
-        channel: dbRecord.channel,
-        recipientId: dbRecord.recipient_id,
-        notificationId: dbRecord.notification_id,
-        messageId: dbRecord.message_id,
-        duration: dbRecord.duration,
-        errorCode: dbRecord.error_code,
-        errorMessage: dbRecord.error_message,
-        metadata: dbRecord.metadata,
-        correlationId: dbRecord.correlation_id,
-        createdAt: dbRecord.created_at,
-        updatedAt: dbRecord.updated_at
-      };
-    } catch (error) {
-      this.logger.error('Failed to store audit record in PostgreSQL', {
-        service: 'AuditService',
-        recordId: record.id,
-        error: error.message,
-        stack: error.stack
-      });
-      throw error;
-    } finally {
-      client.release();
-    }
-  }
-  
-  /**
-   * Store an audit record in a file
-   * @param record - The audit record to store
-   * @returns The stored audit record
-   * @private
-   */
-  private async storeAuditRecordInFile(record: IAuditRecord): Promise<IAuditRecord> {
-    // Implementation would depend on the file system access library
-    // For simplicity, we'll just log a message and store in memory
-    this.logger.info('Storing audit record in file', {
-      service: 'AuditService',
-      recordId: record.id,
-      filePath: this.filePath
-    });
-    
-    // Store in memory as a fallback
-    return this.storeAuditRecordInMemory(record);
-  }
-  
-  /**
-   * Store an audit record in memory
-   * @param record - The audit record to store
-   * @returns The stored audit record
-   * @private
-   */
-  private storeAuditRecordInMemory(record: IAuditRecord): IAuditRecord {
-    // Add to memory storage
-    this.memoryStorage.push(record);
-    
-    // Limit memory storage size to prevent memory leaks
-    const maxMemoryRecords = 1000;
-    if (this.memoryStorage.length > maxMemoryRecords) {
-      this.memoryStorage = this.memoryStorage.slice(-maxMemoryRecords);
+      if (isSensitive) {
+        // Redact sensitive field
+        result[key] = '[REDACTED]';
+      } else if (typeof value === 'object' && value !== null) {
+        // Recursively process nested objects
+        result[key] = Array.isArray(value)
+          ? value.map(item => typeof item === 'object' && item !== null ? this.redactSensitiveFields(item) : item)
+          : this.redactSensitiveFields(value);
+      } else {
+        // Keep non-sensitive field as is
+        result[key] = value;
+      }
     }
     
-    return record;
+    return result;
   }
-  
+
   /**
-   * Query audit records from PostgreSQL
-   * @param filters - The filters to apply to the query
-   * @returns An array of matching audit records
-   * @private
+   * Redacts credentials from a URL.
+   * 
+   * @param url The URL to process
+   * @returns The URL with credentials redacted
    */
-  private async queryAuditRecordsFromPostgres(filters: IAuditQueryFilters): Promise<IAuditRecord[]> {
-    if (!this.dbPool) {
-      throw new Error('Database pool is not initialized');
-    }
-    
-    const client = await this.dbPool.connect();
+  private redactUrlCredentials(url: string): string {
     try {
-      // Build the query
-      let query = 'SELECT * FROM audit_records WHERE 1=1';
-      const params: any[] = [];
-      let paramIndex = 1;
+      const urlObj = new URL(url);
       
-      // Add filters
-      if (filters.eventTypes && filters.eventTypes.length > 0) {
-        query += ` AND event_type IN (${filters.eventTypes.map(() => `$${paramIndex++}`).join(', ')})`;
-        params.push(...filters.eventTypes);
+      // Check if URL contains credentials
+      if (urlObj.username || urlObj.password) {
+        // Redact credentials
+        urlObj.username = urlObj.username ? '[REDACTED]' : '';
+        urlObj.password = urlObj.password ? '[REDACTED]' : '';
       }
       
-      if (filters.statuses && filters.statuses.length > 0) {
-        query += ` AND status IN (${filters.statuses.map(() => `$${paramIndex++}`).join(', ')})`;
-        params.push(...filters.statuses);
-      }
-      
-      if (filters.channels && filters.channels.length > 0) {
-        query += ` AND channel IN (${filters.channels.map(() => `$${paramIndex++}`).join(', ')})`;
-        params.push(...filters.channels);
-      }
-      
-      if (filters.recipientId) {
-        query += ` AND recipient_id = $${paramIndex++}`;
-        params.push(filters.recipientId);
-      }
-      
-      if (filters.notificationId) {
-        query += ` AND notification_id = $${paramIndex++}`;
-        params.push(filters.notificationId);
-      }
-      
-      if (filters.messageId) {
-        query += ` AND message_id = $${paramIndex++}`;
-        params.push(filters.messageId);
-      }
-      
-      if (filters.correlationId) {
-        query += ` AND correlation_id = $${paramIndex++}`;
-        params.push(filters.correlationId);
-      }
-      
-      if (filters.startDate) {
-        query += ` AND timestamp >= $${paramIndex++}`;
-        params.push(filters.startDate);
-      }
-      
-      if (filters.endDate) {
-        query += ` AND timestamp <= $${paramIndex++}`;
-        params.push(filters.endDate);
-      }
-      
-      // Add sorting
-      const sortBy = filters.sortBy || 'timestamp';
-      const sortDirection = filters.sortDirection || 'DESC';
-      query += ` ORDER BY ${this.mapSortFieldToColumn(sortBy)} ${sortDirection}`;
-      
-      // Add pagination
-      if (filters.limit) {
-        query += ` LIMIT $${paramIndex++}`;
-        params.push(filters.limit);
-      }
-      
-      if (filters.offset) {
-        query += ` OFFSET $${paramIndex++}`;
-        params.push(filters.offset);
-      }
-      
-      // Execute the query
-      const result = await client.query(query, params);
-      
-      // Map the database records to our interface
-      return result.rows.map(row => ({
-        id: row.id,
-        timestamp: row.timestamp,
-        eventType: row.event_type,
-        status: row.status,
-        channel: row.channel,
-        recipientId: row.recipient_id,
-        notificationId: row.notification_id,
-        messageId: row.message_id,
-        duration: row.duration,
-        errorCode: row.error_code,
-        errorMessage: row.error_message,
-        metadata: row.metadata,
-        correlationId: row.correlation_id,
-        createdAt: row.created_at,
-        updatedAt: row.updated_at
-      }));
+      return urlObj.toString();
     } catch (error) {
-      this.logger.error('Failed to query audit records from PostgreSQL', {
-        service: 'AuditService',
-        filters,
-        error: error.message,
-        stack: error.stack
-      });
-      throw error;
-    } finally {
-      client.release();
+      // If URL parsing fails, return the original URL
+      return url;
     }
   }
-  
+
   /**
-   * Query audit records from a file
-   * @param filters - The filters to apply to the query
-   * @returns An array of matching audit records
-   * @private
+   * Truncates a response body to a reasonable size for logging.
+   * 
+   * @param body The response body to truncate
+   * @returns The truncated response body
    */
-  private async queryAuditRecordsFromFile(filters: IAuditQueryFilters): Promise<IAuditRecord[]> {
-    // Implementation would depend on the file system access library
-    // For simplicity, we'll just log a message and query from memory
-    this.logger.info('Querying audit records from file', {
-      service: 'AuditService',
-      filters,
-      filePath: this.filePath
-    });
+  private truncateResponseBody(body: string): string {
+    const maxLength = 1000; // Maximum length for response bodies
     
-    // Query from memory as a fallback
-    return this.queryAuditRecordsFromMemory(filters);
-  }
-  
-  /**
-   * Query audit records from memory
-   * @param filters - The filters to apply to the query
-   * @returns An array of matching audit records
-   * @private
-   */
-  private queryAuditRecordsFromMemory(filters: IAuditQueryFilters): IAuditRecord[] {
-    let records = [...this.memoryStorage];
-    
-    // Apply filters
-    if (filters.eventTypes && filters.eventTypes.length > 0) {
-      records = records.filter(record => filters.eventTypes.includes(record.eventType));
+    if (body.length <= maxLength) {
+      return body;
     }
     
-    if (filters.statuses && filters.statuses.length > 0) {
-      records = records.filter(record => filters.statuses.includes(record.status));
-    }
-    
-    if (filters.channels && filters.channels.length > 0) {
-      records = records.filter(record => record.channel && filters.channels.includes(record.channel));
-    }
-    
-    if (filters.recipientId) {
-      records = records.filter(record => record.recipientId === filters.recipientId);
-    }
-    
-    if (filters.notificationId) {
-      records = records.filter(record => record.notificationId === filters.notificationId);
-    }
-    
-    if (filters.messageId) {
-      records = records.filter(record => record.messageId === filters.messageId);
-    }
-    
-    if (filters.correlationId) {
-      records = records.filter(record => record.correlationId === filters.correlationId);
-    }
-    
-    if (filters.startDate) {
-      records = records.filter(record => record.timestamp >= filters.startDate);
-    }
-    
-    if (filters.endDate) {
-      records = records.filter(record => record.timestamp <= filters.endDate);
-    }
-    
-    // Apply sorting
-    const sortBy = filters.sortBy || 'timestamp';
-    const sortDirection = filters.sortDirection || 'DESC';
-    records.sort((a, b) => {
-      const aValue = a[sortBy];
-      const bValue = b[sortBy];
-      
-      if (aValue < bValue) {
-        return sortDirection === 'ASC' ? -1 : 1;
-      }
-      if (aValue > bValue) {
-        return sortDirection === 'ASC' ? 1 : -1;
-      }
-      return 0;
-    });
-    
-    // Apply pagination
-    if (filters.offset) {
-      records = records.slice(filters.offset);
-    }
-    
-    if (filters.limit) {
-      records = records.slice(0, filters.limit);
-    }
-    
-    return records;
-  }
-  
-  /**
-   * Group records by time points for metrics calculation
-   * @param records - The records to group
-   * @param startDate - The start date of the range
-   * @param endDate - The end date of the range
-   * @param groupBy - The time unit to group by
-   * @returns An array of time points with metrics
-   * @private
-   */
-  private groupRecordsByTimePoints(
-    records: IAuditRecord[],
-    startDate: Date,
-    endDate: Date,
-    groupBy: 'hour' | 'day' | 'week' | 'month'
-  ): Array<{
-    timePoint: Date;
-    count: number;
-    successCount: number;
-    failureCount: number;
-    averageDuration: number;
-  }> {
-    // Generate time points based on the groupBy parameter
-    const timePoints: Date[] = [];
-    let currentDate = new Date(startDate);
-    
-    while (currentDate <= endDate) {
-      timePoints.push(new Date(currentDate));
-      
-      // Increment the date based on the groupBy parameter
-      switch (groupBy) {
-        case 'hour':
-          currentDate = new Date(currentDate.getTime() + 60 * 60 * 1000);
-          break;
-        case 'day':
-          currentDate = new Date(currentDate.getTime() + 24 * 60 * 60 * 1000);
-          break;
-        case 'week':
-          currentDate = new Date(currentDate.getTime() + 7 * 24 * 60 * 60 * 1000);
-          break;
-        case 'month':
-          currentDate = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, currentDate.getDate());
-          break;
-      }
-    }
-    
-    // Group records by time points
-    return timePoints.map((timePoint, index) => {
-      const nextTimePoint = index < timePoints.length - 1 ? timePoints[index + 1] : new Date(endDate.getTime() + 1);
-      
-      // Get records for this time point
-      const pointRecords = records.filter(record => {
-        return record.timestamp >= timePoint && record.timestamp < nextTimePoint;
-      });
-      
-      // Calculate metrics for this time point
-      const count = pointRecords.length;
-      const successCount = pointRecords.filter(r => r.status === AuditStatus.SUCCESS).length;
-      const failureCount = pointRecords.filter(r => r.status === AuditStatus.FAILURE).length;
-      
-      // Calculate average duration
-      const recordsWithDuration = pointRecords.filter(r => r.duration !== undefined && r.duration !== null);
-      const totalDuration = recordsWithDuration.reduce((sum, record) => sum + (record.duration || 0), 0);
-      const averageDuration = recordsWithDuration.length > 0 ? totalDuration / recordsWithDuration.length : 0;
-      
-      return {
-        timePoint,
-        count,
-        successCount,
-        failureCount,
-        averageDuration
-      };
-    });
-  }
-  
-  /**
-   * Map a sort field to a database column name
-   * @param field - The field to map
-   * @returns The corresponding database column name
-   * @private
-   */
-  private mapSortFieldToColumn(field: string): string {
-    const columnMap: Record<string, string> = {
-      id: 'id',
-      timestamp: 'timestamp',
-      eventType: 'event_type',
-      status: 'status',
-      channel: 'channel',
-      recipientId: 'recipient_id',
-      notificationId: 'notification_id',
-      messageId: 'message_id',
-      duration: 'duration',
-      errorCode: 'error_code',
-      correlationId: 'correlation_id',
-      createdAt: 'created_at',
-      updatedAt: 'updated_at'
-    };
-    
-    return columnMap[field] || 'timestamp';
+    return `${body.substring(0, maxLength)}... [truncated ${body.length - maxLength} characters]`;
   }
 }
 
-// Export a default instance for use throughout the application
-export const auditService = new AuditService();
+export default AuditService;
