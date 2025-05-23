@@ -1,170 +1,261 @@
-# outputs.tf for the storage module
-# This file exports output values from the storage module, including bucket names, ARNs,
-# domain names, and access information. These outputs are used by application services
-# to access the storage resources and are essential for integration with the document
-# processing pipeline.
+# -----------------------------------------------
+# Storage Module Outputs
+# -----------------------------------------------
+# This file defines all output values from the storage module, including
+# bucket names, ARNs, domain names, and access information. These outputs
+# are used by application services to access the storage resources and
+# are essential for integration with the document processing pipeline.
+# -----------------------------------------------
 
-# Production bucket outputs
+# -----------------------------------------------
+# Production Bucket Outputs
+# -----------------------------------------------
+
 output "production_bucket_name" {
-  description = "The name of the production document storage bucket"
+  description = "Name of the production document storage bucket"
   value       = aws_s3_bucket.mca_documents_production.id
 }
 
 output "production_bucket_arn" {
-  description = "The ARN of the production document storage bucket for IAM policy references"
+  description = "ARN of the production document storage bucket"
   value       = aws_s3_bucket.mca_documents_production.arn
 }
 
 output "production_bucket_domain_name" {
-  description = "The domain name of the production bucket for constructing URLs"
+  description = "Domain name of the production document storage bucket"
+  value       = aws_s3_bucket.mca_documents_production.bucket_domain_name
+}
+
+output "production_bucket_regional_domain_name" {
+  description = "Regional domain name of the production document storage bucket"
   value       = aws_s3_bucket.mca_documents_production.bucket_regional_domain_name
 }
 
 output "production_bucket_region" {
-  description = "The region where the production bucket is located"
-  value       = aws_s3_bucket.mca_documents_production.region
+  description = "Region of the production document storage bucket"
+  value       = var.primary_region
 }
 
-# Staging bucket outputs
+# -----------------------------------------------
+# Staging Bucket Outputs
+# -----------------------------------------------
+
 output "staging_bucket_name" {
-  description = "The name of the staging document storage bucket"
+  description = "Name of the staging document storage bucket"
   value       = aws_s3_bucket.mca_documents_staging.id
 }
 
 output "staging_bucket_arn" {
-  description = "The ARN of the staging document storage bucket for IAM policy references"
+  description = "ARN of the staging document storage bucket"
   value       = aws_s3_bucket.mca_documents_staging.arn
 }
 
 output "staging_bucket_domain_name" {
-  description = "The domain name of the staging bucket for constructing URLs"
+  description = "Domain name of the staging document storage bucket"
+  value       = aws_s3_bucket.mca_documents_staging.bucket_domain_name
+}
+
+output "staging_bucket_regional_domain_name" {
+  description = "Regional domain name of the staging document storage bucket"
   value       = aws_s3_bucket.mca_documents_staging.bucket_regional_domain_name
 }
 
 output "staging_bucket_region" {
-  description = "The region where the staging bucket is located"
-  value       = aws_s3_bucket.mca_documents_staging.region
+  description = "Region of the staging document storage bucket"
+  value       = var.primary_region
 }
 
-# Replica bucket outputs for disaster recovery
+# -----------------------------------------------
+# Replica Bucket Outputs (if enabled)
+# -----------------------------------------------
+
 output "production_replica_bucket_name" {
-  description = "The name of the production replica bucket for disaster recovery"
-  value       = aws_s3_bucket.mca_documents_production_replica.id
+  description = "Name of the production replica document storage bucket"
+  value       = var.enable_replication && length(var.replica_regions) > 0 ? aws_s3_bucket.mca_documents_production_replica[0].id : null
 }
 
 output "production_replica_bucket_arn" {
-  description = "The ARN of the production replica bucket for IAM policy references"
-  value       = aws_s3_bucket.mca_documents_production_replica.arn
+  description = "ARN of the production replica document storage bucket"
+  value       = var.enable_replication && length(var.replica_regions) > 0 ? aws_s3_bucket.mca_documents_production_replica[0].arn : null
+}
+
+output "production_replica_bucket_domain_name" {
+  description = "Domain name of the production replica document storage bucket"
+  value       = var.enable_replication && length(var.replica_regions) > 0 ? aws_s3_bucket.mca_documents_production_replica[0].bucket_domain_name : null
 }
 
 output "production_replica_bucket_region" {
-  description = "The region where the production replica bucket is located"
-  value       = var.replica_region
+  description = "Region of the production replica document storage bucket"
+  value       = var.enable_replication && length(var.replica_regions) > 0 ? local.replica_region : null
 }
 
 output "staging_replica_bucket_name" {
-  description = "The name of the staging replica bucket for disaster recovery"
-  value       = aws_s3_bucket.mca_documents_staging_replica.id
+  description = "Name of the staging replica document storage bucket"
+  value       = var.enable_replication && length(var.replica_regions) > 0 ? aws_s3_bucket.mca_documents_staging_replica[0].id : null
 }
 
 output "staging_replica_bucket_arn" {
-  description = "The ARN of the staging replica bucket for IAM policy references"
-  value       = aws_s3_bucket.mca_documents_staging_replica.arn
+  description = "ARN of the staging replica document storage bucket"
+  value       = var.enable_replication && length(var.replica_regions) > 0 ? aws_s3_bucket.mca_documents_staging_replica[0].arn : null
+}
+
+output "staging_replica_bucket_domain_name" {
+  description = "Domain name of the staging replica document storage bucket"
+  value       = var.enable_replication && length(var.replica_regions) > 0 ? aws_s3_bucket.mca_documents_staging_replica[0].bucket_domain_name : null
 }
 
 output "staging_replica_bucket_region" {
-  description = "The region where the staging replica bucket is located"
-  value       = var.replica_region
+  description = "Region of the staging replica document storage bucket"
+  value       = var.enable_replication && length(var.replica_regions) > 0 ? local.replica_region : null
 }
 
-# Bucket versioning status outputs
-output "production_bucket_versioning_enabled" {
-  description = "Whether versioning is enabled on the production bucket"
-  value       = aws_s3_bucket_versioning.mca_documents_production.enabled
+# -----------------------------------------------
+# Access Logging Bucket Outputs (if created)
+# -----------------------------------------------
+
+output "access_log_bucket_name" {
+  description = "Name of the access logging bucket (if created)"
+  value       = var.enable_access_logging && var.access_log_bucket == "" ? aws_s3_bucket.access_logs[0].id : var.access_log_bucket
 }
 
-output "staging_bucket_versioning_enabled" {
-  description = "Whether versioning is enabled on the staging bucket"
-  value       = aws_s3_bucket_versioning.mca_documents_staging.enabled
+output "access_log_bucket_arn" {
+  description = "ARN of the access logging bucket (if created)"
+  value       = var.enable_access_logging && var.access_log_bucket == "" ? aws_s3_bucket.access_logs[0].arn : null
 }
 
-# Bucket encryption outputs
-output "production_bucket_encryption_enabled" {
-  description = "Whether server-side encryption is enabled on the production bucket"
-  value       = aws_s3_bucket_server_side_encryption_configuration.mca_documents_production.rule[0].apply_server_side_encryption_by_default.sse_algorithm == "AES256"
+# -----------------------------------------------
+# URL Generation Helper Outputs
+# -----------------------------------------------
+
+output "production_bucket_url_prefix" {
+  description = "URL prefix for production bucket objects (without protocol)"
+  value       = "${aws_s3_bucket.mca_documents_production.bucket_regional_domain_name}/"
 }
 
-output "staging_bucket_encryption_enabled" {
-  description = "Whether server-side encryption is enabled on the staging bucket"
-  value       = aws_s3_bucket_server_side_encryption_configuration.mca_documents_staging.rule[0].apply_server_side_encryption_by_default.sse_algorithm == "AES256"
+output "staging_bucket_url_prefix" {
+  description = "URL prefix for staging bucket objects (without protocol)"
+  value       = "${aws_s3_bucket.mca_documents_staging.bucket_regional_domain_name}/"
 }
 
-# Replication configuration outputs
-output "production_replication_enabled" {
-  description = "Whether cross-region replication is enabled for the production bucket"
-  value       = length(aws_s3_bucket_replication_configuration.mca_documents_production.rule) > 0
+output "production_replica_bucket_url_prefix" {
+  description = "URL prefix for production replica bucket objects (without protocol)"
+  value       = var.enable_replication && length(var.replica_regions) > 0 ? "${aws_s3_bucket.mca_documents_production_replica[0].bucket_regional_domain_name}/" : null
 }
 
-output "staging_replication_enabled" {
-  description = "Whether cross-region replication is enabled for the staging bucket"
-  value       = length(aws_s3_bucket_replication_configuration.mca_documents_staging.rule) > 0
+output "staging_replica_bucket_url_prefix" {
+  description = "URL prefix for staging replica bucket objects (without protocol)"
+  value       = var.enable_replication && length(var.replica_regions) > 0 ? "${aws_s3_bucket.mca_documents_staging_replica[0].bucket_regional_domain_name}/" : null
 }
 
-# URL generation helper outputs
-output "production_bucket_url_base" {
-  description = "Base URL for constructing S3 object URLs in the production bucket"
-  value       = "https://${aws_s3_bucket.mca_documents_production.bucket_regional_domain_name}"
+# -----------------------------------------------
+# Configuration Outputs
+# -----------------------------------------------
+
+output "encryption_algorithm" {
+  description = "Server-side encryption algorithm used for buckets"
+  value       = var.encryption_algorithm
 }
 
-output "staging_bucket_url_base" {
-  description = "Base URL for constructing S3 object URLs in the staging bucket"
-  value       = "https://${aws_s3_bucket.mca_documents_staging.bucket_regional_domain_name}"
+output "versioning_enabled" {
+  description = "Whether versioning is enabled for the buckets"
+  value       = var.enable_versioning
 }
 
-# Lifecycle policy outputs
-output "production_lifecycle_rules" {
-  description = "Summary of lifecycle rules applied to the production bucket"
-  value = {
-    transition_to_ia_days = aws_s3_bucket_lifecycle_configuration.mca_documents_production.rule[0].transition[0].days
-    expiration_days       = try(aws_s3_bucket_lifecycle_configuration.mca_documents_production.rule[0].expiration[0].days, null)
-  }
+output "replication_enabled" {
+  description = "Whether cross-region replication is enabled"
+  value       = var.enable_replication && length(var.replica_regions) > 0
 }
 
-output "staging_lifecycle_rules" {
-  description = "Summary of lifecycle rules applied to the staging bucket"
-  value = {
-    transition_to_ia_days = aws_s3_bucket_lifecycle_configuration.mca_documents_staging.rule[0].transition[0].days
-    expiration_days       = try(aws_s3_bucket_lifecycle_configuration.mca_documents_staging.rule[0].expiration[0].days, null)
-  }
+output "signed_url_expiration" {
+  description = "Default expiration time in seconds for signed URLs"
+  value       = var.signed_url_expiration
 }
 
-# Composite outputs for application configuration
-output "document_storage_config" {
-  description = "Complete document storage configuration for application services"
+# -----------------------------------------------
+# IAM Role Outputs (for replication)
+# -----------------------------------------------
+
+output "replication_role_arn" {
+  description = "ARN of the IAM role used for bucket replication"
+  value       = var.enable_replication && length(var.replica_regions) > 0 ? aws_iam_role.replication[0].arn : null
+}
+
+output "replication_role_name" {
+  description = "Name of the IAM role used for bucket replication"
+  value       = var.enable_replication && length(var.replica_regions) > 0 ? aws_iam_role.replication[0].name : null
+}
+
+# -----------------------------------------------
+# Consolidated Outputs (for easier consumption)
+# -----------------------------------------------
+
+output "bucket_info" {
+  description = "Consolidated information about all buckets for easier consumption"
   value = {
     production = {
-      bucket_name       = aws_s3_bucket.mca_documents_production.id
-      region            = aws_s3_bucket.mca_documents_production.region
-      url_base          = "https://${aws_s3_bucket.mca_documents_production.bucket_regional_domain_name}"
-      versioning_enabled = aws_s3_bucket_versioning.mca_documents_production.enabled
-      replica = {
-        bucket_name = aws_s3_bucket.mca_documents_production_replica.id
-        region      = var.replica_region
-      }
-    }
+      name            = aws_s3_bucket.mca_documents_production.id
+      arn             = aws_s3_bucket.mca_documents_production.arn
+      domain_name     = aws_s3_bucket.mca_documents_production.bucket_domain_name
+      regional_domain = aws_s3_bucket.mca_documents_production.bucket_regional_domain_name
+      region          = var.primary_region
+      url_prefix      = "${aws_s3_bucket.mca_documents_production.bucket_regional_domain_name}/"
+    },
     staging = {
-      bucket_name       = aws_s3_bucket.mca_documents_staging.id
-      region            = aws_s3_bucket.mca_documents_staging.region
-      url_base          = "https://${aws_s3_bucket.mca_documents_staging.bucket_regional_domain_name}"
-      versioning_enabled = aws_s3_bucket_versioning.mca_documents_staging.enabled
-      replica = {
-        bucket_name = aws_s3_bucket.mca_documents_staging_replica.id
-        region      = var.replica_region
+      name            = aws_s3_bucket.mca_documents_staging.id
+      arn             = aws_s3_bucket.mca_documents_staging.arn
+      domain_name     = aws_s3_bucket.mca_documents_staging.bucket_domain_name
+      regional_domain = aws_s3_bucket.mca_documents_staging.bucket_regional_domain_name
+      region          = var.primary_region
+      url_prefix      = "${aws_s3_bucket.mca_documents_staging.bucket_regional_domain_name}/"
+    },
+    replica = var.enable_replication && length(var.replica_regions) > 0 ? {
+      production = {
+        name            = aws_s3_bucket.mca_documents_production_replica[0].id
+        arn             = aws_s3_bucket.mca_documents_production_replica[0].arn
+        domain_name     = aws_s3_bucket.mca_documents_production_replica[0].bucket_domain_name
+        regional_domain = aws_s3_bucket.mca_documents_production_replica[0].bucket_regional_domain_name
+        region          = local.replica_region
+        url_prefix      = "${aws_s3_bucket.mca_documents_production_replica[0].bucket_regional_domain_name}/"
+      },
+      staging = {
+        name            = aws_s3_bucket.mca_documents_staging_replica[0].id
+        arn             = aws_s3_bucket.mca_documents_staging_replica[0].arn
+        domain_name     = aws_s3_bucket.mca_documents_staging_replica[0].bucket_domain_name
+        regional_domain = aws_s3_bucket.mca_documents_staging_replica[0].bucket_regional_domain_name
+        region          = local.replica_region
+        url_prefix      = "${aws_s3_bucket.mca_documents_staging_replica[0].bucket_regional_domain_name}/"
       }
-    }
-    security = {
-      encryption_algorithm = "AES256"
-      signed_url_expiration = 900  # 15 minutes in seconds
-    }
+    } : null
   }
 }
+
+# -----------------------------------------------
+# Module Compliance Notes
+# -----------------------------------------------
+# This outputs file implements the following requirements from the technical specification:
+#
+# 1. Export bucket names for production and staging environments
+#    - Production and staging bucket names are exported as separate outputs
+#    - Consolidated bucket information is provided in the bucket_info output
+#
+# 2. Output bucket ARNs for IAM policy references
+#    - ARNs for all buckets are exported for use in IAM policies
+#    - These are essential for configuring secure access to the buckets
+#
+# 3. Provide bucket domain names for constructing URLs
+#    - Both standard and regional domain names are exported
+#    - URL prefixes are provided for easy construction of object URLs
+#
+# 4. Export bucket region information for client configuration
+#    - Region information is included for all buckets
+#    - This enables proper client configuration for regional endpoints
+#
+# 5. Include replica bucket details for disaster recovery scenarios
+#    - Replica bucket information is exported when replication is enabled
+#    - This supports disaster recovery and multi-region access patterns
+#
+# Additional outputs provided:
+# - Access logging bucket information (if created)
+# - Encryption and versioning configuration details
+# - IAM role information for replication
+# - Consolidated bucket information for easier consumption by other modules
