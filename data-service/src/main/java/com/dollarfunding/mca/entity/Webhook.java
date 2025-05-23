@@ -1,26 +1,25 @@
 package com.dollarfunding.mca.entity;
 
 import java.time.LocalDateTime;
+import java.util.Objects;
 
-import jakarta.persistence.Column;
-import jakarta.persistence.Entity;
-import jakarta.persistence.EnumType;
-import jakarta.persistence.Enumerated;
-import jakarta.persistence.GeneratedValue;
-import jakarta.persistence.GenerationType;
-import jakarta.persistence.Id;
-import jakarta.persistence.PrePersist;
-import jakarta.persistence.PreUpdate;
-import jakarta.persistence.Table;
-import jakarta.validation.constraints.Max;
-import jakarta.validation.constraints.Min;
-import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.NotNull;
-import jakarta.validation.constraints.Pattern;
-import jakarta.validation.constraints.Size;
+import javax.persistence.Column;
+import javax.persistence.Entity;
+import javax.persistence.EnumType;
+import javax.persistence.Enumerated;
+import javax.persistence.GeneratedValue;
+import javax.persistence.GenerationType;
+import javax.persistence.Id;
+import javax.persistence.PrePersist;
+import javax.persistence.PreUpdate;
+import javax.persistence.Table;
+import javax.validation.constraints.NotBlank;
+import javax.validation.constraints.NotNull;
+import javax.validation.constraints.Pattern;
+import javax.validation.constraints.Size;
 
 /**
- * Entity representing a webhook configuration for notification delivery.
+ * Entity class representing webhook configuration in the database.
  * <p>
  * This entity stores information about external webhook endpoints for notification delivery,
  * including the endpoint URL, secret key for HMAC signing, active status, and event type.
@@ -38,32 +37,32 @@ public class Webhook {
 
     /**
      * The URL of the webhook endpoint where notifications will be sent.
-     * Must be a valid HTTPS URL.
+     * Must be a valid URL starting with http:// or https://
      */
     @NotBlank(message = "Endpoint URL is required")
-    @Pattern(regexp = "^https://.*", message = "Endpoint URL must use HTTPS protocol")
-    @Size(max = 255, message = "Endpoint URL cannot exceed 255 characters")
+    @Pattern(regexp = "^(https?://)[\\w.-]+(?:\\.[\\w.-]+)+[\\w\\-._~:/?#[\\]@!$&'()*+,;=.]+$", 
+             message = "Endpoint URL must be a valid URL")
     @Column(name = "endpoint_url", nullable = false)
     private String endpointUrl;
 
     /**
-     * Secret key used for HMAC signing of webhook payloads.
-     * This provides a way for the webhook receiver to verify the authenticity of the webhook.
+     * Secret key used for signing webhook payloads with HMAC-SHA256.
+     * This provides a way for webhook recipients to verify the authenticity of the webhook.
      */
     @NotBlank(message = "Secret key is required")
-    @Size(min = 32, max = 128, message = "Secret key must be between 32 and 128 characters")
+    @Size(min = 16, message = "Secret key must be at least 16 characters long")
     @Column(name = "secret_key", nullable = false)
     private String secretKey;
 
     /**
-     * Flag indicating whether this webhook is active and should receive notifications.
+     * Indicates whether this webhook is currently active and should receive notifications.
      */
     @NotNull(message = "Active status is required")
     @Column(name = "active", nullable = false)
     private Boolean active;
 
     /**
-     * The type of event that triggers this webhook.
+     * The type of event that triggers this webhook notification.
      */
     @NotNull(message = "Event type is required")
     @Enumerated(EnumType.STRING)
@@ -71,80 +70,65 @@ public class Webhook {
     private EventType eventType;
 
     /**
-     * The maximum number of retry attempts for failed webhook deliveries.
+     * Maximum number of retry attempts for failed webhook deliveries.
      */
-    @Min(value = 0, message = "Max retry attempts must be at least 0")
-    @Max(value = 10, message = "Max retry attempts cannot exceed 10")
     @Column(name = "max_retry_attempts", nullable = false)
     private Integer maxRetryAttempts = 3;
 
     /**
-     * The current status of the webhook delivery.
-     * This is used to track whether the last delivery attempt was successful.
+     * Current number of consecutive failed delivery attempts.
      */
-    @Column(name = "last_delivery_status")
-    private String lastDeliveryStatus;
+    @Column(name = "consecutive_failures", nullable = false)
+    private Integer consecutiveFailures = 0;
 
     /**
-     * The timestamp of the last delivery attempt.
+     * Timestamp of the last successful webhook delivery.
      */
-    @Column(name = "last_delivery_attempt")
-    private LocalDateTime lastDeliveryAttempt;
+    @Column(name = "last_success_at")
+    private LocalDateTime lastSuccessAt;
 
     /**
-     * The number of consecutive failed delivery attempts.
+     * Timestamp of the last failed webhook delivery.
      */
-    @Min(value = 0, message = "Failed attempts must be at least 0")
-    @Column(name = "failed_attempts", nullable = false)
-    private Integer failedAttempts = 0;
+    @Column(name = "last_failure_at")
+    private LocalDateTime lastFailureAt;
 
     /**
-     * Whether the last delivery was successful.
+     * Description of the webhook for administrative purposes.
      */
-    @Column(name = "last_delivery_success")
-    private Boolean lastDeliverySuccess;
+    @Column(name = "description")
+    @Size(max = 500, message = "Description cannot exceed 500 characters")
+    private String description;
 
     /**
-     * The HTTP status code from the last delivery attempt.
-     */
-    @Column(name = "last_delivery_status_code")
-    private Integer lastDeliveryStatusCode;
-
-    /**
-     * The error message from the last delivery attempt, if any.
-     */
-    @Column(name = "last_delivery_error")
-    private String lastDeliveryError;
-
-    /**
-     * Total number of successful deliveries.
-     */
-    @Column(name = "successful_deliveries_count")
-    private Long successfulDeliveriesCount = 0L;
-
-    /**
-     * Total number of failed deliveries.
-     */
-    @Column(name = "failed_deliveries_count")
-    private Long failedDeliveriesCount = 0L;
-
-    /**
-     * The name of the signature header used (e.g., "X-Webhook-Signature").
-     */
-    @Column(name = "signature_header")
-    private String signatureHeader = "X-Webhook-Signature";
-
-    /**
-     * The timestamp when this webhook was created.
+     * Timestamp when this webhook configuration was created.
      */
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
     /**
-     * The timestamp when this webhook was last updated.
+     * Timestamp when this webhook configuration was last updated.
      */
     @Column(name = "updated_at", nullable = false)
     private LocalDateTime updatedAt;
+
+    /**
+     * Automatically sets the creation and update timestamps before persisting.
+     */
+    @PrePersist
+    protected void onCreate() {
+        LocalDateTime now = LocalDateTime.now();
+        this.createdAt = now;
+        this.updatedAt = now;
+    }
+
+    /**
+     * Automatically updates the update timestamp before updating.
+     */
+    @PreUpdate
+    protected void onUpdate() {
+        this.updatedAt = LocalDateTime.now();
+    }
 
     /**
      * Default constructor required by JPA.
@@ -156,89 +140,15 @@ public class Webhook {
      * Constructor with required fields.
      *
      * @param endpointUrl The URL of the webhook endpoint
-     * @param secretKey The secret key for HMAC signing
-     * @param active Whether the webhook is active
-     * @param eventType The type of event that triggers this webhook
+     * @param secretKey   The secret key for HMAC signing
+     * @param active      Whether the webhook is active
+     * @param eventType   The type of event that triggers this webhook
      */
     public Webhook(String endpointUrl, String secretKey, Boolean active, EventType eventType) {
         this.endpointUrl = endpointUrl;
         this.secretKey = secretKey;
         this.active = active;
         this.eventType = eventType;
-    }
-
-    /**
-     * Sets the creation and update timestamps before persisting.
-     */
-    @PrePersist
-    protected void onCreate() {
-        LocalDateTime now = LocalDateTime.now();
-        this.createdAt = now;
-        this.updatedAt = now;
-        if (this.successfulDeliveriesCount == null) {
-            this.successfulDeliveriesCount = 0L;
-        }
-        if (this.failedDeliveriesCount == null) {
-            this.failedDeliveriesCount = 0L;
-        }
-        if (this.signatureHeader == null) {
-            this.signatureHeader = "X-Webhook-Signature";
-        }
-    }
-
-    /**
-     * Updates the update timestamp before updating.
-     */
-    @PreUpdate
-    protected void onUpdate() {
-        this.updatedAt = LocalDateTime.now();
-    }
-
-    /**
-     * Records a successful delivery attempt.
-     */
-    public void recordSuccessfulDelivery() {
-        this.lastDeliveryStatus = "SUCCESS";
-        this.lastDeliveryAttempt = LocalDateTime.now();
-        this.failedAttempts = 0;
-    }
-
-    /**
-     * Records a failed delivery attempt.
-     *
-     * @param errorMessage The error message from the failed delivery
-     * @return true if max retry attempts has not been reached, false otherwise
-     */
-    public boolean recordFailedDelivery(String errorMessage) {
-        this.lastDeliveryStatus = "FAILED: " + errorMessage;
-        this.lastDeliveryAttempt = LocalDateTime.now();
-        this.failedAttempts++;
-        return this.failedAttempts <= this.maxRetryAttempts;
-    }
-
-    /**
-     * Checks if this webhook should be retried after a failed delivery.
-     *
-     * @return true if the webhook should be retried, false otherwise
-     */
-    public boolean shouldRetry() {
-        return this.active && this.failedAttempts > 0 && this.failedAttempts <= this.maxRetryAttempts;
-    }
-
-    /**
-     * Resets the failed attempts counter.
-     */
-    public void resetFailedAttempts() {
-        this.failedAttempts = 0;
-    }
-
-    /**
-     * Checks if the webhook is active.
-     *
-     * @return true if the webhook is active, false otherwise
-     */
-    public boolean isActive() {
-        return Boolean.TRUE.equals(this.active);
     }
 
     // Getters and Setters
@@ -291,76 +201,36 @@ public class Webhook {
         this.maxRetryAttempts = maxRetryAttempts;
     }
 
-    public String getLastDeliveryStatus() {
-        return lastDeliveryStatus;
+    public Integer getConsecutiveFailures() {
+        return consecutiveFailures;
     }
 
-    public void setLastDeliveryStatus(String lastDeliveryStatus) {
-        this.lastDeliveryStatus = lastDeliveryStatus;
+    public void setConsecutiveFailures(Integer consecutiveFailures) {
+        this.consecutiveFailures = consecutiveFailures;
     }
 
-    public LocalDateTime getLastDeliveryAttempt() {
-        return lastDeliveryAttempt;
+    public LocalDateTime getLastSuccessAt() {
+        return lastSuccessAt;
     }
 
-    public void setLastDeliveryAttempt(LocalDateTime lastDeliveryAttempt) {
-        this.lastDeliveryAttempt = lastDeliveryAttempt;
+    public void setLastSuccessAt(LocalDateTime lastSuccessAt) {
+        this.lastSuccessAt = lastSuccessAt;
     }
 
-    public Integer getFailedAttempts() {
-        return failedAttempts;
+    public LocalDateTime getLastFailureAt() {
+        return lastFailureAt;
     }
 
-    public void setFailedAttempts(Integer failedAttempts) {
-        this.failedAttempts = failedAttempts;
+    public void setLastFailureAt(LocalDateTime lastFailureAt) {
+        this.lastFailureAt = lastFailureAt;
     }
 
-    public Boolean getLastDeliverySuccess() {
-        return lastDeliverySuccess;
+    public String getDescription() {
+        return description;
     }
 
-    public void setLastDeliverySuccess(Boolean lastDeliverySuccess) {
-        this.lastDeliverySuccess = lastDeliverySuccess;
-    }
-
-    public Integer getLastDeliveryStatusCode() {
-        return lastDeliveryStatusCode;
-    }
-
-    public void setLastDeliveryStatusCode(Integer lastDeliveryStatusCode) {
-        this.lastDeliveryStatusCode = lastDeliveryStatusCode;
-    }
-
-    public String getLastDeliveryError() {
-        return lastDeliveryError;
-    }
-
-    public void setLastDeliveryError(String lastDeliveryError) {
-        this.lastDeliveryError = lastDeliveryError;
-    }
-
-    public Long getSuccessfulDeliveriesCount() {
-        return successfulDeliveriesCount;
-    }
-
-    public void setSuccessfulDeliveriesCount(Long successfulDeliveriesCount) {
-        this.successfulDeliveriesCount = successfulDeliveriesCount;
-    }
-
-    public Long getFailedDeliveriesCount() {
-        return failedDeliveriesCount;
-    }
-
-    public void setFailedDeliveriesCount(Long failedDeliveriesCount) {
-        this.failedDeliveriesCount = failedDeliveriesCount;
-    }
-
-    public String getSignatureHeader() {
-        return signatureHeader;
-    }
-
-    public void setSignatureHeader(String signatureHeader) {
-        this.signatureHeader = signatureHeader;
+    public void setDescription(String description) {
+        this.description = description;
     }
 
     public LocalDateTime getCreatedAt() {
@@ -371,6 +241,65 @@ public class Webhook {
         return updatedAt;
     }
 
+    /**
+     * Records a successful webhook delivery.
+     * Updates the lastSuccessAt timestamp and resets the consecutive failures counter.
+     */
+    public void recordSuccess() {
+        this.lastSuccessAt = LocalDateTime.now();
+        this.consecutiveFailures = 0;
+    }
+
+    /**
+     * Records a failed webhook delivery.
+     * Updates the lastFailureAt timestamp and increments the consecutive failures counter.
+     * If the consecutive failures exceed the maximum retry attempts, the webhook is deactivated.
+     *
+     * @return true if the webhook should be deactivated due to too many failures, false otherwise
+     */
+    public boolean recordFailure() {
+        this.lastFailureAt = LocalDateTime.now();
+        this.consecutiveFailures++;
+        
+        if (this.consecutiveFailures >= this.maxRetryAttempts) {
+            this.active = false;
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Checks if this webhook should be triggered for the given event type.
+     *
+     * @param eventType The event type to check
+     * @return true if this webhook should be triggered, false otherwise
+     */
+    public boolean shouldTriggerFor(EventType eventType) {
+        return this.active && this.eventType == eventType;
+    }
+
+    /**
+     * Generates a payload for this webhook based on the event type.
+     *
+     * @return A sample payload for this webhook's event type
+     */
+    public Object generateSamplePayload() {
+        return this.eventType.generateSamplePayload();
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (o == null || getClass() != o.getClass()) return false;
+        Webhook webhook = (Webhook) o;
+        return Objects.equals(id, webhook.id);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(id);
+    }
+
     @Override
     public String toString() {
         return "Webhook{" +
@@ -378,15 +307,7 @@ public class Webhook {
                 ", endpointUrl='" + endpointUrl + '\'' +
                 ", active=" + active +
                 ", eventType=" + eventType +
-                ", maxRetryAttempts=" + maxRetryAttempts +
-                ", failedAttempts=" + failedAttempts +
-                ", lastDeliveryStatus='" + lastDeliveryStatus + '\'' +
-                ", lastDeliveryAttempt=" + lastDeliveryAttempt +
-                ", lastDeliverySuccess=" + lastDeliverySuccess +
-                ", lastDeliveryStatusCode=" + lastDeliveryStatusCode +
-                ", successfulDeliveriesCount=" + successfulDeliveriesCount +
-                ", failedDeliveriesCount=" + failedDeliveriesCount +
-                ", signatureHeader='" + signatureHeader + '\'' +
+                ", consecutiveFailures=" + consecutiveFailures +
                 ", createdAt=" + createdAt +
                 ", updatedAt=" + updatedAt +
                 '}';
