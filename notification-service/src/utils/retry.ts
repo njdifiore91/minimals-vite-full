@@ -1,308 +1,315 @@
 /**
- * Retry utility for implementing exponential backoff for webhook deliveries
+ * Retry Utilities
  * 
- * This module provides utilities for calculating retry intervals, tracking retry attempts,
- * and scheduling retries with configurable parameters. It implements an exponential backoff
- * algorithm with jitter to prevent the "thundering herd" problem.
+ * This file provides utility functions for implementing an exponential backoff retry mechanism
+ * for failed webhook deliveries. It includes functions for calculating retry intervals,
+ * tracking retry attempts, and scheduling retries with configurable parameters.
+ * 
+ * These utilities are critical for ensuring reliable notification delivery even when
+ * recipients are temporarily unavailable, as specified in section 4.1.10 of the technical
+ * specification.
  */
-
-import dayjs from 'dayjs';
 
 /**
- * Configuration options for the retry mechanism
+ * Interface for configuring retry behavior with exponential backoff
  */
 export interface RetryOptions {
-  /** Base delay in milliseconds before applying exponential factor */
+  /** Base delay in milliseconds before applying exponential backoff */
   baseDelayMs: number;
-  /** Exponential factor to multiply by attempt number */
+  /** Factor to multiply the delay by for each subsequent retry */
   exponentialFactor: number;
-  /** Maximum delay in milliseconds */
+  /** Maximum delay in milliseconds between retries */
   maxDelayMs: number;
   /** Maximum number of retry attempts */
   maxRetries: number;
-  /** Jitter factor (0-1) to randomize delay and prevent thundering herd */
+  /** Factor to apply for jitter (0-1, where 0 means no jitter) */
   jitterFactor: number;
 }
 
 /**
- * Default retry configuration
- */
-export const DEFAULT_RETRY_OPTIONS: RetryOptions = {
-  baseDelayMs: 1000, // 1 second
-  exponentialFactor: 2,
-  maxDelayMs: 60000, // 1 minute
-  maxRetries: 5,
-  jitterFactor: 0.2, // 20% jitter
-};
-
-/**
- * Retry state for tracking attempts and scheduling
+ * Interface for tracking retry state
  */
 export interface RetryState {
-  /** Current retry attempt number (0-based) */
+  /** Current retry attempt (0 for initial attempt) */
   attempt: number;
-  /** Timestamp when the next retry should occur */
+  /** Timestamp for the next retry attempt */
   nextRetryTime: number | null;
-  /** Whether the retry limit has been reached */
+  /** Whether retry attempts have been exhausted */
   exhausted: boolean;
+  /** Error from the last attempt */
+  lastError: Error | null;
   /** History of retry timestamps */
   retryHistory: number[];
-  /** Original error that triggered the retry */
-  originalError?: Error;
-  /** Last error encountered during retry */
-  lastError?: Error;
+  /** Additional metadata for the retry state */
+  metadata?: Record<string, any>;
 }
 
 /**
  * Creates a new retry state
+ * 
+ * @param error Optional error from the initial attempt
+ * @returns A new retry state object
  */
-export function createRetryState(originalError?: Error): RetryState {
+export function createRetryState(error: Error | null = null): RetryState {
   return {
     attempt: 0,
     nextRetryTime: null,
     exhausted: false,
+    lastError: error,
     retryHistory: [],
-    originalError,
+    metadata: {},
   };
 }
 
 /**
- * Calculates the delay for the next retry attempt using exponential backoff
+ * Calculates the next retry time using exponential backoff
  * 
- * @param attempt Current retry attempt number (0-based)
- * @param options Retry configuration options
- * @returns Delay in milliseconds for the next retry
+ * @param attempt Current retry attempt (0-based)
+ * @param options Retry options for configuration
+ * @returns Timestamp in milliseconds for the next retry
  */
-export function calculateBackoffDelay(
-  attempt: number,
-  options: RetryOptions = DEFAULT_RETRY_OPTIONS
-): number {
-  // Ensure attempt is at least 0
-  const retryAttempt = Math.max(0, attempt);
+export function calculateNextRetryTime(attempt: number, options: RetryOptions): number {
+  // Calculate base delay with exponential backoff
+  // For attempt 0, use baseDelayMs directly
+  // For subsequent attempts, apply exponential backoff
+  const exponentialDelay = attempt === 0
+    ? options.baseDelayMs
+    : options.baseDelayMs * Math.pow(options.exponentialFactor, attempt);
   
-  // Calculate exponential backoff: baseDelay * (exponentialFactor ^ attempt)
-  const exponentialDelay = options.baseDelayMs * Math.pow(options.exponentialFactor, retryAttempt);
-  
-  // Cap the delay at the maximum allowed delay
+  // Cap the delay at the maximum delay
   const cappedDelay = Math.min(exponentialDelay, options.maxDelayMs);
   
-  return cappedDelay;
+  // Apply jitter to prevent thundering herd problem
+  // Jitter is a random value between (1 - jitterFactor) and (1 + jitterFactor)
+  // For example, with jitterFactor = 0.2, jitter will be between 0.8 and 1.2
+  const jitter = options.jitterFactor > 0
+    ? 1 + (Math.random() * 2 - 1) * options.jitterFactor
+    : 1;
+  
+  // Apply jitter to the capped delay
+  const finalDelay = Math.floor(cappedDelay * jitter);
+  
+  // Calculate the next retry time by adding the delay to the current time
+  return Date.now() + finalDelay;
 }
 
 /**
- * Adds jitter to the delay to prevent thundering herd problem
- * 
- * @param delay Base delay in milliseconds
- * @param jitterFactor Factor to determine jitter amount (0-1)
- * @returns Delay with jitter applied
- */
-export function applyJitter(
-  delay: number,
-  jitterFactor: number = DEFAULT_RETRY_OPTIONS.jitterFactor
-): number {
-  // Ensure jitter factor is between 0 and 1
-  const factor = Math.max(0, Math.min(1, jitterFactor));
-  
-  // Calculate jitter range (delay * jitterFactor)
-  const jitterRange = delay * factor;
-  
-  // Generate random jitter within range: -jitterRange/2 to +jitterRange/2
-  const jitter = (Math.random() - 0.5) * jitterRange;
-  
-  // Apply jitter to delay
-  return Math.max(0, delay + jitter);
-}
-
-/**
- * Calculates the next retry time with exponential backoff and jitter
- * 
- * @param attempt Current retry attempt number (0-based)
- * @param options Retry configuration options
- * @returns Timestamp in milliseconds when the next retry should occur
- */
-export function calculateNextRetryTime(
-  attempt: number,
-  options: RetryOptions = DEFAULT_RETRY_OPTIONS
-): number {
-  const backoffDelay = calculateBackoffDelay(attempt, options);
-  const delayWithJitter = applyJitter(backoffDelay, options.jitterFactor);
-  
-  // Calculate next retry time by adding delay to current time
-  return Date.now() + delayWithJitter;
-}
-
-/**
- * Determines if a retry is eligible based on attempt count and options
+ * Checks if retry attempts have been exhausted
  * 
  * @param state Current retry state
- * @param options Retry configuration options
- * @returns Whether a retry is eligible
+ * @param options Retry options for configuration
+ * @returns True if retry attempts have been exhausted, false otherwise
  */
-export function isRetryEligible(
-  state: RetryState,
-  options: RetryOptions = DEFAULT_RETRY_OPTIONS
-): boolean {
-  return state.attempt < options.maxRetries;
+export function isRetryExhausted(state: RetryState, options: RetryOptions): boolean {
+  return state.attempt >= options.maxRetries;
 }
 
 /**
- * Determines if an error is retryable based on its type and status code
- * 
- * @param error Error to check
- * @returns Whether the error is retryable
- */
-export function isErrorRetryable(error: any): boolean {
-  // Network errors are generally retryable
-  if (error?.code === 'ECONNRESET' || 
-      error?.code === 'ETIMEDOUT' || 
-      error?.code === 'ECONNREFUSED' || 
-      error?.code === 'ENOTFOUND') {
-    return true;
-  }
-  
-  // For HTTP errors, check status code
-  // 429 (Too Many Requests) and 5xx errors are retryable
-  if (error?.response?.status) {
-    const statusCode = error.response.status;
-    return statusCode === 429 || (statusCode >= 500 && statusCode < 600);
-  }
-  
-  // Default to not retryable for unknown error types
-  return false;
-}
-
-/**
- * Updates the retry state for the next attempt
+ * Prepares the retry state for the next retry attempt
  * 
  * @param state Current retry state
- * @param error Error from the failed attempt
- * @param options Retry configuration options
- * @returns Updated retry state
+ * @param error Error from the current attempt
+ * @param options Retry options for configuration
+ * @returns Updated retry state for the next attempt
  */
 export function prepareForNextRetry(
   state: RetryState,
   error: Error,
-  options: RetryOptions = DEFAULT_RETRY_OPTIONS
+  options: RetryOptions
 ): RetryState {
-  // Increment attempt counter
+  // Increment the attempt counter
   const nextAttempt = state.attempt + 1;
   
-  // Calculate next retry time
-  const nextRetryTime = calculateNextRetryTime(nextAttempt, options);
+  // Check if retry attempts have been exhausted
+  const exhausted = nextAttempt > options.maxRetries;
   
-  // Check if retry limit has been reached
-  const exhausted = nextAttempt >= options.maxRetries;
+  // Calculate the next retry time if not exhausted
+  const nextRetryTime = exhausted ? null : calculateNextRetryTime(nextAttempt, options);
   
-  // Update retry history
-  const retryHistory = [...state.retryHistory, Date.now()];
+  // Update the retry history
+  const retryHistory = [...state.retryHistory];
+  if (nextRetryTime) {
+    retryHistory.push(nextRetryTime);
+  }
   
+  // Return the updated retry state
   return {
-    ...state,
     attempt: nextAttempt,
-    nextRetryTime: exhausted ? null : nextRetryTime,
+    nextRetryTime,
     exhausted,
-    retryHistory,
     lastError: error,
-    originalError: state.originalError || error,
+    retryHistory,
+    metadata: {
+      ...state.metadata,
+      lastErrorMessage: error.message,
+      lastErrorType: error.constructor.name,
+      lastErrorTime: Date.now(),
+    },
   };
 }
 
 /**
- * Formats a retry state for logging
+ * Determines if a retry should be attempted based on the error
+ * 
+ * @param error Error from the current attempt
+ * @returns True if a retry should be attempted, false otherwise
+ */
+export function shouldRetry(error: Error): boolean {
+  // Network errors should always be retried
+  if (error.name === 'NetworkError' || error.name === 'FetchError' || error.name === 'AbortError') {
+    return true;
+  }
+  
+  // Timeout errors should be retried
+  if (error.name === 'TimeoutError' || error.message.includes('timeout')) {
+    return true;
+  }
+  
+  // HTTP errors with status codes 429 (Too Many Requests) or 5xx should be retried
+  if (error instanceof Error && 'status' in error) {
+    const status = (error as any).status;
+    return status === 429 || (status >= 500 && status < 600);
+  }
+  
+  // For other errors, check if they are transient based on the message
+  const transientErrorPatterns = [
+    'ECONNRESET',
+    'ECONNREFUSED',
+    'ETIMEDOUT',
+    'EHOSTUNREACH',
+    'ENETUNREACH',
+    'ENOTFOUND',
+    'socket hang up',
+    'network error',
+    'server error',
+    'gateway timeout',
+    'service unavailable',
+    'too many requests',
+    'request failed',
+    'connection closed',
+  ];
+  
+  return transientErrorPatterns.some(pattern => 
+    error.message.toLowerCase().includes(pattern.toLowerCase())
+  );
+}
+
+/**
+ * Determines if an HTTP status code is retryable
+ * 
+ * @param statusCode HTTP status code
+ * @returns True if the status code is retryable, false otherwise
+ */
+export function isRetryableStatusCode(statusCode: number): boolean {
+  // 429 Too Many Requests - should be retried after a delay
+  if (statusCode === 429) {
+    return true;
+  }
+  
+  // 5xx Server Errors - should be retried
+  if (statusCode >= 500 && statusCode < 600) {
+    return true;
+  }
+  
+  // 408 Request Timeout - should be retried
+  if (statusCode === 408) {
+    return true;
+  }
+  
+  // All other status codes are not retryable
+  return false;
+}
+
+/**
+ * Formats retry state for logging
  * 
  * @param state Retry state to format
- * @returns Formatted retry information for logging
+ * @returns Formatted retry state for logging
  */
 export function formatRetryForLogging(state: RetryState): Record<string, any> {
   return {
     attempt: state.attempt,
     nextRetryTime: state.nextRetryTime ? new Date(state.nextRetryTime).toISOString() : null,
     exhausted: state.exhausted,
-    retryCount: state.retryHistory.length,
+    lastErrorMessage: state.lastError?.message,
+    lastErrorType: state.lastError?.constructor.name,
     retryHistory: state.retryHistory.map(time => new Date(time).toISOString()),
-    errorMessage: state.lastError?.message || state.originalError?.message,
-    errorType: state.lastError?.constructor.name || state.originalError?.constructor.name,
   };
 }
 
 /**
- * Calculates the time remaining until the next retry
+ * Calculates exponential backoff delay without applying jitter
+ * Useful for displaying predictable retry times to users
  * 
- * @param state Current retry state
- * @returns Time remaining in milliseconds, or null if no retry is scheduled
+ * @param attempt Current retry attempt (0-based)
+ * @param options Retry options for configuration
+ * @returns Delay in milliseconds for the given attempt
  */
-export function getTimeUntilNextRetry(state: RetryState): number | null {
-  if (!state.nextRetryTime) {
-    return null;
+export function calculateBackoffDelay(attempt: number, options: RetryOptions): number {
+  if (attempt === 0) {
+    return options.baseDelayMs;
   }
   
-  const timeRemaining = state.nextRetryTime - Date.now();
-  return Math.max(0, timeRemaining);
+  const exponentialDelay = options.baseDelayMs * Math.pow(options.exponentialFactor, attempt);
+  return Math.min(exponentialDelay, options.maxDelayMs);
 }
 
 /**
- * Checks if it's time to execute the next retry
+ * Formats a retry delay in a human-readable format
  * 
- * @param state Current retry state
- * @returns Whether it's time to retry
+ * @param delayMs Delay in milliseconds
+ * @returns Human-readable delay string
  */
-export function isTimeToRetry(state: RetryState): boolean {
-  if (!state.nextRetryTime || state.exhausted) {
-    return false;
+export function formatRetryDelay(delayMs: number): string {
+  if (delayMs < 1000) {
+    return `${delayMs}ms`;
   }
   
-  return Date.now() >= state.nextRetryTime;
+  if (delayMs < 60000) {
+    return `${Math.round(delayMs / 1000)}s`;
+  }
+  
+  return `${Math.round(delayMs / 60000)}m`;
 }
 
 /**
- * Creates a promise that resolves after the next retry delay
+ * Calculates all retry delays for a given configuration
+ * Useful for displaying the retry schedule to users or for testing
  * 
- * @param state Current retry state
- * @returns Promise that resolves when it's time to retry
+ * @param options Retry options for configuration
+ * @returns Array of delays in milliseconds for each retry attempt
  */
-export function waitForNextRetry(state: RetryState): Promise<void> {
-  const timeRemaining = getTimeUntilNextRetry(state);
+export function calculateRetrySchedule(options: RetryOptions): number[] {
+  const schedule: number[] = [];
   
-  if (timeRemaining === null || timeRemaining <= 0) {
-    return Promise.resolve();
+  for (let attempt = 0; attempt <= options.maxRetries; attempt++) {
+    schedule.push(calculateBackoffDelay(attempt, options));
   }
   
-  return new Promise(resolve => setTimeout(resolve, timeRemaining));
+  return schedule;
 }
 
 /**
- * Executes a function with retry logic
+ * Estimates the total time required for all retry attempts
  * 
- * @param fn Function to execute with retry logic
- * @param options Retry configuration options
- * @returns Promise that resolves with the function result or rejects after all retries fail
+ * @param options Retry options for configuration
+ * @returns Total time in milliseconds for all retry attempts
  */
-export async function withRetry<T>(
-  fn: () => Promise<T>,
-  options: RetryOptions = DEFAULT_RETRY_OPTIONS
-): Promise<T> {
-  let state = createRetryState();
-  
-  while (true) {
-    try {
-      // Attempt to execute the function
-      return await fn();
-    } catch (error: any) {
-      // Check if the error is retryable
-      if (!isErrorRetryable(error)) {
-        throw error;
-      }
-      
-      // Update retry state
-      state = prepareForNextRetry(state, error, options);
-      
-      // Check if we've exhausted all retries
-      if (state.exhausted) {
-        throw state.lastError || new Error('Retry limit exceeded');
-      }
-      
-      // Wait until the next retry time
-      await waitForNextRetry(state);
-    }
-  }
+export function estimateTotalRetryTime(options: RetryOptions): number {
+  return calculateRetrySchedule(options).reduce((sum, delay) => sum + delay, 0);
+}
+
+/**
+ * Creates a default retry options object with recommended values
+ * 
+ * @returns Default retry options
+ */
+export function createDefaultRetryOptions(): RetryOptions {
+  return {
+    baseDelayMs: 1000,        // Start with 1 second delay
+    exponentialFactor: 2,     // Double the delay each time
+    maxDelayMs: 60000,        // Cap at 1 minute
+    maxRetries: 5,            // Try up to 5 times
+    jitterFactor: 0.2,        // Add 20% jitter
+  };
 }
