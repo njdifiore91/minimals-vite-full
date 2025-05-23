@@ -1,27 +1,29 @@
 package com.dollarfunding.mca.dto;
 
+import com.dollarfunding.mca.entity.Application;
 import com.dollarfunding.mca.entity.MerchantDetails;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Size;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
-import javax.validation.Valid;
-import javax.validation.constraints.NotBlank;
-import javax.validation.constraints.NotNull;
-import javax.validation.constraints.Pattern;
-import javax.validation.constraints.Size;
 import java.math.BigDecimal;
 
 /**
  * Data Transfer Object for creating or updating merchant details.
- * This class defines the structure for incoming merchant data with validation annotations
- * for required fields. It includes fields for merchant information with appropriate
- * JSON serialization annotations.
+ * This class defines the structure for incoming merchant data with
+ * validation annotations for required fields. It serves as the contract
+ * for merchant operations in the REST API.
  * <p>
- * Sensitive PII data fields are marked for field-level encryption in the service layer.
+ * Fields include merchant information (legal_name, dba_name, ein, address,
+ * industry, revenue) with appropriate JSON serialization annotations.
  * </p>
  *
  * @author MCA Application Team
@@ -35,25 +37,25 @@ public class MerchantDetailsRequestDTO {
 
     /**
      * Legal name of the merchant (PII data).
-     * This field is subject to field-level encryption.
+     * This field is required and will be encrypted at rest.
      */
     @NotBlank(message = "Legal name is required")
-    @Size(max = 100, message = "Legal name cannot exceed 100 characters")
+    @Size(max = 255, message = "Legal name must be less than 255 characters")
     @JsonProperty("legal_name")
     private String legalName;
 
     /**
      * Doing Business As name of the merchant (PII data).
-     * This field is subject to field-level encryption.
+     * This field is optional and will be encrypted at rest if provided.
      */
-    @Size(max = 100, message = "DBA name cannot exceed 100 characters")
+    @Size(max = 255, message = "DBA name must be less than 255 characters")
     @JsonProperty("dba_name")
     private String dbaName;
 
     /**
      * Employer Identification Number (EIN) of the merchant (PII data).
-     * Format: XX-XXXXXXX (9 digits with hyphen)
-     * This field is subject to field-level encryption.
+     * This field is required, must follow the format XX-XXXXXXX,
+     * and will be encrypted at rest.
      */
     @NotBlank(message = "EIN is required")
     @Pattern(regexp = "^\\d{2}-\\d{7}$", message = "EIN must be in format XX-XXXXXXX")
@@ -73,7 +75,7 @@ public class MerchantDetailsRequestDTO {
      * Industry of the merchant.
      */
     @NotBlank(message = "Industry is required")
-    @Size(max = 50, message = "Industry cannot exceed 50 characters")
+    @Size(max = 100, message = "Industry must be less than 100 characters")
     @JsonProperty("industry")
     private String industry;
 
@@ -86,46 +88,83 @@ public class MerchantDetailsRequestDTO {
 
     /**
      * Converts this DTO to a MerchantDetails entity.
-     * Note: This method does not set the id or application_id fields,
-     * which should be handled by the service layer.
+     * This method handles the conversion of all fields, including proper
+     * formatting of address and financial information.
      *
+     * @param application The associated Application entity
      * @return A new MerchantDetails entity with data from this DTO
      */
-    public MerchantDetails toEntity() {
-        MerchantDetails entity = new MerchantDetails();
-        entity.setLegalName(this.legalName);
-        entity.setDbaName(this.dbaName);
-        entity.setEin(this.ein);
-        entity.setAddress(this.address != null ? this.address.toAddressObject() : null);
-        entity.setIndustry(this.industry);
-        entity.setRevenue(this.revenue);
-        return entity;
-    }
-
-    /**
-     * Creates a new DTO from a MerchantDetails entity.
-     *
-     * @param entity The MerchantDetails entity
-     * @return A new MerchantDetailsRequestDTO with data from the entity
-     */
-    public static MerchantDetailsRequestDTO fromEntity(MerchantDetails entity) {
-        if (entity == null) {
-            return null;
+    public MerchantDetails toEntity(Application application) {
+        if (application == null) {
+            throw new IllegalArgumentException("Application cannot be null");
         }
 
-        return MerchantDetailsRequestDTO.builder()
-                .legalName(entity.getLegalName())
-                .dbaName(entity.getDbaName())
-                .ein(entity.getEin())
-                .address(AddressDTO.fromAddressObject(entity.getAddress()))
-                .industry(entity.getIndustry())
-                .revenue(entity.getRevenue())
+        // Convert address DTO to entity address
+        MerchantDetails.Address addressEntity = null;
+        if (this.address != null) {
+            addressEntity = MerchantDetails.Address.builder()
+                    .street(this.address.getStreet())
+                    .city(this.address.getCity())
+                    .state(this.address.getState())
+                    .zip(this.address.getZipCode())
+                    .country(this.address.getCountry())
+                    .build();
+        }
+
+        // Build and return the entity
+        return MerchantDetails.builder()
+                .application(application)
+                .legalName(this.legalName)
+                .dbaName(this.dbaName)
+                .ein(this.ein)
+                .address(addressEntity)
+                .industry(this.industry)
+                .revenue(this.revenue)
                 .build();
     }
 
     /**
-     * Inner class representing the address structure.
-     * Contains validation annotations for address fields.
+     * Updates an existing MerchantDetails entity with data from this DTO.
+     * This method updates all fields in the entity with values from this DTO,
+     * preserving the entity's ID, creation timestamp, and application reference.
+     *
+     * @param entity The existing MerchantDetails entity to update
+     * @return The updated MerchantDetails entity
+     */
+    public MerchantDetails updateEntity(MerchantDetails entity) {
+        if (entity == null) {
+            throw new IllegalArgumentException("Entity cannot be null");
+        }
+
+        // Update simple fields
+        entity.setLegalName(this.legalName);
+        entity.setDbaName(this.dbaName);
+        entity.setEin(this.ein);
+        entity.setIndustry(this.industry);
+        entity.setRevenue(this.revenue);
+
+        // Update address if provided
+        if (this.address != null) {
+            MerchantDetails.Address addressEntity = entity.getAddress();
+            if (addressEntity == null) {
+                addressEntity = new MerchantDetails.Address();
+            }
+            
+            addressEntity.setStreet(this.address.getStreet());
+            addressEntity.setCity(this.address.getCity());
+            addressEntity.setState(this.address.getState());
+            addressEntity.setZip(this.address.getZipCode());
+            addressEntity.setCountry(this.address.getCountry());
+            
+            entity.setAddress(addressEntity);
+        }
+
+        return entity;
+    }
+
+    /**
+     * Inner class representing the address structure for API requests.
+     * Contains fields for street, city, state, ZIP code, and country.
      */
     @Data
     @Builder
@@ -135,34 +174,21 @@ public class MerchantDetailsRequestDTO {
     public static class AddressDTO {
 
         /**
-         * Street address line 1 (PII data).
-         * This field is subject to field-level encryption.
+         * Street address (PII data).
          */
-        @NotBlank(message = "Street address is required")
-        @Size(max = 100, message = "Street address cannot exceed 100 characters")
-        @JsonProperty("street_address")
-        private String streetAddress;
-
-        /**
-         * Street address line 2 (PII data).
-         * This field is subject to field-level encryption.
-         */
-        @Size(max = 100, message = "Street address line 2 cannot exceed 100 characters")
-        @JsonProperty("street_address_2")
-        private String streetAddress2;
+        @NotBlank(message = "Street is required")
+        @JsonProperty("street")
+        private String street;
 
         /**
          * City (PII data).
-         * This field is subject to field-level encryption.
          */
         @NotBlank(message = "City is required")
-        @Size(max = 50, message = "City cannot exceed 50 characters")
         @JsonProperty("city")
         private String city;
 
         /**
-         * State (PII data).
-         * This field is subject to field-level encryption.
+         * State (2-letter code).
          */
         @NotBlank(message = "State is required")
         @Size(min = 2, max = 2, message = "State must be a 2-letter code")
@@ -170,8 +196,7 @@ public class MerchantDetailsRequestDTO {
         private String state;
 
         /**
-         * ZIP code (PII data).
-         * This field is subject to field-level encryption.
+         * ZIP code.
          */
         @NotBlank(message = "ZIP code is required")
         @Pattern(regexp = "^\\d{5}(-\\d{4})?$", message = "ZIP code must be in format XXXXX or XXXXX-XXXX")
@@ -179,34 +204,30 @@ public class MerchantDetailsRequestDTO {
         private String zipCode;
 
         /**
-         * Converts this DTO to an Address object.
-         * The actual implementation depends on the Address class structure.
-         *
-         * @return An Address object with data from this DTO
+         * Country.
          */
-        public Object toAddressObject() {
-            // Implementation depends on the actual Address class structure
-            // This is a placeholder for the actual conversion logic
-            return this;
-        }
+        @NotBlank(message = "Country is required")
+        @JsonProperty("country")
+        private String country;
 
         /**
-         * Creates a new AddressDTO from an Address object.
+         * Creates a new AddressDTO from a MerchantDetails.Address object.
          *
          * @param address The Address object
          * @return A new AddressDTO with data from the Address object
          */
-        public static AddressDTO fromAddressObject(Object address) {
-            // Implementation depends on the actual Address class structure
-            // This is a placeholder for the actual conversion logic
+        public static AddressDTO fromAddressObject(MerchantDetails.Address address) {
             if (address == null) {
                 return null;
             }
-            if (address instanceof AddressDTO) {
-                return (AddressDTO) address;
-            }
-            // Default implementation would extract fields from the Address object
-            return new AddressDTO();
+
+            return AddressDTO.builder()
+                    .street(address.getStreet())
+                    .city(address.getCity())
+                    .state(address.getState())
+                    .zipCode(address.getZip())
+                    .country(address.getCountry())
+                    .build();
         }
     }
 }
