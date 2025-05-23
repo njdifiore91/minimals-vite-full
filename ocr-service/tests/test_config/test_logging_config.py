@@ -4,632 +4,578 @@
 """
 Unit tests for the OCR Service's logging_config.py module.
 
-These tests verify that logging configuration correctly sets up log levels,
-formats, handlers, and context enrichment based on the environment.
-They ensure that logging works correctly for monitoring, debugging, and troubleshooting.
+These tests verify that logging configuration correctly sets up log levels, formats,
+handlers, and context enrichment based on the environment. The tests ensure that
+logging works correctly for monitoring, debugging, and troubleshooting.
 """
 
 import os
+import sys
 import json
 import logging
 import pytest
 from unittest.mock import patch, MagicMock, call
-from typing import Dict, Any
+from datetime import datetime
+import uuid
+import importlib
+from typing import Dict, Any, Optional
 
-# Import the module to test
+# Import test fixtures
+from conftest import Environment
+
+# Import the module under test
 from src.config.logging_config import (
+    SERVICE_NAME,
+    LOG_LEVEL,
     LOG_LEVELS,
     DEFAULT_LOG_LEVEL,
-    LOG_FORMAT,
-    DATE_FORMAT,
-    ContextEnricher,
     JsonFormatter,
-    set_request_context,
-    clear_request_context,
-    get_logging_config,
-    configure_logging,
-    get_logger
+    LOGGING_CONFIG,
+    setup_logging,
+    LogContext,
+    get_logger,
+    add_context_to_record,
+    ContextFilter,
+    apply_context_filter
 )
 
 
-# ===== Test Constants and Default Values =====
+class TestLogLevelConfiguration:
+    """Test suite for log level configuration."""
 
-def test_log_levels_constants():
-    """
-    Test that LOG_LEVELS contains the correct log levels for each environment.
-    """
-    assert "development" in LOG_LEVELS
-    assert "staging" in LOG_LEVELS
-    assert "production" in LOG_LEVELS
-    
-    assert LOG_LEVELS["development"] == logging.DEBUG
-    assert LOG_LEVELS["staging"] == logging.INFO
-    assert LOG_LEVELS["production"] == logging.INFO
+    def test_log_levels_by_environment(self):
+        """Test that the correct log level is set for each environment."""
+        assert LOG_LEVELS["development"] == logging.DEBUG
+        assert LOG_LEVELS["staging"] == logging.INFO
+        assert LOG_LEVELS["production"] == logging.INFO
 
+    def test_default_log_level(self):
+        """Test that the default log level is set correctly."""
+        assert DEFAULT_LOG_LEVEL == logging.INFO
 
-def test_default_log_level():
-    """
-    Test that DEFAULT_LOG_LEVEL is set to INFO.
-    """
-    assert DEFAULT_LOG_LEVEL == logging.INFO
+    @pytest.mark.parametrize("env_vars", [Environment.DEVELOPMENT], indirect=True)
+    def test_development_log_level(self, env_vars):
+        """Test that the log level is set to DEBUG in development environment."""
+        with patch("src.config.logging_config.ENVIRONMENT", "development"):
+            from src.config.logging_config import LOG_LEVEL
+            assert LOG_LEVEL == logging.DEBUG
 
+    @pytest.mark.parametrize("env_vars", [Environment.STAGING], indirect=True)
+    def test_staging_log_level(self, env_vars):
+        """Test that the log level is set to INFO in staging environment."""
+        with patch("src.config.logging_config.ENVIRONMENT", "staging"):
+            from src.config.logging_config import LOG_LEVEL
+            assert LOG_LEVEL == logging.INFO
 
-def test_log_format():
-    """
-    Test that LOG_FORMAT includes required fields.
-    """
-    assert "%(asctime)s" in LOG_FORMAT
-    assert "%(levelname)s" in LOG_FORMAT
-    assert "%(service)s" in LOG_FORMAT
-    assert "%(request_id)s" in LOG_FORMAT
-    assert "%(name)s" in LOG_FORMAT
-    assert "%(message)s" in LOG_FORMAT
+    @pytest.mark.parametrize("env_vars", [Environment.PRODUCTION], indirect=True)
+    def test_production_log_level(self, env_vars):
+        """Test that the log level is set to INFO in production environment."""
+        with patch("src.config.logging_config.ENVIRONMENT", "production"):
+            from src.config.logging_config import LOG_LEVEL
+            assert LOG_LEVEL == logging.INFO
 
-
-def test_date_format():
-    """
-    Test that DATE_FORMAT is correctly defined.
-    """
-    assert DATE_FORMAT == "%Y-%m-%d %H:%M:%S.%f"
-
-
-# ===== Test ContextEnricher Class =====
-
-def test_context_enricher_initialization():
-    """
-    Test that ContextEnricher can be initialized.
-    """
-    enricher = ContextEnricher()
-    assert isinstance(enricher, logging.Filter)
+    def test_unknown_environment_log_level(self):
+        """Test that the default log level is used for unknown environments."""
+        with patch("src.config.logging_config.ENVIRONMENT", "unknown"):
+            from src.config.logging_config import LOG_LEVEL
+            assert LOG_LEVEL == DEFAULT_LOG_LEVEL
 
 
-@patch('src.config.logging_config.request_id_var')
-@patch('src.config.logging_config.user_id_var')
-@patch('src.config.logging_config.app_config')
-def test_context_enricher_filter_with_context(mock_app_config, mock_user_id_var, mock_request_id_var):
-    """
-    Test that ContextEnricher.filter adds context information to log records when context is available.
-    """
-    # Setup mocks
-    mock_request_id_var.get.return_value = 'test-request-id'
-    mock_user_id_var.get.return_value = 'test-user-id'
-    mock_app_config.__getitem__.side_effect = lambda key: {
-        'service': {'name': 'ocr-service', 'version': '1.0.0'},
-        'environment': 'development'
-    }[key]
-    
-    # Create a log record
-    record = logging.LogRecord(
-        name='test_logger',
-        level=logging.INFO,
-        pathname='test_file.py',
-        lineno=42,
-        msg='Test message',
-        args=(),
-        exc_info=None
-    )
-    
-    # Apply the filter
-    enricher = ContextEnricher()
-    result = enricher.filter(record)
-    
-    # Verify the result
-    assert result is True
-    assert record.request_id == 'test-request-id'
-    assert record.user_id == 'test-user-id'
-    assert record.service == 'ocr-service-1.0.0'
-    assert record.environment == 'development'
+class TestJsonFormatter:
+    """Test suite for the JsonFormatter class."""
+
+    def test_basic_format(self):
+        """Test that the formatter correctly formats a basic log record."""
+        formatter = JsonFormatter()
+        record = logging.LogRecord(
+            name="test_logger",
+            level=logging.INFO,
+            pathname="test_file.py",
+            lineno=42,
+            msg="Test message",
+            args=(),
+            exc_info=None
+        )
+
+        formatted = formatter.format(record)
+        log_dict = json.loads(formatted)
+
+        # Check basic fields
+        assert "timestamp" in log_dict
+        assert log_dict["service"] == SERVICE_NAME
+        assert log_dict["level"] == "INFO"
+        assert log_dict["message"] == "Test message"
+        assert log_dict["logger"] == "test_logger"
+        assert log_dict["path"] == "test_file.py"
+        assert log_dict["function"] == "?"
+        assert log_dict["line"] == 42
+
+    def test_format_with_exception(self):
+        """Test that the formatter correctly formats a log record with an exception."""
+        formatter = JsonFormatter()
+        try:
+            raise ValueError("Test exception")
+        except ValueError:
+            exc_info = sys.exc_info()
+
+        record = logging.LogRecord(
+            name="test_logger",
+            level=logging.ERROR,
+            pathname="test_file.py",
+            lineno=42,
+            msg="Exception occurred",
+            args=(),
+            exc_info=exc_info
+        )
+
+        formatted = formatter.format(record)
+        log_dict = json.loads(formatted)
+
+        # Check exception field
+        assert "exception" in log_dict
+        assert "ValueError: Test exception" in log_dict["exception"]
+
+    def test_format_with_context(self):
+        """Test that the formatter correctly includes context information."""
+        formatter = JsonFormatter()
+        record = logging.LogRecord(
+            name="test_logger",
+            level=logging.INFO,
+            pathname="test_file.py",
+            lineno=42,
+            msg="Test message with context",
+            args=(),
+            exc_info=None
+        )
+
+        # Add context attributes
+        record.request_id = "test-request-id"
+        record.document_id = "test-document-id"
+        record.application_id = "test-application-id"
+        record.processing_time = 123
+        record.extra = {"custom_field": "custom_value"}
+
+        formatted = formatter.format(record)
+        log_dict = json.loads(formatted)
+
+        # Check context fields
+        assert log_dict["request_id"] == "test-request-id"
+        assert log_dict["document_id"] == "test-document-id"
+        assert log_dict["application_id"] == "test-application-id"
+        assert log_dict["processing_time_ms"] == 123
+        assert log_dict["custom_field"] == "custom_value"
 
 
-@patch('src.config.logging_config.request_id_var')
-@patch('src.config.logging_config.user_id_var')
-@patch('src.config.logging_config.app_config')
-def test_context_enricher_filter_without_context(mock_app_config, mock_user_id_var, mock_request_id_var):
-    """
-    Test that ContextEnricher.filter adds default context information to log records when context is not available.
-    """
-    # Setup mocks
-    mock_request_id_var.get.return_value = ''
-    mock_user_id_var.get.return_value = ''
-    mock_app_config.__getitem__.side_effect = lambda key: {
-        'service': {'name': 'ocr-service', 'version': '1.0.0'},
-        'environment': 'development'
-    }[key]
-    
-    # Create a log record
-    record = logging.LogRecord(
-        name='test_logger',
-        level=logging.INFO,
-        pathname='test_file.py',
-        lineno=42,
-        msg='Test message',
-        args=(),
-        exc_info=None
-    )
-    
-    # Apply the filter
-    enricher = ContextEnricher()
-    result = enricher.filter(record)
-    
-    # Verify the result
-    assert result is True
-    assert record.request_id == 'no-request-id'
-    assert record.user_id == 'no-user-id'
-    assert record.service == 'ocr-service-1.0.0'
-    assert record.environment == 'development'
+class TestLoggingConfig:
+    """Test suite for the LOGGING_CONFIG dictionary."""
+
+    def test_formatters_config(self):
+        """Test that formatters are correctly configured."""
+        assert "json" in LOGGING_CONFIG["formatters"]
+        assert "standard" in LOGGING_CONFIG["formatters"]
+        assert LOGGING_CONFIG["formatters"]["json"]["()"] == JsonFormatter
+        assert "format" in LOGGING_CONFIG["formatters"]["standard"]
+        assert "datefmt" in LOGGING_CONFIG["formatters"]["standard"]
+
+    def test_console_handler_config(self):
+        """Test that the console handler is correctly configured."""
+        assert "console" in LOGGING_CONFIG["handlers"]
+        console_handler = LOGGING_CONFIG["handlers"]["console"]
+        assert console_handler["class"] == "logging.StreamHandler"
+        assert console_handler["level"] == LOG_LEVEL
+        assert console_handler["stream"] == sys.stdout
+
+    def test_file_handler_config(self):
+        """Test that the file handler is correctly configured."""
+        assert "file" in LOGGING_CONFIG["handlers"]
+        file_handler = LOGGING_CONFIG["handlers"]["file"]
+        assert file_handler["class"] == "logging.handlers.RotatingFileHandler"
+        assert file_handler["level"] == LOG_LEVEL
+        assert file_handler["formatter"] == "json"
+        assert SERVICE_NAME in file_handler["filename"]
+        assert file_handler["maxBytes"] == 10485760  # 10MB
+        assert file_handler["backupCount"] == 10
+
+    def test_error_file_handler_config(self):
+        """Test that the error file handler is correctly configured."""
+        assert "error_file" in LOGGING_CONFIG["handlers"]
+        error_handler = LOGGING_CONFIG["handlers"]["error_file"]
+        assert error_handler["class"] == "logging.handlers.RotatingFileHandler"
+        assert error_handler["level"] == logging.ERROR
+        assert error_handler["formatter"] == "json"
+        assert SERVICE_NAME in error_handler["filename"]
+        assert "_error" in error_handler["filename"]
+        assert error_handler["maxBytes"] == 10485760  # 10MB
+        assert error_handler["backupCount"] == 10
+
+    def test_root_logger_config(self):
+        """Test that the root logger is correctly configured."""
+        assert "" in LOGGING_CONFIG["loggers"]
+        root_logger = LOGGING_CONFIG["loggers"][""]
+        assert "console" in root_logger["handlers"]
+        assert root_logger["level"] == LOG_LEVEL
+        assert root_logger["propagate"] is True
+
+    def test_service_loggers_config(self):
+        """Test that service-specific loggers are correctly configured."""
+        service_loggers = ["ocr_service", "ocr_service.api", "ocr_service.models", "ocr_service.services"]
+        for logger_name in service_loggers:
+            assert logger_name in LOGGING_CONFIG["loggers"]
+            logger_config = LOGGING_CONFIG["loggers"][logger_name]
+            assert logger_config["level"] == LOG_LEVEL
+            assert logger_config["propagate"] is False
+
+            # Check handlers based on environment
+            with patch("src.config.logging_config.ENVIRONMENT", "development"):
+                assert logger_config["handlers"] == ["console"]
+
+            with patch("src.config.logging_config.ENVIRONMENT", "production"):
+                assert set(logger_config["handlers"]) == {"console", "file", "error_file"}
+
+    def test_tensorflow_logger_config(self):
+        """Test that the TensorFlow logger is correctly configured."""
+        assert "tensorflow" in LOGGING_CONFIG["loggers"]
+        tf_logger = LOGGING_CONFIG["loggers"]["tensorflow"]
+        assert tf_logger["level"] == logging.WARNING  # Reduced verbosity
+        assert tf_logger["propagate"] is False
 
 
-# ===== Test JsonFormatter Class =====
+class TestProductionLoggingConfig:
+    """Test suite for production-specific logging configuration."""
 
-def test_json_formatter_initialization():
-    """
-    Test that JsonFormatter can be initialized.
-    """
-    formatter = JsonFormatter()
-    assert isinstance(formatter, logging.Formatter)
+    @patch("src.config.logging_config.ENVIRONMENT", "production")
+    def test_datadog_handler_not_available(self):
+        """Test that Datadog handler is not added when the module is not available."""
+        with patch("importlib.import_module", side_effect=ImportError):
+            # Re-import to trigger the production-specific code
+            import importlib
+            importlib.reload(sys.modules["src.config.logging_config"])
+            from src.config.logging_config import LOGGING_CONFIG
 
+            # Datadog handler should not be added
+            assert "datadog" not in LOGGING_CONFIG["handlers"]
 
-@patch('src.config.logging_config.app_config')
-def test_json_formatter_format(mock_app_config):
-    """
-    Test that JsonFormatter.format correctly formats log records as JSON.
-    """
-    # Setup mocks
-    mock_app_config.__getitem__.side_effect = lambda key: {
-        'service': {'name': 'ocr-service', 'version': '1.0.0'},
-        'environment': 'development'
-    }[key]
-    
-    # Create a log record with context attributes
-    record = logging.LogRecord(
-        name='test_logger',
-        level=logging.INFO,
-        pathname='test_file.py',
-        lineno=42,
-        msg='Test message',
-        args=(),
-        exc_info=None
-    )
-    record.request_id = 'test-request-id'
-    record.user_id = 'test-user-id'
-    record.service = 'ocr-service-1.0.0'
-    record.environment = 'development'
-    record.custom_field = 'custom-value'
-    
-    # Format the record
-    formatter = JsonFormatter()
-    formatter.datefmt = DATE_FORMAT
-    result = formatter.format(record)
-    
-    # Parse the JSON result
-    json_result = json.loads(result)
-    
-    # Verify the result
-    assert json_result['level'] == 'INFO'
-    assert json_result['service'] == 'ocr-service-1.0.0'
-    assert json_result['request_id'] == 'test-request-id'
-    assert json_result['user_id'] == 'test-user-id'
-    assert json_result['name'] == 'test_logger'
-    assert json_result['message'] == 'Test message'
-    assert json_result['environment'] == 'development'
-    assert json_result['custom_field'] == 'custom-value'
-    assert 'timestamp' in json_result
+    @patch("src.config.logging_config.ENVIRONMENT", "production")
+    def test_datadog_handler_available(self):
+        """Test that Datadog handler is added when the module is available."""
+        # Mock the datadog_logger module
+        mock_datadog_module = MagicMock()
+        mock_datadog_module.DatadogLogHandler = "DatadogLogHandler"
+
+        with patch.dict("sys.modules", {"datadog_logger": mock_datadog_module}):
+            # Re-import to trigger the production-specific code
+            importlib.reload(sys.modules["src.config.logging_config"])
+            from src.config.logging_config import LOGGING_CONFIG
+
+            # Datadog handler should be added
+            assert "datadog" in LOGGING_CONFIG["handlers"]
+            datadog_handler = LOGGING_CONFIG["handlers"]["datadog"]
+            assert datadog_handler["class"] == "datadog_logger.DatadogLogHandler"
+            assert datadog_handler["level"] == LOG_LEVEL
+            assert datadog_handler["formatter"] == "json"
+            assert datadog_handler["service"] == SERVICE_NAME
+            assert "env:production" in datadog_handler["tags"]
+            assert f"service:{SERVICE_NAME}" in datadog_handler["tags"]
+
+            # Check that datadog handler is added to all loggers
+            for logger_name, logger_config in LOGGING_CONFIG["loggers"].items():
+                assert "datadog" in logger_config["handlers"]
 
 
-@patch('src.config.logging_config.app_config')
-def test_json_formatter_format_with_exception(mock_app_config):
-    """
-    Test that JsonFormatter.format correctly formats log records with exceptions as JSON.
-    """
-    # Setup mocks
-    mock_app_config.__getitem__.side_effect = lambda key: {
-        'service': {'name': 'ocr-service', 'version': '1.0.0'},
-        'environment': 'development'
-    }[key]
-    
-    # Create an exception
-    try:
-        raise ValueError("Test exception")
-    except ValueError as e:
-        exc_info = (type(e), e, e.__traceback__)
-    
-    # Create a log record with an exception
-    record = logging.LogRecord(
-        name='test_logger',
-        level=logging.ERROR,
-        pathname='test_file.py',
-        lineno=42,
-        msg='Test exception',
-        args=(),
-        exc_info=exc_info
-    )
-    record.request_id = 'test-request-id'
-    record.service = 'ocr-service-1.0.0'
-    record.environment = 'development'
-    
-    # Format the record
-    formatter = JsonFormatter()
-    formatter.datefmt = DATE_FORMAT
-    result = formatter.format(record)
-    
-    # Parse the JSON result
-    json_result = json.loads(result)
-    
-    # Verify the result
-    assert json_result['level'] == 'ERROR'
-    assert json_result['service'] == 'ocr-service-1.0.0'
-    assert json_result['request_id'] == 'test-request-id'
-    assert json_result['name'] == 'test_logger'
-    assert json_result['message'] == 'Test exception'
-    assert json_result['environment'] == 'development'
-    assert 'exception' in json_result
-    assert 'ValueError: Test exception' in json_result['exception']
+class TestSetupLogging:
+    """Test suite for the setup_logging function."""
+
+    def test_setup_logging(self):
+        """Test that setup_logging correctly configures logging."""
+        with patch("logging.config.dictConfig") as mock_dict_config, \
+             patch("logging.info") as mock_info:
+            setup_logging()
+
+            # Check that dictConfig was called with the correct configuration
+            mock_dict_config.assert_called_once_with(LOGGING_CONFIG)
+
+            # Check that an info message was logged
+            mock_info.assert_called_once()
+            assert SERVICE_NAME in mock_info.call_args[0][0]
+            assert "logging initialized" in mock_info.call_args[0][0]
+            assert logging.getLevelName(LOG_LEVEL) in mock_info.call_args[0][0]
 
 
-# ===== Test Request Context Functions =====
+class TestLogContext:
+    """Test suite for the LogContext class."""
 
-@patch('src.config.logging_config.request_id_var')
-@patch('src.config.logging_config.user_id_var')
-def test_set_request_context(mock_user_id_var, mock_request_id_var):
-    """
-    Test that set_request_context correctly sets the request context.
-    """
-    # Call the function
-    set_request_context('test-request-id', 'test-user-id')
-    
-    # Verify that the context variables were set
-    mock_request_id_var.set.assert_called_once_with('test-request-id')
-    mock_user_id_var.set.assert_called_once_with('test-user-id')
+    def test_context_manager_with_request_id(self):
+        """Test that LogContext correctly adds context with a provided request_id."""
+        logger = logging.getLogger("test_logger")
+        request_id = "test-request-id"
 
+        # Create a handler with a _context attribute
+        handler = logging.StreamHandler()
+        handler._context = {}
+        logger.addHandler(handler)
 
-@patch('src.config.logging_config.request_id_var')
-@patch('src.config.logging_config.user_id_var')
-def test_set_request_context_without_user_id(mock_user_id_var, mock_request_id_var):
-    """
-    Test that set_request_context correctly sets the request context without a user_id.
-    """
-    # Call the function
-    set_request_context('test-request-id')
-    
-    # Verify that the request_id was set but user_id was not
-    mock_request_id_var.set.assert_called_once_with('test-request-id')
-    mock_user_id_var.set.assert_not_called()
+        # Use the context manager with a request_id
+        with LogContext(logger, request_id=request_id, document_id="test-doc") as ctx_request_id:
+            # Check that the context was set on the handler
+            assert handler._context["request_id"] == request_id
+            assert handler._context["document_id"] == "test-doc"
+            # Check that the context manager returns the request_id
+            assert ctx_request_id == request_id
 
+        # Check that the context was restored after exiting
+        assert handler._context == {}
 
-@patch('src.config.logging_config.request_id_var')
-@patch('src.config.logging_config.user_id_var')
-def test_clear_request_context(mock_user_id_var, mock_request_id_var):
-    """
-    Test that clear_request_context correctly clears the request context.
-    """
-    # Call the function
-    clear_request_context()
-    
-    # Verify that the context variables were cleared
-    mock_request_id_var.set.assert_called_once_with('')
-    mock_user_id_var.set.assert_called_once_with('')
+    def test_context_manager_without_request_id(self):
+        """Test that LogContext generates a request_id if not provided."""
+        logger = logging.getLogger("test_logger")
 
+        # Create a handler with a _context attribute
+        handler = logging.StreamHandler()
+        handler._context = {}
+        logger.addHandler(handler)
 
-# ===== Test Logging Configuration Functions =====
+        # Use the context manager without a request_id
+        with LogContext(logger, document_id="test-doc") as ctx_request_id:
+            # Check that a request_id was generated
+            assert "request_id" in handler._context
+            assert uuid.UUID(handler._context["request_id"])  # Valid UUID
+            assert handler._context["document_id"] == "test-doc"
+            # Check that the context manager returns the generated request_id
+            assert ctx_request_id == handler._context["request_id"]
 
-@patch('src.config.logging_config.app_config')
-@patch('src.config.logging_config.os.makedirs')
-def test_get_logging_config_development(mock_makedirs, mock_app_config):
-    """
-    Test that get_logging_config returns the correct configuration for development environment.
-    """
-    # Setup mocks
-    mock_app_config.__getitem__.side_effect = lambda key: {
-        'service': {'name': 'ocr-service', 'version': '1.0.0'},
-        'environment': 'development'
-    }[key]
-    
-    # Call the function
-    config = get_logging_config()
-    
-    # Verify the result
-    assert config['version'] == 1
-    assert config['disable_existing_loggers'] is False
-    
-    # Verify formatters
-    assert 'standard' in config['formatters']
-    assert 'json' in config['formatters']
-    assert config['formatters']['standard']['format'] == LOG_FORMAT
-    assert config['formatters']['standard']['datefmt'] == DATE_FORMAT
-    assert config['formatters']['json']['()'] == JsonFormatter
-    
-    # Verify filters
-    assert 'context_enricher' in config['filters']
-    assert config['filters']['context_enricher']['()'] == ContextEnricher
-    
-    # Verify handlers
-    assert 'console' in config['handlers']
-    assert config['handlers']['console']['level'] == logging.DEBUG
-    assert config['handlers']['console']['formatter'] == 'standard'
-    assert 'file' not in config['handlers']
-    assert 'error_file' not in config['handlers']
-    
-    # Verify loggers
-    assert '' in config['loggers']  # Root logger
-    assert 'ocr-service' in config['loggers']
-    assert config['loggers']['']['level'] == logging.DEBUG
-    assert 'console' in config['loggers']['']['handlers']
-    assert 'file' not in config['loggers']['']['handlers']
-    assert 'error_file' not in config['loggers']['']['handlers']
-    
-    # Verify that the log directory was created
-    mock_makedirs.assert_called_once()
+        # Check that the context was restored after exiting
+        assert handler._context == {}
+
+    def test_context_manager_with_existing_context(self):
+        """Test that LogContext correctly preserves and restores existing context."""
+        logger = logging.getLogger("test_logger")
+
+        # Create a handler with existing context
+        handler = logging.StreamHandler()
+        handler._context = {"existing_key": "existing_value"}
+        logger.addHandler(handler)
+
+        # Use the context manager
+        with LogContext(logger, request_id="test-request-id"):
+            # Check that the new context was added without removing existing context
+            assert handler._context["existing_key"] == "existing_value"
+            assert handler._context["request_id"] == "test-request-id"
+
+        # Check that the original context was restored after exiting
+        assert handler._context == {"existing_key": "existing_value"}
 
 
-@patch('src.config.logging_config.app_config')
-@patch('src.config.logging_config.os.makedirs')
-def test_get_logging_config_production(mock_makedirs, mock_app_config):
-    """
-    Test that get_logging_config returns the correct configuration for production environment.
-    """
-    # Setup mocks
-    mock_app_config.__getitem__.side_effect = lambda key: {
-        'service': {'name': 'ocr-service', 'version': '1.0.0'},
-        'environment': 'production'
-    }[key]
-    
-    # Call the function
-    config = get_logging_config()
-    
-    # Verify the result
-    assert config['version'] == 1
-    assert config['disable_existing_loggers'] is False
-    
-    # Verify formatters
-    assert 'standard' in config['formatters']
-    assert 'json' in config['formatters']
-    
-    # Verify filters
-    assert 'context_enricher' in config['filters']
-    
-    # Verify handlers
-    assert 'console' in config['handlers']
-    assert 'file' in config['handlers']
-    assert 'error_file' in config['handlers']
-    assert config['handlers']['console']['level'] == logging.INFO
-    assert config['handlers']['console']['formatter'] == 'json'
-    assert config['handlers']['file']['level'] == logging.INFO
-    assert config['handlers']['file']['formatter'] == 'json'
-    assert config['handlers']['error_file']['level'] == logging.ERROR
-    assert config['handlers']['error_file']['formatter'] == 'json'
-    
-    # Verify loggers
-    assert '' in config['loggers']  # Root logger
-    assert 'ocr-service' in config['loggers']
-    assert config['loggers']['']['level'] == logging.INFO
-    assert 'console' in config['loggers']['']['handlers']
-    assert 'file' in config['loggers']['']['handlers']
-    assert 'error_file' in config['loggers']['']['handlers']
-    
-    # Verify that the log directory was created
-    mock_makedirs.assert_called_once()
+class TestGetLogger:
+    """Test suite for the get_logger function."""
+
+    def test_get_logger_returns_logger_with_context_method(self):
+        """Test that get_logger returns a logger with a context method."""
+        logger = get_logger("test_logger")
+
+        # Check that the logger has a context method
+        assert hasattr(logger, "context")
+        assert callable(logger.context)
+
+        # Check that the context method returns a LogContext instance
+        context = logger.context(request_id="test-request-id")
+        assert isinstance(context, LogContext)
+
+    def test_logger_context_method_works(self):
+        """Test that the context method on the logger works correctly."""
+        logger = get_logger("test_logger")
+
+        # Create a handler with a _context attribute
+        handler = logging.StreamHandler()
+        handler._context = {}
+        logger.addHandler(handler)
+
+        # Use the context method
+        with logger.context(request_id="test-request-id", document_id="test-doc"):
+            # Check that the context was set on the handler
+            assert handler._context["request_id"] == "test-request-id"
+            assert handler._context["document_id"] == "test-doc"
+
+        # Check that the context was restored after exiting
+        assert handler._context == {}
 
 
-@patch('src.config.logging_config.app_config')
-@patch('src.config.logging_config.os.makedirs')
-def test_get_logging_config_staging(mock_makedirs, mock_app_config):
-    """
-    Test that get_logging_config returns the correct configuration for staging environment.
-    """
-    # Setup mocks
-    mock_app_config.__getitem__.side_effect = lambda key: {
-        'service': {'name': 'ocr-service', 'version': '1.0.0'},
-        'environment': 'staging'
-    }[key]
-    
-    # Call the function
-    config = get_logging_config()
-    
-    # Verify the result
-    assert config['version'] == 1
-    assert config['disable_existing_loggers'] is False
-    
-    # Verify handlers
-    assert 'console' in config['handlers']
-    assert 'file' in config['handlers']
-    assert 'error_file' in config['handlers']
-    assert config['handlers']['console']['level'] == logging.INFO
-    assert config['handlers']['file']['level'] == logging.INFO
-    assert config['handlers']['error_file']['level'] == logging.ERROR
-    
-    # Verify loggers
-    assert '' in config['loggers']  # Root logger
-    assert 'ocr-service' in config['loggers']
-    assert config['loggers']['']['level'] == logging.INFO
-    assert 'console' in config['loggers']['']['handlers']
-    assert 'file' in config['loggers']['']['handlers']
-    assert 'error_file' in config['loggers']['']['handlers']
-    
-    # Verify that the log directory was created
-    mock_makedirs.assert_called_once()
+class TestContextFilter:
+    """Test suite for the ContextFilter class."""
+
+    def test_add_context_to_record(self):
+        """Test that add_context_to_record correctly adds context to a log record."""
+        record = logging.LogRecord(
+            name="test_logger",
+            level=logging.INFO,
+            pathname="test_file.py",
+            lineno=42,
+            msg="Test message",
+            args=(),
+            exc_info=None
+        )
+
+        context = {
+            "request_id": "test-request-id",
+            "document_id": "test-doc",
+            "application_id": "test-app"
+        }
+
+        add_context_to_record(record, context)
+
+        # Check that context was added to the record
+        assert record.request_id == "test-request-id"
+        assert record.document_id == "test-doc"
+        assert record.application_id == "test-app"
+
+    def test_context_filter(self):
+        """Test that ContextFilter correctly adds context from handler to log records."""
+        # Create a filter
+        context_filter = ContextFilter()
+
+        # Create a record with a handler that has context
+        record = logging.LogRecord(
+            name="test_logger",
+            level=logging.INFO,
+            pathname="test_file.py",
+            lineno=42,
+            msg="Test message",
+            args=(),
+            exc_info=None
+        )
+
+        # Create a handler with context
+        handler = logging.StreamHandler()
+        handler._context = {
+            "request_id": "test-request-id",
+            "document_id": "test-doc"
+        }
+
+        # Add handler to record
+        record.handler = handler
+
+        # Apply filter
+        context_filter.filter(record)
+
+        # Check that context was added to the record
+        assert record.request_id == "test-request-id"
+        assert record.document_id == "test-doc"
+
+    def test_apply_context_filter(self):
+        """Test that apply_context_filter adds the filter to all handlers."""
+        with patch("logging.root.handlers", [MagicMock(), MagicMock()]), \
+             patch("logging.root.manager.loggerDict", {
+                 "logger1": MagicMock(handlers=[MagicMock()]),
+                 "logger2": MagicMock(handlers=[MagicMock(), MagicMock()])
+             }), \
+             patch("logging.getLogger") as mock_get_logger:
+            # Mock the loggers returned by getLogger
+            mock_loggers = {
+                "logger1": MagicMock(handlers=[MagicMock()]),
+                "logger2": MagicMock(handlers=[MagicMock(), MagicMock()])
+            }
+            mock_get_logger.side_effect = lambda name: mock_loggers[name]
+
+            # Call apply_context_filter
+            apply_context_filter()
+
+            # Check that addFilter was called on all handlers
+            for handler in logging.root.handlers:
+                handler.addFilter.assert_called_once()
+                # Check that a ContextFilter was added
+                filter_arg = handler.addFilter.call_args[0][0]
+                assert isinstance(filter_arg, ContextFilter)
+
+            # Check named loggers
+            for logger_name, logger in mock_loggers.items():
+                for handler in logger.handlers:
+                    handler.addFilter.assert_called_once()
+                    # Check that a ContextFilter was added
+                    filter_arg = handler.addFilter.call_args[0][0]
+                    assert isinstance(filter_arg, ContextFilter)
 
 
-@patch('src.config.logging_config.app_config')
-@patch('src.config.logging_config.os.makedirs')
-def test_get_logging_config_unknown_environment(mock_makedirs, mock_app_config):
-    """
-    Test that get_logging_config uses DEFAULT_LOG_LEVEL for unknown environments.
-    """
-    # Setup mocks
-    mock_app_config.__getitem__.side_effect = lambda key: {
-        'service': {'name': 'ocr-service', 'version': '1.0.0'},
-        'environment': 'unknown'
-    }[key]
-    
-    # Call the function
-    config = get_logging_config()
-    
-    # Verify the result
-    assert config['loggers']['']['level'] == DEFAULT_LOG_LEVEL
-    assert config['handlers']['console']['level'] == DEFAULT_LOG_LEVEL
+class TestLoggingConfigWithFixtures:
+    """Test suite for logging configuration using pytest fixtures."""
 
+    @pytest.mark.parametrize("env_vars", [Environment.DEVELOPMENT], indirect=True)
+    def test_development_logging_config(self, env_vars, monkeypatch):
+        """Test logging configuration in development environment."""
+        # Set environment variable
+        monkeypatch.setenv("ENVIRONMENT", "development")
+        
+        # Reload the module to apply the environment variable
+        importlib.reload(sys.modules["src.config.logging_config"])
+        from src.config.logging_config import LOG_LEVEL, LOGGING_CONFIG
+        
+        # Check log level
+        assert LOG_LEVEL == logging.DEBUG
+        
+        # Check console formatter in development (should be standard, not JSON)
+        assert LOGGING_CONFIG["handlers"]["console"]["formatter"] == "standard"
+        
+        # Check that file handlers are not used for service loggers in development
+        service_logger = LOGGING_CONFIG["loggers"]["ocr_service"]
+        assert service_logger["handlers"] == ["console"]
 
-@patch('src.config.logging_config.logging.config.dictConfig')
-@patch('src.config.logging_config.get_logging_config')
-@patch('src.config.logging_config.logging.getLogger')
-def test_configure_logging_success(mock_get_logger, mock_get_logging_config, mock_dict_config):
-    """
-    Test that configure_logging correctly configures logging when successful.
-    """
-    # Setup mocks
-    mock_config = {'version': 1, 'disable_existing_loggers': False}
-    mock_get_logging_config.return_value = mock_config
-    mock_logger = MagicMock()
-    mock_get_logger.return_value = mock_logger
-    
-    # Call the function
-    configure_logging()
-    
-    # Verify that logging was configured correctly
-    mock_get_logging_config.assert_called_once()
-    mock_dict_config.assert_called_once_with(mock_config)
-    mock_get_logger.assert_called_once_with('ocr-service')
-    mock_logger.info.assert_called_once()
+    @pytest.mark.parametrize("env_vars", [Environment.STAGING], indirect=True)
+    def test_staging_logging_config(self, env_vars, monkeypatch):
+        """Test logging configuration in staging environment."""
+        # Set environment variable
+        monkeypatch.setenv("ENVIRONMENT", "staging")
+        
+        # Reload the module to apply the environment variable
+        importlib.reload(sys.modules["src.config.logging_config"])
+        from src.config.logging_config import LOG_LEVEL, LOGGING_CONFIG
+        
+        # Check log level
+        assert LOG_LEVEL == logging.INFO
+        
+        # Check console formatter in staging (should be JSON)
+        assert LOGGING_CONFIG["handlers"]["console"]["formatter"] == "json"
+        
+        # Check that file handlers are used for service loggers in staging
+        service_logger = LOGGING_CONFIG["loggers"]["ocr_service"]
+        assert set(service_logger["handlers"]) == {"console", "file", "error_file"}
 
+    @pytest.mark.parametrize("env_vars", [Environment.PRODUCTION], indirect=True)
+    def test_production_logging_config(self, env_vars, monkeypatch):
+        """Test logging configuration in production environment."""
+        # Set environment variable
+        monkeypatch.setenv("ENVIRONMENT", "production")
+        
+        # Reload the module to apply the environment variable
+        importlib.reload(sys.modules["src.config.logging_config"])
+        from src.config.logging_config import LOG_LEVEL, LOGGING_CONFIG
+        
+        # Check log level
+        assert LOG_LEVEL == logging.INFO
+        
+        # Check console formatter in production (should be JSON)
+        assert LOGGING_CONFIG["handlers"]["console"]["formatter"] == "json"
+        
+        # Check that file handlers are used for service loggers in production
+        service_logger = LOGGING_CONFIG["loggers"]["ocr_service"]
+        assert set(service_logger["handlers"]) == {"console", "file", "error_file"}
+        
+        # Check that TensorFlow logger is set to WARNING level
+        tf_logger = LOGGING_CONFIG["loggers"]["tensorflow"]
+        assert tf_logger["level"] == logging.WARNING
 
-@patch('src.config.logging_config.logging.config.dictConfig')
-@patch('src.config.logging_config.get_logging_config')
-@patch('src.config.logging_config.logging.basicConfig')
-@patch('src.config.logging_config.logging.getLogger')
-def test_configure_logging_failure(mock_get_logger, mock_basic_config, mock_get_logging_config, mock_dict_config):
-    """
-    Test that configure_logging falls back to basicConfig when dictConfig fails.
-    """
-    # Setup mocks
-    mock_get_logging_config.return_value = {}
-    mock_dict_config.side_effect = Exception("Test exception")
-    mock_logger = MagicMock()
-    mock_get_logger.return_value = mock_logger
-    
-    # Call the function
-    configure_logging()
-    
-    # Verify that basic logging was configured as a fallback
-    mock_get_logging_config.assert_called_once()
-    mock_dict_config.assert_called_once()
-    mock_basic_config.assert_called_once()
-    mock_get_logger.assert_called_once_with('ocr-service')
-    mock_logger.error.assert_called_once()
-
-
-def test_get_logger():
-    """
-    Test that get_logger returns a logger with the specified name.
-    """
-    # Call the function
-    logger = get_logger('test_logger')
-    
-    # Verify the result
-    assert isinstance(logger, logging.Logger)
-    assert logger.name == 'test_logger'
-
-
-# ===== Integration Tests with Fixtures =====
-
-@patch('src.config.logging_config.app_config')
-def test_logging_config_with_dev_environment(mock_app_config, dev_env_vars):
-    """
-    Test that logging configuration is correct for development environment.
-    """
-    # Setup mocks
-    mock_app_config.__getitem__.side_effect = lambda key: {
-        'service': {'name': 'ocr-service', 'version': '1.0.0'},
-        'environment': dev_env_vars['ENVIRONMENT']
-    }[key]
-    
-    # Get the logging configuration
-    config = get_logging_config()
-    
-    # Verify the configuration
-    assert config['loggers']['']['level'] == logging.DEBUG
-    assert config['handlers']['console']['formatter'] == 'standard'
-    assert 'file' not in config['handlers']
-
-
-@patch('src.config.logging_config.app_config')
-def test_logging_config_with_staging_environment(mock_app_config, staging_env_vars):
-    """
-    Test that logging configuration is correct for staging environment.
-    """
-    # Setup mocks
-    mock_app_config.__getitem__.side_effect = lambda key: {
-        'service': {'name': 'ocr-service', 'version': '1.0.0'},
-        'environment': staging_env_vars['ENVIRONMENT']
-    }[key]
-    
-    # Get the logging configuration
-    config = get_logging_config()
-    
-    # Verify the configuration
-    assert config['loggers']['']['level'] == logging.INFO
-    assert config['handlers']['console']['formatter'] == 'json'
-    assert 'file' in config['handlers']
-    assert 'error_file' in config['handlers']
-
-
-@patch('src.config.logging_config.app_config')
-def test_logging_config_with_prod_environment(mock_app_config, prod_env_vars):
-    """
-    Test that logging configuration is correct for production environment.
-    """
-    # Setup mocks
-    mock_app_config.__getitem__.side_effect = lambda key: {
-        'service': {'name': 'ocr-service', 'version': '1.0.0'},
-        'environment': prod_env_vars['ENVIRONMENT']
-    }[key]
-    
-    # Get the logging configuration
-    config = get_logging_config()
-    
-    # Verify the configuration
-    assert config['loggers']['']['level'] == logging.INFO
-    assert config['handlers']['console']['formatter'] == 'json'
-    assert 'file' in config['handlers']
-    assert 'error_file' in config['handlers']
-
-
-@patch('src.config.logging_config.logging')
-@patch('src.config.logging_config.app_config')
-def test_logging_integration_with_mock_app_config(mock_app_config, mock_logging, mock_logging_config):
-    """
-    Test that logging configuration integrates correctly with app_config.
-    """
-    # Setup mocks
-    mock_app_config.__getitem__.side_effect = lambda key: {
-        'service': {'name': mock_logging_config['level'], 'version': '1.0.0'},
-        'environment': 'development'
-    }[key]
-    
-    # Configure logging
-    configure_logging()
-    
-    # Verify that logging was configured
-    assert mock_logging.config.dictConfig.called
-
-
-@patch('src.config.logging_config.request_id_var')
-@patch('src.config.logging_config.user_id_var')
-def test_request_context_integration(mock_user_id_var, mock_request_id_var):
-    """
-    Test that request context functions integrate correctly with logging.
-    """
-    # Set request context
-    set_request_context('test-request-id', 'test-user-id')
-    
-    # Verify that context was set
-    mock_request_id_var.set.assert_called_once_with('test-request-id')
-    mock_user_id_var.set.assert_called_once_with('test-user-id')
-    
-    # Clear request context
-    clear_request_context()
-    
-    # Verify that context was cleared
-    assert mock_request_id_var.set.call_count == 2
-    assert mock_user_id_var.set.call_count == 2
-    mock_request_id_var.set.assert_called_with('')
-    mock_user_id_var.set.assert_called_with('')
+    def test_log_format_configuration(self):
+        """Test log format configuration."""
+        # Check standard formatter format string
+        standard_format = LOGGING_CONFIG["formatters"]["standard"]["format"]
+        assert "%(asctime)s" in standard_format
+        assert "%(levelname)s" in standard_format
+        assert "%(name)s" in standard_format
+        
+        # Check that JSON formatter is used for non-development environments
+        with patch("src.config.logging_config.ENVIRONMENT", "development"):
+            importlib.reload(sys.modules["src.config.logging_config"])
+            from src.config.logging_config import LOGGING_CONFIG as DEV_CONFIG
+            assert DEV_CONFIG["handlers"]["console"]["formatter"] == "standard"
+        
+        with patch("src.config.logging_config.ENVIRONMENT", "production"):
+            importlib.reload(sys.modules["src.config.logging_config"])
+            from src.config.logging_config import LOGGING_CONFIG as PROD_CONFIG
+            assert PROD_CONFIG["handlers"]["console"]["formatter"] == "json"
