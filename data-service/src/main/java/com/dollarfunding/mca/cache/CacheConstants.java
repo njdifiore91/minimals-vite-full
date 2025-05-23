@@ -2,15 +2,16 @@ package com.dollarfunding.mca.cache;
 
 /**
  * Constants for Redis caching in the MCA application.
- * <p>
+ * 
  * This class centralizes all cache-related constants to ensure consistency across the application.
- * It includes TTL values, cache names, and key prefixes for different entity types and operations.
- * </p>
- * <p>
- * The TTL values are based on the technical specification requirements:
- * - 15 minutes (900 seconds) for application data
- * - 24 hours (86400 seconds) for session data
- * </p>
+ * It defines TTL values, cache names, and key prefixes for different entity types and operations.
+ * 
+ * The MCA application uses Redis as a distributed caching layer with the following configuration:
+ * - Key-based expiration policies (15 minutes for application data, 24 hours for sessions)
+ * - Cluster mode enabled for horizontal scaling
+ * - Memory optimization with appropriate eviction policies
+ * - Persistent storage for critical data with AOF persistence
+ * - Sentinel for automatic failover in case of node failures
  */
 public final class CacheConstants {
 
@@ -18,177 +19,129 @@ public final class CacheConstants {
      * Private constructor to prevent instantiation of this utility class.
      */
     private CacheConstants() {
-        throw new AssertionError("CacheConstants is a utility class and should not be instantiated");
+        throw new AssertionError("CacheConstants utility class should not be instantiated");
     }
 
     /**
-     * TTL (Time-To-Live) constants for different types of cached data.
-     * These values determine how long data remains in the cache before expiration.
+     * TTL (Time-To-Live) Constants
      */
-    public static final class TTL {
-        /**
-         * TTL for application data: 15 minutes (900 seconds).
-         * Used for caching application-related data such as application details, status, etc.
-         */
-        public static final long APPLICATION_DATA_SECONDS = 900L;
-
-        /**
-         * TTL for session data: 24 hours (86400 seconds).
-         * Used for caching user session information.
-         */
-        public static final long SESSION_DATA_SECONDS = 86400L;
-
-        /**
-         * TTL for merchant data: 15 minutes (900 seconds).
-         * Used for caching merchant-related information.
-         */
-        public static final long MERCHANT_DATA_SECONDS = APPLICATION_DATA_SECONDS;
-
-        /**
-         * TTL for document metadata: 15 minutes (900 seconds).
-         * Used for caching document metadata without the actual document content.
-         */
-        public static final long DOCUMENT_METADATA_SECONDS = APPLICATION_DATA_SECONDS;
-
-        /**
-         * TTL for lookup data: 1 hour (3600 seconds).
-         * Used for caching relatively static reference data.
-         */
-        public static final long LOOKUP_DATA_SECONDS = 3600L;
-
-        /**
-         * No expiration TTL value.
-         * Used for data that should remain in cache until explicitly removed.
-         */
-        public static final long NO_EXPIRATION = -1L;
-    }
+    
+    /**
+     * TTL for application data in seconds (15 minutes).
+     * Used for caching application-related data like application details, document metadata, etc.
+     */
+    public static final int APPLICATION_DATA_TTL_SECONDS = 15 * 60; // 15 minutes
+    
+    /**
+     * TTL for session data in seconds (24 hours).
+     * Used for caching user session information.
+     */
+    public static final int SESSION_DATA_TTL_SECONDS = 24 * 60 * 60; // 24 hours
 
     /**
-     * Cache name constants for different entity types.
-     * These values are used to identify different cache regions in Redis.
+     * Cache Name Constants
+     * These constants define the names of different caches used in the application.
      */
-    public static final class CacheName {
-        /**
-         * Cache name for applications data.
-         */
-        public static final String APPLICATIONS = "applications";
-
-        /**
-         * Cache name for documents data.
-         */
-        public static final String DOCUMENTS = "documents";
-
-        /**
-         * Cache name for merchants data.
-         */
-        public static final String MERCHANTS = "merchants";
-
-        /**
-         * Cache name for user sessions.
-         */
-        public static final String SESSIONS = "sessions";
-
-        /**
-         * Cache name for lookup/reference data.
-         */
-        public static final String LOOKUPS = "lookups";
-    }
+    
+    /**
+     * Cache name for application entities.
+     * Used to store and retrieve application data.
+     */
+    public static final String APPLICATIONS_CACHE = "applications";
+    
+    /**
+     * Cache name for document entities.
+     * Used to store and retrieve document metadata.
+     */
+    public static final String DOCUMENTS_CACHE = "documents";
+    
+    /**
+     * Cache name for merchant entities.
+     * Used to store and retrieve merchant details.
+     */
+    public static final String MERCHANTS_CACHE = "merchants";
+    
+    /**
+     * Cache name for user session data.
+     * Used to store and retrieve user session information.
+     */
+    public static final String SESSIONS_CACHE = "sessions";
 
     /**
-     * Key prefix constants for different cache operations.
-     * These prefixes are used to create standardized cache keys across the application.
+     * Key Prefix Constants
+     * These constants define the prefixes used for cache keys to ensure uniqueness and organization.
      */
-    public static final class KeyPrefix {
-        /**
-         * Prefix for application-related cache keys.
-         */
-        public static final String APPLICATION = "app:";
-
-        /**
-         * Prefix for document-related cache keys.
-         */
-        public static final String DOCUMENT = "doc:";
-
-        /**
-         * Prefix for merchant-related cache keys.
-         */
-        public static final String MERCHANT = "merch:";
-
-        /**
-         * Prefix for session-related cache keys.
-         */
-        public static final String SESSION = "sess:";
-
-        /**
-         * Prefix for lookup/reference data cache keys.
-         */
-        public static final String LOOKUP = "lookup:";
-
-        /**
-         * Prefix for collection cache keys.
-         */
-        public static final String COLLECTION = "col:";
-
-        /**
-         * Prefix for count cache keys.
-         */
-        public static final String COUNT = "count:";
-
-        /**
-         * Prefix for metadata cache keys.
-         */
-        public static final String METADATA = "meta:";
-    }
+    
+    /**
+     * Prefix for application entity cache keys.
+     * Example usage: APPLICATION_KEY_PREFIX + applicationId
+     */
+    public static final String APPLICATION_KEY_PREFIX = "app:";
+    
+    /**
+     * Prefix for document entity cache keys.
+     * Example usage: DOCUMENT_KEY_PREFIX + documentId
+     */
+    public static final String DOCUMENT_KEY_PREFIX = "doc:";
+    
+    /**
+     * Prefix for merchant entity cache keys.
+     * Example usage: MERCHANT_KEY_PREFIX + merchantId
+     */
+    public static final String MERCHANT_KEY_PREFIX = "merchant:";
+    
+    /**
+     * Prefix for user session cache keys.
+     * Example usage: SESSION_KEY_PREFIX + userId
+     */
+    public static final String SESSION_KEY_PREFIX = "session:";
+    
+    /**
+     * Prefix for list cache keys.
+     * Example usage: LIST_KEY_PREFIX + entityType
+     */
+    public static final String LIST_KEY_PREFIX = "list:";
 
     /**
-     * Constants for cache region names.
-     * These values are used to configure different cache regions with specific settings.
+     * Cache Region Constants
+     * These constants define the regions used for organizing caches.
      */
-    public static final class Region {
-        /**
-         * Region for application data with 15-minute TTL.
-         */
-        public static final String APPLICATION_REGION = "applicationRegion";
-
-        /**
-         * Region for session data with 24-hour TTL.
-         */
-        public static final String SESSION_REGION = "sessionRegion";
-
-        /**
-         * Region for merchant data with 15-minute TTL.
-         */
-        public static final String MERCHANT_REGION = "merchantRegion";
-
-        /**
-         * Region for document metadata with 15-minute TTL.
-         */
-        public static final String DOCUMENT_REGION = "documentRegion";
-
-        /**
-         * Region for lookup data with 1-hour TTL.
-         */
-        public static final String LOOKUP_REGION = "lookupRegion";
-    }
+    
+    /**
+     * Region for entity data caches.
+     * Used to group entity-related caches (applications, documents, merchants).
+     */
+    public static final String ENTITY_CACHE_REGION = "entity";
+    
+    /**
+     * Region for session data caches.
+     * Used to group session-related caches.
+     */
+    public static final String SESSION_CACHE_REGION = "session";
+    
+    /**
+     * Region for query result caches.
+     * Used to group query result caches.
+     */
+    public static final String QUERY_CACHE_REGION = "query";
 
     /**
-     * Constants for cache key delimiters and separators.
-     * These values are used to create and parse structured cache keys.
+     * Cache Operation Constants
+     * These constants define operations that can be performed on caches.
      */
-    public static final class Delimiter {
-        /**
-         * Main delimiter for separating parts of a cache key.
-         */
-        public static final String KEY_DELIMITER = ":";
-
-        /**
-         * Secondary delimiter for separating items in a list within a cache key.
-         */
-        public static final String LIST_DELIMITER = ",";
-
-        /**
-         * Delimiter for separating key-value pairs in a cache key.
-         */
-        public static final String PAIR_DELIMITER = "=";
-    }
+    
+    /**
+     * Maximum number of retry attempts for cache operations.
+     */
+    public static final int MAX_CACHE_RETRY_ATTEMPTS = 3;
+    
+    /**
+     * Delay between cache retry attempts in milliseconds.
+     */
+    public static final int CACHE_RETRY_DELAY_MS = 100;
+    
+    /**
+     * Default batch size for cache operations that process multiple items.
+     */
+    public static final int DEFAULT_CACHE_BATCH_SIZE = 100;
 }
