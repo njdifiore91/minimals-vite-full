@@ -1,226 +1,458 @@
 package com.dollarfunding.mca.dto;
 
-import com.dollarfunding.mca.entity.Application;
 import com.dollarfunding.mca.entity.Document;
+import com.dollarfunding.mca.entity.DocumentClassification;
 import com.dollarfunding.mca.entity.DocumentType;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Stream;
 
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.Mockito.when;
+import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Test class for {@link DocumentResponseDTO}.
- * Validates document metadata structure, JSON serialization/deserialization,
- * pre-signed URL generation, document classification confidence scores, and entity conversion.
+ * Test class for {@link DocumentResponseDTO} that validates the document metadata structure,
+ * JSON serialization/deserialization, and entity conversion.
+ * 
+ * This test suite ensures that the DTO properly represents document metadata,
+ * generates secure access URLs correctly, and includes document classification information.
  */
-@ExtendWith(MockitoExtension.class)
+@DisplayName("Document Response DTO Tests")
 public class DocumentResponseDTOTest {
 
-    private static final ObjectMapper objectMapper = new ObjectMapper();
-    
-    @Mock
-    private Document document;
-    
-    @Mock
-    private Application application;
-    
-    private UUID documentId;
-    private UUID applicationId;
-    private LocalDateTime uploadedAt;
-    private Map<String, Object> metadata;
+    private ObjectMapper objectMapper;
+    private UUID testId;
+    private UUID testApplicationId;
+    private LocalDateTime testUploadedAt;
+    private LocalDateTime testUrlExpiresAt;
     
     @BeforeEach
     void setUp() {
-        // Initialize test data
-        documentId = UUID.randomUUID();
-        applicationId = UUID.randomUUID();
-        uploadedAt = LocalDateTime.now();
+        objectMapper = new ObjectMapper();
+        // Configure ObjectMapper for LocalDateTime serialization
+        objectMapper.findAndRegisterModules();
         
-        // Create metadata with classification confidence scores
-        metadata = new HashMap<>();
-        metadata.put("confidence", 0.95);
-        metadata.put("pageCount", 3);
-        metadata.put("fileSize", 1024);
+        testId = UUID.randomUUID();
+        testApplicationId = UUID.randomUUID();
+        testUploadedAt = LocalDateTime.now().truncatedTo(ChronoUnit.SECONDS);
+        testUrlExpiresAt = testUploadedAt.plusHours(1);
+    }
+    
+    /**
+     * Test data provider for document classification confidence levels.
+     */
+    static Stream<Arguments> confidenceLevelProvider() {
+        return Stream.of(
+            Arguments.of(0.95, true, false, false),  // High confidence
+            Arguments.of(0.85, false, true, false),   // Medium confidence
+            Arguments.of(0.65, false, false, true)    // Low confidence
+        );
+    }
+    
+    /**
+     * Test data provider for URL validity scenarios.
+     */
+    static Stream<Arguments> urlValidityProvider() {
+        LocalDateTime now = LocalDateTime.now();
+        return Stream.of(
+            // Valid URL (not null, not empty, expiry in future)
+            Arguments.of("https://example.com/document.pdf", now.plusMinutes(30), true),
+            // Invalid URL (null)
+            Arguments.of(null, now.plusMinutes(30), false),
+            // Invalid URL (empty)
+            Arguments.of("", now.plusMinutes(30), false),
+            // Invalid URL (expiry in past)
+            Arguments.of("https://example.com/document.pdf", now.minusMinutes(30), false),
+            // Invalid URL (null expiry)
+            Arguments.of("https://example.com/document.pdf", null, false)
+        );
+    }
+
+    @Test
+    @DisplayName("Should create a valid DTO with default constructor")
+    void shouldCreateValidDTOWithDefaultConstructor() {
+        // Given/When
+        DocumentResponseDTO dto = new DocumentResponseDTO();
         
-        Map<String, Double> classificationScores = new HashMap<>();
-        classificationScores.put("BANK_STATEMENT", 0.95);
-        classificationScores.put("TAX_RETURN", 0.03);
-        classificationScores.put("BUSINESS_LICENSE", 0.02);
-        metadata.put("classificationScores", classificationScores);
-        
-        // Configure mock document
-        when(document.getId()).thenReturn(documentId);
-        when(document.getApplication()).thenReturn(application);
-        when(application.getId()).thenReturn(applicationId);
-        when(document.getType()).thenReturn(DocumentType.BANK_STATEMENT);
-        when(document.getStoragePath()).thenReturn("documents/" + applicationId + "/" + documentId + ".pdf");
-        when(document.getClassification()).thenReturn("BANK_STATEMENT");
-        when(document.getUploadedAt()).thenReturn(uploadedAt);
-        when(document.getMetadata()).thenReturn(metadata);
+        // Then
+        assertNotNull(dto, "DTO should not be null");
+        assertNotNull(dto.getMetadata(), "Metadata should be initialized as empty map");
+        assertTrue(dto.getMetadata().isEmpty(), "Metadata should be empty");
     }
     
     @Test
-    @DisplayName("Should convert Document entity to DocumentResponseDTO correctly")
-    void shouldConvertEntityToDTO() {
+    @DisplayName("Should create a valid DTO from Document entity")
+    void shouldCreateValidDTOFromDocumentEntity() {
+        // Given
+        Document document = createTestDocument();
+        String downloadUrl = "https://example.com/documents/test.pdf";
+        
         // When
-        DocumentResponseDTO dto = DocumentResponseDTO.fromEntity(document);
+        DocumentResponseDTO dto = new DocumentResponseDTO(document, downloadUrl, testUrlExpiresAt);
         
         // Then
-        assertThat(dto).isNotNull();
-        assertThat(dto.getId()).isEqualTo(documentId);
-        assertThat(dto.getApplicationId()).isEqualTo(applicationId);
-        assertThat(dto.getType()).isEqualTo(DocumentType.BANK_STATEMENT.name());
-        assertThat(dto.getStoragePath()).isEqualTo("documents/" + applicationId + "/" + documentId + ".pdf");
-        assertThat(dto.getClassification()).isEqualTo("BANK_STATEMENT");
-        assertThat(dto.getUploadedAt()).isEqualTo(uploadedAt);
-        assertThat(dto.getMetadata()).isEqualTo(metadata);
+        assertEquals(testId, dto.getId(), "ID should match entity ID");
+        assertEquals(testApplicationId, dto.getApplicationId(), "Application ID should match entity application ID");
+        assertEquals(DocumentType.BANK_STATEMENT.name(), dto.getType(), "Type should match entity type");
+        assertEquals("mca-documents-production/test-application/bank-statement.pdf", dto.getStoragePath(), "Storage path should match entity storage path");
+        assertEquals(DocumentClassification.VERIFIED.name(), dto.getClassification(), "Classification should match entity classification");
+        assertEquals(testUploadedAt, dto.getUploadedAt(), "Uploaded at should match entity uploaded at");
+        assertEquals(downloadUrl, dto.getDownloadUrl(), "Download URL should match provided URL");
+        assertEquals(testUrlExpiresAt, dto.getUrlExpiresAt(), "URL expiry should match provided expiry");
+        assertEquals(0.97, dto.getClassificationConfidence(), "Classification confidence should match entity confidence score");
+        
+        // Verify metadata
+        assertNotNull(dto.getMetadata(), "Metadata should not be null");
+        assertEquals(3, dto.getMetadata().size(), "Metadata should have correct number of entries");
+        assertEquals(5, dto.getMetadataValue("pageCount"), "Page count metadata should match");
+        assertEquals("2023-01-15", dto.getMetadataValue("documentDate"), "Document date metadata should match");
     }
     
     @Test
-    @DisplayName("Should include pre-signed URL for secure document access")
-    void shouldIncludePreSignedUrl() {
+    @DisplayName("Should create a valid DTO using static factory method")
+    void shouldCreateValidDTOUsingStaticFactoryMethod() {
+        // Given
+        Document document = createTestDocument();
+        String downloadUrl = "https://example.com/documents/test.pdf";
+        
         // When
-        DocumentResponseDTO dto = DocumentResponseDTO.fromEntity(document);
+        DocumentResponseDTO dto = DocumentResponseDTO.fromEntity(document, downloadUrl, testUrlExpiresAt);
         
         // Then
-        assertThat(dto.getPreSignedUrl()).isNotNull();
-        assertThat(dto.getPreSignedUrl()).startsWith("https://");
-        assertThat(dto.getPreSignedUrl()).contains(documentId.toString());
-        assertThat(dto.getPreSignedUrl()).contains("Expires=");
-        assertThat(dto.getPreSignedUrl()).contains("Signature=");
+        assertNotNull(dto, "DTO should not be null");
+        assertEquals(testId, dto.getId(), "ID should match entity ID");
+        assertEquals(testApplicationId, dto.getApplicationId(), "Application ID should match entity application ID");
     }
     
     @Test
-    @DisplayName("Should include document classification confidence scores")
-    void shouldIncludeClassificationConfidenceScores() {
+    @DisplayName("Should return null from static factory method when document is null")
+    void shouldReturnNullFromStaticFactoryMethodWhenDocumentIsNull() {
         // When
-        DocumentResponseDTO dto = DocumentResponseDTO.fromEntity(document);
+        DocumentResponseDTO dto = DocumentResponseDTO.fromEntity(null, "url", testUrlExpiresAt);
         
         // Then
-        assertThat(dto.getMetadata()).containsKey("classificationScores");
-        
-        @SuppressWarnings("unchecked")
-        Map<String, Double> scores = (Map<String, Double>) dto.getMetadata().get("classificationScores");
-        
-        assertThat(scores).isNotNull();
-        assertThat(scores).containsKey("BANK_STATEMENT");
-        assertThat(scores.get("BANK_STATEMENT")).isEqualTo(0.95);
-        assertThat(scores).containsKey("TAX_RETURN");
-        assertThat(scores.get("TAX_RETURN")).isEqualTo(0.03);
-        assertThat(scores).containsKey("BUSINESS_LICENSE");
-        assertThat(scores.get("BUSINESS_LICENSE")).isEqualTo(0.02);
+        assertNull(dto, "DTO should be null when document is null");
     }
     
     @Test
     @DisplayName("Should serialize to JSON correctly")
-    void shouldSerializeToJson() throws Exception {
+    void shouldSerializeToJsonCorrectly() throws Exception {
         // Given
-        DocumentResponseDTO dto = DocumentResponseDTO.fromEntity(document);
+        Document document = createTestDocument();
+        String downloadUrl = "https://example.com/documents/test.pdf";
+        DocumentResponseDTO dto = new DocumentResponseDTO(document, downloadUrl, testUrlExpiresAt);
         
         // When
         String json = objectMapper.writeValueAsString(dto);
         
         // Then
-        assertThat(json).isNotNull();
-        assertThat(json).contains(documentId.toString());
-        assertThat(json).contains(applicationId.toString());
-        assertThat(json).contains("BANK_STATEMENT");
-        assertThat(json).contains("preSignedUrl");
-        assertThat(json).contains("classificationScores");
+        assertTrue(json.contains("\"id\":\"" + testId + "\""), "JSON should contain id field");
+        assertTrue(json.contains("\"application_id\":\"" + testApplicationId + "\""), "JSON should contain application_id field");
+        assertTrue(json.contains("\"type\":\"BANK_STATEMENT\""), "JSON should contain type field");
+        assertTrue(json.contains("\"storage_path\":"), "JSON should contain storage_path field");
+        assertTrue(json.contains("\"classification\":\"VERIFIED\""), "JSON should contain classification field");
+        assertTrue(json.contains("\"uploaded_at\":"), "JSON should contain uploaded_at field");
+        assertTrue(json.contains("\"download_url\":\"https://example.com/documents/test.pdf\""), "JSON should contain download_url field");
+        assertTrue(json.contains("\"url_expires_at\":"), "JSON should contain url_expires_at field");
+        assertTrue(json.contains("\"classification_confidence\":0.97"), "JSON should contain classification_confidence field");
+        assertTrue(json.contains("\"metadata\":"), "JSON should contain metadata field");
+        assertTrue(json.contains("\"pageCount\":5"), "JSON should contain pageCount in metadata");
+        assertTrue(json.contains("\"documentDate\":\"2023-01-15\""), "JSON should contain documentDate in metadata");
     }
     
     @Test
     @DisplayName("Should deserialize from JSON correctly")
-    void shouldDeserializeFromJson() throws Exception {
+    void shouldDeserializeFromJsonCorrectly() throws Exception {
         // Given
-        DocumentResponseDTO originalDto = DocumentResponseDTO.fromEntity(document);
-        String json = objectMapper.writeValueAsString(originalDto);
+        String documentId = UUID.randomUUID().toString();
+        String applicationId = UUID.randomUUID().toString();
+        String uploadedAt = "2023-01-20T10:15:30.000Z";
+        String urlExpiresAt = "2023-01-20T11:15:30.000Z";
+        
+        String json = String.format("{\"id\":\"%s\",\"application_id\":\"%s\",\"type\":\"BANK_STATEMENT\",\"storage_path\":\"mca-documents-production/test-application/bank-statement.pdf\",\"classification\":\"VERIFIED\",\"uploaded_at\":\"%s\",\"metadata\":{\"pageCount\":5,\"documentDate\":\"2023-01-15\",\"confidenceScores\":{\"accountNumber\":0.95,\"bankName\":0.98}},\"download_url\":\"https://example.com/documents/test.pdf\",\"url_expires_at\":\"%s\",\"classification_confidence\":0.97}", 
+                documentId, applicationId, uploadedAt, urlExpiresAt);
         
         // When
-        DocumentResponseDTO deserializedDto = objectMapper.readValue(json, DocumentResponseDTO.class);
+        DocumentResponseDTO dto = objectMapper.readValue(json, DocumentResponseDTO.class);
         
         // Then
-        assertThat(deserializedDto).isNotNull();
-        assertThat(deserializedDto.getId()).isEqualTo(documentId);
-        assertThat(deserializedDto.getApplicationId()).isEqualTo(applicationId);
-        assertThat(deserializedDto.getType()).isEqualTo(DocumentType.BANK_STATEMENT.name());
-        assertThat(deserializedDto.getClassification()).isEqualTo("BANK_STATEMENT");
-        assertThat(deserializedDto.getPreSignedUrl()).isEqualTo(originalDto.getPreSignedUrl());
+        assertEquals(UUID.fromString(documentId), dto.getId(), "ID should be deserialized correctly");
+        assertEquals(UUID.fromString(applicationId), dto.getApplicationId(), "Application ID should be deserialized correctly");
+        assertEquals("BANK_STATEMENT", dto.getType(), "Type should be deserialized correctly");
+        assertEquals("mca-documents-production/test-application/bank-statement.pdf", dto.getStoragePath(), "Storage path should be deserialized correctly");
+        assertEquals("VERIFIED", dto.getClassification(), "Classification should be deserialized correctly");
+        assertEquals("https://example.com/documents/test.pdf", dto.getDownloadUrl(), "Download URL should be deserialized correctly");
+        assertEquals(0.97, dto.getClassificationConfidence(), "Classification confidence should be deserialized correctly");
+        
+        // Verify metadata
+        assertNotNull(dto.getMetadata(), "Metadata should not be null");
+        assertEquals(5, dto.getMetadataValue("pageCount"), "Page count metadata should be deserialized correctly");
+        assertEquals("2023-01-15", dto.getMetadataValue("documentDate"), "Document date metadata should be deserialized correctly");
+        
+        // Verify confidence scores
+        Map<String, Double> confidenceScores = dto.getConfidenceScores();
+        assertNotNull(confidenceScores, "Confidence scores should not be null");
+        assertEquals(0.95, confidenceScores.get("accountNumber"), "Account number confidence score should be deserialized correctly");
+        assertEquals(0.98, confidenceScores.get("bankName"), "Bank name confidence score should be deserialized correctly");
     }
     
-    @Test
-    @DisplayName("Should handle null metadata gracefully")
-    void shouldHandleNullMetadata() {
+    @ParameterizedTest
+    @DisplayName("Should validate URL validity correctly")
+    @MethodSource("urlValidityProvider")
+    void shouldValidateUrlValidityCorrectly(String downloadUrl, LocalDateTime urlExpiresAt, boolean expectedValidity) {
         // Given
-        when(document.getMetadata()).thenReturn(null);
+        DocumentResponseDTO dto = new DocumentResponseDTO();
+        dto.setDownloadUrl(downloadUrl);
+        dto.setUrlExpiresAt(urlExpiresAt);
         
-        // When
-        DocumentResponseDTO dto = DocumentResponseDTO.fromEntity(document);
-        
-        // Then
-        assertThat(dto.getMetadata()).isNotNull();
-        assertThat(dto.getMetadata()).isEmpty();
+        // When/Then
+        assertEquals(expectedValidity, dto.hasValidDownloadUrl(), "URL validity should be determined correctly");
     }
     
-    @Test
-    @DisplayName("Should handle document with no classification")
-    void shouldHandleNoClassification() {
+    @ParameterizedTest
+    @DisplayName("Should determine classification confidence level correctly")
+    @MethodSource("confidenceLevelProvider")
+    void shouldDetermineClassificationConfidenceLevelCorrectly(Double confidence, boolean isHigh, boolean isMedium, boolean isLow) {
         // Given
-        when(document.getClassification()).thenReturn(null);
+        DocumentResponseDTO dto = new DocumentResponseDTO();
+        dto.setClassificationConfidence(confidence);
         
-        // When
-        DocumentResponseDTO dto = DocumentResponseDTO.fromEntity(document);
-        
-        // Then
-        assertThat(dto.getClassification()).isNull();
+        // When/Then
+        assertEquals(isHigh, dto.hasHighClassificationConfidence(), "High confidence should be determined correctly");
+        assertEquals(isMedium, dto.hasMediumClassificationConfidence(), "Medium confidence should be determined correctly");
+        assertEquals(isLow, dto.hasLowClassificationConfidence(), "Low confidence should be determined correctly");
     }
     
     @Test
-    @DisplayName("Should validate pre-signed URL expiration time")
-    void shouldValidatePreSignedUrlExpiration() {
-        // When
-        DocumentResponseDTO dto = DocumentResponseDTO.fromEntity(document);
-        String preSignedUrl = dto.getPreSignedUrl();
+    @DisplayName("Should handle null classification confidence")
+    void shouldHandleNullClassificationConfidence() {
+        // Given
+        DocumentResponseDTO dto = new DocumentResponseDTO();
+        dto.setClassificationConfidence(null);
         
-        // Then
-        assertThat(preSignedUrl).contains("Expires=");
-        
-        // Extract expiration timestamp from URL
-        int expiresIndex = preSignedUrl.indexOf("Expires=");
-        int andIndex = preSignedUrl.indexOf("&", expiresIndex);
-        String expiresValue = preSignedUrl.substring(expiresIndex + 8, andIndex != -1 ? andIndex : preSignedUrl.length());
-        long expirationTimestamp = Long.parseLong(expiresValue);
-        
-        // Verify expiration is in the future (at least 5 minutes)
-        long currentTimestamp = System.currentTimeMillis() / 1000;
-        assertThat(expirationTimestamp).isGreaterThan(currentTimestamp + 300);
+        // When/Then
+        assertFalse(dto.hasHighClassificationConfidence(), "High confidence should be false for null");
+        assertFalse(dto.hasMediumClassificationConfidence(), "Medium confidence should be false for null");
+        assertFalse(dto.hasLowClassificationConfidence(), "Low confidence should be false for null");
     }
     
     @Test
-    @DisplayName("Should include document metadata fields")
-    void shouldIncludeDocumentMetadataFields() {
+    @DisplayName("Should get metadata values correctly")
+    void shouldGetMetadataValuesCorrectly() {
+        // Given
+        DocumentResponseDTO dto = new DocumentResponseDTO();
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("stringKey", "stringValue");
+        metadata.put("intKey", 123);
+        metadata.put("boolKey", true);
+        dto.setMetadata(metadata);
+        
+        // When/Then
+        assertEquals("stringValue", dto.getMetadataValue("stringKey"), "Should get string metadata correctly");
+        assertEquals(123, dto.getMetadataValue("intKey"), "Should get integer metadata correctly");
+        assertEquals(true, dto.getMetadataValue("boolKey"), "Should get boolean metadata correctly");
+        assertNull(dto.getMetadataValue("nonexistent"), "Should return null for nonexistent metadata");
+    }
+    
+    @Test
+    @DisplayName("Should handle null metadata when getting values")
+    void shouldHandleNullMetadataWhenGettingValues() {
+        // Given
+        DocumentResponseDTO dto = new DocumentResponseDTO();
+        dto.setMetadata(null);
+        
+        // When/Then
+        assertNull(dto.getMetadataValue("key"), "Should return null when metadata is null");
+    }
+    
+    @Test
+    @DisplayName("Should get confidence scores correctly")
+    void shouldGetConfidenceScoresCorrectly() {
+        // Given
+        DocumentResponseDTO dto = new DocumentResponseDTO();
+        Map<String, Object> metadata = new HashMap<>();
+        
+        Map<String, Double> confidenceScores = new HashMap<>();
+        confidenceScores.put("field1", 0.95);
+        confidenceScores.put("field2", 0.85);
+        
+        metadata.put("confidenceScores", confidenceScores);
+        dto.setMetadata(metadata);
+        
         // When
-        DocumentResponseDTO dto = DocumentResponseDTO.fromEntity(document);
+        Map<String, Double> retrievedScores = dto.getConfidenceScores();
         
         // Then
-        assertThat(dto.getMetadata()).containsKey("confidence");
-        assertThat(dto.getMetadata().get("confidence")).isEqualTo(0.95);
+        assertNotNull(retrievedScores, "Confidence scores should not be null");
+        assertEquals(2, retrievedScores.size(), "Confidence scores should have correct number of entries");
+        assertEquals(0.95, retrievedScores.get("field1"), "Field1 confidence score should be correct");
+        assertEquals(0.85, retrievedScores.get("field2"), "Field2 confidence score should be correct");
+    }
+    
+    @Test
+    @DisplayName("Should handle missing confidence scores in metadata")
+    void shouldHandleMissingConfidenceScoresInMetadata() {
+        // Given
+        DocumentResponseDTO dto = new DocumentResponseDTO();
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("otherKey", "value");
+        dto.setMetadata(metadata);
         
-        assertThat(dto.getMetadata()).containsKey("pageCount");
-        assertThat(dto.getMetadata().get("pageCount")).isEqualTo(3);
+        // When
+        Map<String, Double> retrievedScores = dto.getConfidenceScores();
         
-        assertThat(dto.getMetadata()).containsKey("fileSize");
-        assertThat(dto.getMetadata().get("fileSize")).isEqualTo(1024);
+        // Then
+        assertNotNull(retrievedScores, "Confidence scores should not be null even when missing");
+        assertTrue(retrievedScores.isEmpty(), "Confidence scores should be empty when missing");
+    }
+    
+    @Test
+    @DisplayName("Should get confidence score for specific field correctly")
+    void shouldGetConfidenceScoreForSpecificFieldCorrectly() {
+        // Given
+        DocumentResponseDTO dto = new DocumentResponseDTO();
+        Map<String, Object> metadata = new HashMap<>();
+        
+        Map<String, Double> confidenceScores = new HashMap<>();
+        confidenceScores.put("field1", 0.95);
+        confidenceScores.put("field2", 0.85);
+        
+        metadata.put("confidenceScores", confidenceScores);
+        dto.setMetadata(metadata);
+        
+        // When/Then
+        assertEquals(0.95, dto.getConfidenceScore("field1"), "Field1 confidence score should be correct");
+        assertEquals(0.85, dto.getConfidenceScore("field2"), "Field2 confidence score should be correct");
+        assertNull(dto.getConfidenceScore("nonexistent"), "Should return null for nonexistent field");
+    }
+    
+    @Test
+    @DisplayName("Should handle missing confidence scores when getting specific field")
+    void shouldHandleMissingConfidenceScoresWhenGettingSpecificField() {
+        // Given
+        DocumentResponseDTO dto = new DocumentResponseDTO();
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("otherKey", "value");
+        dto.setMetadata(metadata);
+        
+        // When/Then
+        assertNull(dto.getConfidenceScore("field"), "Should return null when confidence scores are missing");
+    }
+    
+    @Test
+    @DisplayName("Should create a valid DTO using builder pattern")
+    void shouldCreateValidDTOUsingBuilderPattern() {
+        // Given/When
+        DocumentResponseDTO dto = new DocumentResponseDTO.Builder()
+                .withId(testId)
+                .withApplicationId(testApplicationId)
+                .withType("BANK_STATEMENT")
+                .withStoragePath("mca-documents-production/test-application/bank-statement.pdf")
+                .withClassification("VERIFIED")
+                .withUploadedAt(testUploadedAt)
+                .withDownloadUrl("https://example.com/documents/test.pdf")
+                .withUrlExpiresAt(testUrlExpiresAt)
+                .withClassificationConfidence(0.97)
+                .withMetadata(createTestMetadata())
+                .build();
+        
+        // Then
+        assertEquals(testId, dto.getId(), "Builder should set ID correctly");
+        assertEquals(testApplicationId, dto.getApplicationId(), "Builder should set application ID correctly");
+        assertEquals("BANK_STATEMENT", dto.getType(), "Builder should set type correctly");
+        assertEquals("mca-documents-production/test-application/bank-statement.pdf", dto.getStoragePath(), "Builder should set storage path correctly");
+        assertEquals("VERIFIED", dto.getClassification(), "Builder should set classification correctly");
+        assertEquals(testUploadedAt, dto.getUploadedAt(), "Builder should set uploaded at correctly");
+        assertEquals("https://example.com/documents/test.pdf", dto.getDownloadUrl(), "Builder should set download URL correctly");
+        assertEquals(testUrlExpiresAt, dto.getUrlExpiresAt(), "Builder should set URL expiry correctly");
+        assertEquals(0.97, dto.getClassificationConfidence(), "Builder should set classification confidence correctly");
+        assertNotNull(dto.getMetadata(), "Builder should set metadata correctly");
+        assertEquals(5, dto.getMetadataValue("pageCount"), "Builder should set metadata values correctly");
+    }
+    
+    @Test
+    @DisplayName("Should create a valid DTO using builder from Document entity")
+    void shouldCreateValidDTOUsingBuilderFromDocumentEntity() {
+        // Given
+        Document document = createTestDocument();
+        
+        // When
+        DocumentResponseDTO dto = new DocumentResponseDTO.Builder(document)
+                .withDownloadUrl("https://example.com/documents/test.pdf")
+                .withUrlExpiresAt(testUrlExpiresAt)
+                .build();
+        
+        // Then
+        assertEquals(testId, dto.getId(), "Builder should set ID from document");
+        assertEquals(testApplicationId, dto.getApplicationId(), "Builder should set application ID from document");
+        assertEquals("BANK_STATEMENT", dto.getType(), "Builder should set type from document");
+        assertEquals("mca-documents-production/test-application/bank-statement.pdf", dto.getStoragePath(), "Builder should set storage path from document");
+        assertEquals("VERIFIED", dto.getClassification(), "Builder should set classification from document");
+        assertEquals(testUploadedAt, dto.getUploadedAt(), "Builder should set uploaded at from document");
+        assertEquals("https://example.com/documents/test.pdf", dto.getDownloadUrl(), "Builder should set download URL correctly");
+        assertEquals(testUrlExpiresAt, dto.getUrlExpiresAt(), "Builder should set URL expiry correctly");
+        assertEquals(0.97, dto.getClassificationConfidence(), "Builder should set classification confidence from document");
+    }
+    
+    @Test
+    @DisplayName("Should handle DocumentType enum in builder")
+    void shouldHandleDocumentTypeEnumInBuilder() {
+        // Given/When
+        DocumentResponseDTO dto = new DocumentResponseDTO.Builder()
+                .withType(DocumentType.BANK_STATEMENT)
+                .build();
+        
+        // Then
+        assertEquals("BANK_STATEMENT", dto.getType(), "Builder should handle DocumentType enum correctly");
+    }
+    
+    /**
+     * Creates a test Document entity with sample data.
+     * 
+     * @return A Document entity with test data
+     */
+    private Document createTestDocument() {
+        Document document = new Document();
+        document.setId(testId);
+        document.setApplicationId(testApplicationId);
+        document.setType(DocumentType.BANK_STATEMENT);
+        document.setStoragePath("mca-documents-production/test-application/bank-statement.pdf");
+        document.setClassification(DocumentClassification.VERIFIED);
+        document.setUploadedAt(testUploadedAt);
+        document.setMetadata(createTestMetadata());
+        
+        // Add confidence score
+        document.addMetadata("confidenceScore", 0.97);
+        
+        return document;
+    }
+    
+    /**
+     * Creates test metadata for document.
+     * 
+     * @return A map with test metadata
+     */
+    private Map<String, Object> createTestMetadata() {
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("pageCount", 5);
+        metadata.put("documentDate", "2023-01-15");
+        
+        Map<String, Double> confidenceScores = new HashMap<>();
+        confidenceScores.put("accountNumber", 0.95);
+        confidenceScores.put("bankName", 0.98);
+        metadata.put("confidenceScores", confidenceScores);
+        
+        return metadata;
     }
 }
