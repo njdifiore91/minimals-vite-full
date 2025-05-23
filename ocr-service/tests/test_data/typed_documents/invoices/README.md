@@ -2,115 +2,180 @@
 
 ## Purpose
 
-This directory contains test invoice documents used to validate the OCR Service's ability to extract data from various types of invoices with 99% accuracy as required by the Merchant Cash Advance (MCA) Application Processing System. These test samples are essential for:
+This directory contains a collection of sample invoice documents used for testing the OCR Service's ability to extract data from various types of invoices with high accuracy. These test samples are essential for validating that the OCR Service meets the requirement of 99% data extraction accuracy through AI and machine learning as specified in the technical specifications.
 
-- Training and validating the OCR models for invoice data extraction
-- Testing the OCR Service's ability to handle different invoice formats and layouts
-- Ensuring consistent extraction accuracy across various document qualities and conditions
-- Providing benchmark documents for regression testing
-- Validating the 99% data extraction accuracy requirement specified in section 0.1.1
+The invoice test data serves several critical purposes:
 
-## Invoice Types
+1. **Validation of OCR accuracy** for invoice-specific fields and layouts
+2. **Testing of field extraction** for invoice-specific data points (invoice numbers, dates, line items, totals)
+3. **Verification of confidence scoring** for extracted invoice data
+4. **Performance benchmarking** for invoice processing speed
+5. **Regression testing** to ensure continued accuracy as the OCR models evolve
 
-This test data collection includes the following types of invoices:
+## Invoice Types Included
 
-1. **Vendor Invoices**: Standard B2B invoices from suppliers to businesses
-2. **Service Invoices**: Invoices for professional services (consulting, legal, etc.)
-3. **Retail Receipts**: Point-of-sale receipts from retail establishments
-4. **Utility Bills**: Electricity, water, gas, and telecommunications invoices
-5. **Equipment Invoices**: Invoices for equipment purchases or rentals
-6. **Recurring Subscription Invoices**: Regular billing for subscription services
-7. **Construction/Contractor Invoices**: Invoices for construction or contracting work
-8. **Medical/Healthcare Invoices**: Invoices for medical services or supplies
-9. **Transportation/Shipping Invoices**: Freight, shipping, and logistics invoices
-10. **International Invoices**: Invoices with multiple currencies and international formats
+This test data collection includes the following types of invoices, each with unique characteristics and extraction challenges:
+
+### Vendor Invoices
+- **Supplier invoices** - Standard B2B invoices from suppliers to businesses
+- **Wholesale invoices** - Bulk order invoices with multiple line items and quantity discounts
+- **Manufacturing invoices** - Invoices for raw materials and manufacturing components
+
+### Service Invoices
+- **Professional services** - Invoices for consulting, legal, accounting services
+- **Subscription services** - Recurring billing invoices with subscription details
+- **Contractor invoices** - Invoices for project-based work with hourly rates
+
+### Retail Receipts
+- **Point-of-sale receipts** - Standard retail transaction receipts
+- **E-commerce order confirmations** - Online purchase receipts
+- **Return receipts** - Documentation of returned merchandise
+
+### Financial Invoices
+- **Loan statements** - Documentation of loan payments and terms
+- **Equipment leasing** - Invoices for leased business equipment
+- **Financing agreements** - Documentation of financing terms and payments
+
+### Utility Invoices
+- **Electricity bills** - Monthly utility statements with usage metrics
+- **Telecommunications** - Phone and internet service invoices
+- **Water/sewage bills** - Municipal utility invoices
 
 ## Document Quality Variations
 
-To test the robustness of the OCR system, the invoice samples include various quality variations:
+To test the robustness of the OCR system, invoice samples are provided in various quality levels:
 
-| Quality Variation | Description | Purpose |
-|-------------------|-------------|----------|
-| High Quality | Pristine, clear documents | Baseline for maximum accuracy |
-| Low Resolution | 150 DPI or lower | Test extraction from low-resolution scans |
-| Skewed | 5-15 degree rotation | Test alignment correction algorithms |
-| Noisy | Added digital noise or artifacts | Test noise reduction preprocessing |
-| Faded Text | Low contrast between text and background | Test contrast enhancement capabilities |
-| Handwritten Annotations | Invoices with handwritten notes | Test mixed typed/handwritten content handling |
-| Watermarked | Documents with watermarks | Test background removal capabilities |
-| Compressed | JPEG compression artifacts | Test resilience to compression artifacts |
-| Multiple Pages | Multi-page invoice documents | Test page handling and data aggregation |
-| Small Font | Invoices with 8pt or smaller text | Test small text recognition capabilities |
+### Quality Levels
+1. **High Quality** - Clear, high-resolution scans with optimal contrast
+2. **Medium Quality** - Typical quality scans with minor imperfections
+3. **Low Quality** - Challenging documents with issues like:
+   - Faded text
+   - Poor contrast
+   - Scan artifacts
+   - Skewed alignment
+   - Background noise
+
+### Format Variations
+- **Digital native PDFs** - Programmatically generated invoices
+- **Scanned documents** - Physical documents converted to digital format
+- **Faxed documents** - Documents with typical fax artifacts and quality issues
+- **Mobile phone captures** - Documents photographed with smartphone cameras
+
+### Content Variations
+- **Simple invoices** - Basic invoices with minimal line items
+- **Complex invoices** - Detailed invoices with numerous line items and calculations
+- **Multi-page invoices** - Invoices spanning multiple pages
+- **Invoices with attachments** - Invoices with supplementary documentation
 
 ## Naming Convention
 
-Invoice test files follow this naming convention:
+Invoice test files follow this naming convention to facilitate easy identification and selection:
 
 ```
-[invoice_type]_[industry]_[quality]_[variant].[extension]
+[invoice_type]_[subtype]_[quality]_[variant].[extension]
 ```
-
-Where:
-- `invoice_type`: vendor, service, retail, utility, equipment, subscription, construction, medical, shipping, international
-- `industry`: industry sector (retail, manufacturing, healthcare, technology, etc.)
-- `quality`: hq (high quality), lq (low quality), skewed, noisy, faded, annotated, watermarked, compressed, multipage, smallfont
-- `variant`: numeric identifier for variations of the same type/quality (01, 02, 03, etc.)
-- `extension`: pdf, tiff, png, jpeg
 
 Examples:
-- `vendor_manufacturing_hq_01.pdf`: High-quality vendor invoice from manufacturing industry
-- `retail_food_lq_03.jpeg`: Low-quality retail receipt from food industry
-- `service_technology_skewed_02.pdf`: Skewed service invoice from technology industry
+- `vendor_supplier_high_001.pdf` - High-quality supplier invoice, variant 1
+- `service_consulting_medium_002.pdf` - Medium-quality consulting invoice, variant 2
+- `retail_pos_low_003.pdf` - Low-quality point-of-sale receipt, variant 3
 
-## Usage with Test Framework
+Additional naming elements may include:
+- `_handwritten` - Contains handwritten annotations or fields
+- `_damaged` - Deliberately damaged document (coffee stains, tears, etc.)
+- `_rotated` - Document with non-standard orientation
 
-These invoice test samples are used in conjunction with the `invoices_manifest.json` file, which contains:
+## Test Data Organization
 
-- Expected field locations for each invoice
-- Expected text content for each field
-- Expected confidence scores for extraction
-- Metadata about each document's characteristics
+### Directory Structure
 
-The OCR Service test suite uses this manifest to validate extraction accuracy against known values. Tests will verify that:
+The invoice test data is organized into subdirectories by invoice type:
 
-1. All required fields are correctly identified (invoice number, date, vendor, line items, totals, etc.)
-2. Extracted text matches expected values within acceptable confidence thresholds
-3. Processing time meets the 5-minute requirement specified in section 0.1.1
-4. Overall extraction accuracy meets the 99% requirement
+```
+invoices/
+├── vendor/
+├── service/
+├── retail/
+├── financial/
+└── utility/
+```
+
+### Manifest File
+
+All test documents are registered in the `invoices_manifest.json` file, which contains:
+
+- File paths relative to this directory
+- Expected OCR extraction results for each document
+- Document characteristics and metadata
+- Expected confidence scores for key fields
+
+The manifest file is used by automated tests to validate OCR extraction accuracy against known values.
+
+## Using the Test Data
+
+### For Manual Testing
+
+1. Select invoice samples that represent your test scenario
+2. Process them through the OCR Service using the API or test utilities
+3. Compare the extracted data with the expected results in the manifest
+
+### For Automated Testing
+
+1. Use the test utilities in `ocr-service/tests/test_models/test_typed_text_model.py`
+2. Reference the manifest file for expected extraction results
+3. Validate extraction accuracy and confidence scores
+
+### Performance Testing
+
+Use the full set of invoice samples to benchmark:
+- Processing time per invoice
+- Accuracy rates across different invoice types
+- Confidence score distribution
+- Resource utilization during processing
 
 ## Guidelines for Adding New Test Documents
 
 When adding new invoice test documents to this collection:
 
-1. Follow the established naming convention
-2. Update the `invoices_manifest.json` file with expected extraction results
-3. Include a variety of industries and document qualities
-4. Ensure documents represent real-world scenarios
-5. Include edge cases that test the limits of the OCR system
-6. Remove any personally identifiable information (PII) from test documents
-7. Compress documents appropriately to minimize repository size
-8. Include at least one example of each field type that needs to be extracted
+1. **Follow the naming convention** described above
+2. **Add the document to the appropriate subdirectory** based on type
+3. **Update the manifest file** with:
+   - Document path
+   - Expected extraction results
+   - Document characteristics
+   - Expected confidence scores
+4. **Include diverse examples** that test different aspects of OCR capability
+5. **Ensure proper licensing** for any real-world documents (redact sensitive information)
+6. **Document any special characteristics** in the manifest metadata
 
-## Binary Files Storage
+## Validation Requirements
 
-Actual invoice document files (PDF, TIFF, PNG, JPEG) are excluded from version control via the `.gitignore` file to prevent repository bloat. These files should be stored in the designated S3 bucket with the following structure:
+The OCR Service must correctly extract the following fields from invoice documents with 99% accuracy:
 
-```
-s3://mca-documents-[environment]/test-data/typed_documents/invoices/
-```
+### Required Fields
+- Invoice number
+- Invoice date
+- Due date
+- Vendor/supplier information
+- Customer/billing information
+- Line items (description, quantity, unit price, total)
+- Subtotal
+- Tax amounts
+- Total amount
+- Payment terms
 
-Where `[environment]` is one of: development, staging, production
+### Confidence Scoring
 
-To download the test files for local development, use the provided utility script:
+Each extracted field must include a confidence score (0.0-1.0) indicating the OCR system's confidence in the extraction accuracy. Fields with confidence scores below configurable thresholds should be flagged for human verification.
 
-```bash
-# From the project root directory
-./scripts/download_test_data.sh typed_documents/invoices
-```
+## Integration with OCR Pipeline
 
-## Related Documentation
+These test documents are processed through the complete OCR pipeline:
 
-- [OCR Service Technical Specification](../../../README.md)
-- [Document Classification Guidelines](../../test_models/README.md)
-- [Test Data Management Policy](../../README.md)
-- [Typed Documents Test Suite](../README.md)
+1. Document classification by the Document Service
+2. Text extraction by the OCR Service's `typed_text_model.py`
+3. Field identification based on document structure
+4. Confidence scoring for each extracted field
+5. JSON formatting of extraction results
+
+The test suite validates each step of this pipeline to ensure end-to-end accuracy.
