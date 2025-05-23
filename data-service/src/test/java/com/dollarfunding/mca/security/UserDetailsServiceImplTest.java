@@ -1,489 +1,390 @@
 package com.dollarfunding.mca.security;
 
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.Mockito.*;
-
-import java.time.LocalDateTime;
-import java.util.Optional;
-
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.ArgumentCaptor;
-import org.mockito.Captor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.cache.CacheManager;
+import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
+
+import java.time.LocalDateTime;
+import java.util.HashSet;
+import java.util.Optional;
+import java.util.Set;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.*;
 
 /**
  * Test class for {@link UserDetailsServiceImpl} that verifies the correct loading of user details
  * from the database for authentication and authorization.
  * 
- * These tests ensure that the service correctly retrieves user credentials and authorities
- * from the database for the authentication process, handles exceptions appropriately, and
- * properly maps user authorities.
+ * <p>This test ensures that the service correctly retrieves user credentials and authorities
+ * from the database for the authentication process.</p>
  */
 @ExtendWith(MockitoExtension.class)
-@DisplayName("UserDetailsServiceImpl Tests")
 public class UserDetailsServiceImplTest {
 
     @Mock
     private UserRepository userRepository;
-
+    
+    @Mock
+    private CacheManager cacheManager;
+    
     @InjectMocks
     private UserDetailsServiceImpl userDetailsService;
-
-    @Captor
-    private ArgumentCaptor<User> userCaptor;
-
-    private User operationsStaffUser;
-    private User systemAdminUser;
-    private User regularUser;
-
+    
+    private User testUser;
+    private Role operationsStaffRole;
+    private Role systemAdminRole;
+    
     @BeforeEach
-    void setUp() {
-        // Create roles
-        Role operationsStaffRole = Role.createOperationsStaffRole();
-        Role systemAdminRole = Role.createSystemAdminRole();
+    public void setUp() {
+        // Create test roles
+        operationsStaffRole = new Role(RoleConstants.ROLE_OPERATIONS_STAFF, "Operations Staff Role");
+        systemAdminRole = new Role(RoleConstants.ROLE_SYSTEM_ADMIN, "System Admin Role");
         
-        // Create operations staff user
-        operationsStaffUser = new User("ops_user", "password123", "ops@dollarfunding.com", 
-                                    "Operations", "User", true, true, true, true);
-        operationsStaffUser.setId(1L);
-        operationsStaffUser.addRole(operationsStaffRole);
+        // Create test user
+        testUser = new User("testuser", "password123", "test@example.com", "Test", "User");
+        testUser.setId(1L);
+        testUser.setEnabled(true);
+        testUser.setAccountNonExpired(true);
+        testUser.setCredentialsNonExpired(true);
+        testUser.setAccountNonLocked(true);
+        testUser.setCreatedAt(LocalDateTime.now());
         
-        // Create system admin user
-        systemAdminUser = new User("admin_user", "password456", "admin@dollarfunding.com", 
-                                 "Admin", "User", true, true, true, true);
-        systemAdminUser.setId(2L);
-        systemAdminUser.addRole(systemAdminRole);
-        
-        // Create regular user with no roles
-        regularUser = new User("regular_user", "password789", "user@dollarfunding.com", 
-                             "Regular", "User", true, true, true, true);
-        regularUser.setId(3L);
-    }
-
-    @Nested
-    @DisplayName("Loading User By Username Tests")
-    class LoadingUserByUsernameTests {
-        
-        @Test
-        @DisplayName("loadUserByUsername() should return UserDetails when user exists")
-        void loadUserByUsernameShouldReturnUserDetailsWhenUserExists() {
-            // Arrange
-            when(userRepository.findByUsername("ops_user")).thenReturn(Optional.of(operationsStaffUser));
-            
-            // Act
-            UserDetails userDetails = userDetailsService.loadUserByUsername("ops_user");
-            
-            // Assert
-            assertNotNull(userDetails);
-            assertEquals("ops_user", userDetails.getUsername());
-            assertEquals("password123", userDetails.getPassword());
-            assertTrue(userDetails.isEnabled());
-            assertTrue(userDetails.getAuthorities().stream()
-                    .anyMatch(a -> a.getAuthority().equals(RoleConstants.ROLE_OPERATIONS_STAFF)));
-            
-            // Verify that the user's last login timestamp was updated
-            verify(userRepository).findByUsername("ops_user");
-        }
-        
-        @Test
-        @DisplayName("loadUserByUsername() should throw UsernameNotFoundException when user does not exist")
-        void loadUserByUsernameShouldThrowUsernameNotFoundExceptionWhenUserDoesNotExist() {
-            // Arrange
-            when(userRepository.findByUsername("non_existent_user")).thenReturn(Optional.empty());
-            
-            // Act & Assert
-            Exception exception = assertThrows(UsernameNotFoundException.class, () -> {
-                userDetailsService.loadUserByUsername("non_existent_user");
-            });
-            
-            // Verify the exception message
-            assertEquals("User not found with username: non_existent_user", exception.getMessage());
-            verify(userRepository).findByUsername("non_existent_user");
-        }
-        
-        @Test
-        @DisplayName("loadUserByUsername() should update last login timestamp")
-        void loadUserByUsernameShouldUpdateLastLoginTimestamp() {
-            // Arrange
-            LocalDateTime beforeLogin = LocalDateTime.now().minusSeconds(1);
-            when(userRepository.findByUsername("ops_user")).thenReturn(Optional.of(operationsStaffUser));
-            
-            // Act
-            userDetailsService.loadUserByUsername("ops_user");
-            
-            // Assert
-            verify(userRepository).findByUsername("ops_user");
-            assertNotNull(operationsStaffUser.getLastLoginAt());
-            assertTrue(operationsStaffUser.getLastLoginAt().isAfter(beforeLogin));
-        }
+        // Add roles to user
+        Set<Role> roles = new HashSet<>();
+        roles.add(operationsStaffRole);
+        testUser.setRoles(roles);
     }
     
-    @Nested
-    @DisplayName("Loading User By ID Tests")
-    class LoadingUserByIdTests {
+    @Test
+    @DisplayName("Should load user by username successfully")
+    public void testLoadUserByUsername_Success() {
+        // Arrange
+        when(userRepository.findByUsernameOrEmail(anyString(), anyString()))
+                .thenReturn(Optional.of(testUser));
         
-        @Test
-        @DisplayName("loadUserById() should return UserDetails when user exists")
-        void loadUserByIdShouldReturnUserDetailsWhenUserExists() {
-            // Arrange
-            when(userRepository.findById(2L)).thenReturn(Optional.of(systemAdminUser));
-            
-            // Act
-            UserDetails userDetails = userDetailsService.loadUserById(2L);
-            
-            // Assert
-            assertNotNull(userDetails);
-            assertEquals("admin_user", userDetails.getUsername());
-            assertEquals("password456", userDetails.getPassword());
-            assertTrue(userDetails.isEnabled());
-            assertTrue(userDetails.getAuthorities().stream()
-                    .anyMatch(a -> a.getAuthority().equals(RoleConstants.ROLE_SYSTEM_ADMIN)));
-            
-            verify(userRepository).findById(2L);
-        }
+        // Act
+        UserDetails userDetails = userDetailsService.loadUserByUsername("testuser");
         
-        @Test
-        @DisplayName("loadUserById() should throw UsernameNotFoundException when user does not exist")
-        void loadUserByIdShouldThrowUsernameNotFoundExceptionWhenUserDoesNotExist() {
-            // Arrange
-            when(userRepository.findById(999L)).thenReturn(Optional.empty());
-            
-            // Act & Assert
-            Exception exception = assertThrows(UsernameNotFoundException.class, () -> {
-                userDetailsService.loadUserById(999L);
-            });
-            
-            // Verify the exception message
-            assertEquals("User not found with ID: 999", exception.getMessage());
-            verify(userRepository).findById(999L);
-        }
+        // Assert
+        assertNotNull(userDetails);
+        assertEquals("testuser", userDetails.getUsername());
+        assertEquals("password123", userDetails.getPassword());
+        assertTrue(userDetails.isEnabled());
+        assertTrue(userDetails.isAccountNonExpired());
+        assertTrue(userDetails.isCredentialsNonExpired());
+        assertTrue(userDetails.isAccountNonLocked());
+        
+        // Verify authorities
+        boolean hasOperationsStaffRole = userDetails.getAuthorities().stream()
+                .map(GrantedAuthority::getAuthority)
+                .anyMatch(authority -> authority.equals(RoleConstants.ROLE_OPERATIONS_STAFF));
+        assertTrue(hasOperationsStaffRole);
+        
+        // Verify repository was called
+        verify(userRepository).findByUsernameOrEmail("testuser", "testuser");
+        
+        // Verify last login was updated
+        verify(userRepository).save(any(User.class));
     }
     
-    @Nested
-    @DisplayName("Loading User By Email Tests")
-    class LoadingUserByEmailTests {
+    @Test
+    @DisplayName("Should load user by email successfully")
+    public void testLoadUserByEmail_Success() {
+        // Arrange
+        when(userRepository.findByUsernameOrEmail(anyString(), anyString()))
+                .thenReturn(Optional.of(testUser));
         
-        @Test
-        @DisplayName("loadUserByEmail() should return UserDetails when user exists")
-        void loadUserByEmailShouldReturnUserDetailsWhenUserExists() {
-            // Arrange
-            when(userRepository.findByEmail("user@dollarfunding.com")).thenReturn(Optional.of(regularUser));
-            
-            // Act
-            UserDetails userDetails = userDetailsService.loadUserByEmail("user@dollarfunding.com");
-            
-            // Assert
-            assertNotNull(userDetails);
-            assertEquals("regular_user", userDetails.getUsername());
-            assertEquals("password789", userDetails.getPassword());
-            assertTrue(userDetails.isEnabled());
-            
-            verify(userRepository).findByEmail("user@dollarfunding.com");
-        }
+        // Act
+        UserDetails userDetails = userDetailsService.loadUserByUsername("test@example.com");
         
-        @Test
-        @DisplayName("loadUserByEmail() should throw UsernameNotFoundException when user does not exist")
-        void loadUserByEmailShouldThrowUsernameNotFoundExceptionWhenUserDoesNotExist() {
-            // Arrange
-            when(userRepository.findByEmail("non_existent@dollarfunding.com")).thenReturn(Optional.empty());
-            
-            // Act & Assert
-            Exception exception = assertThrows(UsernameNotFoundException.class, () -> {
-                userDetailsService.loadUserByEmail("non_existent@dollarfunding.com");
-            });
-            
-            // Verify the exception message
-            assertEquals("User not found with email: non_existent@dollarfunding.com", exception.getMessage());
-            verify(userRepository).findByEmail("non_existent@dollarfunding.com");
-        }
+        // Assert
+        assertNotNull(userDetails);
+        assertEquals("testuser", userDetails.getUsername());
+        
+        // Verify repository was called with email
+        verify(userRepository).findByUsernameOrEmail("test@example.com", "test@example.com");
     }
     
-    @Nested
-    @DisplayName("User Authorities Mapping Tests")
-    class UserAuthoritiesMappingTests {
+    @Test
+    @DisplayName("Should throw UsernameNotFoundException when user not found")
+    public void testLoadUserByUsername_UserNotFound() {
+        // Arrange
+        when(userRepository.findByUsernameOrEmail(anyString(), anyString()))
+                .thenReturn(Optional.empty());
         
-        @Test
-        @DisplayName("User with Operations Staff role should have correct authorities")
-        void userWithOperationsStaffRoleShouldHaveCorrectAuthorities() {
-            // Arrange
-            when(userRepository.findByUsername("ops_user")).thenReturn(Optional.of(operationsStaffUser));
-            
-            // Act
-            UserDetails userDetails = userDetailsService.loadUserByUsername("ops_user");
-            
-            // Assert
-            assertTrue(userDetails instanceof UserPrincipal);
-            UserPrincipal userPrincipal = (UserPrincipal) userDetails;
-            
-            assertTrue(userPrincipal.hasAuthority(RoleConstants.ROLE_OPERATIONS_STAFF));
-            assertFalse(userPrincipal.hasAuthority(RoleConstants.ROLE_SYSTEM_ADMIN));
-            assertTrue(userPrincipal.isOperationsStaff());
-            assertFalse(userPrincipal.isSystemAdmin());
-            
-            verify(userRepository).findByUsername("ops_user");
-        }
+        // Act & Assert
+        Exception exception = assertThrows(UsernameNotFoundException.class, () -> {
+            userDetailsService.loadUserByUsername("nonexistent");
+        });
         
-        @Test
-        @DisplayName("User with System Admin role should have correct authorities")
-        void userWithSystemAdminRoleShouldHaveCorrectAuthorities() {
-            // Arrange
-            when(userRepository.findByUsername("admin_user")).thenReturn(Optional.of(systemAdminUser));
-            
-            // Act
-            UserDetails userDetails = userDetailsService.loadUserByUsername("admin_user");
-            
-            // Assert
-            assertTrue(userDetails instanceof UserPrincipal);
-            UserPrincipal userPrincipal = (UserPrincipal) userDetails;
-            
-            assertTrue(userPrincipal.hasAuthority(RoleConstants.ROLE_SYSTEM_ADMIN));
-            assertFalse(userPrincipal.hasAuthority(RoleConstants.ROLE_OPERATIONS_STAFF));
-            assertTrue(userPrincipal.isSystemAdmin());
-            assertFalse(userPrincipal.isOperationsStaff());
-            
-            verify(userRepository).findByUsername("admin_user");
-        }
+        // Verify exception message
+        assertTrue(exception.getMessage().contains("nonexistent"));
         
-        @Test
-        @DisplayName("User with no roles should have no authorities")
-        void userWithNoRolesShouldHaveNoAuthorities() {
-            // Arrange
-            when(userRepository.findByUsername("regular_user")).thenReturn(Optional.of(regularUser));
-            
-            // Act
-            UserDetails userDetails = userDetailsService.loadUserByUsername("regular_user");
-            
-            // Assert
-            assertTrue(userDetails instanceof UserPrincipal);
-            UserPrincipal userPrincipal = (UserPrincipal) userDetails;
-            
-            assertFalse(userPrincipal.hasAuthority(RoleConstants.ROLE_OPERATIONS_STAFF));
-            assertFalse(userPrincipal.hasAuthority(RoleConstants.ROLE_SYSTEM_ADMIN));
-            assertFalse(userPrincipal.isOperationsStaff());
-            assertFalse(userPrincipal.isSystemAdmin());
-            assertTrue(userPrincipal.getAuthorities().isEmpty());
-            
-            verify(userRepository).findByUsername("regular_user");
-        }
+        // Verify repository was called
+        verify(userRepository).findByUsernameOrEmail("nonexistent", "nonexistent");
+        
+        // Verify save was not called
+        verify(userRepository, never()).save(any(User.class));
     }
     
-    @Nested
-    @DisplayName("Caching Tests")
-    class CachingTests {
+    @Test
+    @DisplayName("Should load user by ID successfully")
+    public void testLoadUserById_Success() {
+        // Arrange
+        when(userRepository.findById(1L)).thenReturn(Optional.of(testUser));
         
-        @Test
-        @DisplayName("loadUserByUsername() should have Cacheable annotation with correct parameters")
-        void loadUserByUsernameShouldHaveCacheableAnnotationWithCorrectParameters() throws NoSuchMethodException {
-            // Get the loadUserByUsername method
-            java.lang.reflect.Method method = UserDetailsServiceImpl.class.getMethod("loadUserByUsername", String.class);
-            
-            // Check if the method has the Cacheable annotation
-            assertTrue(method.isAnnotationPresent(org.springframework.cache.annotation.Cacheable.class));
-            
-            // Get the Cacheable annotation
-            org.springframework.cache.annotation.Cacheable cacheable = 
-                method.getAnnotation(org.springframework.cache.annotation.Cacheable.class);
-            
-            // Check the annotation parameters
-            assertEquals("#username", cacheable.key());
-            assertEquals("#result == null", cacheable.unless());
-        }
+        // Act
+        UserDetails userDetails = userDetailsService.loadUserById(1L);
         
-        @Test
-        @DisplayName("loadUserById() should have Cacheable annotation with correct parameters")
-        void loadUserByIdShouldHaveCacheableAnnotationWithCorrectParameters() throws NoSuchMethodException {
-            // Get the loadUserById method
-            java.lang.reflect.Method method = UserDetailsServiceImpl.class.getMethod("loadUserById", Long.class);
-            
-            // Check if the method has the Cacheable annotation
-            assertTrue(method.isAnnotationPresent(org.springframework.cache.annotation.Cacheable.class));
-            
-            // Get the Cacheable annotation
-            org.springframework.cache.annotation.Cacheable cacheable = 
-                method.getAnnotation(org.springframework.cache.annotation.Cacheable.class);
-            
-            // Check the annotation parameters
-            assertEquals("'id_' + #id", cacheable.key());
-            assertEquals("#result == null", cacheable.unless());
-        }
+        // Assert
+        assertNotNull(userDetails);
+        assertEquals("testuser", userDetails.getUsername());
         
-        @Test
-        @DisplayName("loadUserByEmail() should have Cacheable annotation with correct parameters")
-        void loadUserByEmailShouldHaveCacheableAnnotationWithCorrectParameters() throws NoSuchMethodException {
-            // Get the loadUserByEmail method
-            java.lang.reflect.Method method = UserDetailsServiceImpl.class.getMethod("loadUserByEmail", String.class);
-            
-            // Check if the method has the Cacheable annotation
-            assertTrue(method.isAnnotationPresent(org.springframework.cache.annotation.Cacheable.class));
-            
-            // Get the Cacheable annotation
-            org.springframework.cache.annotation.Cacheable cacheable = 
-                method.getAnnotation(org.springframework.cache.annotation.Cacheable.class);
-            
-            // Check the annotation parameters
-            assertEquals("'email_' + #email", cacheable.key());
-            assertEquals("#result == null", cacheable.unless());
-        }
-        
-        @Test
-        @DisplayName("UserDetailsServiceImpl class should have CacheConfig annotation")
-        void userDetailsServiceImplClassShouldHaveCacheConfigAnnotation() {
-            // Check if the class has the CacheConfig annotation
-            assertTrue(UserDetailsServiceImpl.class.isAnnotationPresent(org.springframework.cache.annotation.CacheConfig.class));
-            
-            // Get the CacheConfig annotation
-            org.springframework.cache.annotation.CacheConfig cacheConfig = 
-                UserDetailsServiceImpl.class.getAnnotation(org.springframework.cache.annotation.CacheConfig.class);
-            
-            // Check the annotation parameters
-            assertArrayEquals(new String[]{"userDetails"}, cacheConfig.cacheNames());
-        }
+        // Verify repository was called
+        verify(userRepository).findById(1L);
     }
     
-    @Nested
-    @DisplayName("Last Login Timestamp Tests")
-    class LastLoginTimestampTests {
+    @Test
+    @DisplayName("Should throw UsernameNotFoundException when user ID not found")
+    public void testLoadUserById_UserNotFound() {
+        // Arrange
+        when(userRepository.findById(999L)).thenReturn(Optional.empty());
         
-        @Test
-        @DisplayName("loadUserByUsername() should update last login timestamp")
-        void loadUserByUsernameShouldUpdateLastLoginTimestamp() {
-            // Arrange
-            when(userRepository.findByUsername("ops_user")).thenReturn(Optional.of(operationsStaffUser));
-            
-            // Act
-            userDetailsService.loadUserByUsername("ops_user");
-            
-            // Assert
-            assertNotNull(operationsStaffUser.getLastLoginAt());
-            
-            // Verify that the user's last login timestamp was updated
-            verify(userRepository).findByUsername("ops_user");
-        }
+        // Act & Assert
+        Exception exception = assertThrows(UsernameNotFoundException.class, () -> {
+            userDetailsService.loadUserById(999L);
+        });
         
-        @Test
-        @DisplayName("loadUserById() should update last login timestamp")
-        void loadUserByIdShouldUpdateLastLoginTimestamp() {
-            // Arrange
-            when(userRepository.findById(2L)).thenReturn(Optional.of(systemAdminUser));
-            
-            // Act
-            userDetailsService.loadUserById(2L);
-            
-            // Assert
-            assertNotNull(systemAdminUser.getLastLoginAt());
-            
-            // Verify that the user's last login timestamp was updated
-            verify(userRepository).findById(2L);
-        }
+        // Verify exception message
+        assertTrue(exception.getMessage().contains("999"));
         
-        @Test
-        @DisplayName("loadUserByEmail() should update last login timestamp")
-        void loadUserByEmailShouldUpdateLastLoginTimestamp() {
-            // Arrange
-            when(userRepository.findByEmail("user@dollarfunding.com")).thenReturn(Optional.of(regularUser));
-            
-            // Act
-            userDetailsService.loadUserByEmail("user@dollarfunding.com");
-            
-            // Assert
-            assertNotNull(regularUser.getLastLoginAt());
-            
-            // Verify that the user's last login timestamp was updated
-            verify(userRepository).findByEmail("user@dollarfunding.com");
-        }
+        // Verify repository was called
+        verify(userRepository).findById(999L);
     }
     
-    @Nested
-    @DisplayName("Integration with Spring Security Authentication Manager Tests")
-    class IntegrationWithSpringSecurityAuthenticationManagerTests {
+    @Test
+    @DisplayName("Should map user authorities correctly")
+    public void testUserAuthoritiesMapping() {
+        // Arrange - Add System Admin role to test user
+        testUser.addRole(systemAdminRole);
+        when(userRepository.findByUsernameOrEmail(anyString(), anyString()))
+                .thenReturn(Optional.of(testUser));
         
-        @Test
-        @DisplayName("UserPrincipal created by loadUserByUsername() should have correct user details")
-        void userPrincipalCreatedByLoadUserByUsernameShouldHaveCorrectUserDetails() {
-            // Arrange
-            when(userRepository.findByUsername("ops_user")).thenReturn(Optional.of(operationsStaffUser));
-            
-            // Act
-            UserDetails userDetails = userDetailsService.loadUserByUsername("ops_user");
-            
-            // Assert
-            assertTrue(userDetails instanceof UserPrincipal);
-            UserPrincipal userPrincipal = (UserPrincipal) userDetails;
-            
-            assertEquals(operationsStaffUser.getId(), userPrincipal.getId());
-            assertEquals(operationsStaffUser.getUsername(), userPrincipal.getUsername());
-            assertEquals(operationsStaffUser.getPassword(), userPrincipal.getPassword());
-            assertEquals(operationsStaffUser.getEmail(), userPrincipal.getEmail());
-            assertEquals(operationsStaffUser.getFirstName(), userPrincipal.getFirstName());
-            assertEquals(operationsStaffUser.getLastName(), userPrincipal.getLastName());
-            assertEquals(operationsStaffUser.isEnabled(), userPrincipal.isEnabled());
-            assertEquals(operationsStaffUser.isAccountNonExpired(), userPrincipal.isAccountNonExpired());
-            assertEquals(operationsStaffUser.isAccountNonLocked(), userPrincipal.isAccountNonLocked());
-            assertEquals(operationsStaffUser.isCredentialsNonExpired(), userPrincipal.isCredentialsNonExpired());
-            
-            verify(userRepository).findByUsername("ops_user");
+        // Act
+        UserDetails userDetails = userDetailsService.loadUserByUsername("testuser");
+        
+        // Assert - User should have both roles
+        assertEquals(2, userDetails.getAuthorities().size());
+        
+        boolean hasOperationsStaffRole = userDetails.getAuthorities().stream()
+                .map(GrantedAuthority::getAuthority)
+                .anyMatch(authority -> authority.equals(RoleConstants.ROLE_OPERATIONS_STAFF));
+        
+        boolean hasSystemAdminRole = userDetails.getAuthorities().stream()
+                .map(GrantedAuthority::getAuthority)
+                .anyMatch(authority -> authority.equals(RoleConstants.ROLE_SYSTEM_ADMIN));
+        
+        assertTrue(hasOperationsStaffRole);
+        assertTrue(hasSystemAdminRole);
+    }
+    
+    @Test
+    @DisplayName("Should update last login timestamp")
+    public void testUpdateLastLogin() {
+        // Arrange
+        LocalDateTime beforeUpdate = testUser.getLastLoginAt();
+        
+        // Act
+        userDetailsService.updateLastLogin(testUser);
+        
+        // Assert
+        assertNotNull(testUser.getLastLoginAt());
+        if (beforeUpdate != null) {
+            assertTrue(testUser.getLastLoginAt().isAfter(beforeUpdate) || 
+                    testUser.getLastLoginAt().isEqual(beforeUpdate));
         }
         
-        @Test
-        @DisplayName("UserPrincipal created by loadUserById() should have correct user details")
-        void userPrincipalCreatedByLoadUserByIdShouldHaveCorrectUserDetails() {
-            // Arrange
-            when(userRepository.findById(2L)).thenReturn(Optional.of(systemAdminUser));
-            
-            // Act
-            UserDetails userDetails = userDetailsService.loadUserById(2L);
-            
-            // Assert
-            assertTrue(userDetails instanceof UserPrincipal);
-            UserPrincipal userPrincipal = (UserPrincipal) userDetails;
-            
-            assertEquals(systemAdminUser.getId(), userPrincipal.getId());
-            assertEquals(systemAdminUser.getUsername(), userPrincipal.getUsername());
-            assertEquals(systemAdminUser.getPassword(), userPrincipal.getPassword());
-            assertEquals(systemAdminUser.getEmail(), userPrincipal.getEmail());
-            assertEquals(systemAdminUser.getFirstName(), userPrincipal.getFirstName());
-            assertEquals(systemAdminUser.getLastName(), userPrincipal.getLastName());
-            assertEquals(systemAdminUser.isEnabled(), userPrincipal.isEnabled());
-            assertEquals(systemAdminUser.isAccountNonExpired(), userPrincipal.isAccountNonExpired());
-            assertEquals(systemAdminUser.isAccountNonLocked(), userPrincipal.isAccountNonLocked());
-            assertEquals(systemAdminUser.isCredentialsNonExpired(), userPrincipal.isCredentialsNonExpired());
-            
-            verify(userRepository).findById(2L);
-        }
+        // Verify repository was called
+        verify(userRepository).save(testUser);
+    }
+    
+    @Test
+    @DisplayName("Should handle exception during last login update")
+    public void testUpdateLastLogin_Exception() {
+        // Arrange
+        doThrow(new RuntimeException("Database error")).when(userRepository).save(any(User.class));
         
-        @Test
-        @DisplayName("UserPrincipal created by loadUserByEmail() should have correct user details")
-        void userPrincipalCreatedByLoadUserByEmailShouldHaveCorrectUserDetails() {
-            // Arrange
-            when(userRepository.findByEmail("user@dollarfunding.com")).thenReturn(Optional.of(regularUser));
-            
-            // Act
-            UserDetails userDetails = userDetailsService.loadUserByEmail("user@dollarfunding.com");
-            
-            // Assert
-            assertTrue(userDetails instanceof UserPrincipal);
-            UserPrincipal userPrincipal = (UserPrincipal) userDetails;
-            
-            assertEquals(regularUser.getId(), userPrincipal.getId());
-            assertEquals(regularUser.getUsername(), userPrincipal.getUsername());
-            assertEquals(regularUser.getPassword(), userPrincipal.getPassword());
-            assertEquals(regularUser.getEmail(), userPrincipal.getEmail());
-            assertEquals(regularUser.getFirstName(), userPrincipal.getFirstName());
-            assertEquals(regularUser.getLastName(), userPrincipal.getLastName());
-            assertEquals(regularUser.isEnabled(), userPrincipal.isEnabled());
-            assertEquals(regularUser.isAccountNonExpired(), userPrincipal.isAccountNonExpired());
-            assertEquals(regularUser.isAccountNonLocked(), userPrincipal.isAccountNonLocked());
-            assertEquals(regularUser.isCredentialsNonExpired(), userPrincipal.isCredentialsNonExpired());
-            
-            verify(userRepository).findByEmail("user@dollarfunding.com");
-        }
+        // Act - Should not throw exception
+        assertDoesNotThrow(() -> userDetailsService.updateLastLogin(testUser));
+        
+        // Verify repository was called
+        verify(userRepository).save(testUser);
+    }
+    
+    @Test
+    @DisplayName("Should check if user exists by username or email")
+    public void testExistsByUsernameOrEmail() {
+        // Arrange
+        when(userRepository.existsByUsername("testuser")).thenReturn(true);
+        when(userRepository.existsByEmail("test@example.com")).thenReturn(true);
+        when(userRepository.existsByUsername("nonexistent")).thenReturn(false);
+        when(userRepository.existsByEmail("nonexistent")).thenReturn(false);
+        
+        // Act & Assert
+        assertTrue(userDetailsService.existsByUsernameOrEmail("testuser"));
+        assertTrue(userDetailsService.existsByUsernameOrEmail("test@example.com"));
+        assertFalse(userDetailsService.existsByUsernameOrEmail("nonexistent"));
+        
+        // Verify repository was called
+        verify(userRepository).existsByUsername("testuser");
+        verify(userRepository).existsByEmail("test@example.com");
+        verify(userRepository).existsByUsername("nonexistent");
+        verify(userRepository).existsByEmail("nonexistent");
+    }
+    
+    @Test
+    @DisplayName("Should check if user has specific role")
+    public void testHasRole() {
+        // Arrange
+        when(userRepository.findByUsernameOrEmail("testuser", "testuser"))
+                .thenReturn(Optional.of(testUser));
+        
+        // Act & Assert
+        assertTrue(userDetailsService.hasRole("testuser", RoleConstants.OPERATIONS_STAFF));
+        assertFalse(userDetailsService.hasRole("testuser", RoleConstants.SYSTEM_ADMIN));
+        
+        // Verify repository was called
+        verify(userRepository, times(2)).findByUsernameOrEmail("testuser", "testuser");
+    }
+    
+    @Test
+    @DisplayName("Should check if user is Operations Staff")
+    public void testIsOperationsStaff() {
+        // Arrange
+        when(userRepository.findByUsernameOrEmail("testuser", "testuser"))
+                .thenReturn(Optional.of(testUser));
+        
+        // Act & Assert
+        assertTrue(userDetailsService.isOperationsStaff("testuser"));
+        
+        // Verify repository was called
+        verify(userRepository).findByUsernameOrEmail("testuser", "testuser");
+    }
+    
+    @Test
+    @DisplayName("Should check if user is System Admin")
+    public void testIsSystemAdmin() {
+        // Arrange
+        when(userRepository.findByUsernameOrEmail("testuser", "testuser"))
+                .thenReturn(Optional.of(testUser));
+        
+        // Act & Assert
+        assertFalse(userDetailsService.isSystemAdmin("testuser"));
+        
+        // Add System Admin role and test again
+        testUser.addRole(systemAdminRole);
+        assertTrue(userDetailsService.isSystemAdmin("testuser"));
+        
+        // Verify repository was called twice
+        verify(userRepository, times(2)).findByUsernameOrEmail("testuser", "testuser");
+    }
+    
+    @Test
+    @DisplayName("Should cache user details when loading by username")
+    public void testCacheUserDetailsByUsername() {
+        // This test verifies that caching works as expected
+        // We need to use a spy to verify the actual repository calls
+        UserDetailsServiceImpl serviceSpy = spy(userDetailsService);
+        
+        // Arrange
+        when(userRepository.findByUsernameOrEmail("testuser", "testuser"))
+                .thenReturn(Optional.of(testUser));
+        
+        // Act - Call twice
+        UserDetails firstCall = serviceSpy.loadUserByUsername("testuser");
+        UserDetails secondCall = serviceSpy.loadUserByUsername("testuser");
+        
+        // Assert
+        assertNotNull(firstCall);
+        assertNotNull(secondCall);
+        assertEquals(firstCall.getUsername(), secondCall.getUsername());
+        
+        // Verify repository was called only once (due to caching)
+        verify(userRepository, times(1)).findByUsernameOrEmail("testuser", "testuser");
+    }
+    
+    @Test
+    @DisplayName("Should cache user details when loading by ID")
+    public void testCacheUserDetailsById() {
+        // This test verifies that caching works as expected
+        // We need to use a spy to verify the actual repository calls
+        UserDetailsServiceImpl serviceSpy = spy(userDetailsService);
+        
+        // Arrange
+        when(userRepository.findById(1L)).thenReturn(Optional.of(testUser));
+        
+        // Act - Call twice
+        UserDetails firstCall = serviceSpy.loadUserById(1L);
+        UserDetails secondCall = serviceSpy.loadUserById(1L);
+        
+        // Assert
+        assertNotNull(firstCall);
+        assertNotNull(secondCall);
+        assertEquals(firstCall.getUsername(), secondCall.getUsername());
+        
+        // Verify repository was called only once (due to caching)
+        verify(userRepository, times(1)).findById(1L);
+    }
+    
+    @Test
+    @DisplayName("Should integrate with Spring Security authentication manager")
+    public void testIntegrationWithSpringSecurityAuthenticationManager() {
+        // Arrange
+        when(userRepository.findByUsernameOrEmail("testuser", "testuser"))
+                .thenReturn(Optional.of(testUser));
+        
+        // Act
+        UserDetails userDetails = userDetailsService.loadUserByUsername("testuser");
+        
+        // Assert - Verify UserDetails implementation is compatible with Spring Security
+        assertTrue(userDetails instanceof UserPrincipal);
+        UserPrincipal principal = (UserPrincipal) userDetails;
+        
+        // Check core UserDetails contract
+        assertEquals("testuser", principal.getUsername());
+        assertEquals("password123", principal.getPassword());
+        assertTrue(principal.isEnabled());
+        assertTrue(principal.isAccountNonExpired());
+        assertTrue(principal.isCredentialsNonExpired());
+        assertTrue(principal.isAccountNonLocked());
+        
+        // Check authorities
+        assertTrue(principal.getAuthorities().contains(new SimpleGrantedAuthority(RoleConstants.ROLE_OPERATIONS_STAFF)));
+        
+        // Check additional UserPrincipal methods
+        assertEquals(1L, principal.getId());
+        assertEquals("test@example.com", principal.getEmail());
+        assertEquals("Test", principal.getFirstName());
+        assertEquals("User", principal.getLastName());
+        assertEquals("Test User", principal.getFullName());
+        
+        // Check role-specific methods
+        assertTrue(principal.hasRole(RoleConstants.OPERATIONS_STAFF));
+        assertFalse(principal.hasRole(RoleConstants.SYSTEM_ADMIN));
+        assertTrue(principal.isOperationsStaff());
+        assertFalse(principal.isSystemAdmin());
     }
 }
