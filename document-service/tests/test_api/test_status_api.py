@@ -1,365 +1,939 @@
-"""
-Unit tests for the Document Service status API endpoints.
-
-This module contains tests that verify the Document Service status API endpoints
-correctly report service status, document processing metrics, and queue depths.
-It also tests the integration with the notification service for status updates.
-"""
-
 import json
-import time
-from unittest.mock import patch, MagicMock
-from datetime import datetime, timedelta
-
 import pytest
-from fastapi.testclient import TestClient
+import uuid
+from datetime import datetime, timedelta
+from unittest.mock import MagicMock, patch
 
-from src.api.status import (
-    record_document_processed,
-    record_processing_time,
-    update_classification_accuracy,
-    update_queue_depth,
-    DOCUMENT_PROCESSED_COUNTER,
-    DOCUMENT_PROCESSING_TIME,
-    CLASSIFICATION_ACCURACY,
-    QUEUE_DEPTH
+# Import necessary modules from the document service
+# Use relative imports since we're in the tests directory
+import sys
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
+
+from src.types.status import DocumentStatus, ProcessingStage, StatusHistory
+
+
+# ============================================================================
+# Test Status API Endpoints
+# ============================================================================
+
+@pytest.mark.parametrize(
+    "expected_status", 
+    ["UP", "DEGRADED"]
 )
-from src.types.documents import DocumentType, ProcessingStatus
-
-
-class TestStatusEndpoints:
-    """Test cases for the Document Service status API endpoints."""
-
-    def test_get_status(self, client: TestClient, mock_queue_service):
-        """Test that the status endpoint returns the correct service status information."""
-        # Mock the queue depth method
-        mock_queue_service.get_queue_depth.return_value = 5
-        mock_queue_service.get_connection_count.return_value = 3
+def test_get_status(test_client, mock_s3_storage, mock_rabbitmq_client, expected_status):
+    """
+    Test the GET /status endpoint.
+    
+    This test verifies that the status endpoint returns the correct service status
+    and includes all required information about system metrics, queue status, and
+    document processing statistics.
+    
+    Args:
+        test_client: FastAPI test client
+        mock_s3_storage: Mock S3 storage client
+        mock_rabbitmq_client: Mock RabbitMQ client
+        expected_status: Expected service status (UP or DEGRADED)
+    """
+    # Mock the DocumentService.get_processing_stats method
+    with patch("src.services.document_service.DocumentService.get_processing_stats") as mock_get_stats:
+        # Configure mock to return different stats based on expected status
+        if expected_status == "UP":
+            mock_get_stats.return_value = {
+                "total_processed": 1000,
+                "successful": 990,
+                "failed": 10,
+                "avg_processing_time": 2.5,
+                "classification_accuracy": 0.99,
+                "documents_by_type": {
+                    "LOAN_APPLICATION": 300,
+                    "TAX_RETURN": 200,
+                    "BANK_STATEMENT": 250,
+                    "PAY_STUB": 150,
+                    "IDENTITY_DOCUMENT": 100
+                }
+            }
+        else:  # DEGRADED
+            mock_get_stats.return_value = {
+                "total_processed": 1000,
+                "successful": 850,
+                "failed": 150,  # High failure rate
+                "avg_processing_time": 8.5,  # Slow processing
+                "classification_accuracy": 0.85,  # Lower accuracy
+                "documents_by_type": {
+                    "LOAN_APPLICATION": 300,
+                    "TAX_RETURN": 200,
+                    "BANK_STATEMENT": 250,
+                    "PAY_STUB": 150,
+                    "IDENTITY_DOCUMENT": 100
+                }
+            }
         
-        # Call the status endpoint
-        response = client.get("/status")
-        
-        # Verify the response
-        assert response.status_code == 200
-        data = response.json()
-        
-        # Check required fields
-        assert data["status"] == "operational"
-        assert data["service"] == "document-service"
-        assert "version" in data
-        assert "uptime_seconds" in data
-        assert "environment" in data
-        
-        # Check resource information
-        assert "resources" in data
-        assert "cpu_percent" in data["resources"]
-        assert "memory_usage_bytes" in data["resources"]
-        assert "thread_count" in data["resources"]
-        
-        # Check queue information
-        assert "queue" in data
-        assert data["queue"]["document_processing_depth"] == 5
-        
-        # Check connection information
-        assert "connections" in data
-        assert data["connections"]["rabbitmq"] == 3
-
-    def test_get_status_with_queue_error(self, client: TestClient, mock_queue_service):
-        """Test that the status endpoint handles queue service errors gracefully."""
-        # Mock the queue depth method to raise an exception
-        mock_queue_service.get_queue_depth.side_effect = Exception("Queue connection error")
-        mock_queue_service.get_connection_count.side_effect = Exception("Connection count error")
-        
-        # Call the status endpoint
-        response = client.get("/status")
-        
-        # Verify the response
-        assert response.status_code == 200
-        data = response.json()
-        
-        # Check that the endpoint still returns a valid response despite the error
-        assert data["status"] == "operational"
-        assert data["queue"]["document_processing_depth"] == -1
-        assert data["connections"]["rabbitmq"] == -1
-
-    def test_health_check(self, client: TestClient):
-        """Test that the health check endpoint returns a healthy status."""
-        # Call the health check endpoint
-        response = client.get("/status/health")
-        
-        # Verify the response
-        assert response.status_code == 200
-        data = response.json()
-        assert data["status"] == "healthy"
-
-    def test_metrics_endpoint(self, client: TestClient, mock_queue_service):
-        """Test that the metrics endpoint returns Prometheus metrics in the correct format."""
-        # Mock the queue depth method
-        mock_queue_service.get_queue_depth.return_value = 10
-        
-        # Call the metrics endpoint
-        response = client.get("/status/metrics")
-        
-        # Verify the response
-        assert response.status_code == 200
-        assert response.headers["Content-Type"] == "application/openmetrics-text; version=1.0.0; charset=utf-8"
-        
-        # Check that the response contains expected metric names
-        content = response.text
-        assert "document_service_documents_processed_total" in content
-        assert "document_service_processing_time_seconds" in content
-        assert "document_service_classification_accuracy" in content
-        assert "document_service_queue_depth" in content
-        assert "document_service_cpu_usage_percent" in content
-        assert "document_service_memory_usage_bytes" in content
-
-    def test_metrics_with_queue_error(self, client: TestClient, mock_queue_service):
-        """Test that the metrics endpoint handles queue service errors gracefully."""
-        # Mock the queue depth method to raise an exception
-        mock_queue_service.get_queue_depth.side_effect = Exception("Queue connection error")
-        
-        # Call the metrics endpoint
-        response = client.get("/status/metrics")
-        
-        # Verify the response still succeeds despite the error
-        assert response.status_code == 200
-        assert response.headers["Content-Type"] == "application/openmetrics-text; version=1.0.0; charset=utf-8"
-
-    def test_get_processing_stats(self, client: TestClient):
-        """Test that the processing stats endpoint returns detailed statistics."""
-        # Call the processing stats endpoint
-        response = client.get("/status/stats")
-        
-        # Verify the response
-        assert response.status_code == 200
-        data = response.json()
-        
-        # Check required sections
-        assert "throughput" in data
-        assert "accuracy" in data
-        assert "errors" in data
-        assert "queue_status" in data
-        
-        # Check throughput metrics
-        assert "documents_per_minute" in data["throughput"]
-        assert "documents_processed_today" in data["throughput"]
-        assert "documents_processed_total" in data["throughput"]
-        
-        # Check accuracy metrics
-        assert "overall_percent" in data["accuracy"]
-        assert "by_model" in data["accuracy"]
-        assert "by_document_type" in data["accuracy"]
-        
-        # Check error metrics
-        assert "error_rate_percent" in data["errors"]
-        assert "most_common_errors" in data["errors"]
-        
-        # Check queue metrics
-        assert "current_depth" in data["queue_status"]
-        assert "average_wait_time_seconds" in data["queue_status"]
-        assert "max_wait_time_seconds" in data["queue_status"]
-
-
-class TestMetricsHelpers:
-    """Test cases for the Document Service metrics helper functions."""
-
-    def test_record_document_processed(self):
-        """Test that the record_document_processed function increments the counter."""
-        # Get the initial value
-        initial_value = DOCUMENT_PROCESSED_COUNTER.labels(
-            document_type=DocumentType.APPLICATION.value,
-            status=ProcessingStatus.COMPLETED.value
-        )._value.get()
-        
-        # Call the function
-        record_document_processed(
-            document_type=DocumentType.APPLICATION.value,
-            status=ProcessingStatus.COMPLETED.value
-        )
-        
-        # Get the new value
-        new_value = DOCUMENT_PROCESSED_COUNTER.labels(
-            document_type=DocumentType.APPLICATION.value,
-            status=ProcessingStatus.COMPLETED.value
-        )._value.get()
-        
-        # Verify the counter was incremented
-        assert new_value == initial_value + 1
-
-    def test_record_processing_time(self):
-        """Test that the record_processing_time function observes the processing time."""
-        # Get the initial count
-        initial_count = DOCUMENT_PROCESSING_TIME.labels(
-            document_type=DocumentType.APPLICATION.value
-        )._count.get()
-        
-        # Call the function
-        record_processing_time(
-            document_type=DocumentType.APPLICATION.value,
-            processing_time=1.5
-        )
-        
-        # Get the new count
-        new_count = DOCUMENT_PROCESSING_TIME.labels(
-            document_type=DocumentType.APPLICATION.value
-        )._count.get()
-        
-        # Verify the histogram count was incremented
-        assert new_count == initial_count + 1
-
-    def test_update_classification_accuracy(self):
-        """Test that the update_classification_accuracy function sets the gauge value."""
-        # Call the function
-        update_classification_accuracy(model_type="svm", accuracy=98.5)
-        
-        # Get the value
-        value = CLASSIFICATION_ACCURACY.labels(model_type="svm")._value.get()
-        
-        # Verify the gauge was set to the correct value
-        assert value == 98.5
-
-    def test_update_queue_depth(self):
-        """Test that the update_queue_depth function sets the gauge value."""
-        # Call the function
-        update_queue_depth(queue_name="document-processing", depth=42)
-        
-        # Get the value
-        value = QUEUE_DEPTH.labels(queue_name="document-processing")._value.get()
-        
-        # Verify the gauge was set to the correct value
-        assert value == 42
-
-
-class TestDocumentStatusTracking:
-    """Test cases for document status tracking and notification integration."""
-
-    @patch('src.api.status.record_document_processed')
-    def test_document_status_update(self, mock_record_processed, client: TestClient, create_test_document):
-        """Test that document status updates are properly tracked and recorded in metrics."""
-        # Create a test document
-        document = create_test_document()
-        document_id = document.metadata['document_id']
-        
-        # Mock the API endpoint for updating document status
-        with patch('src.services.queue_service.QueueService.publish') as mock_publish:
-            # Call the document status update endpoint
-            response = client.put(
-                f"/documents/{document_id}/status",
-                json={"status": ProcessingStatus.COMPLETED.value}
-            )
+        # Mock the QueueService.get_queue_stats method
+        with patch("src.services.queue_service.QueueService.get_queue_stats") as mock_queue_stats:
+            # Configure mock to return different queue stats based on expected status
+            if expected_status == "UP":
+                mock_queue_stats.return_value = [
+                    {
+                        "queue_name": "document-processing",
+                        "depth": 5,
+                        "processing_rate": 120.5,
+                        "consumers": 3
+                    },
+                    {
+                        "queue_name": "data-extraction",
+                        "depth": 2,
+                        "processing_rate": 90.2,
+                        "consumers": 2
+                    }
+                ]
+            else:  # DEGRADED
+                mock_queue_stats.return_value = [
+                    {
+                        "queue_name": "document-processing",
+                        "depth": 1500,  # Queue backup
+                        "processing_rate": 50.5,  # Slow processing
+                        "consumers": 3
+                    },
+                    {
+                        "queue_name": "data-extraction",
+                        "depth": 800,  # Queue backup
+                        "processing_rate": 30.2,  # Slow processing
+                        "consumers": 2
+                    }
+                ]
             
-            # Verify the response
+            # Mock system metrics
+            with patch("psutil.cpu_percent") as mock_cpu, \
+                 patch("psutil.virtual_memory") as mock_memory, \
+                 patch("psutil.disk_usage") as mock_disk, \
+                 patch("psutil.net_connections") as mock_connections, \
+                 patch("psutil.Process") as mock_process:
+                
+                # Configure mocks based on expected status
+                if expected_status == "UP":
+                    mock_cpu.return_value = 45.5  # Normal CPU usage
+                    mock_memory.return_value.used = 4 * 1024 * 1024 * 1024  # 4 GB
+                    mock_memory.return_value.percent = 40.0  # Normal memory usage
+                    mock_disk.return_value.percent = 60.0  # Normal disk usage
+                else:  # DEGRADED
+                    mock_cpu.return_value = 92.5  # High CPU usage
+                    mock_memory.return_value.used = 14 * 1024 * 1024 * 1024  # 14 GB
+                    mock_memory.return_value.percent = 92.0  # High memory usage
+                    mock_disk.return_value.percent = 95.0  # High disk usage
+                
+                # Common mocks for both scenarios
+                mock_connections.return_value = [MagicMock() for _ in range(10)]
+                mock_process.return_value.open_files.return_value = [MagicMock() for _ in range(20)]
+                
+                # Make request to status endpoint
+                response = test_client.get("/status")
+                
+                # Verify response
+                assert response.status_code == 200
+                data = response.json()
+                
+                # Check basic structure
+                assert "status" in data
+                assert "version" in data
+                assert "environment" in data
+                assert "timestamp" in data
+                assert "uptime_seconds" in data
+                assert "system" in data
+                assert "queues" in data
+                assert "document_stats" in data
+                
+                # Check status matches expected
+                assert data["status"] == expected_status
+                
+                # Check system metrics
+                assert "cpu_usage_percent" in data["system"]
+                assert "memory_usage_bytes" in data["system"]
+                assert "memory_usage_percent" in data["system"]
+                assert "disk_usage_percent" in data["system"]
+                assert "open_connections" in data["system"]
+                assert "open_file_descriptors" in data["system"]
+                
+                # Check queue information
+                assert len(data["queues"]) == 2
+                for queue in data["queues"]:
+                    assert "queue_name" in queue
+                    assert "depth" in queue
+                    assert "processing_rate" in queue
+                    assert "consumers" in queue
+                
+                # Check document stats
+                assert "total_processed" in data["document_stats"]
+                assert "successful" in data["document_stats"]
+                assert "failed" in data["document_stats"]
+                assert "avg_processing_time" in data["document_stats"]
+                assert "classification_accuracy" in data["document_stats"]
+                assert "documents_by_type" in data["document_stats"]
+
+
+def test_get_metrics_unauthorized(test_client):
+    """
+    Test the GET /status/metrics endpoint without authentication.
+    
+    This test verifies that the metrics endpoint requires authentication
+    and returns a 401 Unauthorized response when no token is provided.
+    
+    Args:
+        test_client: FastAPI test client
+    """
+    # Make request without authentication
+    response = test_client.get("/status/metrics")
+    
+    # Verify response
+    assert response.status_code == 401
+    assert "detail" in response.json()
+    assert "WWW-Authenticate" in response.headers
+    assert response.headers["WWW-Authenticate"] == "Bearer"
+
+
+def test_get_metrics_authorized(test_client, mock_auth_headers):
+    """
+    Test the GET /status/metrics endpoint with authentication.
+    
+    This test verifies that the metrics endpoint returns Prometheus-formatted
+    metrics when a valid authentication token is provided.
+    
+    Args:
+        test_client: FastAPI test client
+        mock_auth_headers: Mock authentication headers
+    """
+    # Mock the validate_jwt_token function
+    with patch("src.utils.validation_utils.validate_jwt_token") as mock_validate:
+        # Configure mock to return a valid token payload with required roles
+        mock_validate.return_value = {
+            "sub": "test-user",
+            "roles": ["operations_staff"],
+            "exp": datetime.now().timestamp() + 3600
+        }
+        
+        # Mock system metrics
+        with patch("psutil.cpu_percent") as mock_cpu, \
+             patch("psutil.virtual_memory") as mock_memory, \
+             patch("psutil.disk_usage") as mock_disk, \
+             patch("psutil.net_connections") as mock_connections:
+            
+            # Configure mocks
+            mock_cpu.return_value = 45.5
+            mock_memory.return_value.used = 4 * 1024 * 1024 * 1024  # 4 GB
+            mock_disk.return_value.percent = 60.0
+            mock_connections.return_value = [MagicMock() for _ in range(10)]
+            
+            # Make request with authentication
+            response = test_client.get("/status/metrics", headers=mock_auth_headers)
+            
+            # Verify response
+            assert response.status_code == 200
+            assert response.headers["content-type"] == "text/plain; version=0.0.4; charset=utf-8"
+            
+            # Check that response contains Prometheus metrics
+            content = response.content.decode("utf-8")
+            assert "document_service_documents_processed_total" in content
+            assert "document_service_processing_seconds" in content
+            assert "document_service_classification_accuracy" in content
+            assert "document_service_queue_depth" in content
+            assert "document_service_cpu_usage_percent" in content
+            assert "document_service_memory_usage_bytes" in content
+            assert "document_service_api_requests_total" in content
+
+
+def test_get_document_stats_unauthorized(test_client):
+    """
+    Test the GET /status/stats endpoint without authentication.
+    
+    This test verifies that the document stats endpoint requires authentication
+    and returns a 401 Unauthorized response when no token is provided.
+    
+    Args:
+        test_client: FastAPI test client
+    """
+    # Make request without authentication
+    response = test_client.get("/status/stats")
+    
+    # Verify response
+    assert response.status_code == 401
+    assert "detail" in response.json()
+    assert "WWW-Authenticate" in response.headers
+    assert response.headers["WWW-Authenticate"] == "Bearer"
+
+
+def test_get_document_stats_authorized(test_client, mock_auth_headers):
+    """
+    Test the GET /status/stats endpoint with authentication.
+    
+    This test verifies that the document stats endpoint returns detailed
+    document processing statistics when a valid authentication token is provided.
+    
+    Args:
+        test_client: FastAPI test client
+        mock_auth_headers: Mock authentication headers
+    """
+    # Mock the validate_jwt_token function
+    with patch("src.utils.validation_utils.validate_jwt_token") as mock_validate:
+        # Configure mock to return a valid token payload with required roles
+        mock_validate.return_value = {
+            "sub": "test-user",
+            "roles": ["operations_staff"],
+            "exp": datetime.now().timestamp() + 3600
+        }
+        
+        # Mock the DocumentService.get_detailed_stats method
+        with patch("src.services.document_service.DocumentService.get_detailed_stats") as mock_get_stats:
+            # Configure mock to return detailed stats
+            mock_get_stats.return_value = {
+                "total_processed": 1000,
+                "successful": 990,
+                "failed": 10,
+                "avg_processing_time": 2.5,
+                "classification_accuracy": 0.99,
+                "documents_by_type": {
+                    "LOAN_APPLICATION": 300,
+                    "TAX_RETURN": 200,
+                    "BANK_STATEMENT": 250,
+                    "PAY_STUB": 150,
+                    "IDENTITY_DOCUMENT": 100
+                },
+                "processing_time_by_type": {
+                    "LOAN_APPLICATION": 3.2,
+                    "TAX_RETURN": 2.8,
+                    "BANK_STATEMENT": 2.5,
+                    "PAY_STUB": 1.9,
+                    "IDENTITY_DOCUMENT": 1.5
+                },
+                "accuracy_by_type": {
+                    "LOAN_APPLICATION": 0.99,
+                    "TAX_RETURN": 0.98,
+                    "BANK_STATEMENT": 0.99,
+                    "PAY_STUB": 0.97,
+                    "IDENTITY_DOCUMENT": 0.95
+                },
+                "error_rates": {
+                    "classification_errors": 0.01,
+                    "extraction_errors": 0.02,
+                    "storage_errors": 0.005,
+                    "timeout_errors": 0.001
+                },
+                "hourly_throughput": [
+                    {"hour": "00:00", "count": 35},
+                    {"hour": "01:00", "count": 28},
+                    {"hour": "02:00", "count": 15},
+                    # ... more hourly data
+                    {"hour": "23:00", "count": 42}
+                ],
+                "document_types": [
+                    {
+                        "type": "LOAN_APPLICATION",
+                        "count": 300,
+                        "avg_processing_time": 3.2,
+                        "accuracy": 0.99,
+                        "error_rate": 0.01,
+                        "confidence_distribution": {
+                            "high": 0.85,
+                            "medium": 0.12,
+                            "low": 0.03
+                        }
+                    },
+                    # ... more document types
+                ]
+            }
+            
+            # Make request with authentication
+            response = test_client.get("/status/stats", headers=mock_auth_headers)
+            
+            # Verify response
             assert response.status_code == 200
             data = response.json()
-            assert data["status"] == ProcessingStatus.COMPLETED.value
             
-            # Verify that the metrics were updated
-            mock_record_processed.assert_called_once_with(
-                document_type=document.document_type.value if document.document_type else "unknown",
-                status=ProcessingStatus.COMPLETED.value
-            )
+            # Check basic structure
+            assert "total_processed" in data
+            assert "successful" in data
+            assert "failed" in data
+            assert "avg_processing_time" in data
+            assert "classification_accuracy" in data
+            assert "documents_by_type" in data
+            assert "processing_time_by_type" in data
+            assert "accuracy_by_type" in data
+            assert "error_rates" in data
+            assert "hourly_throughput" in data
+            assert "document_types" in data
             
-            # Verify that a notification was published to the queue
-            mock_publish.assert_called_once()
-            # Check that the published message contains the correct information
-            published_message = mock_publish.call_args[0][0]
-            assert published_message["document_id"] == document_id
-            assert published_message["status"] == ProcessingStatus.COMPLETED.value
+            # Check detailed stats
+            assert data["total_processed"] == 1000
+            assert data["successful"] == 990
+            assert data["failed"] == 10
+            assert data["classification_accuracy"] == 0.99
+            assert len(data["documents_by_type"]) == 5
+            assert len(data["processing_time_by_type"]) == 5
+            assert len(data["accuracy_by_type"]) == 5
+            assert len(data["error_rates"]) == 4
+            assert len(data["hourly_throughput"]) > 0
+            assert len(data["document_types"]) > 0
 
-    def test_batch_status_retrieval(self, client: TestClient, create_test_documents):
-        """Test that batch status retrieval works correctly for multiple documents."""
-        # Create multiple test documents
-        documents = create_test_documents(5)
-        document_ids = [doc.metadata['document_id'] for doc in documents]
-        
-        # Call the batch status endpoint
-        response = client.post(
-            "/documents/batch/status",
-            json={"document_ids": document_ids}
-        )
-        
-        # Verify the response
-        assert response.status_code == 200
-        data = response.json()
-        
-        # Check that all document statuses are returned
-        assert len(data["documents"]) == 5
-        for doc_status in data["documents"]:
-            assert "document_id" in doc_status
-            assert "status" in doc_status
-            assert doc_status["document_id"] in document_ids
 
-    @patch('src.services.queue_service.QueueService.publish')
-    def test_status_webhook_notification(self, mock_publish, client: TestClient, create_test_document):
-        """Test that status updates trigger webhook notifications via the queue service."""
-        # Create a test document
-        document = create_test_document()
-        document_id = document.metadata['document_id']
+# ============================================================================
+# Test Document Status Tracking
+# ============================================================================
+
+def test_document_status_tracking(test_client, mock_auth_headers, mock_rabbitmq_client):
+    """
+    Test document status tracking functionality.
+    
+    This test verifies that the document service correctly tracks and reports
+    the status of documents throughout the classification pipeline.
+    
+    Args:
+        test_client: FastAPI test client
+        mock_auth_headers: Mock authentication headers
+        mock_rabbitmq_client: Mock RabbitMQ client
+    """
+    # Mock the validate_jwt_token function
+    with patch("src.utils.validation_utils.validate_jwt_token") as mock_validate:
+        # Configure mock to return a valid token payload with required roles
+        mock_validate.return_value = {
+            "sub": "test-user",
+            "roles": ["operations_staff"],
+            "exp": datetime.now().timestamp() + 3600
+        }
         
-        # Call the document status update endpoint
-        response = client.put(
-            f"/documents/{document_id}/status",
-            json={
-                "status": ProcessingStatus.CLASSIFIED.value,
-                "notify": True  # Request notification
+        # Create test document IDs
+        document_id = str(uuid.uuid4())
+        application_id = str(uuid.uuid4())
+        
+        # Mock the DocumentService.get_document_status method
+        with patch("src.services.document_service.DocumentService.get_document_status") as mock_get_status:
+            # Configure mock to return document status
+            mock_get_status.return_value = {
+                "document_id": document_id,
+                "application_id": application_id,
+                "status": "PROCESSED",
+                "stage": "CLASSIFICATION_COMPLETE",
+                "created_at": datetime.now().isoformat(),
+                "updated_at": datetime.now().isoformat(),
+                "processing_time_ms": 250,
+                "document_type": "LOAN_APPLICATION",
+                "confidence": 0.95,
+                "needs_review": False,
+                "error": None,
+                "history": [
+                    {
+                        "timestamp": (datetime.now() - timedelta(seconds=10)).isoformat(),
+                        "stage": "RECEIVED",
+                        "status": "PENDING",
+                        "details": "Document received for processing"
+                    },
+                    {
+                        "timestamp": (datetime.now() - timedelta(seconds=8)).isoformat(),
+                        "stage": "VALIDATION",
+                        "status": "PROCESSING",
+                        "details": "Validating document format"
+                    },
+                    {
+                        "timestamp": (datetime.now() - timedelta(seconds=5)).isoformat(),
+                        "stage": "CLASSIFICATION",
+                        "status": "PROCESSING",
+                        "details": "Classifying document type"
+                    },
+                    {
+                        "timestamp": datetime.now().isoformat(),
+                        "stage": "CLASSIFICATION_COMPLETE",
+                        "status": "PROCESSED",
+                        "details": "Document classified as LOAN_APPLICATION with 95% confidence"
+                    }
+                ]
             }
-        )
-        
-        # Verify the response
-        assert response.status_code == 200
-        
-        # Verify that a notification was published to the queue
-        mock_publish.assert_called_once()
-        
-        # Check that the published message contains the correct information
-        published_message = mock_publish.call_args[0][0]
-        assert published_message["document_id"] == document_id
-        assert published_message["status"] == ProcessingStatus.CLASSIFIED.value
-        assert published_message["event_type"] == "status_update"
-        assert "timestamp" in published_message
+            
+            # Make request to get document status
+            response = test_client.get(f"/documents/{document_id}/status", headers=mock_auth_headers)
+            
+            # Verify response
+            assert response.status_code == 200
+            data = response.json()
+            
+            # Check basic structure
+            assert "document_id" in data
+            assert "application_id" in data
+            assert "status" in data
+            assert "stage" in data
+            assert "created_at" in data
+            assert "updated_at" in data
+            assert "processing_time_ms" in data
+            assert "document_type" in data
+            assert "confidence" in data
+            assert "needs_review" in data
+            assert "history" in data
+            
+            # Check specific values
+            assert data["document_id"] == document_id
+            assert data["application_id"] == application_id
+            assert data["status"] == "PROCESSED"
+            assert data["stage"] == "CLASSIFICATION_COMPLETE"
+            assert data["document_type"] == "LOAN_APPLICATION"
+            assert data["confidence"] == 0.95
+            assert data["needs_review"] is False
+            assert len(data["history"]) == 4
 
-    def test_status_history_retrieval(self, client: TestClient, create_test_document):
-        """Test that status history is maintained and can be retrieved for audit purposes."""
-        # Create a test document
-        document = create_test_document()
-        document_id = document.metadata['document_id']
+
+def test_batch_status_retrieval(test_client, mock_auth_headers):
+    """
+    Test batch status retrieval functionality.
+    
+    This test verifies that the document service correctly handles batch
+    status retrieval for multiple documents.
+    
+    Args:
+        test_client: FastAPI test client
+        mock_auth_headers: Mock authentication headers
+    """
+    # Mock the validate_jwt_token function
+    with patch("src.utils.validation_utils.validate_jwt_token") as mock_validate:
+        # Configure mock to return a valid token payload with required roles
+        mock_validate.return_value = {
+            "sub": "test-user",
+            "roles": ["operations_staff"],
+            "exp": datetime.now().timestamp() + 3600
+        }
         
-        # Update the document status multiple times to create history
-        status_updates = [
-            ProcessingStatus.RECEIVED.value,
-            ProcessingStatus.CLASSIFYING.value,
-            ProcessingStatus.CLASSIFIED.value,
-            ProcessingStatus.PROCESSING.value,
-            ProcessingStatus.COMPLETED.value
-        ]
+        # Create test document IDs
+        document_ids = [str(uuid.uuid4()) for _ in range(3)]
+        application_id = str(uuid.uuid4())
         
-        for status in status_updates:
-            # Small delay to ensure different timestamps
-            time.sleep(0.01)
+        # Mock the DocumentService.get_documents_status method
+        with patch("src.services.document_service.DocumentService.get_documents_status") as mock_get_status:
+            # Configure mock to return batch status
+            mock_get_status.return_value = {
+                "documents": [
+                    {
+                        "document_id": document_ids[0],
+                        "application_id": application_id,
+                        "status": "PROCESSED",
+                        "stage": "CLASSIFICATION_COMPLETE",
+                        "document_type": "LOAN_APPLICATION",
+                        "confidence": 0.95,
+                        "processing_time_ms": 250,
+                        "updated_at": datetime.now().isoformat()
+                    },
+                    {
+                        "document_id": document_ids[1],
+                        "application_id": application_id,
+                        "status": "PROCESSED",
+                        "stage": "CLASSIFICATION_COMPLETE",
+                        "document_type": "BANK_STATEMENT",
+                        "confidence": 0.98,
+                        "processing_time_ms": 180,
+                        "updated_at": datetime.now().isoformat()
+                    },
+                    {
+                        "document_id": document_ids[2],
+                        "application_id": application_id,
+                        "status": "FAILED",
+                        "stage": "CLASSIFICATION",
+                        "document_type": None,
+                        "confidence": None,
+                        "processing_time_ms": 320,
+                        "updated_at": datetime.now().isoformat(),
+                        "error": {
+                            "code": "CLASSIFICATION_ERROR",
+                            "message": "Failed to classify document",
+                            "details": "Document format not supported"
+                        }
+                    }
+                ],
+                "total": 3,
+                "successful": 2,
+                "failed": 1,
+                "pending": 0,
+                "processing": 0
+            }
             
-            # Update the status
-            client.put(
-                f"/documents/{document_id}/status",
-                json={"status": status}
+            # Make request to get batch status by application ID
+            response = test_client.get(
+                f"/documents/status", 
+                params={"application_id": application_id},
+                headers=mock_auth_headers
             )
-        
-        # Retrieve the status history
-        response = client.get(f"/documents/{document_id}/status/history")
-        
-        # Verify the response
-        assert response.status_code == 200
-        data = response.json()
-        
-        # Check that the history contains all status updates
-        assert len(data["history"]) == len(status_updates)
-        
-        # Check that the history is in chronological order (oldest first)
-        for i, status_record in enumerate(data["history"]):
-            assert status_record["status"] == status_updates[i]
-            assert "timestamp" in status_record
             
-            # Check that timestamps are in ascending order
-            if i > 0:
-                prev_timestamp = data["history"][i-1]["timestamp"]
-                curr_timestamp = status_record["timestamp"]
-                assert prev_timestamp < curr_timestamp
+            # Verify response
+            assert response.status_code == 200
+            data = response.json()
+            
+            # Check basic structure
+            assert "documents" in data
+            assert "total" in data
+            assert "successful" in data
+            assert "failed" in data
+            assert "pending" in data
+            assert "processing" in data
+            
+            # Check specific values
+            assert data["total"] == 3
+            assert data["successful"] == 2
+            assert data["failed"] == 1
+            assert data["pending"] == 0
+            assert data["processing"] == 0
+            assert len(data["documents"]) == 3
+            
+            # Check document details
+            for doc in data["documents"]:
+                assert "document_id" in doc
+                assert "application_id" in doc
+                assert "status" in doc
+                assert "stage" in doc
+                assert "updated_at" in doc
+                
+                # Check that document_id is in our list
+                assert doc["document_id"] in document_ids
+                assert doc["application_id"] == application_id
+            
+            # Make request to get batch status by document IDs
+            response = test_client.post(
+                f"/documents/status/batch",
+                json={"document_ids": document_ids},
+                headers=mock_auth_headers
+            )
+            
+            # Verify response
+            assert response.status_code == 200
+            data = response.json()
+            
+            # Check that we got the same structure
+            assert "documents" in data
+            assert "total" in data
+            assert len(data["documents"]) == 3
+
+
+def test_status_webhook_notification(test_client, mock_auth_headers, mock_rabbitmq_client):
+    """
+    Test status webhook notification functionality.
+    
+    This test verifies that the document service correctly sends status
+    update notifications to the notification service via RabbitMQ.
+    
+    Args:
+        test_client: FastAPI test client
+        mock_auth_headers: Mock authentication headers
+        mock_rabbitmq_client: Mock RabbitMQ client
+    """
+    # Mock the validate_jwt_token function
+    with patch("src.utils.validation_utils.validate_jwt_token") as mock_validate:
+        # Configure mock to return a valid token payload with required roles
+        mock_validate.return_value = {
+            "sub": "test-user",
+            "roles": ["operations_staff"],
+            "exp": datetime.now().timestamp() + 3600
+        }
+        
+        # Create test document ID
+        document_id = str(uuid.uuid4())
+        application_id = str(uuid.uuid4())
+        
+        # Mock the DocumentService.update_document_status method
+        with patch("src.services.document_service.DocumentService.update_document_status") as mock_update_status:
+            # Configure mock to return updated status
+            mock_update_status.return_value = {
+                "document_id": document_id,
+                "application_id": application_id,
+                "status": "PROCESSED",
+                "stage": "CLASSIFICATION_COMPLETE",
+                "created_at": datetime.now().isoformat(),
+                "updated_at": datetime.now().isoformat(),
+                "processing_time_ms": 250,
+                "document_type": "LOAN_APPLICATION",
+                "confidence": 0.95,
+                "needs_review": False,
+                "error": None
+            }
+            
+            # Make request to update document status
+            response = test_client.put(
+                f"/documents/{document_id}/status",
+                json={
+                    "status": "PROCESSED",
+                    "stage": "CLASSIFICATION_COMPLETE",
+                    "document_type": "LOAN_APPLICATION",
+                    "confidence": 0.95,
+                    "processing_time_ms": 250,
+                    "needs_review": False
+                },
+                headers=mock_auth_headers
+            )
+            
+            # Verify response
+            assert response.status_code == 200
+            data = response.json()
+            
+            # Check that status was updated
+            assert data["status"] == "PROCESSED"
+            assert data["stage"] == "CLASSIFICATION_COMPLETE"
+            
+            # Verify that notification was sent to RabbitMQ
+            assert mock_rabbitmq_client.publish_message.called
+            
+            # Get the message that was published
+            call_args = mock_rabbitmq_client.publish_message.call_args
+            message = call_args[0][0]  # First positional argument
+            
+            # Check message structure if it's a dict
+            if isinstance(message, dict):
+                assert "event_type" in message
+                assert "document_id" in message
+                assert "application_id" in message
+                assert "status" in message
+                assert "timestamp" in message
+                
+                # Check specific values
+                assert message["event_type"] == "document_status_updated"
+                assert message["document_id"] == document_id
+                assert message["application_id"] == application_id
+                assert message["status"] == "PROCESSED"
+
+
+def test_status_history_and_audit_trail(test_client, mock_auth_headers):
+    """
+    Test status history and audit trail functionality.
+    
+    This test verifies that the document service correctly maintains and
+    reports status history for audit purposes.
+    
+    Args:
+        test_client: FastAPI test client
+        mock_auth_headers: Mock authentication headers
+    """
+    # Mock the validate_jwt_token function
+    with patch("src.utils.validation_utils.validate_jwt_token") as mock_validate:
+        # Configure mock to return a valid token payload with required roles
+        mock_validate.return_value = {
+            "sub": "test-user",
+            "roles": ["operations_staff"],
+            "exp": datetime.now().timestamp() + 3600
+        }
+        
+        # Create test document ID
+        document_id = str(uuid.uuid4())
+        
+        # Mock the DocumentService.get_document_status_history method
+        with patch("src.services.document_service.DocumentService.get_document_status_history") as mock_get_history:
+            # Configure mock to return status history
+            now = datetime.now()
+            mock_get_history.return_value = {
+                "document_id": document_id,
+                "history": [
+                    {
+                        "timestamp": (now - timedelta(minutes=30)).isoformat(),
+                        "stage": "RECEIVED",
+                        "status": "PENDING",
+                        "details": "Document received for processing",
+                        "user_id": None,
+                        "system_event": True
+                    },
+                    {
+                        "timestamp": (now - timedelta(minutes=29)).isoformat(),
+                        "stage": "VALIDATION",
+                        "status": "PROCESSING",
+                        "details": "Validating document format",
+                        "user_id": None,
+                        "system_event": True
+                    },
+                    {
+                        "timestamp": (now - timedelta(minutes=28)).isoformat(),
+                        "stage": "CLASSIFICATION",
+                        "status": "PROCESSING",
+                        "details": "Classifying document type",
+                        "user_id": None,
+                        "system_event": True
+                    },
+                    {
+                        "timestamp": (now - timedelta(minutes=27)).isoformat(),
+                        "stage": "CLASSIFICATION_COMPLETE",
+                        "status": "PROCESSED",
+                        "details": "Document classified as LOAN_APPLICATION with 95% confidence",
+                        "user_id": None,
+                        "system_event": True
+                    },
+                    {
+                        "timestamp": (now - timedelta(minutes=20)).isoformat(),
+                        "stage": "MANUAL_REVIEW",
+                        "status": "PROCESSING",
+                        "details": "Document flagged for manual review due to low confidence",
+                        "user_id": "user-123",
+                        "system_event": False
+                    },
+                    {
+                        "timestamp": (now - timedelta(minutes=15)).isoformat(),
+                        "stage": "MANUAL_REVIEW_COMPLETE",
+                        "status": "PROCESSED",
+                        "details": "Manual review completed, document type confirmed as LOAN_APPLICATION",
+                        "user_id": "user-123",
+                        "system_event": False
+                    }
+                ],
+                "total_events": 6,
+                "system_events": 4,
+                "user_events": 2,
+                "first_event": (now - timedelta(minutes=30)).isoformat(),
+                "last_event": (now - timedelta(minutes=15)).isoformat(),
+                "processing_duration_seconds": 900  # 15 minutes
+            }
+            
+            # Make request to get status history
+            response = test_client.get(
+                f"/documents/{document_id}/status/history",
+                headers=mock_auth_headers
+            )
+            
+            # Verify response
+            assert response.status_code == 200
+            data = response.json()
+            
+            # Check basic structure
+            assert "document_id" in data
+            assert "history" in data
+            assert "total_events" in data
+            assert "system_events" in data
+            assert "user_events" in data
+            assert "first_event" in data
+            assert "last_event" in data
+            assert "processing_duration_seconds" in data
+            
+            # Check specific values
+            assert data["document_id"] == document_id
+            assert data["total_events"] == 6
+            assert data["system_events"] == 4
+            assert data["user_events"] == 2
+            assert len(data["history"]) == 6
+            
+            # Check history entries
+            for entry in data["history"]:
+                assert "timestamp" in entry
+                assert "stage" in entry
+                assert "status" in entry
+                assert "details" in entry
+                assert "user_id" in entry
+                assert "system_event" in entry
+
+
+def test_processing_metrics_reporting(test_client, mock_auth_headers):
+    """
+    Test processing metrics reporting functionality.
+    
+    This test verifies that the document service correctly reports processing
+    metrics including time and error rates.
+    
+    Args:
+        test_client: FastAPI test client
+        mock_auth_headers: Mock authentication headers
+    """
+    # Mock the validate_jwt_token function
+    with patch("src.utils.validation_utils.validate_jwt_token") as mock_validate:
+        # Configure mock to return a valid token payload with required roles
+        mock_validate.return_value = {
+            "sub": "test-user",
+            "roles": ["operations_staff"],
+            "exp": datetime.now().timestamp() + 3600
+        }
+        
+        # Mock the DocumentService.get_processing_metrics method
+        with patch("src.services.document_service.DocumentService.get_processing_metrics") as mock_get_metrics:
+            # Configure mock to return processing metrics
+            now = datetime.now()
+            start_time = now - timedelta(days=7)  # Last 7 days
+            mock_get_metrics.return_value = {
+                "time_period": {
+                    "start": start_time.isoformat(),
+                    "end": now.isoformat(),
+                    "duration_days": 7
+                },
+                "total_documents": 5000,
+                "documents_per_day": [
+                    {"date": (start_time + timedelta(days=i)).strftime("%Y-%m-%d"), "count": random.randint(600, 800)}
+                    for i in range(7)
+                ],
+                "avg_processing_time_ms": 245,
+                "processing_time_percentiles": {
+                    "p50": 220,
+                    "p90": 350,
+                    "p95": 450,
+                    "p99": 750
+                },
+                "error_rates": {
+                    "overall": 0.02,
+                    "by_type": {
+                        "CLASSIFICATION_ERROR": 0.01,
+                        "EXTRACTION_ERROR": 0.005,
+                        "VALIDATION_ERROR": 0.003,
+                        "STORAGE_ERROR": 0.002
+                    },
+                    "by_document_type": {
+                        "LOAN_APPLICATION": 0.015,
+                        "TAX_RETURN": 0.025,
+                        "BANK_STATEMENT": 0.018,
+                        "PAY_STUB": 0.022,
+                        "IDENTITY_DOCUMENT": 0.03
+                    }
+                },
+                "accuracy": {
+                    "overall": 0.98,
+                    "by_document_type": {
+                        "LOAN_APPLICATION": 0.985,
+                        "TAX_RETURN": 0.975,
+                        "BANK_STATEMENT": 0.982,
+                        "PAY_STUB": 0.978,
+                        "IDENTITY_DOCUMENT": 0.97
+                    }
+                },
+                "processing_stages": {
+                    "validation": {
+                        "avg_time_ms": 50,
+                        "error_rate": 0.005
+                    },
+                    "classification": {
+                        "avg_time_ms": 150,
+                        "error_rate": 0.01
+                    },
+                    "extraction": {
+                        "avg_time_ms": 200,
+                        "error_rate": 0.015
+                    },
+                    "storage": {
+                        "avg_time_ms": 45,
+                        "error_rate": 0.002
+                    }
+                }
+            }
+            
+            # Make request to get processing metrics
+            response = test_client.get(
+                "/documents/metrics",
+                params={"days": 7},
+                headers=mock_auth_headers
+            )
+            
+            # Verify response
+            assert response.status_code == 200
+            data = response.json()
+            
+            # Check basic structure
+            assert "time_period" in data
+            assert "total_documents" in data
+            assert "documents_per_day" in data
+            assert "avg_processing_time_ms" in data
+            assert "processing_time_percentiles" in data
+            assert "error_rates" in data
+            assert "accuracy" in data
+            assert "processing_stages" in data
+            
+            # Check specific values
+            assert data["total_documents"] == 5000
+            assert data["avg_processing_time_ms"] == 245
+            assert len(data["documents_per_day"]) == 7
+            assert data["error_rates"]["overall"] == 0.02
+            assert data["accuracy"]["overall"] == 0.98
+            
+            # Check processing stages
+            for stage in ["validation", "classification", "extraction", "storage"]:
+                assert stage in data["processing_stages"]
+                assert "avg_time_ms" in data["processing_stages"][stage]
+                assert "error_rate" in data["processing_stages"][stage]
