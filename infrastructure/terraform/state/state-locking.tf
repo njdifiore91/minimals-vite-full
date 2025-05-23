@@ -1,162 +1,285 @@
-# -------------------------------------------------------
+# -----------------------------------------------------------------------------
 # TERRAFORM STATE LOCKING CONFIGURATION
-# -------------------------------------------------------
-# This file implements state locking using DynamoDB to prevent
-# concurrent modifications to Terraform state, which could lead
-# to corruption or inconsistent infrastructure.
+# -----------------------------------------------------------------------------
+# This file implements state locking mechanism to prevent concurrent modifications
+# to Terraform state, which could lead to corruption or inconsistent infrastructure.
+# It configures DynamoDB for distributed locking, ensuring that only one user or
+# CI/CD process can modify the infrastructure at a time.
 #
-# State locking is critical for the GitOps workflow described
-# in section 8.2.2 of the technical specification, ensuring
-# that only one user or CI/CD process can modify the
-# infrastructure at a time.
-#
-# The configuration supports automatic lock cleanup for failed
-# operations and implements consistent locking across all
+# This configuration supports the GitOps workflow mentioned in section 8.2.2 of
+# the technical specification and is designed to be consistent across all
 # environments (development, staging, production).
-# -------------------------------------------------------
+# -----------------------------------------------------------------------------
 
-# Local variables for state locking configuration
-locals {
-  # Default lock timeout in seconds (15 minutes)
-  # This prevents permanent lock-outs in case of failed operations
-  default_lock_timeout = 900
-  
-  # Environment-specific lock configurations
-  lock_config = {
-    development = {
-      table_name     = "mca-terraform-locks-dev"
-      read_capacity  = 5
-      write_capacity = 5
-      ttl_enabled    = true
-      ttl_attribute  = "LockExpiration"
-      ttl_days       = 1  # 1 day TTL for development locks
-    },
-    staging = {
-      table_name     = "mca-terraform-locks-staging"
-      read_capacity  = 5
-      write_capacity = 5
-      ttl_enabled    = true
-      ttl_attribute  = "LockExpiration"
-      ttl_days       = 2  # 2 day TTL for staging locks
-    },
-    production = {
-      table_name     = "mca-terraform-locks-prod"
-      read_capacity  = 10
-      write_capacity = 10
-      ttl_enabled    = true
-      ttl_attribute  = "LockExpiration"
-      ttl_days       = 7  # 7 day TTL for production locks (longer retention for audit purposes)
+# Provider configuration is expected to be defined in the root module
+terraform {
+  required_version = ">= 1.0.0"
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = ">= 4.0.0"
     }
   }
-  
-  # Current environment lock configuration based on workspace
-  current_lock_config = local.is_valid_workspace ? local.lock_config[terraform.workspace] : null
 }
 
-# DynamoDB table for Terraform state locking
-# This table is used to prevent concurrent modifications to the Terraform state
-# by creating a distributed locking mechanism
+# Create a DynamoDB table for Terraform state locking
 resource "aws_dynamodb_table" "terraform_state_lock" {
-  # Only create the table if we're in a valid workspace
-  count = local.is_valid_workspace ? 1 : 0
+  name           = var.lock_table_name
+  billing_mode   = "PAY_PER_REQUEST"  # On-demand capacity to minimize costs
+  hash_key       = "LockID"
   
-  # Use the environment-specific table name from lock_config
-  name = local.current_lock_config.table_name
-  
-  # The hash key must be LockID for Terraform state locking
-  # This is a requirement for Terraform to use the table for locking
-  hash_key = "LockID"
-  
-  # Use PAY_PER_REQUEST billing mode for cost optimization
-  # This is more cost-effective than provisioned capacity for state locking
-  # which typically has sporadic, low-volume usage patterns
-  billing_mode = "PAY_PER_REQUEST"
-  
-  # Define the LockID attribute (required for Terraform state locking)
   attribute {
     name = "LockID"
-    type = "S"  # String type
+    type = "S"
   }
   
-  # Enable point-in-time recovery for data protection
+  # Enable point-in-time recovery for the lock table
   point_in_time_recovery {
     enabled = true
   }
   
-  # Enable TTL for automatic lock cleanup of failed operations
-  # This ensures that locks are automatically released after a specified time
-  # even if the Terraform operation fails unexpectedly
-  dynamic "ttl" {
-    for_each = local.current_lock_config.ttl_enabled ? [1] : []
-    content {
-      enabled        = true
-      attribute_name = local.current_lock_config.ttl_attribute
-    }
+  # Add tags for resource identification and management
+  tags = {
+    Name        = var.lock_table_name
+    Environment = "all"
+    Purpose     = "terraform-state-locking"
+    ManagedBy   = "terraform"
+    Project     = "MCA Application Processing System"
   }
   
-  # Apply standard resource tags plus lock-specific tags
-  tags = merge(local.current_tags, {
-    Name        = "Terraform State Lock Table"
-    Description = "DynamoDB table for Terraform state locking"
-    Service     = "Terraform"
-    Component   = "State Management"
-  })
-  
-  # Prevent destruction of the lock table to avoid disrupting operations
+  # Prevent accidental deletion of the lock table
   lifecycle {
     prevent_destroy = true
   }
 }
 
-# IAM policy document for state locking
-# This policy grants the necessary permissions for Terraform to use
-# the DynamoDB table for state locking
-data "aws_iam_policy_document" "terraform_state_lock" {
-  count = local.is_valid_workspace ? 1 : 0
-  
-  statement {
-    actions = [
-      "dynamodb:GetItem",
-      "dynamodb:PutItem",
-      "dynamodb:DeleteItem"
-    ]
-    
-    resources = [
-      aws_dynamodb_table.terraform_state_lock[0].arn
-    ]
-    
-    effect = "Allow"
-  }
-}
-
-# Output the DynamoDB table name for use in backend configuration
-output "dynamodb_lock_table_name" {
-  value       = local.is_valid_workspace ? aws_dynamodb_table.terraform_state_lock[0].name : null
+# Output the DynamoDB table name for reference in other modules
+output "dynamodb_table_name" {
+  value       = aws_dynamodb_table.terraform_state_lock.name
   description = "The name of the DynamoDB table used for Terraform state locking"
 }
 
-# Output the DynamoDB table ARN for IAM policy configuration
-output "dynamodb_lock_table_arn" {
-  value       = local.is_valid_workspace ? aws_dynamodb_table.terraform_state_lock[0].arn : null
+# Output the DynamoDB table ARN for reference in IAM policies
+output "dynamodb_table_arn" {
+  value       = aws_dynamodb_table.terraform_state_lock.arn
   description = "The ARN of the DynamoDB table used for Terraform state locking"
 }
 
-# Helper resource to provide guidance on state locking
-resource "null_resource" "state_lock_helper" {
-  # Only create this resource when explicitly requested
-  count = terraform.workspace == "default" ? 1 : 0
+# Output whether stale lock cleanup is enabled
+output "stale_lock_cleanup_enabled" {
+  value       = var.stale_lock_cleanup_enabled
+  description = "Whether automatic cleanup of stale locks is enabled"
+}
+
+# Configure automatic cleanup for stale locks
+resource "aws_cloudwatch_event_rule" "stale_lock_detection" {
+  count       = var.stale_lock_cleanup_enabled ? 1 : 0
+  name        = "terraform-stale-lock-detection"
+  description = "Trigger cleanup of stale Terraform state locks"
   
-  provisioner "local-exec" {
-    command = <<-EOT
-      echo "\nState Locking Information:\n"
-      echo "Terraform uses state locking to prevent concurrent operations on the same state."
-      echo "If a state becomes locked and the process that locked it has terminated, you can use:"
-      echo "  terraform force-unlock <LOCK_ID>"
-      echo "\nTo disable state locking temporarily (not recommended):"
-      echo "  terraform apply -lock=false"
-      echo "\nTo set a custom lock timeout:"
-      echo "  terraform apply -lock-timeout=<DURATION>"
-      echo "  Example: terraform apply -lock-timeout=10m (10 minutes)"
-    EOT
+  # Run every 6 hours
+  schedule_expression = "rate(6 hours)"
+  
+  tags = {
+    Name        = "terraform-stale-lock-detection"
+    Environment = "all"
+    Purpose     = "terraform-state-locking"
+    ManagedBy   = "terraform"
+    Project     = "MCA Application Processing System"
   }
+}
+
+# Lambda function to clean up stale locks
+resource "aws_lambda_function" "lock_cleanup" {
+  count           = var.stale_lock_cleanup_enabled ? 1 : 0
+  function_name    = "terraform-lock-cleanup"
+  description      = "Cleans up stale Terraform state locks"
+  runtime          = "nodejs16.x"
+  handler          = "index.handler"
+  timeout          = 30
+  memory_size      = 128
+  role             = aws_iam_role.lock_cleanup_role[0].arn
+  
+  # Inline code for the Lambda function
+  filename         = "${path.module}/lock_cleanup.zip"
+  source_code_hash = filebase64sha256("${path.module}/lock_cleanup.zip")
+  
+  environment {
+    variables = {
+      DYNAMODB_TABLE = aws_dynamodb_table.terraform_state_lock.name
+      MAX_LOCK_AGE_HOURS = tostring(var.stale_lock_age_hours)
+    }
+  }
+  
+  tags = {
+    Name        = "terraform-lock-cleanup"
+    Environment = "all"
+    Purpose     = "terraform-state-locking"
+    ManagedBy   = "terraform"
+    Project     = "MCA Application Processing System"
+  }
+}
+
+# IAM role for the lock cleanup Lambda function
+resource "aws_iam_role" "lock_cleanup_role" {
+  count = var.stale_lock_cleanup_enabled ? 1 : 0
+  name = "terraform-lock-cleanup-role"
+  
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "lambda.amazonaws.com"
+        }
+      }
+    ]
+  })
+  
+  tags = {
+    Name        = "terraform-lock-cleanup-role"
+    Environment = "all"
+    Purpose     = "terraform-state-locking"
+    ManagedBy   = "terraform"
+    Project     = "MCA Application Processing System"
+  }
+}
+
+# IAM policy for the lock cleanup Lambda function
+resource "aws_iam_policy" "lock_cleanup_policy" {
+  count       = var.stale_lock_cleanup_enabled ? 1 : 0
+  name        = "terraform-lock-cleanup-policy"
+  description = "Policy for Terraform lock cleanup Lambda function"
+  
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = [
+          "dynamodb:Scan",
+          "dynamodb:DeleteItem",
+          "dynamodb:GetItem"
+        ]
+        Effect   = "Allow"
+        Resource = aws_dynamodb_table.terraform_state_lock.arn
+      },
+      {
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ]
+        Effect   = "Allow"
+        Resource = "arn:aws:logs:*:*:*"
+      }
+    ]
+  })
+  
+  tags = {
+    Name        = "terraform-lock-cleanup-policy"
+    Environment = "all"
+    Purpose     = "terraform-state-locking"
+    ManagedBy   = "terraform"
+    Project     = "MCA Application Processing System"
+  }
+}
+
+# Attach the policy to the role
+resource "aws_iam_role_policy_attachment" "lock_cleanup_attachment" {
+  count      = var.stale_lock_cleanup_enabled ? 1 : 0
+  role       = aws_iam_role.lock_cleanup_role[0].name
+  policy_arn = aws_iam_policy.lock_cleanup_policy[0].arn
+}
+
+# CloudWatch event target to trigger the Lambda function
+resource "aws_cloudwatch_event_target" "lock_cleanup_target" {
+  count     = var.stale_lock_cleanup_enabled ? 1 : 0
+  rule      = aws_cloudwatch_event_rule.stale_lock_detection[0].name
+  target_id = "terraform-lock-cleanup"
+  arn       = aws_lambda_function.lock_cleanup[0].arn
+}
+
+# Permission for CloudWatch to invoke the Lambda function
+resource "aws_lambda_permission" "allow_cloudwatch" {
+  count         = var.stale_lock_cleanup_enabled ? 1 : 0
+  statement_id  = "AllowExecutionFromCloudWatch"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.lock_cleanup[0].function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.stale_lock_detection[0].arn
+}
+
+# Example backend configuration for reference
+locals {
+  backend_config_example = <<-EOT
+    # Example backend configuration using the state locking DynamoDB table
+    # Include this in your Terraform configuration files
+    
+    terraform {
+      backend "s3" {
+        bucket         = "mca-terraform-state-bucket"
+        key            = "path/to/your/terraform.tfstate"
+        region         = "us-east-1"  # Change to your region
+        encrypt        = true
+        dynamodb_table = "${aws_dynamodb_table.terraform_state_lock.name}"
+      }
+    }
+  EOT
+}
+
+# Variables for customizing the state locking configuration
+variable "lock_table_name" {
+  description = "Name of the DynamoDB table used for Terraform state locking"
+  type        = string
+  default     = "terraform-state-lock"
+}
+
+variable "stale_lock_cleanup_enabled" {
+  description = "Whether to enable automatic cleanup of stale locks"
+  type        = bool
+  default     = true
+}
+
+variable "stale_lock_age_hours" {
+  description = "Age in hours after which a lock is considered stale"
+  type        = number
+  default     = 24
+}
+
+# Documentation on state locking behavior
+locals {
+  state_locking_docs = <<-EOT
+    # Terraform State Locking
+    
+    This configuration implements state locking using DynamoDB to prevent concurrent
+    modifications to Terraform state files. State locking is critical in environments
+    where multiple users or CI/CD processes might attempt to modify infrastructure
+    simultaneously.
+    
+    ## How State Locking Works
+    
+    1. When a Terraform operation that could modify state begins (apply, destroy),
+       Terraform attempts to acquire a lock by writing to the DynamoDB table.
+    
+    2. If the lock is successfully acquired, the operation proceeds.
+    
+    3. If another process already holds the lock, Terraform will wait and retry
+       for up to 10 minutes (configurable) before failing.
+    
+    4. Once the operation completes, Terraform automatically releases the lock.
+    
+    ## Lock Cleanup
+    
+    A CloudWatch scheduled event triggers a Lambda function every 6 hours to
+    clean up stale locks (locks older than 24 hours). This prevents orphaned
+    locks from blocking infrastructure operations indefinitely.
+    
+    ## Environment-Specific Considerations
+    
+    The state locking mechanism is consistent across all environments (development,
+    staging, production) to ensure reliable operation of the GitOps workflow and
+    CI/CD pipeline integration.
+  EOT
 }
