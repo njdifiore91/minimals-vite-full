@@ -1,334 +1,404 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from typing import Dict, List, Optional, Any
-import logging
-import os
-import time
-from datetime import datetime, timedelta
+"""Diagnostic endpoints for troubleshooting the OCR Service.
 
-# Import from local modules
+This module provides endpoints for retrieving logs, checking configuration,
+and performing diagnostic tests on OCR models. These endpoints are used by
+operations staff to troubleshoot issues with the service, verify its
+configuration, and test OCR functionality.
+"""
+
+import os
+import logging
+from datetime import datetime, timedelta
+from typing import Dict, Any, List, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Body, File, UploadFile
+from pydantic import BaseModel
+
 from ..config import app_config, tensorflow_config, logging_config
 from ..services import ocr_service
-from ..types.models import OCRModelType, ModelMetrics
-from ..types.errors import ServiceError, ErrorCategory
-from ..utils import logging_utils, tensorflow_utils, error_utils
+from ..models import model_factory
+from ..utils import error_utils, logging_utils
+from ..auth.jwt_auth import validate_api_key, validate_admin_role
 
-# Create router with prefix
-router = APIRouter(
-    prefix="/diagnostics",
-    tags=["diagnostics"],
-    responses={
-        status.HTTP_401_UNAUTHORIZED: {"description": "Unauthorized"},
-        status.HTTP_403_FORBIDDEN: {"description": "Forbidden"},
-        status.HTTP_500_INTERNAL_SERVER_ERROR: {"description": "Internal Server Error"},
-    },
-)
-
-# Logger for this module
+# Initialize logger
 logger = logging.getLogger(__name__)
 
-
-# Authentication dependency
-async def verify_admin_access():
-    """Verify that the user has admin access for diagnostics endpoints.
-    
-    This is a placeholder for actual authentication logic that would be implemented
-    based on the authentication system used (JWT, API key, etc.)
-    
-    Raises:
-        HTTPException: If authentication fails or user lacks required permissions
-    """
-    # TODO: Implement actual authentication check
-    # For now, this is a placeholder that allows access
-    # In production, this would verify JWT tokens or API keys
-    return True
+# Create router
+diagnostics_router = APIRouter(tags=["diagnostics"])
 
 
-@router.get("/logs", summary="Retrieve recent logs")
+# Define request models
+class DiagnosticTestRequest(BaseModel):
+    """Request model for diagnostic tests."""
+    test_type: str
+    parameters: Optional[Dict[str, Any]] = None
+
+
+class ModelReloadRequest(BaseModel):
+    """Request model for model reloading."""
+    model_ids: Optional[List[str]] = None
+    force: bool = False
+
+
+@diagnostics_router.get("/logs", summary="Retrieve recent logs", dependencies=[Depends(validate_api_key)])
 async def get_logs(
-    level: str = Query("INFO", description="Log level filter (ERROR, WARN, INFO, DEBUG)"),
-    hours: int = Query(24, description="Hours of logs to retrieve", ge=1, le=72),
+    level: str = Query("INFO", description="Minimum log level to retrieve"),
+    hours: int = Query(24, description="Number of hours of logs to retrieve"),
     service: Optional[str] = Query(None, description="Filter logs by service component"),
-    limit: int = Query(100, description="Maximum number of log entries to return", ge=10, le=1000),
-    _: bool = Depends(verify_admin_access),
+    limit: int = Query(1000, description="Maximum number of log entries to return")
 ) -> Dict[str, Any]:
-    """Retrieve recent logs from the OCR service.
+    """Retrieve recent logs from the OCR Service.
     
-    This endpoint allows operations staff to view recent logs for troubleshooting.
-    Logs can be filtered by level, time range, and service component.
+    This endpoint allows operations staff to retrieve and filter logs for troubleshooting.
     
     Args:
-        level: Minimum log level to include (ERROR, WARN, INFO, DEBUG)
-        hours: Number of hours of logs to retrieve (1-72)
-        service: Optional service component filter
-        limit: Maximum number of log entries to return (10-1000)
-        _: Admin access verification dependency
+        level: Minimum log level to retrieve (DEBUG, INFO, WARN, ERROR)
+        hours: Number of hours of logs to retrieve
+        service: Filter logs by service component
+        limit: Maximum number of log entries to return
         
     Returns:
-        Dict containing log entries and metadata
+        Dict[str, Any]: A dictionary containing filtered logs
     """
     try:
-        logger.info(f"Retrieving logs with level={level}, hours={hours}, service={service}, limit={limit}")
-        
-        # Convert level string to logging level
-        numeric_level = logging_utils.get_log_level(level)
-        if not numeric_level:
+        # Validate log level
+        valid_levels = ["DEBUG", "INFO", "WARN", "ERROR"]
+        if level not in valid_levels:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid log level: {level}. Must be one of ERROR, WARN, INFO, DEBUG"
+                detail=f"Invalid log level. Must be one of: {', '.join(valid_levels)}"
             )
+        
+        # Get numeric log level
+        numeric_level = getattr(logging, level)
         
         # Calculate time range
         end_time = datetime.now()
         start_time = end_time - timedelta(hours=hours)
         
-        # Retrieve logs from the logging system
-        # This implementation will depend on how logs are stored
-        # (file, database, external service, etc.)
-        log_entries = logging_utils.get_log_entries(
-            start_time=start_time,
-            end_time=end_time,
-            level=numeric_level,
-            service=service,
-            limit=limit
-        )
+        # Get log file path from config
+        log_file = logging_config.LOG_FILE
+        
+        # Check if log file exists
+        if not os.path.exists(log_file):
+            return {
+                "status": "error",
+                "message": f"Log file not found: {log_file}",
+                "logs": []
+            }
+        
+        # Parse and filter logs
+        logs = []
+        with open(log_file, 'r') as f:
+            for line in f:
+                try:
+                    # Parse log entry
+                    log_entry = logging_utils.parse_log_entry(line)
+                    
+                    # Apply filters
+                    if log_entry:
+                        # Filter by level
+                        if getattr(logging, log_entry.get("level", "INFO")) < numeric_level:
+                            continue
+                        
+                        # Filter by time
+                        log_time = datetime.fromisoformat(log_entry.get("timestamp", "").replace('Z', '+00:00'))
+                        if log_time < start_time or log_time > end_time:
+                            continue
+                        
+                        # Filter by service
+                        if service and log_entry.get("service") != service:
+                            continue
+                        
+                        logs.append(log_entry)
+                        
+                        # Limit number of logs
+                        if len(logs) >= limit:
+                            break
+                except Exception as e:
+                    # Skip malformed log entries
+                    continue
         
         return {
-            "timestamp": datetime.now().isoformat(),
+            "status": "success",
+            "count": len(logs),
+            "start_time": start_time.isoformat(),
+            "end_time": end_time.isoformat(),
             "level": level,
-            "hours": hours,
-            "service": service,
-            "count": len(log_entries),
-            "logs": log_entries
+            "service_filter": service,
+            "logs": logs
         }
+    
     except Exception as e:
-        error = error_utils.format_exception(e, ErrorCategory.SYSTEM)
+        error = error_utils.format_exception(e)
         logger.error(f"Error retrieving logs: {error}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to retrieve logs: {str(e)}"
+            detail=f"Error retrieving logs: {str(e)}"
         )
 
 
-@router.get("/config", summary="Get current configuration")
-async def get_config(_: bool = Depends(verify_admin_access)) -> Dict[str, Any]:
-    """Retrieve the current configuration of the OCR service.
+@diagnostics_router.get("/config", summary="Check current configuration", dependencies=[Depends(validate_api_key)])
+async def get_config() -> Dict[str, Any]:
+    """Retrieve the current configuration of the OCR Service.
     
-    This endpoint returns the current configuration settings for the OCR service,
-    excluding sensitive information like credentials.
+    This endpoint allows operations staff to check the current configuration
+    settings of the service for troubleshooting purposes.
     
-    Args:
-        _: Admin access verification dependency
-        
     Returns:
-        Dict containing configuration settings
+        Dict[str, Any]: A dictionary containing configuration settings
     """
     try:
-        logger.info("Retrieving current configuration")
-        
-        # Get configuration but exclude sensitive information
-        config = app_config.get_sanitized_config()
-        
-        # Add TensorFlow configuration
-        tf_config = tensorflow_config.get_sanitized_config()
-        
-        # Add logging configuration
-        log_config = logging_config.get_sanitized_config()
-        
-        # Add environment information
-        env_info = {
-            "environment": os.environ.get("ENVIRONMENT", "development"),
-            "python_version": os.environ.get("PYTHON_VERSION", "unknown"),
-            "hostname": os.environ.get("HOSTNAME", "unknown"),
-            "service_version": os.environ.get("SERVICE_VERSION", "unknown"),
+        # Create sanitized configuration object
+        # Remove sensitive information like credentials
+        sanitized_config = {
+            "app": {
+                "service_name": app_config.SERVICE_NAME,
+                "version": app_config.SERVICE_VERSION,
+                "environment": app_config.ENVIRONMENT,
+                "debug_mode": app_config.DEBUG_MODE,
+                "api_base_path": app_config.API_BASE_PATH,
+                "host": app_config.HOST,
+                "port": app_config.PORT,
+            },
+            "tensorflow": {
+                "model_path": tensorflow_config.MODEL_PATH,
+                "model_version": tensorflow_config.MODEL_VERSION,
+                "gpu_enabled": tensorflow_config.GPU_ENABLED,
+                "min_gpu_memory_mb": tensorflow_config.MIN_GPU_MEMORY_MB,
+                "confidence_threshold": tensorflow_config.CONFIDENCE_THRESHOLD,
+                "batch_size": tensorflow_config.BATCH_SIZE,
+                "supported_document_types": tensorflow_config.SUPPORTED_DOCUMENT_TYPES,
+            },
+            "rabbitmq": {
+                "host": app_config.RABBITMQ_HOST,
+                "port": app_config.RABBITMQ_PORT,
+                "exchange": app_config.RABBITMQ_EXCHANGE,
+                "queue": app_config.RABBITMQ_QUEUE,
+                "routing_key": app_config.RABBITMQ_ROUTING_KEY,
+                "prefetch_count": app_config.RABBITMQ_PREFETCH_COUNT,
+                # Credentials are intentionally omitted
+            },
+            "s3": {
+                "endpoint": app_config.S3_ENDPOINT,
+                "region": app_config.S3_REGION,
+                "bucket": app_config.S3_BUCKET,
+                "use_ssl": app_config.S3_USE_SSL,
+                # Credentials are intentionally omitted
+            },
+            "logging": {
+                "level": logging_config.LOG_LEVEL,
+                "format": logging_config.LOG_FORMAT,
+                "file": logging_config.LOG_FILE,
+                "max_size_mb": logging_config.LOG_MAX_SIZE_MB,
+                "backup_count": logging_config.LOG_BACKUP_COUNT,
+            }
         }
         
         return {
-            "timestamp": datetime.now().isoformat(),
-            "app_config": config,
-            "tensorflow_config": tf_config,
-            "logging_config": log_config,
-            "environment": env_info
+            "status": "success",
+            "config": sanitized_config
         }
+    
     except Exception as e:
-        error = error_utils.format_exception(e, ErrorCategory.SYSTEM)
+        error = error_utils.format_exception(e)
         logger.error(f"Error retrieving configuration: {error}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to retrieve configuration: {str(e)}"
+            detail=f"Error retrieving configuration: {str(e)}"
         )
 
 
-@router.get("/test", summary="Run diagnostic tests")
-async def run_diagnostics(
-    test_type: str = Query("basic", description="Type of diagnostic test to run (basic, full, gpu, models)"),
-    _: bool = Depends(verify_admin_access)
+@diagnostics_router.post("/test", summary="Run diagnostic tests", dependencies=[Depends(validate_api_key)])
+async def run_diagnostic_test(
+    test_request: DiagnosticTestRequest = Body(...),
+    test_file: Optional[UploadFile] = File(None)
 ) -> Dict[str, Any]:
-    """Run diagnostic tests on the OCR service.
+    """Run diagnostic tests on the OCR Service.
     
-    This endpoint runs various diagnostic tests to verify the health and functionality
-    of the OCR service components.
+    This endpoint allows operations staff to run various diagnostic tests
+    to verify the functionality of the OCR Service.
     
     Args:
-        test_type: Type of diagnostic test to run (basic, full, gpu, models)
-        _: Admin access verification dependency
+        test_request: Test configuration including test type and parameters
+        test_file: Optional test file for OCR processing tests
         
     Returns:
-        Dict containing test results
+        Dict[str, Any]: A dictionary containing test results
     """
     try:
-        logger.info(f"Running diagnostic tests: {test_type}")
-        start_time = time.time()
-        results = {}
+        # Validate test type
+        valid_test_types = ["ocr", "connectivity", "performance", "model"]
+        if test_request.test_type not in valid_test_types:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid test type. Must be one of: {', '.join(valid_test_types)}"
+            )
         
-        # Basic system diagnostics
-        if test_type in ["basic", "full"]:
-            results["system"] = {
-                "cpu": tensorflow_utils.check_cpu_info(),
-                "memory": tensorflow_utils.check_memory_info(),
-                "disk": tensorflow_utils.check_disk_info(),
-                "python": tensorflow_utils.check_python_info(),
-            }
-        
-        # GPU diagnostics
-        if test_type in ["gpu", "full"]:
-            results["gpu"] = tensorflow_utils.check_gpu_info()
-        
-        # Model diagnostics
-        if test_type in ["models", "full"]:
-            results["models"] = {
-                "loaded": tensorflow_utils.check_loaded_models(),
-                "performance": tensorflow_utils.check_model_performance(),
-            }
-        
-        # Service connectivity tests
-        if test_type == "full":
-            results["connectivity"] = {
-                "rabbitmq": tensorflow_utils.check_rabbitmq_connectivity(),
-                "s3": tensorflow_utils.check_s3_connectivity(),
-            }
-        
-        # Calculate execution time
-        execution_time = time.time() - start_time
-        
-        return {
+        # Initialize test results
+        test_results = {
+            "test_type": test_request.test_type,
             "timestamp": datetime.now().isoformat(),
-            "test_type": test_type,
-            "execution_time": execution_time,
-            "results": results
+            "parameters": test_request.parameters or {},
+            "results": {},
+            "status": "pending"
         }
+        
+        # Run the appropriate test based on test type
+        if test_request.test_type == "ocr":
+            # Validate test file for OCR test
+            if not test_file:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Test file is required for OCR tests"
+                )
+            
+            # Process test file with OCR
+            test_results["results"] = await ocr_service.run_diagnostic_ocr(
+                test_file,
+                test_request.parameters
+            )
+            
+        elif test_request.test_type == "connectivity":
+            # Test connectivity to dependencies
+            test_results["results"] = await ocr_service.test_connectivity()
+            
+        elif test_request.test_type == "performance":
+            # Run performance tests
+            test_results["results"] = await ocr_service.run_performance_test(
+                test_request.parameters
+            )
+            
+        elif test_request.test_type == "model":
+            # Test model loading and inference
+            test_results["results"] = await ocr_service.test_model(
+                test_request.parameters
+            )
+        
+        # Update test status
+        test_results["status"] = "success"
+        
+        return test_results
+    
     except Exception as e:
-        error = error_utils.format_exception(e, ErrorCategory.SYSTEM)
-        logger.error(f"Error running diagnostics: {error}")
+        error = error_utils.format_exception(e)
+        logger.error(f"Error running diagnostic test: {error}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to run diagnostics: {str(e)}"
+            detail=f"Error running diagnostic test: {str(e)}"
         )
 
 
-@router.get("/models", summary="Get information about loaded OCR models")
-async def get_models(_: bool = Depends(verify_admin_access)) -> Dict[str, Any]:
-    """Retrieve information about the currently loaded OCR models.
+@diagnostics_router.get("/models", summary="Check loaded OCR models", dependencies=[Depends(validate_api_key)])
+async def get_models() -> Dict[str, Any]:
+    """Retrieve information about currently loaded OCR models.
     
-    This endpoint returns details about the OCR models currently loaded in the service,
-    including model types, versions, and performance metrics.
+    This endpoint allows operations staff to check which OCR models are
+    currently loaded and their status.
     
-    Args:
-        _: Admin access verification dependency
-        
     Returns:
-        Dict containing model information
+        Dict[str, Any]: A dictionary containing model information
     """
     try:
-        logger.info("Retrieving model information")
-        
-        # Get information about loaded models
-        models_info = ocr_service.get_models_info()
-        
-        # Get model performance metrics
-        performance_metrics = ocr_service.get_model_metrics()
-        
-        # Get model usage statistics
-        usage_stats = ocr_service.get_model_usage_stats()
+        # Get model information from model factory
+        models_info = await model_factory.get_models_info()
         
         return {
-            "timestamp": datetime.now().isoformat(),
-            "models": models_info,
-            "performance": performance_metrics,
-            "usage": usage_stats
+            "status": "success",
+            "models": models_info
         }
+    
     except Exception as e:
-        error = error_utils.format_exception(e, ErrorCategory.SYSTEM)
+        error = error_utils.format_exception(e)
         logger.error(f"Error retrieving model information: {error}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to retrieve model information: {str(e)}"
+            detail=f"Error retrieving model information: {str(e)}"
         )
 
 
-@router.post("/models/reload", summary="Reload OCR models")
-async def reload_models(
-    model_type: Optional[OCRModelType] = Query(None, description="Specific model type to reload (TYPED, HANDWRITTEN, HYBRID)"),
-    _: bool = Depends(verify_admin_access)
-) -> Dict[str, Any]:
+@diagnostics_router.post("/models/reload", summary="Reload OCR models", dependencies=[Depends(validate_admin_role)])
+async def reload_models(reload_request: ModelReloadRequest = Body(...)) -> Dict[str, Any]:
     """Reload OCR models used by the service.
     
-    This endpoint triggers a reload of the specified OCR models or all models if
-    no specific type is provided. This is useful for updating models without
-    restarting the service.
+    This endpoint allows administrators to reload OCR models, either
+    specific models or all models.
     
     Args:
-        model_type: Optional specific model type to reload
-        _: Admin access verification dependency
+        reload_request: Model reload configuration
         
     Returns:
-        Dict containing reload status and information
+        Dict[str, Any]: A dictionary containing reload results
     """
     try:
-        if model_type:
-            logger.info(f"Reloading OCR model: {model_type}")
-            # Reload specific model type
-            result = ocr_service.reload_model(model_type)
-        else:
-            logger.info("Reloading all OCR models")
-            # Reload all models
-            result = ocr_service.reload_all_models()
+        # Log the reload request
+        logger.info(f"Model reload requested by admin. Force: {reload_request.force}, Models: {reload_request.model_ids or 'all'}")
+        
+        # Reload models
+        reload_results = await model_factory.reload_models(
+            model_ids=reload_request.model_ids,
+            force=reload_request.force
+        )
         
         return {
-            "timestamp": datetime.now().isoformat(),
-            "model_type": model_type.value if model_type else "all",
-            "success": result["success"],
-            "message": result["message"],
-            "models": result["models"]
+            "status": "success",
+            "message": "Models reloaded successfully",
+            "results": reload_results
         }
+    
     except Exception as e:
-        error = error_utils.format_exception(e, ErrorCategory.SYSTEM)
+        error = error_utils.format_exception(e)
         logger.error(f"Error reloading models: {error}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to reload models: {str(e)}"
+            detail=f"Error reloading models: {str(e)}"
         )
 
 
-@router.get("/health", summary="Check diagnostics subsystem health")
-async def check_health() -> Dict[str, Any]:
-    """Check the health of the diagnostics subsystem.
+@diagnostics_router.get("/system", summary="Get system diagnostics", dependencies=[Depends(validate_api_key)])
+async def get_system_diagnostics() -> Dict[str, Any]:
+    """Retrieve system diagnostic information.
     
-    This endpoint verifies that the diagnostics subsystem is functioning correctly.
-    It does not require admin access as it's used for basic health monitoring.
+    This endpoint provides detailed system information for troubleshooting,
+    including environment variables, Python version, and installed packages.
     
     Returns:
-        Dict containing health status information
+        Dict[str, Any]: A dictionary containing system diagnostic information
     """
     try:
-        # Perform basic health check of diagnostics subsystem
-        return {
-            "timestamp": datetime.now().isoformat(),
-            "status": "healthy",
-            "message": "Diagnostics subsystem is functioning correctly"
+        import sys
+        import platform
+        import pkg_resources
+        
+        # Get system information
+        system_info = {
+            "python": {
+                "version": sys.version,
+                "executable": sys.executable,
+                "platform": platform.platform(),
+            },
+            "packages": [
+                {"name": pkg.key, "version": pkg.version}
+                for pkg in pkg_resources.working_set
+            ],
+            "environment": {
+                # Filter environment variables to exclude sensitive information
+                key: value for key, value in os.environ.items()
+                if not any(sensitive in key.lower() for sensitive in [
+                    "key", "secret", "password", "token", "credential"
+                ])
+            }
         }
+        
+        return {
+            "status": "success",
+            "system": system_info
+        }
+    
     except Exception as e:
-        logger.error(f"Diagnostics health check failed: {str(e)}")
+        error = error_utils.format_exception(e)
+        logger.error(f"Error retrieving system diagnostics: {error}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Diagnostics health check failed: {str(e)}"
+            detail=f"Error retrieving system diagnostics: {str(e)}"
         )
