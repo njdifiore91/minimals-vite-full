@@ -1,9 +1,13 @@
 package com.dollarfunding.mca.entity;
 
+import jakarta.persistence.Column;
+import jakarta.persistence.Enumerated;
+import jakarta.persistence.EnumType;
+
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.Map;
-import java.util.Optional;
-import java.util.function.Function;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -14,159 +18,218 @@ import java.util.stream.Collectors;
 public enum ApplicationStatus {
     
     /**
-     * Initial state for newly created applications.
-     * Applications in this state have been received but not yet started processing.
+     * Initial status when an application is first created or received via email.
+     * This status indicates that the application has been received but processing has not yet begun.
      */
-    NEW("New application received"),
+    NEW("Application has been received but not yet processed"),
     
     /**
-     * Application is waiting for processing or additional information.
-     * Applications in this state are waiting for additional documents or information
-     * before processing can continue.
+     * Application is waiting for additional documents or information.
+     * This status indicates that the application cannot proceed until additional information is provided.
      */
-    PENDING("Pending additional information"),
+    PENDING("Application is waiting for additional documents or information"),
     
     /**
      * Application is currently being processed.
-     * Applications in this state are actively being evaluated by the system or staff.
+     * This status indicates that the application is actively being reviewed and processed.
      */
-    PROCESSING("Application is being processed"),
+    PROCESSING("Application is currently being processed"),
     
     /**
      * Application has been approved.
-     * Applications in this state have met all criteria and been approved for funding.
+     * This status indicates that the application has met all requirements and has been approved.
      */
-    APPROVED("Application approved for funding"),
+    APPROVED("Application has been approved"),
     
     /**
      * Application has been rejected.
-     * Applications in this state have been evaluated and determined not to meet criteria.
+     * This status indicates that the application has been reviewed and does not meet the requirements.
      */
-    REJECTED("Application rejected"),
+    REJECTED("Application has been rejected"),
     
     /**
      * Application processing has been completed.
-     * Applications in this state have completed the entire lifecycle (approved and funded,
-     * or rejected and closed).
+     * This status indicates that all processing steps have been completed for this application.
      */
-    COMPLETED("Application processing completed");
+    COMPLETED("Application processing has been completed"),
+    
+    /**
+     * An error occurred during processing.
+     * This status indicates that there was a system error during the processing of the application.
+     */
+    ERROR("An error occurred during application processing"),
+    
+    /**
+     * Application has validation or rule violations.
+     * This status indicates that the application has been flagged for review due to rule violations.
+     */
+    EXCEPTION("Application has been flagged for review due to rule violations");
     
     private final String description;
     
     /**
-     * Static map for efficient lookup of enum values by description.
-     */
-    private static final Map<String, ApplicationStatus> BY_DESCRIPTION = 
-            Arrays.stream(values())
-                  .collect(Collectors.toMap(ApplicationStatus::getDescription, Function.identity()));
-    
-    /**
      * Constructor for ApplicationStatus enum.
      * 
-     * @param description Human-readable description of the status
+     * @param description A human-readable description of the status
      */
     ApplicationStatus(String description) {
         this.description = description;
     }
     
     /**
-     * Get the human-readable description of this status.
+     * Get the description of the status.
      * 
-     * @return The description string
+     * @return The human-readable description of the status
      */
     public String getDescription() {
         return description;
     }
     
     /**
-     * Find an ApplicationStatus by its description.
-     * 
-     * @param description The description to search for
-     * @return Optional containing the matching ApplicationStatus, or empty if not found
+     * Define valid status transitions.
+     * This map defines which status values can transition to which other status values.
      */
-    public static Optional<ApplicationStatus> findByDescription(String description) {
-        return Optional.ofNullable(BY_DESCRIPTION.get(description));
-    }
+    private static final Map<ApplicationStatus, Set<ApplicationStatus>> VALID_TRANSITIONS = Map.of(
+        NEW, Set.of(PROCESSING, PENDING, ERROR, EXCEPTION),
+        PENDING, Set.of(PROCESSING, ERROR, EXCEPTION),
+        PROCESSING, Set.of(APPROVED, REJECTED, PENDING, ERROR, EXCEPTION),
+        APPROVED, Set.of(COMPLETED, ERROR),
+        REJECTED, Set.of(COMPLETED, ERROR),
+        EXCEPTION, Set.of(PROCESSING, PENDING, ERROR),
+        ERROR, Set.of(PROCESSING, PENDING, EXCEPTION),
+        COMPLETED, Collections.emptySet() // Terminal state, no further transitions
+    );
     
     /**
-     * Checks if a transition from the current status to the target status is valid.
-     * Implements business rules for allowed status transitions.
+     * Check if a transition from the current status to the target status is valid.
      * 
      * @param targetStatus The status to transition to
      * @return true if the transition is valid, false otherwise
      */
     public boolean canTransitionTo(ApplicationStatus targetStatus) {
-        if (targetStatus == null) {
-            return false;
+        return VALID_TRANSITIONS.getOrDefault(this, Collections.emptySet()).contains(targetStatus);
+    }
+    
+    /**
+     * Get all possible next statuses that this status can transition to.
+     * 
+     * @return A set of valid next statuses
+     */
+    public Set<ApplicationStatus> getValidNextStatuses() {
+        return Collections.unmodifiableSet(VALID_TRANSITIONS.getOrDefault(this, Collections.emptySet()));
+    }
+    
+    /**
+     * Convert a string to an ApplicationStatus enum value.
+     * 
+     * @param status The string representation of the status
+     * @return The corresponding ApplicationStatus enum value, or null if not found
+     */
+    public static ApplicationStatus fromString(String status) {
+        if (status == null) {
+            return null;
         }
         
-        switch (this) {
-            case NEW:
-                // New applications can move to pending, processing, rejected
-                return targetStatus == PENDING || targetStatus == PROCESSING || targetStatus == REJECTED;
-                
-            case PENDING:
-                // Pending applications can move to processing, rejected
-                return targetStatus == PROCESSING || targetStatus == REJECTED;
-                
-            case PROCESSING:
-                // Processing applications can move to approved, rejected, pending (if more info needed)
-                return targetStatus == APPROVED || targetStatus == REJECTED || targetStatus == PENDING;
-                
-            case APPROVED:
-                // Approved applications can only move to completed
-                return targetStatus == COMPLETED;
-                
-            case REJECTED:
-                // Rejected applications can only move to completed
-                return targetStatus == COMPLETED;
-                
-            case COMPLETED:
-                // Completed applications cannot transition to any other status
-                return false;
-                
-            default:
-                return false;
+        try {
+            return ApplicationStatus.valueOf(status.toUpperCase());
+        } catch (IllegalArgumentException e) {
+            return null;
         }
     }
     
     /**
-     * Checks if this status is considered a terminal status.
-     * Terminal statuses are those that represent the end of the application lifecycle.
+     * Get all terminal statuses (statuses that represent the end of the application lifecycle).
+     * 
+     * @return A set of terminal statuses
+     */
+    public static Set<ApplicationStatus> getTerminalStatuses() {
+        return Set.of(COMPLETED, REJECTED);
+    }
+    
+    /**
+     * Check if this status is a terminal status.
      * 
      * @return true if this is a terminal status, false otherwise
      */
-    public boolean isTerminalStatus() {
-        return this == COMPLETED;
+    public boolean isTerminal() {
+        return getTerminalStatuses().contains(this);
     }
     
     /**
-     * Checks if this status is considered an active status.
-     * Active statuses are those where the application is still being processed.
+     * Get all active statuses (statuses where the application is still being processed).
+     * 
+     * @return A set of active statuses
+     */
+    public static Set<ApplicationStatus> getActiveStatuses() {
+        return Set.of(NEW, PENDING, PROCESSING, EXCEPTION);
+    }
+    
+    /**
+     * Check if this status is an active status.
      * 
      * @return true if this is an active status, false otherwise
      */
-    public boolean isActiveStatus() {
-        return this == NEW || this == PENDING || this == PROCESSING;
+    public boolean isActive() {
+        return getActiveStatuses().contains(this);
     }
     
     /**
-     * Checks if this status indicates the application has been decided upon.
-     * Decided statuses are those where a final decision has been made.
+     * Get all error statuses (statuses that indicate an issue with the application).
      * 
-     * @return true if this is a decided status, false otherwise
+     * @return A set of error statuses
      */
-    public boolean isDecidedStatus() {
-        return this == APPROVED || this == REJECTED || this == COMPLETED;
+    public static Set<ApplicationStatus> getErrorStatuses() {
+        return Set.of(ERROR, EXCEPTION);
     }
     
     /**
-     * Returns a string representation of this status.
+     * Check if this status is an error status.
      * 
-     * @return The name of the enum constant
+     * @return true if this is an error status, false otherwise
      */
-    @Override
-    public String toString() {
-        return name();
+    public boolean isError() {
+        return getErrorStatuses().contains(this);
+    }
+    
+    /**
+     * Get all statuses that require human intervention.
+     * 
+     * @return A set of statuses requiring human intervention
+     */
+    public static Set<ApplicationStatus> getHumanInterventionStatuses() {
+        return Set.of(EXCEPTION, ERROR, PENDING);
+    }
+    
+    /**
+     * Check if this status requires human intervention.
+     * 
+     * @return true if this status requires human intervention, false otherwise
+     */
+    public boolean requiresHumanIntervention() {
+        return getHumanInterventionStatuses().contains(this);
+    }
+    
+    /**
+     * Get all statuses as a string array.
+     * 
+     * @return An array of status names as strings
+     */
+    public static String[] getStatusNames() {
+        return Arrays.stream(ApplicationStatus.values())
+                .map(Enum::name)
+                .toArray(String[]::new);
+    }
+    
+    /**
+     * Get all statuses with their descriptions as a map.
+     * 
+     * @return A map of status names to descriptions
+     */
+    public static Map<String, String> getStatusDescriptions() {
+        return Arrays.stream(ApplicationStatus.values())
+                .collect(Collectors.toMap(
+                    Enum::name,
+                    ApplicationStatus::getDescription
+                ));
     }
 }
