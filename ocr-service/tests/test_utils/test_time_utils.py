@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-Unit tests for the time_utils module.
+Unit tests for the time_utils.py module.
 
 This module contains tests for timestamp generation, date comparison, duration calculation,
 and time formatting functions to ensure consistent timestamp handling in logs, message
@@ -11,869 +11,728 @@ publishing, and document metadata.
 
 import datetime
 import time
-import re
+from unittest.mock import patch, MagicMock
+from dateutil import tz
+from dateutil.relativedelta import relativedelta
 import pytest
-import pytz
-from freezegun import freeze_time
-from dateutil import parser
 
-from ocr_service.utils.time_utils import (
-    is_valid_date,
-    get_current_timestamp,
-    format_datetime,
-    format_date,
-    format_time,
-    format_timestamp,
-    format_time_to_now,
-    is_date_between,
-    is_date_after,
-    is_same_date,
-    get_date_range_label,
-    add_time,
-    subtract_time,
-    parse_iso_datetime,
-    calculate_processing_time,
-    calculate_document_age,
-    get_processing_timestamp,
-    get_log_timestamp,
-    get_expiry_timestamp,
-    DEFAULT_TIMEZONE,
-    FORMAT_PATTERNS
-)
+from src.utils import time_utils
 
 
-class TestIsValidDate:
-    """Tests for the is_valid_date function."""
+class TestTimestampGeneration:
+    """Tests for timestamp generation functions."""
 
-    def test_valid_datetime(self):
-        """Test is_valid_date with a valid datetime object."""
-        dt = datetime.datetime.now()
-        assert is_valid_date(dt) is True
-
-    def test_valid_date(self):
-        """Test is_valid_date with a valid date object."""
-        d = datetime.date.today()
-        assert is_valid_date(d) is True
-
-    def test_valid_iso_string(self):
-        """Test is_valid_date with a valid ISO 8601 string."""
-        dt_str = "2023-01-15T12:30:45Z"
-        assert is_valid_date(dt_str) is True
-
-    def test_valid_timestamp_int(self):
-        """Test is_valid_date with a valid integer timestamp."""
-        ts = int(time.time())
-        assert is_valid_date(ts) is True
-
-    def test_valid_timestamp_float(self):
-        """Test is_valid_date with a valid float timestamp."""
-        ts = time.time()
-        assert is_valid_date(ts) is True
-
-    def test_none_value(self):
-        """Test is_valid_date with None value."""
-        assert is_valid_date(None) is False
-
-    def test_invalid_string(self):
-        """Test is_valid_date with an invalid string."""
-        assert is_valid_date("not a date") is False
-
-    def test_invalid_type(self):
-        """Test is_valid_date with an invalid type."""
-        assert is_valid_date([]) is False
-        assert is_valid_date({}) is False
-
-    def test_overflow_timestamp(self):
-        """Test is_valid_date with an overflow timestamp."""
-        # A timestamp too large for datetime conversion
-        assert is_valid_date(10**20) is False
-
-
-class TestGetCurrentTimestamp:
-    """Tests for the get_current_timestamp function."""
-
-    @freeze_time("2023-05-15 12:30:45")
-    def test_get_current_timestamp_default_timezone(self):
-        """Test get_current_timestamp with default timezone (UTC)."""
-        timestamp = get_current_timestamp()
-        assert timestamp == "2023-05-15T12:30:45.000Z"
-
-    @freeze_time("2023-05-15 12:30:45")
-    def test_get_current_timestamp_custom_timezone(self):
-        """Test get_current_timestamp with a custom timezone."""
-        est = pytz.timezone('US/Eastern')
-        timestamp = get_current_timestamp(est)
-        # EST is UTC-5 (or UTC-4 during daylight saving)
-        # Since freeze_time sets the UTC time, the EST time would be 5 hours behind
-        # But the function converts the current time to the specified timezone
-        assert timestamp == "2023-05-15T08:30:45.000Z"
-
-    def test_get_current_timestamp_format(self):
-        """Test that get_current_timestamp returns a properly formatted ISO 8601 string."""
-        timestamp = get_current_timestamp()
-        # ISO 8601 format: YYYY-MM-DDThh:mm:ss.sssZ
-        pattern = r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$'
-        assert re.match(pattern, timestamp) is not None
-
-
-class TestFormatFunctions:
-    """Tests for the format_datetime, format_date, format_time, and format_timestamp functions."""
-
-    @freeze_time("2023-05-15 12:30:45")
-    def test_format_datetime_default_template(self):
-        """Test format_datetime with default template."""
-        dt = datetime.datetime.now()
-        formatted = format_datetime(dt)
-        assert formatted == "15 May 2023 12:30 PM"
-
-    @freeze_time("2023-05-15 12:30:45")
-    def test_format_datetime_custom_template(self):
-        """Test format_datetime with a custom template."""
-        dt = datetime.datetime.now()
-        formatted = format_datetime(dt, "%Y-%m-%d %H:%M:%S")
-        assert formatted == "2023-05-15 12:30:45"
-
-    def test_format_datetime_invalid_date(self):
-        """Test format_datetime with an invalid date."""
-        formatted = format_datetime(None)
-        assert formatted == "Invalid date"
-
-    @freeze_time("2023-05-15 12:30:45")
-    def test_format_date_default_template(self):
-        """Test format_date with default template."""
-        dt = datetime.datetime.now()
-        formatted = format_date(dt)
-        assert formatted == "15 May 2023"
-
-    @freeze_time("2023-05-15 12:30:45")
-    def test_format_date_custom_template(self):
-        """Test format_date with a custom template."""
-        dt = datetime.datetime.now()
-        formatted = format_date(dt, "%Y-%m-%d")
-        assert formatted == "2023-05-15"
-
-    def test_format_date_invalid_date(self):
-        """Test format_date with an invalid date."""
-        formatted = format_date(None)
-        assert formatted == "Invalid date"
-
-    @freeze_time("2023-05-15 12:30:45")
-    def test_format_time_default_template(self):
-        """Test format_time with default template."""
-        dt = datetime.datetime.now()
-        formatted = format_time(dt)
-        assert formatted == "12:30 PM"
-
-    @freeze_time("2023-05-15 12:30:45")
-    def test_format_time_custom_template(self):
-        """Test format_time with a custom template."""
-        dt = datetime.datetime.now()
-        formatted = format_time(dt, "%H:%M:%S")
-        assert formatted == "12:30:45"
-
-    def test_format_time_invalid_date(self):
-        """Test format_time with an invalid date."""
-        formatted = format_time(None)
-        assert formatted == "Invalid date"
-
-    @freeze_time("2023-05-15 12:30:45")
-    def test_format_timestamp(self):
-        """Test format_timestamp with a valid datetime."""
-        dt = datetime.datetime.now()
-        timestamp = format_timestamp(dt)
-        # Get the expected timestamp
-        expected = int(dt.timestamp())
-        assert timestamp == expected
-
-    def test_format_timestamp_invalid_date(self):
-        """Test format_timestamp with an invalid date."""
-        timestamp = format_timestamp(None)
-        assert timestamp == "Invalid date"
-
-
-class TestFormatTimeToNow:
-    """Tests for the format_time_to_now function."""
-
-    @freeze_time("2023-05-15 12:30:45")
-    def test_format_time_to_now_seconds(self):
-        """Test format_time_to_now with a time difference of seconds."""
-        dt = datetime.datetime.now() - datetime.timedelta(seconds=30)
-        result = format_time_to_now(dt)
-        assert result == "a few seconds"
-
-    @freeze_time("2023-05-15 12:30:45")
-    def test_format_time_to_now_minutes(self):
-        """Test format_time_to_now with a time difference of minutes."""
-        dt = datetime.datetime.now() - datetime.timedelta(minutes=5)
-        result = format_time_to_now(dt)
-        assert result == "5 minutes"
-
-    @freeze_time("2023-05-15 12:30:45")
-    def test_format_time_to_now_single_minute(self):
-        """Test format_time_to_now with a time difference of 1 minute."""
-        dt = datetime.datetime.now() - datetime.timedelta(minutes=1)
-        result = format_time_to_now(dt)
-        assert result == "1 minute"
-
-    @freeze_time("2023-05-15 12:30:45")
-    def test_format_time_to_now_hours(self):
-        """Test format_time_to_now with a time difference of hours."""
-        dt = datetime.datetime.now() - datetime.timedelta(hours=3)
-        result = format_time_to_now(dt)
-        assert result == "3 hours"
-
-    @freeze_time("2023-05-15 12:30:45")
-    def test_format_time_to_now_single_hour(self):
-        """Test format_time_to_now with a time difference of 1 hour."""
-        dt = datetime.datetime.now() - datetime.timedelta(hours=1)
-        result = format_time_to_now(dt)
-        assert result == "1 hour"
-
-    @freeze_time("2023-05-15 12:30:45")
-    def test_format_time_to_now_days(self):
-        """Test format_time_to_now with a time difference of days."""
-        dt = datetime.datetime.now() - datetime.timedelta(days=4)
-        result = format_time_to_now(dt)
-        assert result == "4 days"
-
-    @freeze_time("2023-05-15 12:30:45")
-    def test_format_time_to_now_single_day(self):
-        """Test format_time_to_now with a time difference of 1 day."""
-        dt = datetime.datetime.now() - datetime.timedelta(days=1)
-        result = format_time_to_now(dt)
-        assert result == "1 day"
-
-    @freeze_time("2023-05-15 12:30:45")
-    def test_format_time_to_now_weeks(self):
-        """Test format_time_to_now with a time difference of weeks."""
-        dt = datetime.datetime.now() - datetime.timedelta(days=14)
-        result = format_time_to_now(dt)
-        assert result == "2 weeks"
-
-    @freeze_time("2023-05-15 12:30:45")
-    def test_format_time_to_now_single_week(self):
-        """Test format_time_to_now with a time difference of 1 week."""
-        dt = datetime.datetime.now() - datetime.timedelta(days=7)
-        result = format_time_to_now(dt)
-        assert result == "1 week"
-
-    @freeze_time("2023-05-15 12:30:45")
-    def test_format_time_to_now_months(self):
-        """Test format_time_to_now with a time difference of months."""
-        # Approximately 2 months (60 days)
-        dt = datetime.datetime.now() - datetime.timedelta(days=60)
-        result = format_time_to_now(dt)
-        assert result == "2 months"
-
-    @freeze_time("2023-05-15 12:30:45")
-    def test_format_time_to_now_single_month(self):
-        """Test format_time_to_now with a time difference of 1 month."""
-        # Approximately 1 month (30 days)
-        dt = datetime.datetime.now() - datetime.timedelta(days=30)
-        result = format_time_to_now(dt)
-        assert result == "1 month"
-
-    @freeze_time("2023-05-15 12:30:45")
-    def test_format_time_to_now_years(self):
-        """Test format_time_to_now with a time difference of years."""
-        # Approximately 2 years (730 days)
-        dt = datetime.datetime.now() - datetime.timedelta(days=730)
-        result = format_time_to_now(dt)
-        assert result == "2 years"
-
-    @freeze_time("2023-05-15 12:30:45")
-    def test_format_time_to_now_single_year(self):
-        """Test format_time_to_now with a time difference of 1 year."""
-        # Approximately 1 year (365 days)
-        dt = datetime.datetime.now() - datetime.timedelta(days=365)
-        result = format_time_to_now(dt)
-        assert result == "1 year"
-
-    def test_format_time_to_now_invalid_date(self):
-        """Test format_time_to_now with an invalid date."""
-        result = format_time_to_now(None)
-        assert result == "Invalid date"
-
-    @freeze_time("2023-05-15 12:30:45")
-    def test_format_time_to_now_timezone_aware(self):
-        """Test format_time_to_now with timezone-aware datetimes."""
-        now = datetime.datetime.now(pytz.UTC)
-        dt = now - datetime.timedelta(hours=2)
-        result = format_time_to_now(dt)
-        assert result == "2 hours"
-
-
-class TestDateComparisonFunctions:
-    """Tests for the is_date_between, is_date_after, and is_same_date functions."""
-
-    def test_is_date_between_true(self):
-        """Test is_date_between when the date is between start and end dates."""
-        start = datetime.datetime(2023, 1, 1)
-        end = datetime.datetime(2023, 12, 31)
-        input_date = datetime.datetime(2023, 6, 15)
-        assert is_date_between(input_date, start, end) is True
-
-    def test_is_date_between_false(self):
-        """Test is_date_between when the date is not between start and end dates."""
-        start = datetime.datetime(2023, 1, 1)
-        end = datetime.datetime(2023, 12, 31)
-        input_date = datetime.datetime(2024, 1, 1)
-        assert is_date_between(input_date, start, end) is False
-
-    def test_is_date_between_equal_to_start(self):
-        """Test is_date_between when the date is equal to the start date."""
-        start = datetime.datetime(2023, 1, 1)
-        end = datetime.datetime(2023, 12, 31)
-        input_date = datetime.datetime(2023, 1, 1)
-        assert is_date_between(input_date, start, end) is True
-
-    def test_is_date_between_equal_to_end(self):
-        """Test is_date_between when the date is equal to the end date."""
-        start = datetime.datetime(2023, 1, 1)
-        end = datetime.datetime(2023, 12, 31)
-        input_date = datetime.datetime(2023, 12, 31)
-        assert is_date_between(input_date, start, end) is True
-
-    def test_is_date_between_invalid_dates(self):
-        """Test is_date_between with invalid dates."""
-        assert is_date_between(None, "2023-01-01", "2023-12-31") is False
-        assert is_date_between("2023-06-15", None, "2023-12-31") is False
-        assert is_date_between("2023-06-15", "2023-01-01", None) is False
-
-    def test_is_date_after_true(self):
-        """Test is_date_after when the start date is after the end date."""
-        start = datetime.datetime(2023, 6, 15)
-        end = datetime.datetime(2023, 1, 1)
-        assert is_date_after(start, end) is True
-
-    def test_is_date_after_false(self):
-        """Test is_date_after when the start date is not after the end date."""
-        start = datetime.datetime(2023, 1, 1)
-        end = datetime.datetime(2023, 6, 15)
-        assert is_date_after(start, end) is False
-
-    def test_is_date_after_equal(self):
-        """Test is_date_after when the start date is equal to the end date."""
-        date = datetime.datetime(2023, 1, 1)
-        assert is_date_after(date, date) is False
-
-    def test_is_date_after_invalid_dates(self):
-        """Test is_date_after with invalid dates."""
-        assert is_date_after(None, "2023-01-01") is False
-        assert is_date_after("2023-06-15", None) is False
-
-    def test_is_same_date_year_true(self):
-        """Test is_same_date with unit_to_compare='year' when years are the same."""
-        date1 = datetime.datetime(2023, 6, 15)
-        date2 = datetime.datetime(2023, 1, 1)
-        assert is_same_date(date1, date2, "year") is True
-
-    def test_is_same_date_year_false(self):
-        """Test is_same_date with unit_to_compare='year' when years are different."""
-        date1 = datetime.datetime(2023, 6, 15)
-        date2 = datetime.datetime(2022, 6, 15)
-        assert is_same_date(date1, date2, "year") is False
-
-    def test_is_same_date_month_true(self):
-        """Test is_same_date with unit_to_compare='month' when months are the same."""
-        date1 = datetime.datetime(2023, 6, 15)
-        date2 = datetime.datetime(2023, 6, 1)
-        assert is_same_date(date1, date2, "month") is True
-
-    def test_is_same_date_month_false(self):
-        """Test is_same_date with unit_to_compare='month' when months are different."""
-        date1 = datetime.datetime(2023, 6, 15)
-        date2 = datetime.datetime(2023, 7, 15)
-        assert is_same_date(date1, date2, "month") is False
-
-    def test_is_same_date_day_true(self):
-        """Test is_same_date with unit_to_compare='day' when days are the same."""
-        date1 = datetime.datetime(2023, 6, 15, 12, 0)
-        date2 = datetime.datetime(2023, 6, 15, 18, 0)
-        assert is_same_date(date1, date2, "day") is True
-
-    def test_is_same_date_day_false(self):
-        """Test is_same_date with unit_to_compare='day' when days are different."""
-        date1 = datetime.datetime(2023, 6, 15)
-        date2 = datetime.datetime(2023, 6, 16)
-        assert is_same_date(date1, date2, "day") is False
-
-    def test_is_same_date_hour_true(self):
-        """Test is_same_date with unit_to_compare='hour' when hours are the same."""
-        date1 = datetime.datetime(2023, 6, 15, 12, 30)
-        date2 = datetime.datetime(2023, 6, 15, 12, 45)
-        assert is_same_date(date1, date2, "hour") is True
-
-    def test_is_same_date_hour_false(self):
-        """Test is_same_date with unit_to_compare='hour' when hours are different."""
-        date1 = datetime.datetime(2023, 6, 15, 12, 30)
-        date2 = datetime.datetime(2023, 6, 15, 13, 30)
-        assert is_same_date(date1, date2, "hour") is False
-
-    def test_is_same_date_minute_true(self):
-        """Test is_same_date with unit_to_compare='minute' when minutes are the same."""
-        date1 = datetime.datetime(2023, 6, 15, 12, 30, 15)
-        date2 = datetime.datetime(2023, 6, 15, 12, 30, 45)
-        assert is_same_date(date1, date2, "minute") is True
-
-    def test_is_same_date_minute_false(self):
-        """Test is_same_date with unit_to_compare='minute' when minutes are different."""
-        date1 = datetime.datetime(2023, 6, 15, 12, 30)
-        date2 = datetime.datetime(2023, 6, 15, 12, 31)
-        assert is_same_date(date1, date2, "minute") is False
-
-    def test_is_same_date_second_true(self):
-        """Test is_same_date with unit_to_compare='second' when seconds are the same."""
-        date1 = datetime.datetime(2023, 6, 15, 12, 30, 45, 123000)
-        date2 = datetime.datetime(2023, 6, 15, 12, 30, 45, 456000)
-        assert is_same_date(date1, date2, "second") is True
-
-    def test_is_same_date_second_false(self):
-        """Test is_same_date with unit_to_compare='second' when seconds are different."""
-        date1 = datetime.datetime(2023, 6, 15, 12, 30, 45)
-        date2 = datetime.datetime(2023, 6, 15, 12, 30, 46)
-        assert is_same_date(date1, date2, "second") is False
-
-    def test_is_same_date_invalid_unit(self):
-        """Test is_same_date with an invalid unit_to_compare."""
-        date1 = datetime.datetime(2023, 6, 15)
-        date2 = datetime.datetime(2023, 6, 15)
-        assert is_same_date(date1, date2, "invalid_unit") is False
-
-    def test_is_same_date_invalid_dates(self):
-        """Test is_same_date with invalid dates."""
-        assert is_same_date(None, "2023-01-01") is False
-        assert is_same_date("2023-06-15", None) is False
-
-
-class TestGetDateRangeLabel:
-    """Tests for the get_date_range_label function."""
-
-    def test_get_date_range_label_different_years(self):
-        """Test get_date_range_label with dates in different years."""
-        start = datetime.datetime(2022, 12, 15)
-        end = datetime.datetime(2023, 6, 15)
-        label = get_date_range_label(start, end)
-        assert label == "15 Dec 2022 - 15 Jun 2023"
-
-    def test_get_date_range_label_same_year_different_months(self):
-        """Test get_date_range_label with dates in the same year but different months."""
-        start = datetime.datetime(2023, 1, 15)
-        end = datetime.datetime(2023, 6, 15)
-        label = get_date_range_label(start, end)
-        assert label == "15 Jan - 15 Jun 2023"
-
-    def test_get_date_range_label_same_year_same_month_different_days(self):
-        """Test get_date_range_label with dates in the same year and month but different days."""
-        start = datetime.datetime(2023, 6, 1)
-        end = datetime.datetime(2023, 6, 15)
-        label = get_date_range_label(start, end)
-        assert label == "1 - 15 Jun 2023"
-
-    def test_get_date_range_label_same_date(self):
-        """Test get_date_range_label with the same start and end date."""
-        date = datetime.datetime(2023, 6, 15)
-        label = get_date_range_label(date, date)
-        assert label == "15 Jun 2023"
-
-    def test_get_date_range_label_initial_true(self):
-        """Test get_date_range_label with initial=True to get unoptimized format."""
-        start = datetime.datetime(2023, 6, 1)
-        end = datetime.datetime(2023, 6, 15)
-        label = get_date_range_label(start, end, initial=True)
-        assert label == "1 Jun 2023 - 15 Jun 2023"
-
-    def test_get_date_range_label_invalid_dates(self):
-        """Test get_date_range_label with invalid dates."""
-        assert get_date_range_label(None, "2023-06-15") == "Invalid date"
-        assert get_date_range_label("2023-06-01", None) == "Invalid date"
-
-    def test_get_date_range_label_end_before_start(self):
-        """Test get_date_range_label with end date before start date."""
-        start = datetime.datetime(2023, 6, 15)
-        end = datetime.datetime(2023, 6, 1)
-        label = get_date_range_label(start, end)
-        assert label == "Invalid date"
-
-
-class TestAddSubtractTime:
-    """Tests for the add_time and subtract_time functions."""
-
-    @freeze_time("2023-05-15 12:30:45")
-    def test_add_time_default_base_date(self):
-        """Test add_time with default base_date (current time)."""
-        result = add_time(days=1, hours=2, minutes=30)
-        expected = datetime.datetime(2023, 5, 16, 15, 0, 45, tzinfo=DEFAULT_TIMEZONE)
-        assert parser.parse(result) == expected
-
-    def test_add_time_custom_base_date(self):
-        """Test add_time with a custom base_date."""
-        base_date = datetime.datetime(2023, 5, 15, 12, 30, 45)
-        result = add_time(days=1, hours=2, minutes=30, base_date=base_date)
-        expected = datetime.datetime(2023, 5, 16, 15, 0, 45, tzinfo=DEFAULT_TIMEZONE)
-        assert parser.parse(result) == expected
-
-    def test_add_time_years_months(self):
-        """Test add_time with years and months."""
-        base_date = datetime.datetime(2023, 5, 15, 12, 30, 45)
-        result = add_time(years=1, months=2, base_date=base_date)
-        expected = datetime.datetime(2024, 7, 15, 12, 30, 45, tzinfo=DEFAULT_TIMEZONE)
-        assert parser.parse(result) == expected
-
-    def test_add_time_milliseconds(self):
-        """Test add_time with milliseconds."""
-        base_date = datetime.datetime(2023, 5, 15, 12, 30, 45)
-        result = add_time(milliseconds=500, base_date=base_date)
-        expected = datetime.datetime(2023, 5, 15, 12, 30, 45, 500000, tzinfo=DEFAULT_TIMEZONE)
-        assert parser.parse(result) == expected
-
-    def test_add_time_leap_year(self):
-        """Test add_time with leap year considerations."""
-        # January 31 + 1 month should be February 28 in a non-leap year
-        base_date = datetime.datetime(2023, 1, 31)
-        result = add_time(months=1, base_date=base_date)
-        expected = datetime.datetime(2023, 2, 28, tzinfo=DEFAULT_TIMEZONE)
-        assert parser.parse(result) == expected
-
-        # January 31 + 1 month should be February 29 in a leap year
-        base_date = datetime.datetime(2024, 1, 31)  # 2024 is a leap year
-        result = add_time(months=1, base_date=base_date)
-        expected = datetime.datetime(2024, 2, 29, tzinfo=DEFAULT_TIMEZONE)
-        assert parser.parse(result) == expected
-
-    def test_add_time_invalid_base_date(self):
-        """Test add_time with an invalid base_date."""
-        # Should use current time if base_date is invalid
-        with freeze_time("2023-05-15 12:30:45"):
-            result = add_time(days=1, base_date=None)
-            expected = datetime.datetime(2023, 5, 16, 12, 30, 45, tzinfo=DEFAULT_TIMEZONE)
-            assert parser.parse(result) == expected
-
-    @freeze_time("2023-05-15 12:30:45")
-    def test_subtract_time_default_base_date(self):
-        """Test subtract_time with default base_date (current time)."""
-        result = subtract_time(days=1, hours=2, minutes=30)
-        expected = datetime.datetime(2023, 5, 14, 10, 0, 45, tzinfo=DEFAULT_TIMEZONE)
-        assert parser.parse(result) == expected
-
-    def test_subtract_time_custom_base_date(self):
-        """Test subtract_time with a custom base_date."""
-        base_date = datetime.datetime(2023, 5, 15, 12, 30, 45)
-        result = subtract_time(days=1, hours=2, minutes=30, base_date=base_date)
-        expected = datetime.datetime(2023, 5, 14, 10, 0, 45, tzinfo=DEFAULT_TIMEZONE)
-        assert parser.parse(result) == expected
-
-    def test_subtract_time_years_months(self):
-        """Test subtract_time with years and months."""
-        base_date = datetime.datetime(2023, 5, 15, 12, 30, 45)
-        result = subtract_time(years=1, months=2, base_date=base_date)
-        expected = datetime.datetime(2022, 3, 15, 12, 30, 45, tzinfo=DEFAULT_TIMEZONE)
-        assert parser.parse(result) == expected
-
-    def test_subtract_time_milliseconds(self):
-        """Test subtract_time with milliseconds."""
-        base_date = datetime.datetime(2023, 5, 15, 12, 30, 45, 500000)
-        result = subtract_time(milliseconds=500, base_date=base_date)
-        expected = datetime.datetime(2023, 5, 15, 12, 30, 45, tzinfo=DEFAULT_TIMEZONE)
-        assert parser.parse(result) == expected
-
-    def test_subtract_time_month_edge_case(self):
-        """Test subtract_time with month edge cases."""
-        # March 31 - 1 month should be February 28 in a non-leap year
-        base_date = datetime.datetime(2023, 3, 31)
-        result = subtract_time(months=1, base_date=base_date)
-        expected = datetime.datetime(2023, 2, 28, tzinfo=DEFAULT_TIMEZONE)
-        assert parser.parse(result) == expected
-
-        # March 31 - 1 month should be February 29 in a leap year
-        base_date = datetime.datetime(2024, 3, 31)  # 2024 is a leap year
-        result = subtract_time(months=1, base_date=base_date)
-        expected = datetime.datetime(2024, 2, 29, tzinfo=DEFAULT_TIMEZONE)
-        assert parser.parse(result) == expected
-
-
-class TestParseIsoDatetime:
-    """Tests for the parse_iso_datetime function."""
-
-    def test_parse_iso_datetime_valid(self):
-        """Test parse_iso_datetime with a valid ISO 8601 string."""
-        dt_str = "2023-05-15T12:30:45Z"
-        result = parse_iso_datetime(dt_str)
-        expected = datetime.datetime(2023, 5, 15, 12, 30, 45, tzinfo=pytz.UTC)
-        assert result == expected
-
-    def test_parse_iso_datetime_with_timezone(self):
-        """Test parse_iso_datetime with a timezone-aware ISO 8601 string."""
-        dt_str = "2023-05-15T12:30:45+02:00"
-        result = parse_iso_datetime(dt_str)
-        # The result should be timezone-aware with the specified offset
-        assert result.tzinfo is not None
-        assert result.tzname() == "+02:00"
-        assert result.hour == 12
-
-    def test_parse_iso_datetime_invalid(self):
-        """Test parse_iso_datetime with an invalid string."""
-        assert parse_iso_datetime("not a date") is None
-        assert parse_iso_datetime(None) is None
-
-
-class TestCalculateProcessingTime:
-    """Tests for the calculate_processing_time function."""
-
-    def test_calculate_processing_time_valid(self):
-        """Test calculate_processing_time with valid start and end times."""
-        start_time = datetime.datetime(2023, 5, 15, 12, 30, 0)
-        end_time = datetime.datetime(2023, 5, 15, 12, 30, 30)  # 30 seconds later
-        result = calculate_processing_time(start_time, end_time)
+    def test_get_current_timestamp(self):
+        """Test getting the current timestamp with timezone information."""
+        # Get current timestamp
+        timestamp = time_utils.get_current_timestamp()
         
-        assert result["valid"] is True
-        assert result["seconds"] == 30
-        assert result["milliseconds"] == 30000
-        assert result["formatted"] == "30.0s"
-
-    def test_calculate_processing_time_milliseconds(self):
-        """Test calculate_processing_time with a time difference in milliseconds."""
-        start_time = datetime.datetime(2023, 5, 15, 12, 30, 0)
-        end_time = datetime.datetime(2023, 5, 15, 12, 30, 0, 500000)  # 500ms later
-        result = calculate_processing_time(start_time, end_time)
+        # Verify it's a datetime object
+        assert isinstance(timestamp, datetime.datetime)
         
-        assert result["valid"] is True
-        assert result["seconds"] == 0.5
-        assert result["milliseconds"] == 500
-        assert result["formatted"] == "500ms"
-
-    def test_calculate_processing_time_minutes(self):
-        """Test calculate_processing_time with a time difference in minutes."""
-        start_time = datetime.datetime(2023, 5, 15, 12, 30, 0)
-        end_time = datetime.datetime(2023, 5, 15, 12, 32, 30)  # 2 minutes and 30 seconds later
-        result = calculate_processing_time(start_time, end_time)
+        # Verify it has timezone information
+        assert timestamp.tzinfo is not None
         
-        assert result["valid"] is True
-        assert result["seconds"] == 150
-        assert result["milliseconds"] == 150000
-        assert result["formatted"] == "2m 30.0s"
+        # Verify it's close to the current time
+        now = datetime.datetime.now(tz.tzlocal())
+        diff = abs((now - timestamp).total_seconds())
+        assert diff < 1.0  # Should be less than 1 second difference
 
-    def test_calculate_processing_time_hours(self):
-        """Test calculate_processing_time with a time difference in hours."""
-        start_time = datetime.datetime(2023, 5, 15, 12, 30, 0)
-        end_time = datetime.datetime(2023, 5, 15, 14, 45, 15)  # 2 hours, 15 minutes, and 15 seconds later
-        result = calculate_processing_time(start_time, end_time)
+    def test_get_utc_timestamp(self):
+        """Test getting the current UTC timestamp."""
+        # Get UTC timestamp
+        timestamp = time_utils.get_utc_timestamp()
         
-        assert result["valid"] is True
-        assert result["seconds"] == 8115
-        assert result["milliseconds"] == 8115000
-        assert result["formatted"] == "2h 15m 15.0s"
-
-    def test_calculate_processing_time_invalid_dates(self):
-        """Test calculate_processing_time with invalid dates."""
-        result = calculate_processing_time(None, "2023-05-15T12:30:30Z")
-        assert result["valid"] is False
-        assert result["error"] == "Invalid date"
+        # Verify it's a datetime object
+        assert isinstance(timestamp, datetime.datetime)
         
-        result = calculate_processing_time("2023-05-15T12:30:00Z", None)
-        assert result["valid"] is False
-        assert result["error"] == "Invalid date"
-
-    def test_calculate_processing_time_timezone_aware(self):
-        """Test calculate_processing_time with timezone-aware datetimes."""
-        start_time = datetime.datetime(2023, 5, 15, 12, 30, 0, tzinfo=pytz.UTC)
-        end_time = datetime.datetime(2023, 5, 15, 14, 30, 0, tzinfo=pytz.UTC)  # 2 hours later
-        result = calculate_processing_time(start_time, end_time)
+        # Verify it has UTC timezone
+        assert timestamp.tzinfo is not None
+        assert timestamp.tzinfo == tz.UTC
         
-        assert result["valid"] is True
-        assert result["seconds"] == 7200
-        assert result["milliseconds"] == 7200000
-        assert result["formatted"] == "2h 0m 0.0s"
+        # Verify it's close to the current UTC time
+        now = datetime.datetime.now(tz.UTC)
+        diff = abs((now - timestamp).total_seconds())
+        assert diff < 1.0  # Should be less than 1 second difference
 
-    def test_calculate_processing_time_different_timezones(self):
-        """Test calculate_processing_time with datetimes in different timezones."""
-        start_time = datetime.datetime(2023, 5, 15, 12, 30, 0, tzinfo=pytz.UTC)
-        # 2 hours later in UTC, but expressed in EST (UTC-5)
-        end_time = datetime.datetime(2023, 5, 15, 9, 30, 0, tzinfo=pytz.timezone('US/Eastern'))
-        result = calculate_processing_time(start_time, end_time)
+    def test_get_timestamp_ms(self):
+        """Test getting a timestamp in milliseconds."""
+        # Test with no arguments (current time)
+        ms_timestamp = time_utils.get_timestamp_ms()
         
-        assert result["valid"] is True
-        # The difference should be 2 hours (7200 seconds) regardless of timezone representation
-        assert result["seconds"] == 7200
-        assert result["milliseconds"] == 7200000
-        assert result["formatted"] == "2h 0m 0.0s"
-
-
-class TestCalculateDocumentAge:
-    """Tests for the calculate_document_age function."""
-
-    @freeze_time("2023-05-15 12:30:45")
-    def test_calculate_document_age_minutes(self):
-        """Test calculate_document_age with a document age in minutes."""
-        # Document from 30 minutes ago
-        doc_date = datetime.datetime.now() - datetime.timedelta(minutes=30)
-        result = calculate_document_age(doc_date)
+        # Verify it's an integer
+        assert isinstance(ms_timestamp, int)
         
-        assert result["valid"] is True
-        assert result["days"] == 0
-        assert result["formatted"] == "30 minutes"
-
-    @freeze_time("2023-05-15 12:30:45")
-    def test_calculate_document_age_hours(self):
-        """Test calculate_document_age with a document age in hours."""
-        # Document from 3 hours ago
-        doc_date = datetime.datetime.now() - datetime.timedelta(hours=3)
-        result = calculate_document_age(doc_date)
+        # Verify it's close to the current time in milliseconds
+        now_ms = int(time.time() * 1000)
+        diff = abs(now_ms - ms_timestamp)
+        assert diff < 1000  # Should be less than 1 second difference
         
-        assert result["valid"] is True
-        assert result["days"] == 0
-        assert result["formatted"] == "3 hours"
-
-    @freeze_time("2023-05-15 12:30:45")
-    def test_calculate_document_age_days(self):
-        """Test calculate_document_age with a document age in days."""
-        # Document from 5 days ago
-        doc_date = datetime.datetime.now() - datetime.timedelta(days=5)
-        result = calculate_document_age(doc_date)
+        # Test with a specific datetime
+        test_dt = datetime.datetime(2025, 5, 23, 12, 0, 0, tzinfo=tz.UTC)
+        ms_timestamp = time_utils.get_timestamp_ms(test_dt)
         
-        assert result["valid"] is True
-        assert result["days"] == 5
-        assert result["formatted"] == "5 days"
-
-    @freeze_time("2023-05-15 12:30:45")
-    def test_calculate_document_age_months(self):
-        """Test calculate_document_age with a document age in months."""
-        # Document from 2 months ago (approximately 60 days)
-        doc_date = datetime.datetime.now() - datetime.timedelta(days=60)
-        result = calculate_document_age(doc_date)
+        # Verify it matches the expected timestamp
+        expected_ms = int(test_dt.timestamp() * 1000)
+        assert ms_timestamp == expected_ms
         
-        assert result["valid"] is True
-        assert result["days"] == 60
-        assert result["formatted"] == "2 months"
+        # Test with an invalid date
+        assert time_utils.get_timestamp_ms("invalid_date") == 0
 
-    @freeze_time("2023-05-15 12:30:45")
-    def test_calculate_document_age_years(self):
-        """Test calculate_document_age with a document age in years."""
-        # Document from 1 year and 2 months ago (approximately 425 days)
-        doc_date = datetime.datetime.now() - datetime.timedelta(days=425)
-        result = calculate_document_age(doc_date)
-        
-        assert result["valid"] is True
-        assert result["days"] == 425
-        assert result["formatted"] == "1 year 2 months"
-
-    @freeze_time("2023-05-15 12:30:45")
-    def test_calculate_document_age_years_no_months(self):
-        """Test calculate_document_age with a document age in years with no remaining months."""
-        # Document from 2 years ago (approximately 730 days)
-        doc_date = datetime.datetime.now() - datetime.timedelta(days=730)
-        result = calculate_document_age(doc_date)
-        
-        assert result["valid"] is True
-        assert result["days"] == 730
-        assert result["formatted"] == "2 years"
-
-    def test_calculate_document_age_invalid_date(self):
-        """Test calculate_document_age with an invalid date."""
-        result = calculate_document_age(None)
-        
-        assert result["valid"] is False
-        assert result["error"] == "Invalid date"
-        assert result["days"] == 0
-        assert result["formatted"] == "Unknown"
-
-    @freeze_time("2023-05-15 12:30:45")
-    def test_calculate_document_age_timezone_aware(self):
-        """Test calculate_document_age with a timezone-aware datetime."""
-        # Document from 3 days ago with UTC timezone
-        doc_date = datetime.datetime.now(pytz.UTC) - datetime.timedelta(days=3)
-        result = calculate_document_age(doc_date)
-        
-        assert result["valid"] is True
-        assert result["days"] == 3
-        assert result["formatted"] == "3 days"
-
-
-class TestTimestampFunctions:
-    """Tests for the get_processing_timestamp, get_log_timestamp, and get_expiry_timestamp functions."""
-
-    @freeze_time("2023-05-15 12:30:45")
-    def test_get_processing_timestamp(self):
-        """Test get_processing_timestamp returns the correct ISO and Unix timestamps."""
-        iso_timestamp, unix_timestamp = get_processing_timestamp()
-        
-        assert iso_timestamp == "2023-05-15T12:30:45.000Z"
-        assert unix_timestamp == int(datetime.datetime(2023, 5, 15, 12, 30, 45).timestamp())
-
-    @freeze_time("2023-05-15 12:30:45.123456")
     def test_get_log_timestamp(self):
-        """Test get_log_timestamp returns the correct log format timestamp."""
-        log_timestamp = get_log_timestamp()
+        """Test getting a formatted timestamp for logging purposes."""
+        # Get log timestamp
+        log_timestamp = time_utils.get_log_timestamp()
         
-        assert log_timestamp == "2023-05-15 12:30:45.123456"
+        # Verify it's a string
+        assert isinstance(log_timestamp, str)
+        
+        # Verify it matches the expected format (YYYY-MM-DD HH:MM:SS.ffffff)
+        # This is a basic format check, not checking the actual values
+        assert len(log_timestamp) >= 19  # At least YYYY-MM-DD HH:MM:SS
+        assert log_timestamp[4] == '-' and log_timestamp[7] == '-'  # Date separators
+        assert log_timestamp[10] == ' '  # Space between date and time
+        assert log_timestamp[13] == ':' and log_timestamp[16] == ':'  # Time separators
 
-    @freeze_time("2023-05-15 12:30:45")
-    def test_get_expiry_timestamp(self):
-        """Test get_expiry_timestamp returns the correct expiry timestamps."""
-        # Test with 1 hour TTL (3600 seconds)
-        iso_timestamp, unix_timestamp = get_expiry_timestamp(3600)
-        
-        expected_dt = datetime.datetime(2023, 5, 15, 13, 30, 45, tzinfo=DEFAULT_TIMEZONE)
-        assert iso_timestamp == "2023-05-15T13:30:45.000Z"
-        assert unix_timestamp == int(expected_dt.timestamp())
 
-    @freeze_time("2023-05-15 12:30:45")
-    def test_get_expiry_timestamp_days(self):
-        """Test get_expiry_timestamp with a TTL of multiple days."""
-        # Test with 2 days TTL (172800 seconds)
-        iso_timestamp, unix_timestamp = get_expiry_timestamp(172800)
+class TestDateValidationAndConversion:
+    """Tests for date validation and conversion functions."""
+
+    def test_is_valid_date(self):
+        """Test checking if a date is valid."""
+        # Test with valid dates in different formats
+        assert time_utils.is_valid_date(datetime.datetime.now()) is True
+        assert time_utils.is_valid_date("2025-05-23T12:00:00Z") is True
+        assert time_utils.is_valid_date(time.time()) is True
         
-        expected_dt = datetime.datetime(2023, 5, 17, 12, 30, 45, tzinfo=DEFAULT_TIMEZONE)
-        assert iso_timestamp == "2023-05-17T12:30:45.000Z"
-        assert unix_timestamp == int(expected_dt.timestamp())
+        # Test with invalid dates
+        assert time_utils.is_valid_date(None) is False
+        assert time_utils.is_valid_date("invalid_date") is False
+        assert time_utils.is_valid_date("2025-13-45") is False  # Invalid month and day
+        assert time_utils.is_valid_date({}) is False  # Invalid type
+
+    def test_to_datetime(self):
+        """Test converting various date formats to a datetime object."""
+        # Test with datetime object
+        dt = datetime.datetime(2025, 5, 23, 12, 0, 0, tzinfo=tz.UTC)
+        assert time_utils.to_datetime(dt) == dt
+        
+        # Test with timestamp (float/int)
+        timestamp = dt.timestamp()
+        converted_dt = time_utils.to_datetime(timestamp)
+        assert isinstance(converted_dt, datetime.datetime)
+        assert abs((converted_dt.timestamp() - timestamp)) < 0.001  # Allow small floating point difference
+        
+        # Test with ISO 8601 string
+        iso_str = "2025-05-23T12:00:00Z"
+        converted_dt = time_utils.to_datetime(iso_str)
+        assert isinstance(converted_dt, datetime.datetime)
+        assert converted_dt.year == 2025
+        assert converted_dt.month == 5
+        assert converted_dt.day == 23
+        assert converted_dt.hour == 12
+        assert converted_dt.minute == 0
+        assert converted_dt.second == 0
+        assert converted_dt.tzinfo is not None  # Should have timezone info
+        
+        # Test with other date string formats
+        date_str = "May 23, 2025"
+        converted_dt = time_utils.to_datetime(date_str)
+        assert isinstance(converted_dt, datetime.datetime)
+        assert converted_dt.year == 2025
+        assert converted_dt.month == 5
+        assert converted_dt.day == 23
+        
+        # Test with invalid date
+        assert time_utils.to_datetime("invalid_date") is None
+        assert time_utils.to_datetime(None) is None
+
+
+class TestDateComparison:
+    """Tests for date comparison functions."""
+
+    def test_is_between(self):
+        """Test checking if a date is between two other dates (inclusive)."""
+        # Create test dates
+        start = datetime.datetime(2025, 5, 1, tzinfo=tz.UTC)
+        middle = datetime.datetime(2025, 5, 15, tzinfo=tz.UTC)
+        end = datetime.datetime(2025, 5, 31, tzinfo=tz.UTC)
+        
+        # Test date in the middle of the range
+        assert time_utils.is_between(middle, start, end) is True
+        
+        # Test with the start date (inclusive)
+        assert time_utils.is_between(start, start, end) is True
+        
+        # Test with the end date (inclusive)
+        assert time_utils.is_between(end, start, end) is True
+        
+        # Test with date before the range
+        before = datetime.datetime(2025, 4, 30, tzinfo=tz.UTC)
+        assert time_utils.is_between(before, start, end) is False
+        
+        # Test with date after the range
+        after = datetime.datetime(2025, 6, 1, tzinfo=tz.UTC)
+        assert time_utils.is_between(after, start, end) is False
+        
+        # Test with different date formats
+        assert time_utils.is_between("2025-05-15", "2025-05-01", "2025-05-31") is True
+        assert time_utils.is_between(middle.timestamp(), start.timestamp(), end.timestamp()) is True
+        
+        # Test with invalid dates
+        assert time_utils.is_between("invalid", start, end) is False
+        assert time_utils.is_between(middle, "invalid", end) is False
+        assert time_utils.is_between(middle, start, "invalid") is False
+
+    def test_is_after(self):
+        """Test checking if date1 is after date2."""
+        # Create test dates
+        earlier = datetime.datetime(2025, 5, 1, tzinfo=tz.UTC)
+        later = datetime.datetime(2025, 5, 15, tzinfo=tz.UTC)
+        
+        # Test with later date first (should be True)
+        assert time_utils.is_after(later, earlier) is True
+        
+        # Test with earlier date first (should be False)
+        assert time_utils.is_after(earlier, later) is False
+        
+        # Test with same date (should be False)
+        assert time_utils.is_after(earlier, earlier) is False
+        
+        # Test with different date formats
+        assert time_utils.is_after("2025-05-15", "2025-05-01") is True
+        assert time_utils.is_after(later.timestamp(), earlier.timestamp()) is True
+        
+        # Test with invalid dates
+        assert time_utils.is_after("invalid", earlier) is False
+        assert time_utils.is_after(later, "invalid") is False
+
+    def test_is_same(self):
+        """Test checking if two dates are the same at the specified unit level."""
+        # Create test dates
+        date1 = datetime.datetime(2025, 5, 15, 10, 30, 45, tzinfo=tz.UTC)
+        
+        # Same exact datetime
+        date2 = datetime.datetime(2025, 5, 15, 10, 30, 45, tzinfo=tz.UTC)
+        assert time_utils.is_same(date1, date2) is True  # Default unit is 'day'
+        assert time_utils.is_same(date1, date2, 'year') is True
+        assert time_utils.is_same(date1, date2, 'month') is True
+        assert time_utils.is_same(date1, date2, 'day') is True
+        assert time_utils.is_same(date1, date2, 'hour') is True
+        assert time_utils.is_same(date1, date2, 'minute') is True
+        assert time_utils.is_same(date1, date2, 'second') is True
+        
+        # Same day, different time
+        date3 = datetime.datetime(2025, 5, 15, 14, 45, 30, tzinfo=tz.UTC)
+        assert time_utils.is_same(date1, date3) is True  # Default unit is 'day'
+        assert time_utils.is_same(date1, date3, 'year') is True
+        assert time_utils.is_same(date1, date3, 'month') is True
+        assert time_utils.is_same(date1, date3, 'day') is True
+        assert time_utils.is_same(date1, date3, 'hour') is False
+        assert time_utils.is_same(date1, date3, 'minute') is False
+        assert time_utils.is_same(date1, date3, 'second') is False
+        
+        # Same month, different day
+        date4 = datetime.datetime(2025, 5, 20, 10, 30, 45, tzinfo=tz.UTC)
+        assert time_utils.is_same(date1, date4) is False  # Default unit is 'day'
+        assert time_utils.is_same(date1, date4, 'year') is True
+        assert time_utils.is_same(date1, date4, 'month') is True
+        assert time_utils.is_same(date1, date4, 'day') is False
+        
+        # Same year, different month
+        date5 = datetime.datetime(2025, 6, 15, 10, 30, 45, tzinfo=tz.UTC)
+        assert time_utils.is_same(date1, date5) is False  # Default unit is 'day'
+        assert time_utils.is_same(date1, date5, 'year') is True
+        assert time_utils.is_same(date1, date5, 'month') is False
+        
+        # Different year
+        date6 = datetime.datetime(2026, 5, 15, 10, 30, 45, tzinfo=tz.UTC)
+        assert time_utils.is_same(date1, date6) is False  # Default unit is 'day'
+        assert time_utils.is_same(date1, date6, 'year') is False
+        
+        # Test with different date formats
+        assert time_utils.is_same("2025-05-15", "2025-05-15") is True
+        assert time_utils.is_same("2025-05-15", "2025-05-16") is False
+        
+        # Test with invalid unit
+        assert time_utils.is_same(date1, date2, 'invalid_unit') is False
+        
+        # Test with invalid dates
+        assert time_utils.is_same("invalid", date2) is False
+        assert time_utils.is_same(date1, "invalid") is False
+
+
+class TestDurationCalculation:
+    """Tests for duration calculation functions."""
+
+    def test_add_time(self):
+        """Test adding a duration to the current time."""
+        # Mock current time to have a fixed reference point
+        fixed_now = datetime.datetime(2025, 5, 23, 12, 0, 0, tzinfo=tz.tzlocal())
+        with patch('datetime.datetime') as mock_datetime:
+            mock_datetime.now.return_value = fixed_now
+            
+            # Test adding days
+            result = time_utils.add_time({'days': 5})
+            expected = fixed_now + datetime.timedelta(days=5)
+            assert result.year == expected.year
+            assert result.month == expected.month
+            assert result.day == expected.day
+            
+            # Test adding a complex duration
+            result = time_utils.add_time({
+                'years': 1,
+                'months': 2,
+                'days': 3,
+                'hours': 4,
+                'minutes': 5,
+                'seconds': 6
+            })
+            expected = fixed_now + relativedelta(
+                years=1,
+                months=2,
+                days=3,
+                hours=4,
+                minutes=5,
+                seconds=6
+            )
+            assert result.year == expected.year
+            assert result.month == expected.month
+            assert result.day == expected.day
+            assert result.hour == expected.hour
+            assert result.minute == expected.minute
+            assert result.second == expected.second
+
+    def test_subtract_time(self):
+        """Test subtracting a duration from the current time."""
+        # Mock current time to have a fixed reference point
+        fixed_now = datetime.datetime(2025, 5, 23, 12, 0, 0, tzinfo=tz.tzlocal())
+        with patch('datetime.datetime') as mock_datetime:
+            mock_datetime.now.return_value = fixed_now
+            
+            # Test subtracting days
+            result = time_utils.subtract_time({'days': 5})
+            expected = fixed_now - datetime.timedelta(days=5)
+            assert result.year == expected.year
+            assert result.month == expected.month
+            assert result.day == expected.day
+            
+            # Test subtracting a complex duration
+            result = time_utils.subtract_time({
+                'years': 1,
+                'months': 2,
+                'days': 3,
+                'hours': 4,
+                'minutes': 5,
+                'seconds': 6
+            })
+            expected = fixed_now - relativedelta(
+                years=1,
+                months=2,
+                days=3,
+                hours=4,
+                minutes=5,
+                seconds=6
+            )
+            assert result.year == expected.year
+            assert result.month == expected.month
+            assert result.day == expected.day
+            assert result.hour == expected.hour
+            assert result.minute == expected.minute
+            assert result.second == expected.second
+
+    def test_calculate_duration(self):
+        """Test calculating the duration between two timestamps in seconds."""
+        # Create test timestamps
+        start = datetime.datetime(2025, 5, 23, 12, 0, 0, tzinfo=tz.UTC)
+        end = datetime.datetime(2025, 5, 23, 12, 1, 30, tzinfo=tz.UTC)  # 1 minute 30 seconds later
+        
+        # Calculate duration
+        duration = time_utils.calculate_duration(start, end)
+        
+        # Verify it's the expected duration (90 seconds)
+        assert duration == 90.0
+        
+        # Test with end_time not provided (should use current time)
+        with patch('datetime.datetime') as mock_datetime:
+            mock_now = datetime.datetime(2025, 5, 23, 12, 1, 30, tzinfo=tz.tzlocal())
+            mock_datetime.now.return_value = mock_now
+            
+            duration = time_utils.calculate_duration(start)
+            assert duration == 90.0
+        
+        # Test with different timezone in start and end
+        start_pst = datetime.datetime(2025, 5, 23, 5, 0, 0, tzinfo=tz.gettz('America/Los_Angeles'))
+        end_est = datetime.datetime(2025, 5, 23, 9, 1, 30, tzinfo=tz.gettz('America/New_York'))
+        # The difference should be 1 hour 30 seconds (3600 + 90 = 3690 seconds)
+        # PST is 3 hours behind EST, so 9:00 EST - 5:00 PST = 1 hour difference
+        duration = time_utils.calculate_duration(start_pst, end_est)
+        assert abs(duration - 3690.0) < 1.0  # Allow small difference due to DST variations
+        
+        # Test with string timestamps
+        duration = time_utils.calculate_duration("2025-05-23T12:00:00Z", "2025-05-23T12:01:30Z")
+        assert duration == 90.0
+        
+        # Test with invalid start time
+        assert time_utils.calculate_duration("invalid", end) == 0.0
+        
+        # Test with invalid end time
+        assert time_utils.calculate_duration(start, "invalid") == 0.0
+
+    def test_calculate_processing_time(self):
+        """Test calculating processing time metrics between two timestamps."""
+        # Create test timestamps
+        start = datetime.datetime(2025, 5, 23, 12, 0, 0, tzinfo=tz.UTC)
+        end = datetime.datetime(2025, 5, 23, 12, 1, 30, tzinfo=tz.UTC)  # 1 minute 30 seconds later
+        
+        # Calculate processing time
+        result = time_utils.calculate_processing_time(start, end)
+        
+        # Verify the result structure
+        assert isinstance(result, dict)
+        assert 'total_seconds' in result
+        assert 'formatted_time' in result
+        assert 'start_iso' in result
+        assert 'end_iso' in result
+        
+        # Verify the values
+        assert result['total_seconds'] == 90.0
+        assert result['formatted_time'] == '1m 30s'
+        assert result['start_iso'] == start.isoformat()
+        assert result['end_iso'] == end.isoformat()
+        
+        # Test with longer duration (hours)
+        end_hours = datetime.datetime(2025, 5, 23, 15, 30, 45, tzinfo=tz.UTC)  # 3 hours 30 minutes 45 seconds later
+        result = time_utils.calculate_processing_time(start, end_hours)
+        assert result['total_seconds'] == 12645.0  # 3*3600 + 30*60 + 45 = 12645
+        assert result['formatted_time'] == '3h 30m 45s'
+        
+        # Test with end_time not provided (should use current time)
+        with patch('datetime.datetime') as mock_datetime:
+            mock_now = datetime.datetime(2025, 5, 23, 12, 1, 30, tzinfo=tz.tzlocal())
+            mock_datetime.now.return_value = mock_now
+            
+            result = time_utils.calculate_processing_time(start)
+            assert abs(result['total_seconds'] - 90.0) < 1.0  # Allow small difference due to timezone handling
+        
+        # Test with invalid start time
+        result = time_utils.calculate_processing_time("invalid", end)
+        assert result['total_seconds'] == 0.0
+        assert result['formatted_time'] == '0s'
+        assert result['start_iso'] == 'Invalid date'
+        assert result['end_iso'] == 'Invalid date'
+        
+        # Test with invalid end time
+        result = time_utils.calculate_processing_time(start, "invalid")
+        assert result['total_seconds'] == 0.0
+        assert result['formatted_time'] == '0s'
+        assert result['start_iso'] == start.isoformat()
+        assert result['end_iso'] == 'Invalid date'
+
+    def test_calculate_age(self):
+        """Test calculating the age (time ago) of a timestamp in a human-readable format."""
+        # Mock current time to have a fixed reference point
+        fixed_now = datetime.datetime(2025, 5, 23, 12, 0, 0, tzinfo=tz.UTC)
+        with patch('datetime.datetime') as mock_datetime:
+            mock_datetime.now.return_value = fixed_now
+            
+            # Test with various time differences
+            
+            # Just now (less than 10 seconds)
+            date = datetime.datetime(2025, 5, 23, 11, 59, 55, tzinfo=tz.UTC)  # 5 seconds ago
+            assert time_utils.calculate_age(date) == 'just now'
+            
+            # Seconds
+            date = datetime.datetime(2025, 5, 23, 11, 59, 30, tzinfo=tz.UTC)  # 30 seconds ago
+            assert time_utils.calculate_age(date) == '30 seconds ago'
+            
+            # Minutes
+            date = datetime.datetime(2025, 5, 23, 11, 58, 0, tzinfo=tz.UTC)  # 2 minutes ago
+            assert time_utils.calculate_age(date) == '2 minutes ago'
+            
+            # Single minute (test singular form)
+            date = datetime.datetime(2025, 5, 23, 11, 59, 0, tzinfo=tz.UTC)  # 1 minute ago
+            assert time_utils.calculate_age(date) == '1 minute ago'
+            
+            # Hours
+            date = datetime.datetime(2025, 5, 23, 10, 0, 0, tzinfo=tz.UTC)  # 2 hours ago
+            assert time_utils.calculate_age(date) == '2 hours ago'
+            
+            # Single hour (test singular form)
+            date = datetime.datetime(2025, 5, 23, 11, 0, 0, tzinfo=tz.UTC)  # 1 hour ago
+            assert time_utils.calculate_age(date) == '1 hour ago'
+            
+            # Days
+            date = datetime.datetime(2025, 5, 21, 12, 0, 0, tzinfo=tz.UTC)  # 2 days ago
+            assert time_utils.calculate_age(date) == '2 days ago'
+            
+            # Single day (test singular form)
+            date = datetime.datetime(2025, 5, 22, 12, 0, 0, tzinfo=tz.UTC)  # 1 day ago
+            assert time_utils.calculate_age(date) == '1 day ago'
+            
+            # Weeks
+            date = datetime.datetime(2025, 5, 9, 12, 0, 0, tzinfo=tz.UTC)  # 2 weeks ago
+            assert time_utils.calculate_age(date) == '2 weeks ago'
+            
+            # Single week (test singular form)
+            date = datetime.datetime(2025, 5, 16, 12, 0, 0, tzinfo=tz.UTC)  # 1 week ago
+            assert time_utils.calculate_age(date) == '1 week ago'
+            
+            # Months
+            date = datetime.datetime(2025, 3, 23, 12, 0, 0, tzinfo=tz.UTC)  # 2 months ago
+            assert time_utils.calculate_age(date) == '2 months ago'
+            
+            # Single month (test singular form)
+            date = datetime.datetime(2025, 4, 23, 12, 0, 0, tzinfo=tz.UTC)  # 1 month ago
+            assert time_utils.calculate_age(date) == '1 month ago'
+            
+            # Years
+            date = datetime.datetime(2023, 5, 23, 12, 0, 0, tzinfo=tz.UTC)  # 2 years ago
+            assert time_utils.calculate_age(date) == '2 years ago'
+            
+            # Single year (test singular form)
+            date = datetime.datetime(2024, 5, 23, 12, 0, 0, tzinfo=tz.UTC)  # 1 year ago
+            assert time_utils.calculate_age(date) == '1 year ago'
+        
+        # Test with invalid date
+        assert time_utils.calculate_age("invalid") == 'Invalid date'
+
+
+class TestTimeFormatting:
+    """Tests for time formatting functions."""
+
+    def test_format_datetime(self):
+        """Test formatting a date as a datetime string."""
+        # Create test date
+        dt = datetime.datetime(2025, 5, 23, 14, 30, 0, tzinfo=tz.UTC)
+        
+        # Test with default format
+        formatted = time_utils.format_datetime(dt)
+        assert formatted == '23 May 2025 02:30 PM'
+        
+        # Test with custom format
+        formatted = time_utils.format_datetime(dt, '%Y-%m-%d %H:%M:%S')
+        assert formatted == '2025-05-23 14:30:00'
+        
+        # Test with string date
+        formatted = time_utils.format_datetime("2025-05-23T14:30:00Z")
+        assert formatted == '23 May 2025 02:30 PM'
+        
+        # Test with timestamp
+        formatted = time_utils.format_datetime(dt.timestamp())
+        assert formatted == '23 May 2025 02:30 PM'
+        
+        # Test with invalid date
+        assert time_utils.format_datetime("invalid") == 'Invalid date'
+
+    def test_format_date(self):
+        """Test formatting a date as a date string (without time)."""
+        # Create test date
+        dt = datetime.datetime(2025, 5, 23, 14, 30, 0, tzinfo=tz.UTC)
+        
+        # Test with default format
+        formatted = time_utils.format_date(dt)
+        assert formatted == '23 May 2025'
+        
+        # Test with custom format
+        formatted = time_utils.format_date(dt, '%Y-%m-%d')
+        assert formatted == '2025-05-23'
+        
+        # Test with string date
+        formatted = time_utils.format_date("2025-05-23T14:30:00Z")
+        assert formatted == '23 May 2025'
+        
+        # Test with timestamp
+        formatted = time_utils.format_date(dt.timestamp())
+        assert formatted == '23 May 2025'
+        
+        # Test with invalid date
+        assert time_utils.format_date("invalid") == 'Invalid date'
+
+    def test_format_time(self):
+        """Test formatting a date as a time string (without date)."""
+        # Create test date
+        dt = datetime.datetime(2025, 5, 23, 14, 30, 0, tzinfo=tz.UTC)
+        
+        # Test with default format
+        formatted = time_utils.format_time(dt)
+        assert formatted == '02:30 PM'
+        
+        # Test with custom format
+        formatted = time_utils.format_time(dt, '%H:%M:%S')
+        assert formatted == '14:30:00'
+        
+        # Test with string date
+        formatted = time_utils.format_time("2025-05-23T14:30:00Z")
+        assert formatted == '02:30 PM'
+        
+        # Test with timestamp
+        formatted = time_utils.format_time(dt.timestamp())
+        assert formatted == '02:30 PM'
+        
+        # Test with invalid date
+        assert time_utils.format_time("invalid") == 'Invalid date'
+
+    def test_format_iso8601(self):
+        """Test formatting a date as an ISO 8601 string."""
+        # Create test date
+        dt = datetime.datetime(2025, 5, 23, 14, 30, 0, tzinfo=tz.UTC)
+        
+        # Test with datetime with timezone
+        formatted = time_utils.format_iso8601(dt)
+        assert formatted == '2025-05-23T14:30:00+00:00'
+        
+        # Test with datetime without timezone (should add UTC)
+        dt_no_tz = datetime.datetime(2025, 5, 23, 14, 30, 0)  # No timezone
+        formatted = time_utils.format_iso8601(dt_no_tz)
+        assert formatted == '2025-05-23T14:30:00+00:00'
+        
+        # Test with string date
+        formatted = time_utils.format_iso8601("2025-05-23T14:30:00Z")
+        assert formatted == '2025-05-23T14:30:00+00:00'
+        
+        # Test with timestamp
+        formatted = time_utils.format_iso8601(dt.timestamp())
+        assert formatted == '2025-05-23T14:30:00+00:00'
+        
+        # Test with invalid date
+        assert time_utils.format_iso8601("invalid") == 'Invalid date'
+
+    def test_format_date_range(self):
+        """Test formatting a date range as a string."""
+        # Create test dates
+        start = datetime.datetime(2025, 5, 15, tzinfo=tz.UTC)
+        end = datetime.datetime(2025, 5, 20, tzinfo=tz.UTC)
+        
+        # Test with default format (not initial)
+        formatted = time_utils.format_date_range(start, end)
+        assert formatted == '15 - 20 May 2025'
+        
+        # Test with initial=True (always show full range)
+        formatted = time_utils.format_date_range(start, end, initial=True)
+        assert formatted == '15 May 2025 - 20 May 2025'
+        
+        # Test with same day
+        same_day_end = datetime.datetime(2025, 5, 15, 23, 59, 59, tzinfo=tz.UTC)
+        formatted = time_utils.format_date_range(start, same_day_end)
+        assert formatted == '15 May 2025'
+        
+        # Test with same month, different year
+        diff_year_end = datetime.datetime(2026, 5, 15, tzinfo=tz.UTC)
+        formatted = time_utils.format_date_range(start, diff_year_end)
+        assert formatted == '15 May 2025 - 15 May 2026'
+        
+        # Test with different month, same year
+        diff_month_end = datetime.datetime(2025, 6, 15, tzinfo=tz.UTC)
+        formatted = time_utils.format_date_range(start, diff_month_end)
+        assert formatted == '15 May - 15 Jun 2025'
+        
+        # Test with string dates
+        formatted = time_utils.format_date_range("2025-05-15", "2025-05-20")
+        assert formatted == '15 - 20 May 2025'
+        
+        # Test with invalid dates
+        assert time_utils.format_date_range("invalid", end) == 'Invalid date'
+        assert time_utils.format_date_range(start, "invalid") == 'Invalid date'
+        
+        # Test with end date before start date
+        assert time_utils.format_date_range(end, start) == 'Invalid date'
 
 
 class TestTimezoneHandling:
-    """Tests for timezone handling consistency across all functions."""
+    """Tests for timezone handling consistency."""
 
-    def test_default_timezone_is_utc(self):
-        """Test that the default timezone is UTC."""
-        assert DEFAULT_TIMEZONE == pytz.UTC
-
-    @freeze_time("2023-05-15 12:30:45")
-    def test_timezone_consistency_in_timestamp_generation(self):
-        """Test timezone consistency in timestamp generation functions."""
-        # All timestamp generation functions should use the same timezone (UTC by default)
-        timestamp1 = get_current_timestamp()
-        timestamp2 = get_processing_timestamp()[0]
-        timestamp3 = get_log_timestamp()
+    def test_timezone_consistency(self):
+        """Test that timezone information is consistently handled across functions."""
+        # Create dates with different timezone representations
+        utc_date = datetime.datetime(2025, 5, 23, 12, 0, 0, tzinfo=tz.UTC)
+        est_date = datetime.datetime(2025, 5, 23, 8, 0, 0, tzinfo=tz.gettz('America/New_York'))
+        pst_date = datetime.datetime(2025, 5, 23, 5, 0, 0, tzinfo=tz.gettz('America/Los_Angeles'))
         
-        dt1 = parser.parse(timestamp1)
-        dt2 = parser.parse(timestamp2)
-        dt3 = parser.parse(timestamp3)
+        # These dates represent the same moment in time, just in different timezones
+        # Verify that format_iso8601 produces consistent results
+        utc_iso = time_utils.format_iso8601(utc_date)
+        est_iso = time_utils.format_iso8601(est_date)
+        pst_iso = time_utils.format_iso8601(pst_date)
         
-        # All should represent the same point in time
-        assert dt1.replace(microsecond=0) == dt2.replace(microsecond=0)
-        assert dt1.replace(microsecond=0) == dt3.replace(microsecond=0, tzinfo=pytz.UTC)
-
-    def test_timezone_handling_in_date_comparison(self):
-        """Test timezone handling in date comparison functions."""
-        # Create two datetimes representing the same point in time in different timezones
-        dt1 = datetime.datetime(2023, 5, 15, 12, 30, 45, tzinfo=pytz.UTC)
-        dt2 = datetime.datetime(2023, 5, 15, 7, 30, 45, tzinfo=pytz.timezone('US/Eastern'))  # UTC-5
+        # Convert back to datetime and verify they represent the same moment
+        utc_dt = time_utils.to_datetime(utc_iso)
+        est_dt = time_utils.to_datetime(est_iso)
+        pst_dt = time_utils.to_datetime(pst_iso)
         
-        # They should be considered the same time
-        assert is_same_date(dt1, dt2, "second") is True
-        assert is_date_after(dt1, dt2) is False
-        assert is_date_after(dt2, dt1) is False
-
-    def test_timezone_handling_in_duration_calculation(self):
-        """Test timezone handling in duration calculation functions."""
-        # Create start and end times in different timezones
-        start = datetime.datetime(2023, 5, 15, 12, 30, 0, tzinfo=pytz.UTC)
-        end = datetime.datetime(2023, 5, 15, 8, 30, 0, tzinfo=pytz.timezone('US/Eastern'))  # UTC-4 during DST
+        # All should be within a second of each other when converted to UTC
+        assert abs((utc_dt - est_dt).total_seconds()) < 1.0
+        assert abs((utc_dt - pst_dt).total_seconds()) < 1.0
         
-        # The duration should be 1 hour (3600 seconds)
-        result = calculate_processing_time(start, end)
-        assert result["valid"] is True
-        assert result["seconds"] == 3600
-        assert result["formatted"] == "1h 0m 0.0s"
+        # Test that calculate_duration handles timezone differences correctly
+        duration_utc_est = time_utils.calculate_duration(utc_date, est_date)
+        duration_est_pst = time_utils.calculate_duration(est_date, pst_date)
+        
+        # The duration should be close to zero since they represent the same moment
+        assert abs(duration_utc_est) < 1.0
+        assert abs(duration_est_pst) < 1.0
+
+    def test_timezone_conversion(self):
+        """Test that timezone conversion is handled correctly."""
+        # Create a date in UTC
+        utc_date = datetime.datetime(2025, 5, 23, 12, 0, 0, tzinfo=tz.UTC)
+        
+        # Convert to string and back, should preserve timezone
+        iso_str = time_utils.format_iso8601(utc_date)
+        converted = time_utils.to_datetime(iso_str)
+        
+        # Verify timezone is preserved
+        assert converted.tzinfo is not None
+        
+        # Verify the time is the same
+        assert abs((utc_date - converted).total_seconds()) < 1.0
+        
+        # Test with a date without timezone (should default to UTC)
+        naive_date = datetime.datetime(2025, 5, 23, 12, 0, 0)  # No timezone
+        iso_str = time_utils.format_iso8601(naive_date)
+        converted = time_utils.to_datetime(iso_str)
+        
+        # Verify timezone is added
+        assert converted.tzinfo is not None
+        
+        # Verify the time is interpreted as UTC
+        utc_equivalent = datetime.datetime(2025, 5, 23, 12, 0, 0, tzinfo=tz.UTC)
+        assert abs((utc_equivalent - converted).total_seconds()) < 1.0
 
 
-if __name__ == "__main__":
-    pytest.main(['-xvs', __file__])
+class TestDocumentMetadata:
+    """Tests for document metadata functions."""
+
+    def test_get_document_processing_metadata(self):
+        """Test generating document processing metadata with timestamps."""
+        # Mock current time to have a fixed reference point
+        fixed_now = datetime.datetime(2025, 5, 23, 12, 1, 30, tzinfo=tz.tzlocal())
+        with patch('datetime.datetime') as mock_datetime:
+            mock_datetime.now.return_value = fixed_now
+            
+            # Create a start time 90 seconds earlier
+            start_time = datetime.datetime(2025, 5, 23, 12, 0, 0, tzinfo=tz.tzlocal())
+            
+            # Generate metadata
+            metadata = time_utils.get_document_processing_metadata(start_time)
+            
+            # Verify the metadata structure
+            assert isinstance(metadata, dict)
+            assert 'processing_started' in metadata
+            assert 'processing_completed' in metadata
+            assert 'processing_duration_seconds' in metadata
+            assert 'processing_duration_formatted' in metadata
+            assert 'timestamp' in metadata
+            
+            # Verify the values
+            assert metadata['processing_started'] == time_utils.format_iso8601(start_time)
+            assert metadata['processing_completed'] == time_utils.format_iso8601(fixed_now)
+            assert metadata['processing_duration_seconds'] == '90.0'
+            assert metadata['processing_duration_formatted'] == '1m 30s'
+            assert metadata['timestamp'] == time_utils.format_iso8601(fixed_now)
+            
+            # Test with invalid start time (should use current time as start)
+            metadata = time_utils.get_document_processing_metadata("invalid")
+            assert metadata['processing_started'] == time_utils.format_iso8601(fixed_now)
+            assert metadata['processing_duration_seconds'] == '0.0'
+            assert metadata['processing_duration_formatted'] == '0.00s'
