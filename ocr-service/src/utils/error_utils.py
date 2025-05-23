@@ -1,4 +1,5 @@
-# error_utils.py
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 
 """
 Error handling utilities for the OCR Service.
@@ -28,6 +29,23 @@ import traceback
 from datetime import datetime
 from enum import Enum, auto
 from typing import Any, Dict, List, Optional, Tuple, Type, Union
+
+# Import StorageErrorCode for boto3 error handling
+try:
+    from ..types.storage import StorageErrorCode
+except ImportError:
+    # Define a fallback if the import fails
+    class StorageErrorCode(Enum):
+        CONNECTION_ERROR = auto()
+        AUTHENTICATION_ERROR = auto()
+        PERMISSION_DENIED = auto()
+        RESOURCE_NOT_FOUND = auto()
+        BUCKET_NOT_FOUND = auto()
+        OBJECT_NOT_FOUND = auto()
+        INVALID_REQUEST = auto()
+        TIMEOUT = auto()
+        INTERNAL_ERROR = auto()
+        UNKNOWN_ERROR = auto()
 
 # Setup module logger
 logger = logging.getLogger(__name__)
@@ -486,3 +504,48 @@ def handle_uncaught_exception(exc_type: Type[Exception], exc_value: Exception, e
 def set_global_exception_handler():
     """Set the global exception handler for uncaught exceptions."""
     sys.excepthook = handle_uncaught_exception
+
+
+def handle_boto_error(e) -> Tuple[StorageErrorCode, str]:
+    """Handle boto3 errors and convert them to StorageErrorCode.
+    
+    Args:
+        e: The boto3 ClientError exception
+        
+    Returns:
+        Tuple containing the StorageErrorCode and error message
+    """
+    error_code = StorageErrorCode.UNKNOWN_ERROR
+    error_message = str(e)
+    
+    # Extract error information from boto3 ClientError
+    if hasattr(e, 'response') and 'Error' in e.response:
+        boto_error_code = e.response['Error'].get('Code', '')
+        boto_error_message = e.response['Error'].get('Message', '')
+        
+        # Map boto3 error codes to StorageErrorCode
+        if boto_error_code in ['AccessDenied', 'AccessDeniedException']:
+            error_code = StorageErrorCode.PERMISSION_DENIED
+        elif boto_error_code in ['NoSuchBucket', 'BucketNotFound']:
+            error_code = StorageErrorCode.BUCKET_NOT_FOUND
+        elif boto_error_code in ['NoSuchKey', 'KeyNotFound', '404']:
+            error_code = StorageErrorCode.OBJECT_NOT_FOUND
+        elif boto_error_code in ['InvalidRequest', 'ValidationError', 'MalformedXML']:
+            error_code = StorageErrorCode.INVALID_REQUEST
+        elif boto_error_code in ['RequestTimeout', 'RequestTimeTooSkewed']:
+            error_code = StorageErrorCode.TIMEOUT
+        elif boto_error_code in ['AuthFailure', 'InvalidAccessKeyId', 'SignatureDoesNotMatch']:
+            error_code = StorageErrorCode.AUTHENTICATION_ERROR
+        elif boto_error_code in ['InternalError', 'ServiceUnavailable', 'SlowDown']:
+            error_code = StorageErrorCode.INTERNAL_ERROR
+        
+        # Use boto3 error message if available
+        if boto_error_message:
+            error_message = boto_error_message
+    
+    # Check for connection errors
+    if isinstance(e, Exception) and any(conn_err in str(e).lower() for conn_err in 
+                                     ['connection', 'timeout', 'timed out', 'network', 'reset']):
+        error_code = StorageErrorCode.CONNECTION_ERROR
+    
+    return error_code, error_message
