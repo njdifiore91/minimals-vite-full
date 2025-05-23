@@ -19,7 +19,7 @@ import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.userdetails.User;
 import org.springframework.stereotype.Component;
 
-import javax.annotation.PostConstruct;
+import jakarta.annotation.PostConstruct;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Paths;
@@ -297,6 +297,16 @@ public class JwtTokenProvider {
      */
     public boolean isRefreshToken(String token) {
         return REFRESH_TOKEN.equals(getTokenType(token));
+    }
+    
+    /**
+     * Check if the token is an access token.
+     *
+     * @param token the JWT token
+     * @return true if the token is an access token, false otherwise
+     */
+    public boolean isAccessToken(String token) {
+        return ACCESS_TOKEN.equals(getTokenType(token));
     }
 
     /**
