@@ -9,102 +9,66 @@ and other input data. It's essential for ensuring data integrity and preventing
 processing of invalid or malicious content.
 
 Functions:
-    is_valid_document_type: Validates if a document is of a supported type
+    is_valid_document_type: Validates if a document type is supported
     is_valid_document_size: Validates if a document size is within limits
     is_valid_mime_type: Validates if a MIME type is supported
     validate_message_schema: Validates RabbitMQ message schema
-    validate_document: Comprehensive document validation
-    get_mime_type: Detects MIME type from file content
-    get_file_extension: Extracts file extension from filename
-    is_valid_file_extension: Validates if a file extension is supported
+    validate_document_format: Validates document format and structure
+    validate_document_content: Validates document content for processing
+    validate_extraction_request: Validates OCR extraction request
+    get_document_validation_rules: Gets document validation rules
+    apply_validation_rules: Applies validation rules to a document
 """
 
 import os
 import json
 import logging
 import mimetypes
-import magic
-from typing import Dict, List, Optional, Union, Any, Tuple, BinaryIO
-from jsonschema import validate, ValidationError
+from typing import Dict, List, Any, Optional, Tuple, Union, Set
+from pathlib import Path
 
-from ..types.documents import DocumentType, DocumentMetadata
+# Import custom types
 from ..types.messages import MessagePayload
 from ..types.errors import ServiceError, ErrorCategory
-from ..config import app_config
+from ..types.config import ConfigDict
 
-# Configure logger
+# Setup logger
 logger = logging.getLogger(__name__)
 
 # Constants for document validation
-SUPPORTED_MIME_TYPES = {
-    'application/pdf': DocumentType.APPLICATION,
-    'image/tiff': DocumentType.APPLICATION,
-    'image/jpeg': DocumentType.APPLICATION,
-    'image/png': DocumentType.APPLICATION,
-    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': DocumentType.BANK_STATEMENT,
-    'application/vnd.ms-excel': DocumentType.BANK_STATEMENT,
-    'application/msword': DocumentType.APPLICATION,
-    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': DocumentType.APPLICATION
+SUPPORTED_DOCUMENT_TYPES = {
+    'pdf': 'application/pdf',
+    'tiff': 'image/tiff',
+    'tif': 'image/tiff',
+    'png': 'image/png',
+    'jpg': 'image/jpeg',
+    'jpeg': 'image/jpeg'
 }
 
-SUPPORTED_FILE_EXTENSIONS = {
-    '.pdf': 'application/pdf',
-    '.tiff': 'image/tiff',
-    '.tif': 'image/tiff',
-    '.jpg': 'image/jpeg',
-    '.jpeg': 'image/jpeg',
-    '.png': 'image/png',
-    '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    '.xls': 'application/vnd.ms-excel',
-    '.doc': 'application/msword',
-    '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-}
+# Maximum document size (50MB)
+MAX_DOCUMENT_SIZE_BYTES = 50 * 1024 * 1024
 
-# Default size limits in bytes
-DEFAULT_MIN_SIZE = 1024  # 1KB
-DEFAULT_MAX_SIZE = 20 * 1024 * 1024  # 20MB
+# Minimum document size (1KB)
+MIN_DOCUMENT_SIZE_BYTES = 1024
 
-# Message schema definitions
-OCR_REQUEST_SCHEMA = {
-    "type": "object",
-    "required": ["document_id", "document_type", "storage_path", "metadata"],
-    "properties": {
-        "document_id": {"type": "string"},
-        "document_type": {"type": "string", "enum": [t.name for t in DocumentType]},
-        "storage_path": {"type": "string"},
-        "metadata": {
-            "type": "object",
-            "properties": {
-                "filename": {"type": "string"},
-                "size": {"type": "integer"},
-                "mime_type": {"type": "string"},
-                "created_at": {"type": "string", "format": "date-time"},
-                "classification": {"type": "object"}
-            },
-            "required": ["filename", "size", "mime_type"]
-        },
-        "processing_options": {"type": "object"}
-    }
-}
+# Maximum image dimensions
+MAX_IMAGE_DIMENSIONS = (8000, 8000)  # Width, Height
+
+# Minimum image dimensions for reliable OCR
+MIN_IMAGE_DIMENSIONS = (100, 100)  # Width, Height
 
 
-def is_valid_document_type(document_type: str) -> bool:
+def is_valid_document_type(file_extension: str) -> bool:
     """
-    Validates if a document type is supported.
+    Validates if a document type is supported based on file extension.
     
     Args:
-        document_type: The document type to validate
+        file_extension: The file extension to validate (without the dot)
         
     Returns:
         bool: True if the document type is supported, False otherwise
     """
-    try:
-        # Check if the document type is a valid enum value
-        DocumentType[document_type]
-        return True
-    except (KeyError, ValueError):
-        logger.warning(f"Unsupported document type: {document_type}")
-        return False
+    return file_extension.lower() in SUPPORTED_DOCUMENT_TYPES
 
 
 def is_valid_mime_type(mime_type: str) -> bool:
@@ -117,325 +81,391 @@ def is_valid_mime_type(mime_type: str) -> bool:
     Returns:
         bool: True if the MIME type is supported, False otherwise
     """
-    if mime_type in SUPPORTED_MIME_TYPES:
-        return True
-    
-    logger.warning(f"Unsupported MIME type: {mime_type}")
-    return False
+    return mime_type in SUPPORTED_DOCUMENT_TYPES.values()
 
 
-def get_mime_type(file_content: bytes) -> str:
-    """
-    Detects MIME type from file content using python-magic.
-    
-    Args:
-        file_content: The file content as bytes
-        
-    Returns:
-        str: The detected MIME type
-    """
-    try:
-        mime = magic.Magic(mime=True)
-        detected_mime = mime.from_buffer(file_content)
-        logger.debug(f"Detected MIME type: {detected_mime}")
-        return detected_mime
-    except Exception as e:
-        logger.error(f"Error detecting MIME type: {str(e)}")
-        return "application/octet-stream"  # Default fallback
-
-
-def get_file_extension(filename: str) -> str:
-    """
-    Extracts file extension from filename.
-    
-    Args:
-        filename: The filename to extract extension from
-        
-    Returns:
-        str: The file extension (lowercase with dot)
-    """
-    _, ext = os.path.splitext(filename)
-    return ext.lower()
-
-
-def is_valid_file_extension(filename: str) -> bool:
-    """
-    Validates if a file extension is supported.
-    
-    Args:
-        filename: The filename to validate
-        
-    Returns:
-        bool: True if the file extension is supported, False otherwise
-    """
-    ext = get_file_extension(filename)
-    if ext in SUPPORTED_FILE_EXTENSIONS:
-        return True
-    
-    logger.warning(f"Unsupported file extension: {ext}")
-    return False
-
-
-def is_valid_document_size(size: int, min_size: int = DEFAULT_MIN_SIZE, max_size: int = DEFAULT_MAX_SIZE) -> bool:
+def is_valid_document_size(file_size: int) -> bool:
     """
     Validates if a document size is within acceptable limits.
     
     Args:
-        size: The document size in bytes
-        min_size: Minimum acceptable size in bytes (default: 1KB)
-        max_size: Maximum acceptable size in bytes (default: 20MB)
+        file_size: The file size in bytes
         
     Returns:
-        bool: True if the size is within limits, False otherwise
+        bool: True if the document size is valid, False otherwise
     """
-    if size < min_size:
-        logger.warning(f"Document size too small: {size} bytes (minimum: {min_size} bytes)")
-        return False
-    
-    if size > max_size:
-        logger.warning(f"Document size too large: {size} bytes (maximum: {max_size} bytes)")
-        return False
-    
-    return True
+    return MIN_DOCUMENT_SIZE_BYTES <= file_size <= MAX_DOCUMENT_SIZE_BYTES
 
 
-def validate_message_schema(message: Dict[str, Any], schema: Dict[str, Any] = OCR_REQUEST_SCHEMA) -> Tuple[bool, Optional[str]]:
+def is_valid_image_dimensions(width: int, height: int) -> bool:
     """
-    Validates a message against a JSON schema.
+    Validates if image dimensions are within acceptable limits for OCR processing.
     
     Args:
-        message: The message to validate
-        schema: The JSON schema to validate against (default: OCR_REQUEST_SCHEMA)
+        width: Image width in pixels
+        height: Image height in pixels
+        
+    Returns:
+        bool: True if the dimensions are valid, False otherwise
+    """
+    return (MIN_IMAGE_DIMENSIONS[0] <= width <= MAX_IMAGE_DIMENSIONS[0] and
+            MIN_IMAGE_DIMENSIONS[1] <= height <= MAX_IMAGE_DIMENSIONS[1])
+
+
+def validate_message_schema(message: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
+    """
+    Validates the schema of a RabbitMQ message for OCR processing.
+    
+    Args:
+        message: The message payload to validate
         
     Returns:
         Tuple[bool, Optional[str]]: (is_valid, error_message)
     """
-    try:
-        validate(instance=message, schema=schema)
-        return True, None
-    except ValidationError as e:
-        error_message = f"Schema validation error: {str(e)}"
-        logger.error(error_message)
-        return False, error_message
-
-
-def validate_document_metadata(metadata: Dict[str, Any]) -> Tuple[bool, Optional[ServiceError]]:
-    """
-    Validates document metadata for completeness and correctness.
-    
-    Args:
-        metadata: The document metadata to validate
-        
-    Returns:
-        Tuple[bool, Optional[ServiceError]]: (is_valid, error)
-    """
-    required_fields = ["filename", "size", "mime_type"]
+    required_fields = ['document_id', 'document_type', 'storage_path', 'classification']
     
     # Check for required fields
     for field in required_fields:
-        if field not in metadata:
-            error = ServiceError(
-                message=f"Missing required metadata field: {field}",
+        if field not in message:
+            return False, f"Missing required field: {field}"
+    
+    # Validate document_type
+    if not is_valid_document_type(Path(message['storage_path']).suffix.lstrip('.')):
+        return False, f"Unsupported document type: {message['document_type']}"
+    
+    # Validate classification
+    valid_classifications = ['typed', 'handwritten', 'mixed', 'unknown']
+    if message['classification'] not in valid_classifications:
+        return False, f"Invalid classification: {message['classification']}"
+    
+    return True, None
+
+
+def validate_document_format(file_path: str) -> Tuple[bool, Optional[str]]:
+    """
+    Validates the format and structure of a document.
+    
+    Args:
+        file_path: Path to the document file
+        
+    Returns:
+        Tuple[bool, Optional[str]]: (is_valid, error_message)
+    """
+    if not os.path.exists(file_path):
+        return False, f"File does not exist: {file_path}"
+    
+    # Get file extension and validate
+    file_extension = Path(file_path).suffix.lstrip('.')
+    if not is_valid_document_type(file_extension):
+        return False, f"Unsupported document type: {file_extension}"
+    
+    # Check file size
+    file_size = os.path.getsize(file_path)
+    if not is_valid_document_size(file_size):
+        return False, f"Invalid document size: {file_size} bytes"
+    
+    # Detect MIME type and validate
+    mime_type, _ = mimetypes.guess_type(file_path)
+    if mime_type is None or not is_valid_mime_type(mime_type):
+        return False, f"Invalid or unsupported MIME type: {mime_type}"
+    
+    return True, None
+
+
+def validate_document_content(file_path: str, document_type: str) -> Tuple[bool, Optional[str]]:
+    """
+    Validates the content of a document for OCR processing.
+    
+    This function performs deeper validation of document content beyond basic format checks.
+    It checks for document corruption, password protection, and other issues that might
+    prevent successful OCR processing.
+    
+    Args:
+        file_path: Path to the document file
+        document_type: Type of the document (pdf, tiff, etc.)
+        
+    Returns:
+        Tuple[bool, Optional[str]]: (is_valid, error_message)
+    """
+    # First validate format
+    is_valid, error_message = validate_document_format(file_path)
+    if not is_valid:
+        return False, error_message
+    
+    # Additional validation based on document type
+    if document_type.lower() == 'pdf':
+        # Check for password protection or corruption in PDF
+        try:
+            import PyPDF2
+            with open(file_path, 'rb') as pdf_file:
+                try:
+                    pdf_reader = PyPDF2.PdfReader(pdf_file)
+                    if pdf_reader.is_encrypted:
+                        return False, "PDF is password protected"
+                    # Check if PDF has pages
+                    if len(pdf_reader.pages) == 0:
+                        return False, "PDF has no pages"
+                except PyPDF2.errors.PdfReadError:
+                    return False, "PDF is corrupted or invalid"
+        except ImportError:
+            logger.warning("PyPDF2 not available, skipping detailed PDF validation")
+    
+    elif document_type.lower() in ['tiff', 'tif', 'png', 'jpg', 'jpeg']:
+        # Check image properties for image-based documents
+        try:
+            from PIL import Image
+            try:
+                with Image.open(file_path) as img:
+                    width, height = img.size
+                    if not is_valid_image_dimensions(width, height):
+                        return False, f"Invalid image dimensions: {width}x{height}"
+                    
+                    # Check if image is empty or corrupted
+                    img.load()
+            except Exception as e:
+                return False, f"Image is corrupted or invalid: {str(e)}"
+        except ImportError:
+            logger.warning("PIL not available, skipping detailed image validation")
+    
+    return True, None
+
+
+def validate_extraction_request(message: MessagePayload) -> Tuple[bool, Optional[ServiceError]]:
+    """
+    Validates an OCR extraction request message.
+    
+    This function performs comprehensive validation of an OCR extraction request,
+    including message schema, document access, and processing eligibility.
+    
+    Args:
+        message: The OCR extraction request message
+        
+    Returns:
+        Tuple[bool, Optional[ServiceError]]: (is_valid, error)
+    """
+    try:
+        # Validate message schema
+        is_valid, error_message = validate_message_schema(message)
+        if not is_valid:
+            return False, ServiceError(
+                message=error_message,
                 category=ErrorCategory.VALIDATION,
-                details={"metadata": metadata}
+                details={
+                    "message_id": message.get("message_id", "unknown"),
+                    "document_id": message.get("document_id", "unknown")
+                }
             )
-            return False, error
+        
+        # Additional validation logic can be added here
+        # For example, checking if the document is already processed,
+        # or if it meets specific business rules for processing
+        
+        return True, None
     
-    # Validate MIME type
-    if not is_valid_mime_type(metadata["mime_type"]):
-        error = ServiceError(
-            message=f"Unsupported MIME type: {metadata['mime_type']}",
-            category=ErrorCategory.VALIDATION,
-            details={"metadata": metadata}
+    except Exception as e:
+        logger.error(f"Error validating extraction request: {str(e)}")
+        return False, ServiceError(
+            message="Failed to validate extraction request",
+            category=ErrorCategory.SYSTEM,
+            details={
+                "message_id": message.get("message_id", "unknown"),
+                "document_id": message.get("document_id", "unknown"),
+                "error": str(e)
+            }
         )
-        return False, error
+
+
+def get_document_validation_rules(document_type: str, classification: str) -> Dict[str, Any]:
+    """
+    Gets the validation rules for a specific document type and classification.
     
-    # Validate file extension
-    if not is_valid_file_extension(metadata["filename"]):
-        error = ServiceError(
-            message=f"Unsupported file extension: {get_file_extension(metadata['filename'])}",
-            category=ErrorCategory.VALIDATION,
-            details={"metadata": metadata}
-        )
-        return False, error
+    Args:
+        document_type: The document type (pdf, tiff, etc.)
+        classification: The document classification (typed, handwritten, mixed)
+        
+    Returns:
+        Dict[str, Any]: Validation rules for the document
+    """
+    # Base validation rules for all document types
+    base_rules = {
+        "max_size_bytes": MAX_DOCUMENT_SIZE_BYTES,
+        "min_size_bytes": MIN_DOCUMENT_SIZE_BYTES,
+        "max_pages": 100,  # Default max pages
+        "require_text_content": True,  # Default to requiring text content
+    }
     
-    # Validate size
-    if not is_valid_document_size(metadata["size"]):
-        error = ServiceError(
-            message=f"Invalid document size: {metadata['size']} bytes",
-            category=ErrorCategory.VALIDATION,
-            details={"metadata": metadata}
-        )
-        return False, error
+    # Document type specific rules
+    type_rules = {
+        "pdf": {
+            "max_pages": 200,  # PDFs can have more pages
+            "allow_scanned": True,
+            "require_text_content": False,  # PDFs might be scanned without text
+        },
+        "tiff": {
+            "max_pages": 50,  # Multi-page TIFFs
+            "min_dpi": 200,  # Minimum DPI for TIFF
+            "require_text_content": False,  # TIFFs are images
+        },
+        "png": {
+            "max_pages": 1,  # PNGs are single page
+            "min_dpi": 150,  # Minimum DPI for PNG
+            "require_text_content": False,  # PNGs are images
+        },
+        "jpg": {
+            "max_pages": 1,  # JPGs are single page
+            "min_dpi": 150,  # Minimum DPI for JPG
+            "require_text_content": False,  # JPGs are images
+        },
+        "jpeg": {
+            "max_pages": 1,  # JPEGs are single page
+            "min_dpi": 150,  # Minimum DPI for JPEG
+            "require_text_content": False,  # JPEGs are images
+        }
+    }
+    
+    # Classification specific rules
+    classification_rules = {
+        "typed": {
+            "min_confidence": 0.75,  # Higher confidence for typed text
+            "ocr_model": "typed_text_model",
+        },
+        "handwritten": {
+            "min_confidence": 0.60,  # Lower confidence threshold for handwritten
+            "ocr_model": "handwritten_text_model",
+        },
+        "mixed": {
+            "min_confidence": 0.65,  # Balanced confidence for mixed content
+            "ocr_model": "hybrid_text_model",
+        },
+        "unknown": {
+            "min_confidence": 0.70,  # Default confidence threshold
+            "ocr_model": "hybrid_text_model",  # Use hybrid model for unknown
+        }
+    }
+    
+    # Combine rules
+    rules = base_rules.copy()
+    
+    # Add document type specific rules
+    if document_type.lower() in type_rules:
+        rules.update(type_rules[document_type.lower()])
+    
+    # Add classification specific rules
+    if classification.lower() in classification_rules:
+        rules.update(classification_rules[classification.lower()])
+    
+    return rules
+
+
+def apply_validation_rules(file_path: str, rules: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
+    """
+    Applies validation rules to a document.
+    
+    Args:
+        file_path: Path to the document file
+        rules: Validation rules to apply
+        
+    Returns:
+        Tuple[bool, Optional[str]]: (is_valid, error_message)
+    """
+    if not os.path.exists(file_path):
+        return False, f"File does not exist: {file_path}"
+    
+    # Check file size
+    file_size = os.path.getsize(file_path)
+    if file_size < rules.get("min_size_bytes", MIN_DOCUMENT_SIZE_BYTES):
+        return False, f"Document too small: {file_size} bytes"
+    
+    if file_size > rules.get("max_size_bytes", MAX_DOCUMENT_SIZE_BYTES):
+        return False, f"Document too large: {file_size} bytes"
+    
+    # Get file extension
+    file_extension = Path(file_path).suffix.lstrip('.')
+    
+    # Additional validation based on document type
+    if file_extension.lower() == 'pdf':
+        try:
+            import PyPDF2
+            with open(file_path, 'rb') as pdf_file:
+                try:
+                    pdf_reader = PyPDF2.PdfReader(pdf_file)
+                    
+                    # Check if PDF is encrypted
+                    if pdf_reader.is_encrypted:
+                        return False, "PDF is password protected"
+                    
+                    # Check page count
+                    page_count = len(pdf_reader.pages)
+                    if page_count > rules.get("max_pages", 100):
+                        return False, f"PDF has too many pages: {page_count}"
+                    
+                    # Check for text content if required
+                    if rules.get("require_text_content", False):
+                        # Check first page for text
+                        first_page = pdf_reader.pages[0]
+                        text = first_page.extract_text()
+                        if not text.strip():
+                            # If no text found and scanned PDFs are not allowed
+                            if not rules.get("allow_scanned", True):
+                                return False, "PDF appears to be scanned without text content"
+                except PyPDF2.errors.PdfReadError:
+                    return False, "PDF is corrupted or invalid"
+        except ImportError:
+            logger.warning("PyPDF2 not available, skipping detailed PDF validation")
+    
+    elif file_extension.lower() in ['tiff', 'tif', 'png', 'jpg', 'jpeg']:
+        try:
+            from PIL import Image
+            try:
+                with Image.open(file_path) as img:
+                    # Check image dimensions
+                    width, height = img.size
+                    if not is_valid_image_dimensions(width, height):
+                        return False, f"Invalid image dimensions: {width}x{height}"
+                    
+                    # Check DPI if available
+                    if 'dpi' in img.info:
+                        dpi = img.info['dpi']
+                        min_dpi = rules.get("min_dpi", 0)
+                        if dpi[0] < min_dpi or dpi[1] < min_dpi:
+                            return False, f"Image DPI too low: {dpi}"
+                    
+                    # Check number of frames for multi-page formats (TIFF)
+                    if hasattr(img, 'n_frames'):
+                        if img.n_frames > rules.get("max_pages", 1):
+                            return False, f"Image has too many pages/frames: {img.n_frames}"
+            except Exception as e:
+                return False, f"Image is corrupted or invalid: {str(e)}"
+        except ImportError:
+            logger.warning("PIL not available, skipping detailed image validation")
     
     return True, None
 
 
-def validate_document_content(content: bytes, metadata: Dict[str, Any]) -> Tuple[bool, Optional[ServiceError]]:
+def validate_document_for_ocr(file_path: str, document_type: str, classification: str) -> Tuple[bool, Optional[str]]:
     """
-    Validates document content against its metadata.
+    Performs comprehensive validation of a document for OCR processing.
+    
+    This function combines format validation, content validation, and rule-based validation
+    to determine if a document is suitable for OCR processing.
     
     Args:
-        content: The document content as bytes
-        metadata: The document metadata
+        file_path: Path to the document file
+        document_type: Type of the document (pdf, tiff, etc.)
+        classification: Document classification (typed, handwritten, mixed)
         
     Returns:
-        Tuple[bool, Optional[ServiceError]]: (is_valid, error)
+        Tuple[bool, Optional[str]]: (is_valid, error_message)
     """
-    # Validate actual size matches metadata
-    actual_size = len(content)
-    if actual_size != metadata["size"]:
-        error = ServiceError(
-            message=f"Document size mismatch: metadata={metadata['size']}, actual={actual_size}",
-            category=ErrorCategory.VALIDATION,
-            details={"metadata_size": metadata["size"], "actual_size": actual_size}
-        )
-        return False, error
+    # First validate format and content
+    is_valid, error_message = validate_document_content(file_path, document_type)
+    if not is_valid:
+        return False, error_message
     
-    # Validate MIME type matches content
-    detected_mime = get_mime_type(content)
-    if detected_mime != metadata["mime_type"]:
-        # Some flexibility for similar MIME types (e.g., image/jpg vs image/jpeg)
-        if detected_mime.split('/')[0] != metadata["mime_type"].split('/')[0]:
-            error = ServiceError(
-                message=f"MIME type mismatch: metadata={metadata['mime_type']}, detected={detected_mime}",
-                category=ErrorCategory.VALIDATION,
-                details={"metadata_mime": metadata["mime_type"], "detected_mime": detected_mime}
-            )
-            return False, error
+    # Get and apply validation rules
+    rules = get_document_validation_rules(document_type, classification)
+    is_valid, error_message = apply_validation_rules(file_path, rules)
+    if not is_valid:
+        return False, error_message
     
     return True, None
-
-
-def validate_document(content: bytes, metadata: Dict[str, Any]) -> Tuple[bool, Optional[ServiceError]]:
-    """
-    Performs comprehensive document validation.
-    
-    Args:
-        content: The document content as bytes
-        metadata: The document metadata
-        
-    Returns:
-        Tuple[bool, Optional[ServiceError]]: (is_valid, error)
-    """
-    # First validate metadata
-    is_valid, error = validate_document_metadata(metadata)
-    if not is_valid:
-        return False, error
-    
-    # Then validate content against metadata
-    is_valid, error = validate_document_content(content, metadata)
-    if not is_valid:
-        return False, error
-    
-    return True, None
-
-
-def validate_ocr_request(message: Dict[str, Any]) -> Tuple[bool, Optional[ServiceError]]:
-    """
-    Validates an OCR request message from RabbitMQ.
-    
-    Args:
-        message: The OCR request message
-        
-    Returns:
-        Tuple[bool, Optional[ServiceError]]: (is_valid, error)
-    """
-    # Validate message schema
-    is_valid, error_message = validate_message_schema(message)
-    if not is_valid:
-        error = ServiceError(
-            message=error_message or "Invalid message schema",
-            category=ErrorCategory.VALIDATION,
-            details={"message": message}
-        )
-        return False, error
-    
-    # Validate document type
-    if not is_valid_document_type(message["document_type"]):
-        error = ServiceError(
-            message=f"Unsupported document type: {message['document_type']}",
-            category=ErrorCategory.VALIDATION,
-            details={"message": message}
-        )
-        return False, error
-    
-    # Validate metadata
-    is_valid, error = validate_document_metadata(message["metadata"])
-    if not is_valid:
-        return False, error
-    
-    return True, None
-
-
-def apply_document_filters(metadata: Dict[str, Any], filters: Dict[str, Any]) -> bool:
-    """
-    Applies configurable filters to document metadata.
-    
-    Args:
-        metadata: The document metadata
-        filters: The filters to apply
-        
-    Returns:
-        bool: True if the document passes all filters, False otherwise
-    """
-    # Filter by document type
-    if "document_types" in filters and filters["document_types"]:
-        document_type = metadata.get("document_type")
-        if document_type not in filters["document_types"]:
-            logger.info(f"Document filtered out by document type: {document_type}")
-            return False
-    
-    # Filter by MIME type
-    if "mime_types" in filters and filters["mime_types"]:
-        mime_type = metadata.get("mime_type")
-        if mime_type not in filters["mime_types"]:
-            logger.info(f"Document filtered out by MIME type: {mime_type}")
-            return False
-    
-    # Filter by size
-    if "min_size" in filters and metadata.get("size", 0) < filters["min_size"]:
-        logger.info(f"Document filtered out by minimum size: {metadata.get('size')}")
-        return False
-    
-    if "max_size" in filters and metadata.get("size", 0) > filters["max_size"]:
-        logger.info(f"Document filtered out by maximum size: {metadata.get('size')}")
-        return False
-    
-    # Filter by filename pattern
-    if "filename_patterns" in filters and filters["filename_patterns"]:
-        import re
-        filename = metadata.get("filename", "")
-        if not any(re.search(pattern, filename) for pattern in filters["filename_patterns"]):
-            logger.info(f"Document filtered out by filename pattern: {filename}")
-            return False
-    
-    # Filter by classification confidence
-    if "min_confidence" in filters and filters["min_confidence"] > 0:
-        classification = metadata.get("classification", {})
-        confidence = classification.get("confidence", 0)
-        if confidence < filters["min_confidence"]:
-            logger.info(f"Document filtered out by classification confidence: {confidence}")
-            return False
-    
-    return True
-
-
-def get_document_filters() -> Dict[str, Any]:
-    """
-    Retrieves document filters from configuration.
-    
-    Returns:
-        Dict[str, Any]: The document filters
-    """
-    # Get filters from configuration
-    filters = getattr(app_config, "DOCUMENT_FILTERS", {})
-    
-    # Apply defaults if not specified
-    if "min_size" not in filters:
-        filters["min_size"] = DEFAULT_MIN_SIZE
-    
-    if "max_size" not in filters:
-        filters["max_size"] = DEFAULT_MAX_SIZE
-    
-    return filters
