@@ -1,566 +1,488 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+# error_utils.py
 
 """
 Error handling utilities for the OCR Service.
 
-This module provides standardized error handling utilities for creating structured error objects,
-classifying errors, and formatting error messages. It enables consistent error handling across
-the OCR service and facilitates proper error tracking and troubleshooting.
+This module provides standardized error handling functions for the OCR Service,
+including error classification, context enrichment, retry eligibility determination,
+and error serialization for logging and message publishing.
+
+Typical usage example:
+
+    try:
+        result = process_document(document)
+    except Exception as e:
+        error = create_service_error(e, ErrorCategory.PROCESSING)
+        log_error(error)
+        if is_retry_eligible(error):
+            schedule_retry(document)
+        else:
+            send_to_dead_letter_queue(document, error)
 """
 
-import enum
+import inspect
 import json
 import logging
 import sys
 import traceback
-from dataclasses import asdict, dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Type, Union
+from enum import Enum, auto
+from typing import Any, Dict, List, Optional, Tuple, Type, Union
 
-# Configure module logger
+# Setup module logger
 logger = logging.getLogger(__name__)
 
 
-class ErrorCategory(enum.Enum):
-    """Enumeration of error categories for classification."""
-    VALIDATION = "validation"  # Input validation errors
-    CONNECTION = "connection"  # Connection/network errors
-    PROCESSING = "processing"  # Document processing errors
-    STORAGE = "storage"        # Storage-related errors
-    MESSAGING = "messaging"    # Message queue errors
-    SECURITY = "security"      # Security-related errors
-    SYSTEM = "system"          # System/environment errors
-    UNKNOWN = "unknown"        # Unclassified errors
+class ErrorCategory(Enum):
+    """Enum representing different categories of errors in the OCR service."""
+    VALIDATION = auto()  # Input validation errors
+    CONNECTION = auto()  # Connection errors (RabbitMQ, S3, etc.)
+    PROCESSING = auto()  # Document processing errors
+    SYSTEM = auto()      # System-level errors
+    UNKNOWN = auto()     # Uncategorized errors
 
 
-class ErrorSeverity(enum.Enum):
-    """Enumeration of error severity levels."""
-    CRITICAL = "critical"  # Service cannot continue, requires immediate attention
-    ERROR = "error"        # Operation failed, but service can continue
-    WARNING = "warning"    # Potential issue that doesn't prevent operation
-    INFO = "info"          # Informational message about an error condition
+class ErrorSeverity(Enum):
+    """Enum representing the severity of errors."""
+    LOW = auto()      # Non-critical errors that don't affect processing
+    MEDIUM = auto()   # Errors that affect current processing but can be recovered
+    HIGH = auto()     # Critical errors that require immediate attention
+    FATAL = auto()    # Errors that cause system failure
 
 
-@dataclass
-class ErrorContext:
-    """Context information for an error."""
-    document_id: Optional[str] = None
-    request_id: Optional[str] = None
-    operation: Optional[str] = None
-    component: Optional[str] = None
-    timestamp: str = field(default_factory=lambda: datetime.utcnow().isoformat())
-    additional_info: Dict[str, Any] = field(default_factory=dict)
+class RetryStrategy(Enum):
+    """Enum representing different retry strategies for errors."""
+    NONE = auto()           # No retry
+    IMMEDIATE = auto()      # Retry immediately
+    EXPONENTIAL = auto()    # Retry with exponential backoff
+    LINEAR = auto()         # Retry with linear backoff
+    CUSTOM = auto()         # Custom retry strategy
 
 
-@dataclass
-class OCRServiceError:
-    """Standardized error object for OCR Service."""
-    message: str
-    category: ErrorCategory
-    severity: ErrorSeverity
-    error_code: str
-    context: ErrorContext = field(default_factory=ErrorContext)
-    exception: Optional[Exception] = None
-    traceback: Optional[str] = None
-    retry_eligible: bool = False
-    retry_count: int = 0
-    max_retries: int = 3
-
-    def __post_init__(self):
-        """Initialize derived fields after instance creation."""
-        # Capture traceback if exception is provided but traceback isn't
-        if self.exception and not self.traceback:
-            self.traceback = ''.join(traceback.format_exception(
-                type(self.exception), self.exception, self.exception.__traceback__))
-
+class ServiceError(Exception):
+    """Custom exception class for OCR service errors.
+    
+    Attributes:
+        message: A human-readable error message.
+        category: The category of the error (validation, connection, etc.).
+        severity: The severity of the error (low, medium, high, fatal).
+        retry_strategy: The recommended retry strategy for this error.
+        original_exception: The original exception that caused this error.
+        details: Additional details about the error context.
+        timestamp: When the error occurred.
+        trace: Stack trace information.
+    """
+    
+    def __init__(
+        self,
+        message: str,
+        category: ErrorCategory = ErrorCategory.UNKNOWN,
+        severity: ErrorSeverity = ErrorSeverity.MEDIUM,
+        retry_strategy: RetryStrategy = RetryStrategy.NONE,
+        original_exception: Optional[Exception] = None,
+        details: Optional[Dict[str, Any]] = None,
+        trace: Optional[List[str]] = None
+    ):
+        self.message = message
+        self.category = category
+        self.severity = severity
+        self.retry_strategy = retry_strategy
+        self.original_exception = original_exception
+        self.details = details or {}
+        self.timestamp = datetime.utcnow().isoformat()
+        self.trace = trace or traceback.format_stack()[:-1]
+        
+        # Call the base class constructor
+        super().__init__(self.message)
+    
     def to_dict(self) -> Dict[str, Any]:
-        """Convert error to dictionary for serialization.
-
+        """Convert the error to a dictionary for serialization.
+        
         Returns:
-            Dict[str, Any]: Dictionary representation of the error
+            A dictionary representation of the error.
         """
-        error_dict = asdict(self)
-        
-        # Convert enum values to strings
-        error_dict['category'] = self.category.value
-        error_dict['severity'] = self.severity.value
-        
-        # Remove exception object as it's not serializable
-        error_dict.pop('exception', None)
-        
-        return error_dict
-
+        return {
+            "message": self.message,
+            "category": self.category.name,
+            "severity": self.severity.name,
+            "retry_strategy": self.retry_strategy.name,
+            "original_exception": str(self.original_exception) if self.original_exception else None,
+            "details": self.details,
+            "timestamp": self.timestamp,
+            "trace": self.trace
+        }
+    
     def to_json(self) -> str:
-        """Convert error to JSON string.
-
+        """Convert the error to a JSON string for serialization.
+        
         Returns:
-            str: JSON representation of the error
+            A JSON string representation of the error.
         """
         return json.dumps(self.to_dict())
 
-    def log(self, logger_instance: Optional[logging.Logger] = None) -> None:
-        """Log the error with appropriate severity level.
 
-        Args:
-            logger_instance (Optional[logging.Logger]): Logger to use, defaults to module logger
-        """
-        log = logger_instance or logger
-        
-        # Determine log level based on severity
-        if self.severity == ErrorSeverity.CRITICAL:
-            log_method = log.critical
-        elif self.severity == ErrorSeverity.ERROR:
-            log_method = log.error
-        elif self.severity == ErrorSeverity.WARNING:
-            log_method = log.warning
-        else:  # INFO or any other
-            log_method = log.info
-        
-        # Log the error with context
-        log_method(
-            f"[{self.error_code}] {self.message}",
-            extra={
-                "error_category": self.category.value,
-                "error_code": self.error_code,
-                "document_id": self.context.document_id,
-                "request_id": self.context.request_id,
-                "operation": self.context.operation,
-                "component": self.context.component,
-                "retry_eligible": self.retry_eligible,
-                "retry_count": self.retry_count
-            }
-        )
-        
-        # Log traceback for ERROR and CRITICAL levels
-        if self.traceback and self.severity in (ErrorSeverity.ERROR, ErrorSeverity.CRITICAL):
-            log.debug(f"Traceback for error {self.error_code}:\n{self.traceback}")
-
-    def increment_retry(self) -> bool:
-        """Increment retry count and check if max retries reached.
-
-        Returns:
-            bool: True if retry is still possible, False if max retries reached
-        """
-        if not self.retry_eligible:
-            return False
-            
-        self.retry_count += 1
-        return self.retry_count <= self.max_retries
-
-
-# Error code prefixes by category
-ERROR_CODE_PREFIXES = {
-    ErrorCategory.VALIDATION: "VAL",
-    ErrorCategory.CONNECTION: "CONN",
-    ErrorCategory.PROCESSING: "PROC",
-    ErrorCategory.STORAGE: "STOR",
-    ErrorCategory.MESSAGING: "MSG",
-    ErrorCategory.SECURITY: "SEC",
-    ErrorCategory.SYSTEM: "SYS",
-    ErrorCategory.UNKNOWN: "UNK"
-}
-
-# Predefined error codes
-ERROR_CODES = {
-    # Validation errors
-    "VAL001": "Invalid document format",
-    "VAL002": "Unsupported document type",
-    "VAL003": "Document size exceeds limit",
-    "VAL004": "Invalid message format",
-    "VAL005": "Missing required field",
-    
-    # Connection errors
-    "CONN001": "Failed to connect to RabbitMQ",
-    "CONN002": "Failed to connect to S3 storage",
-    "CONN003": "Connection timeout",
-    "CONN004": "Connection refused",
-    "CONN005": "SSL/TLS error",
-    
-    # Processing errors
-    "PROC001": "OCR processing failed",
-    "PROC002": "Document unreadable",
-    "PROC003": "Low confidence extraction",
-    "PROC004": "Model inference error",
-    "PROC005": "GPU resource unavailable",
-    
-    # Storage errors
-    "STOR001": "Failed to download document from S3",
-    "STOR002": "Failed to upload results to S3",
-    "STOR003": "Document not found in storage",
-    "STOR004": "Storage access denied",
-    "STOR005": "Storage quota exceeded",
-    
-    # Messaging errors
-    "MSG001": "Failed to publish message",
-    "MSG002": "Failed to consume message",
-    "MSG003": "Message acknowledgment failed",
-    "MSG004": "Queue not found",
-    "MSG005": "Exchange not found",
-    
-    # Security errors
-    "SEC001": "Authentication failed",
-    "SEC002": "Authorization failed",
-    "SEC003": "Invalid credentials",
-    "SEC004": "Token expired",
-    "SEC005": "Encryption error",
-    
-    # System errors
-    "SYS001": "Out of memory",
-    "SYS002": "File system error",
-    "SYS003": "Environment configuration error",
-    "SYS004": "Dependency missing",
-    "SYS005": "Unexpected system error",
-    
-    # Unknown errors
-    "UNK001": "Unknown error"
-}
-
-
-# Map of error types to categories for automatic classification
-ERROR_TYPE_CATEGORIES = {
-    "ConnectionError": ErrorCategory.CONNECTION,
-    "TimeoutError": ErrorCategory.CONNECTION,
-    "SSLError": ErrorCategory.CONNECTION,
-    "FileNotFoundError": ErrorCategory.STORAGE,
-    "PermissionError": ErrorCategory.SECURITY,
-    "ValueError": ErrorCategory.VALIDATION,
-    "TypeError": ErrorCategory.VALIDATION,
-    "KeyError": ErrorCategory.VALIDATION,
-    "IndexError": ErrorCategory.VALIDATION,
-    "MemoryError": ErrorCategory.SYSTEM,
-    "ImportError": ErrorCategory.SYSTEM,
-    "ModuleNotFoundError": ErrorCategory.SYSTEM,
-    "RuntimeError": ErrorCategory.PROCESSING,
-    "Exception": ErrorCategory.UNKNOWN
-}
-
-
-# Map of error categories to default severity levels
-DEFAULT_SEVERITY = {
-    ErrorCategory.VALIDATION: ErrorSeverity.ERROR,
-    ErrorCategory.CONNECTION: ErrorSeverity.ERROR,
-    ErrorCategory.PROCESSING: ErrorSeverity.ERROR,
-    ErrorCategory.STORAGE: ErrorSeverity.ERROR,
-    ErrorCategory.MESSAGING: ErrorSeverity.ERROR,
-    ErrorCategory.SECURITY: ErrorSeverity.CRITICAL,
-    ErrorCategory.SYSTEM: ErrorSeverity.CRITICAL,
-    ErrorCategory.UNKNOWN: ErrorSeverity.ERROR
-}
-
-
-# Map of error categories to retry eligibility
-RETRY_ELIGIBLE_CATEGORIES = {
-    ErrorCategory.VALIDATION: False,
-    ErrorCategory.CONNECTION: True,
-    ErrorCategory.PROCESSING: True,
-    ErrorCategory.STORAGE: True,
-    ErrorCategory.MESSAGING: True,
-    ErrorCategory.SECURITY: False,
-    ErrorCategory.SYSTEM: False,
-    ErrorCategory.UNKNOWN: False
-}
-
-
-# Specific error codes that are not retry-eligible despite their category
-NON_RETRYABLE_ERROR_CODES = [
-    "VAL001", "VAL002", "VAL003", "VAL004", "VAL005",  # All validation errors
-    "PROC002", "PROC003",  # Unreadable document, low confidence
-    "STOR003", "STOR004", "STOR005",  # Document not found, access denied, quota exceeded
-    "MSG004", "MSG005",  # Queue not found, exchange not found
-    "SEC001", "SEC002", "SEC003", "SEC004", "SEC005",  # All security errors
-    "SYS001", "SYS002", "SYS003", "SYS004", "SYS005",  # All system errors
-    "UNK001"  # Unknown error
-]
-
-
-def classify_exception(exception: Exception) -> ErrorCategory:
-    """Classify an exception into an error category.
-
-    Args:
-        exception (Exception): The exception to classify
-
-    Returns:
-        ErrorCategory: The classified error category
-    """
-    exception_type = type(exception).__name__
-    return ERROR_TYPE_CATEGORIES.get(exception_type, ErrorCategory.UNKNOWN)
-
-
-def generate_error_code(category: ErrorCategory, specific_code: Optional[int] = None) -> str:
-    """Generate an error code based on category and specific code.
-
-    Args:
-        category (ErrorCategory): The error category
-        specific_code (Optional[int]): Specific code number within the category
-
-    Returns:
-        str: The generated error code
-    """
-    prefix = ERROR_CODE_PREFIXES.get(category, "UNK")
-    
-    if specific_code is not None:
-        return f"{prefix}{specific_code:03d}"
-    
-    # If no specific code provided, use the first code for the category
-    for code in ERROR_CODES:
-        if code.startswith(prefix):
-            return code
-    
-    # Fallback to unknown error
-    return "UNK001"
-
-
-def is_retry_eligible(error_code: str, category: ErrorCategory) -> bool:
-    """Determine if an error is eligible for retry based on its code and category.
-
-    Args:
-        error_code (str): The error code
-        category (ErrorCategory): The error category
-
-    Returns:
-        bool: True if the error is retry-eligible, False otherwise
-    """
-    # Check if the error code is in the non-retryable list
-    if error_code in NON_RETRYABLE_ERROR_CODES:
-        return False
-    
-    # Otherwise, use the category's default retry eligibility
-    return RETRY_ELIGIBLE_CATEGORIES.get(category, False)
-
-
-def create_error(
-    message: str,
-    error_code: str,
-    category: Optional[ErrorCategory] = None,
-    severity: Optional[ErrorSeverity] = None,
-    exception: Optional[Exception] = None,
-    context: Optional[ErrorContext] = None,
-    retry_eligible: Optional[bool] = None,
-    max_retries: int = 3
-) -> OCRServiceError:
-    """Create a standardized OCR service error.
-
-    Args:
-        message (str): Error message
-        error_code (str): Error code
-        category (Optional[ErrorCategory]): Error category, derived from error_code if None
-        severity (Optional[ErrorSeverity]): Error severity, derived from category if None
-        exception (Optional[Exception]): Original exception if any
-        context (Optional[ErrorContext]): Error context information
-        retry_eligible (Optional[bool]): Whether the error is eligible for retry
-        max_retries (int): Maximum number of retries for this error
-
-    Returns:
-        OCRServiceError: Standardized error object
-    """
-    # If category not provided, derive it from error code prefix
-    if category is None:
-        prefix = error_code[:3] if len(error_code) >= 3 else "UNK"
-        category_found = False
-        
-        for cat, cat_prefix in ERROR_CODE_PREFIXES.items():
-            if prefix == cat_prefix:
-                category = cat
-                category_found = True
-                break
-        
-        if not category_found:
-            category = ErrorCategory.UNKNOWN
-    
-    # If severity not provided, use default for the category
-    if severity is None:
-        severity = DEFAULT_SEVERITY.get(category, ErrorSeverity.ERROR)
-    
-    # If retry_eligible not provided, determine based on error code and category
-    if retry_eligible is None:
-        retry_eligible = is_retry_eligible(error_code, category)
-    
-    # Create context if not provided
-    if context is None:
-        context = ErrorContext()
-    
-    # Create the error object
-    return OCRServiceError(
-        message=message,
-        category=category,
-        severity=severity,
-        error_code=error_code,
-        context=context,
-        exception=exception,
-        retry_eligible=retry_eligible,
-        max_retries=max_retries
-    )
-
-
-def create_error_from_exception(
+def create_service_error(
     exception: Exception,
-    operation: Optional[str] = None,
-    component: Optional[str] = None,
-    document_id: Optional[str] = None,
-    request_id: Optional[str] = None,
-    additional_info: Optional[Dict[str, Any]] = None,
-    max_retries: int = 3
-) -> OCRServiceError:
-    """Create a standardized error from an exception.
-
+    category: ErrorCategory = ErrorCategory.UNKNOWN,
+    severity: Optional[ErrorSeverity] = None,
+    retry_strategy: Optional[RetryStrategy] = None,
+    details: Optional[Dict[str, Any]] = None
+) -> ServiceError:
+    """Create a ServiceError from an exception.
+    
     Args:
-        exception (Exception): The exception to convert
-        operation (Optional[str]): Operation being performed when the error occurred
-        component (Optional[str]): Component where the error occurred
-        document_id (Optional[str]): ID of the document being processed
-        request_id (Optional[str]): ID of the request being processed
-        additional_info (Optional[Dict[str, Any]]): Additional context information
-        max_retries (int): Maximum number of retries for this error
-
+        exception: The original exception.
+        category: The category of the error.
+        severity: The severity of the error. If None, it will be determined automatically.
+        retry_strategy: The retry strategy for this error. If None, it will be determined automatically.
+        details: Additional details about the error context.
+        
     Returns:
-        OCRServiceError: Standardized error object
+        A ServiceError instance.
     """
-    # Classify the exception
-    category = classify_exception(exception)
+    # Determine severity if not provided
+    if severity is None:
+        severity = _determine_severity(exception, category)
     
-    # Generate an error code based on the category
-    error_code = generate_error_code(category)
+    # Determine retry strategy if not provided
+    if retry_strategy is None:
+        retry_strategy = _determine_retry_strategy(exception, category, severity)
     
-    # Determine if the error is retry-eligible
-    retry_eligible = is_retry_eligible(error_code, category)
+    # Get stack trace
+    trace = traceback.format_exception(type(exception), exception, exception.__traceback__)
     
-    # Create context
-    context = ErrorContext(
-        document_id=document_id,
-        request_id=request_id,
-        operation=operation,
-        component=component,
-        additional_info=additional_info or {}
-    )
-    
-    # Create the error object
-    return OCRServiceError(
+    # Create and return the ServiceError
+    return ServiceError(
         message=str(exception),
         category=category,
-        severity=DEFAULT_SEVERITY.get(category, ErrorSeverity.ERROR),
-        error_code=error_code,
-        context=context,
-        exception=exception,
-        retry_eligible=retry_eligible,
-        max_retries=max_retries
+        severity=severity,
+        retry_strategy=retry_strategy,
+        original_exception=exception,
+        details=details,
+        trace=trace
     )
+
+
+def _determine_severity(exception: Exception, category: ErrorCategory) -> ErrorSeverity:
+    """Determine the severity of an error based on the exception and category.
+    
+    Args:
+        exception: The original exception.
+        category: The category of the error.
+        
+    Returns:
+        The determined severity level.
+    """
+    # Connection errors are typically high severity
+    if category == ErrorCategory.CONNECTION:
+        return ErrorSeverity.HIGH
+    
+    # Validation errors are typically medium severity
+    if category == ErrorCategory.VALIDATION:
+        return ErrorSeverity.MEDIUM
+    
+    # System errors are typically high or fatal severity
+    if category == ErrorCategory.SYSTEM:
+        return ErrorSeverity.HIGH
+    
+    # Processing errors depend on the specific exception
+    if category == ErrorCategory.PROCESSING:
+        # Check for specific processing error types
+        if isinstance(exception, (ValueError, TypeError)):
+            return ErrorSeverity.MEDIUM
+        if isinstance(exception, (MemoryError, RuntimeError)):
+            return ErrorSeverity.HIGH
+    
+    # Default to medium severity for unknown errors
+    return ErrorSeverity.MEDIUM
+
+
+def _determine_retry_strategy(
+    exception: Exception,
+    category: ErrorCategory,
+    severity: ErrorSeverity
+) -> RetryStrategy:
+    """Determine the retry strategy for an error based on the exception, category, and severity.
+    
+    Args:
+        exception: The original exception.
+        category: The category of the error.
+        severity: The severity of the error.
+        
+    Returns:
+        The determined retry strategy.
+    """
+    # Fatal errors should not be retried
+    if severity == ErrorSeverity.FATAL:
+        return RetryStrategy.NONE
+    
+    # Connection errors typically use exponential backoff
+    if category == ErrorCategory.CONNECTION:
+        return RetryStrategy.EXPONENTIAL
+    
+    # Validation errors typically should not be retried
+    if category == ErrorCategory.VALIDATION:
+        return RetryStrategy.NONE
+    
+    # Processing errors may be retried depending on the exception
+    if category == ErrorCategory.PROCESSING:
+        # Temporary processing issues can be retried
+        if isinstance(exception, (TimeoutError, ConnectionResetError)):
+            return RetryStrategy.EXPONENTIAL
+        # Data-related errors should not be retried
+        if isinstance(exception, (ValueError, TypeError, KeyError)):
+            return RetryStrategy.NONE
+    
+    # System errors may be retried with linear backoff
+    if category == ErrorCategory.SYSTEM:
+        return RetryStrategy.LINEAR
+    
+    # Default to no retry for unknown errors
+    return RetryStrategy.NONE
 
 
 def enrich_error_context(
-    error: OCRServiceError,
-    document_id: Optional[str] = None,
-    request_id: Optional[str] = None,
-    operation: Optional[str] = None,
-    component: Optional[str] = None,
-    additional_info: Optional[Dict[str, Any]] = None
-) -> OCRServiceError:
+    error: ServiceError,
+    context: Dict[str, Any]
+) -> ServiceError:
     """Enrich an error with additional context information.
-
+    
     Args:
-        error (OCRServiceError): The error to enrich
-        document_id (Optional[str]): ID of the document being processed
-        request_id (Optional[str]): ID of the request being processed
-        operation (Optional[str]): Operation being performed when the error occurred
-        component (Optional[str]): Component where the error occurred
-        additional_info (Optional[Dict[str, Any]]): Additional context information
-
+        error: The ServiceError to enrich.
+        context: Additional context information to add to the error.
+        
     Returns:
-        OCRServiceError: The enriched error
+        The enriched ServiceError.
     """
-    # Update context fields if provided
-    if document_id is not None:
-        error.context.document_id = document_id
-    
-    if request_id is not None:
-        error.context.request_id = request_id
-    
-    if operation is not None:
-        error.context.operation = operation
-    
-    if component is not None:
-        error.context.component = component
-    
-    # Update additional info if provided
-    if additional_info is not None:
-        error.context.additional_info.update(additional_info)
-    
+    # Update the error details with the new context
+    error.details.update(context)
     return error
 
 
-def format_error_for_response(error: OCRServiceError) -> Dict[str, Any]:
-    """Format an error for API response.
-
+def is_retry_eligible(error: ServiceError, max_retries: int = 3) -> bool:
+    """Determine if an error is eligible for retry based on its retry strategy and other factors.
+    
     Args:
-        error (OCRServiceError): The error to format
-
+        error: The ServiceError to check.
+        max_retries: The maximum number of retries allowed.
+        
     Returns:
-        Dict[str, Any]: Formatted error response
+        True if the error is eligible for retry, False otherwise.
+    """
+    # Check if the error has a retry strategy
+    if error.retry_strategy == RetryStrategy.NONE:
+        return False
+    
+    # Check if the error has already been retried too many times
+    current_retries = error.details.get("retry_count", 0)
+    if current_retries >= max_retries:
+        return False
+    
+    # Check if the error is too severe to retry
+    if error.severity == ErrorSeverity.FATAL:
+        return False
+    
+    # Default to allowing retry
+    return True
+
+
+def increment_retry_count(error: ServiceError) -> ServiceError:
+    """Increment the retry count for an error.
+    
+    Args:
+        error: The ServiceError to update.
+        
+    Returns:
+        The updated ServiceError.
+    """
+    current_retries = error.details.get("retry_count", 0)
+    error.details["retry_count"] = current_retries + 1
+    return error
+
+
+def calculate_retry_delay(error: ServiceError, base_delay: float = 1.0) -> float:
+    """Calculate the delay before the next retry based on the error's retry strategy.
+    
+    Args:
+        error: The ServiceError to calculate the delay for.
+        base_delay: The base delay in seconds.
+        
+    Returns:
+        The calculated delay in seconds.
+    """
+    retry_count = error.details.get("retry_count", 0)
+    
+    if error.retry_strategy == RetryStrategy.IMMEDIATE:
+        return 0.0
+    
+    if error.retry_strategy == RetryStrategy.EXPONENTIAL:
+        # Exponential backoff: base_delay * 2^retry_count
+        return base_delay * (2 ** retry_count)
+    
+    if error.retry_strategy == RetryStrategy.LINEAR:
+        # Linear backoff: base_delay * retry_count
+        return base_delay * retry_count
+    
+    if error.retry_strategy == RetryStrategy.CUSTOM:
+        # Custom backoff strategy defined in the error details
+        custom_delay = error.details.get("custom_delay")
+        if custom_delay is not None:
+            return float(custom_delay)
+    
+    # Default to base delay
+    return base_delay
+
+
+def categorize_exception(exception: Exception) -> ErrorCategory:
+    """Categorize an exception into an ErrorCategory.
+    
+    Args:
+        exception: The exception to categorize.
+        
+    Returns:
+        The determined ErrorCategory.
+    """
+    # Connection-related exceptions
+    if isinstance(exception, (ConnectionError, TimeoutError, ConnectionRefusedError, ConnectionResetError)):
+        return ErrorCategory.CONNECTION
+    
+    # Validation-related exceptions
+    if isinstance(exception, (ValueError, TypeError, KeyError, AttributeError)):
+        return ErrorCategory.VALIDATION
+    
+    # System-related exceptions
+    if isinstance(exception, (MemoryError, OSError, IOError, SystemError)):
+        return ErrorCategory.SYSTEM
+    
+    # Processing-related exceptions (more specific to OCR service)
+    processing_error_types = (
+        "ProcessingError",
+        "OCRError",
+        "DocumentError",
+        "ExtractionError",
+        "ModelError"
+    )
+    if any(error_type in exception.__class__.__name__ for error_type in processing_error_types):
+        return ErrorCategory.PROCESSING
+    
+    # Default to unknown category
+    return ErrorCategory.UNKNOWN
+
+
+def format_error_for_logging(error: ServiceError) -> Dict[str, Any]:
+    """Format an error for logging purposes.
+    
+    Args:
+        error: The ServiceError to format.
+        
+    Returns:
+        A dictionary suitable for logging.
+    """
+    return {
+        "error_message": error.message,
+        "error_category": error.category.name,
+        "error_severity": error.severity.name,
+        "error_timestamp": error.timestamp,
+        "error_details": error.details,
+        "original_exception": str(error.original_exception) if error.original_exception else None,
+        # Include only the first 5 lines of the trace for brevity
+        "trace_excerpt": error.trace[:5] if error.trace else None
+    }
+
+
+def format_error_for_publishing(error: ServiceError) -> Dict[str, Any]:
+    """Format an error for publishing to message queues.
+    
+    Args:
+        error: The ServiceError to format.
+        
+    Returns:
+        A dictionary suitable for message publishing.
     """
     return {
         "error": {
-            "code": error.error_code,
             "message": error.message,
-            "category": error.category.value,
-            "timestamp": error.context.timestamp,
-            "request_id": error.context.request_id
+            "category": error.category.name,
+            "severity": error.severity.name,
+            "timestamp": error.timestamp,
+            "details": error.details,
+            # Exclude stack traces and original exception for security
         }
     }
 
 
-def format_error_for_message(error: OCRServiceError) -> Dict[str, Any]:
-    """Format an error for inclusion in a RabbitMQ message.
-
-    Args:
-        error (OCRServiceError): The error to format
-
+def get_caller_info() -> Dict[str, Any]:
+    """Get information about the caller of a function.
+    
     Returns:
-        Dict[str, Any]: Formatted error for message
+        A dictionary with information about the caller.
     """
+    # Get the current frame and go back 2 frames to get the caller
+    frame = inspect.currentframe()
+    if frame is None:
+        return {"module": "unknown", "function": "unknown", "line": 0}
+    
+    caller_frame = frame.f_back
+    if caller_frame is None:
+        return {"module": "unknown", "function": "unknown", "line": 0}
+    
+    # Get caller information
+    caller_info = inspect.getframeinfo(caller_frame)
     return {
-        "error": {
-            "code": error.error_code,
-            "message": error.message,
-            "category": error.category.value,
-            "severity": error.severity.value,
-            "document_id": error.context.document_id,
-            "request_id": error.context.request_id,
-            "operation": error.context.operation,
-            "component": error.context.component,
-            "timestamp": error.context.timestamp,
-            "retry_count": error.retry_count,
-            "additional_info": error.context.additional_info
-        }
+        "module": caller_info.filename,
+        "function": caller_info.function,
+        "line": caller_info.lineno
     }
 
 
-def handle_uncaught_exception(exc_type: Type[Exception], exc_value: Exception, exc_traceback: Any) -> None:
+def safe_execute(func, *args, default=None, **kwargs):
+    """Safely execute a function and return a default value if it fails.
+    
+    Args:
+        func: The function to execute.
+        *args: Positional arguments to pass to the function.
+        default: The default value to return if the function fails.
+        **kwargs: Keyword arguments to pass to the function.
+        
+    Returns:
+        The result of the function or the default value if it fails.
+    """
+    try:
+        return func(*args, **kwargs)
+    except Exception as e:
+        logger.error(f"Error executing function {func.__name__}: {str(e)}")
+        return default
+
+
+def handle_uncaught_exception(exc_type: Type[Exception], exc_value: Exception, exc_traceback) -> None:
     """Global exception handler for uncaught exceptions.
-
+    
     Args:
-        exc_type (Type[Exception]): Exception type
-        exc_value (Exception): Exception value
-        exc_traceback (Any): Exception traceback
+        exc_type: The type of the exception.
+        exc_value: The exception instance.
+        exc_traceback: The traceback object.
     """
-    # Don't handle KeyboardInterrupt
     if issubclass(exc_type, KeyboardInterrupt):
+        # Don't handle keyboard interrupt
         sys.__excepthook__(exc_type, exc_value, exc_traceback)
         return
     
-    # Create a standardized error
-    error = create_error_from_exception(
-        exception=exc_value,
-        operation="uncaught_exception",
-        component="global_exception_handler"
+    # Create a service error from the uncaught exception
+    error = create_service_error(
+        exc_value,
+        category=categorize_exception(exc_value),
+        details={"uncaught": True}
     )
     
     # Log the error
-    error.log()
+    logger.critical(f"Uncaught exception: {error.message}", extra=format_error_for_logging(error))
     
-    # Call the original exception handler
-    sys.__excepthook__(exc_type, exc_value, exc_traceback)
+    # You might want to send this to a monitoring service or perform other actions
+    # For now, just print to stderr
+    sys.stderr.write(f"CRITICAL ERROR: {error.to_json()}\n")
 
 
-def setup_global_exception_handler() -> None:
-    """Set up the global exception handler for uncaught exceptions."""
+# Set the global exception handler
+def set_global_exception_handler():
+    """Set the global exception handler for uncaught exceptions."""
     sys.excepthook = handle_uncaught_exception
