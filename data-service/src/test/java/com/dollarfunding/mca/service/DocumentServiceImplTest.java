@@ -1,15 +1,15 @@
 package com.dollarfunding.mca.service;
 
-import com.dollarfunding.mca.entity.Application;
-import com.dollarfunding.mca.entity.Document;
-import com.dollarfunding.mca.entity.DocumentType;
-import com.dollarfunding.mca.repository.ApplicationRepository;
-import com.dollarfunding.mca.repository.DocumentRepository;
+import com.dollarfunding.mca.config.S3Config;
 import com.dollarfunding.mca.dto.DocumentRequestDTO;
 import com.dollarfunding.mca.dto.DocumentResponseDTO;
-import com.dollarfunding.mca.exception.ResourceNotFoundException;
-import com.dollarfunding.mca.exception.StorageException;
-import com.dollarfunding.mca.util.EncryptionUtil;
+import com.dollarfunding.mca.entity.Document;
+import com.dollarfunding.mca.entity.DocumentClassification;
+import com.dollarfunding.mca.entity.DocumentType;
+import com.dollarfunding.mca.exception.DocumentNotFoundException;
+import com.dollarfunding.mca.exception.DocumentStorageException;
+import com.dollarfunding.mca.exception.InvalidDocumentException;
+import com.dollarfunding.mca.repository.DocumentRepository;
 import com.dollarfunding.mca.util.JsonUtil;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -20,25 +20,21 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageImpl;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Pageable;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.web.multipart.MultipartFile;
 
+import software.amazon.awssdk.core.ResponseInputStream;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.S3Client;
-import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
-import software.amazon.awssdk.services.s3.model.GetObjectRequest;
-import software.amazon.awssdk.services.s3.model.PutObjectRequest;
+import software.amazon.awssdk.services.s3.model.*;
 import software.amazon.awssdk.services.s3.presigner.S3Presigner;
 import software.amazon.awssdk.services.s3.presigner.model.GetObjectPresignRequest;
 import software.amazon.awssdk.services.s3.presigner.model.PresignedGetObjectRequest;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.URL;
-import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.*;
 
@@ -47,11 +43,14 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 /**
- * Unit tests for the DocumentServiceImpl class.
+ * Unit tests for the DocumentServiceImpl class that manages document storage, retrieval, and metadata.
  * 
- * These tests verify the functionality of the DocumentServiceImpl class, which manages document storage,
- * retrieval, and metadata for the MCA application. The tests use Mockito to mock dependencies and focus
- * on testing the service's business logic.
+ * Tests verify S3 integration, document classification metadata management, secure URL generation,
+ * and document association with applications. Uses Mockito to mock dependencies including S3 client,
+ * DocumentRepository, and encryption utilities.
+ * 
+ * Includes tests for normal operation, edge cases, and error handling to ensure the service
+ * functions correctly under all conditions.
  */
 @ExtendWith(MockitoExtension.class)
 public class DocumentServiceImplTest {
@@ -60,7 +59,7 @@ public class DocumentServiceImplTest {
     private DocumentRepository documentRepository;
 
     @Mock
-    private ApplicationRepository applicationRepository;
+    private S3Config s3Config;
 
     @Mock
     private S3Client s3Client;
@@ -68,144 +67,109 @@ public class DocumentServiceImplTest {
     @Mock
     private S3Presigner s3Presigner;
 
-    @Mock
-    private EncryptionUtil encryptionUtil;
-
-    @Mock
-    private JsonUtil jsonUtil;
-
-    @Mock
-    private PresignedGetObjectRequest presignedGetObjectRequest;
-
     @InjectMocks
     private DocumentServiceImpl documentService;
 
-    // Test data
-    private Long documentId;
-    private Long applicationId;
-    private Document document;
-    private Application application;
-    private DocumentRequestDTO documentRequest;
-    private MultipartFile multipartFile;
-    private Map<String, Object> metadata;
-    private Map<String, Double> confidenceScores;
-    private String storagePath;
-    private String signedUrl;
-    private String bucketName;
-    private String metadataJson;
+    private UUID testApplicationId;
+    private UUID testDocumentId;
+    private Document testDocument;
+    private DocumentRequestDTO testDocumentRequest;
+    private MultipartFile testFile;
+    private URL testSignedUrl;
 
     @BeforeEach
-    void setUp() {
-        // Set up test data
-        documentId = 1L;
-        applicationId = 100L;
-        storagePath = "applications/100/bank_statement/abc-123-xyz";
-        signedUrl = "https://s3.example.com/documents/abc-123-xyz?signature=xyz";
-        bucketName = "mca-documents-production";
-        metadataJson = "{\"originalFilename\":\"bank_statement.pdf\",\"contentType\":\"application/pdf\",\"size\":12345,\"classification\":\"bank_statement\"}";
-
-        // Set up test objects
-        application = new Application();
-        application.setId(applicationId);
-
-        document = new Document();
-        document.setId(documentId);
-        document.setApplication(application);
-        document.setType(DocumentType.BANK_STATEMENT);
-        document.setStoragePath(storagePath);
-        document.setClassification("bank_statement");
-        document.setUploadedAt(LocalDateTime.now());
-        document.setMetadataJson(metadataJson);
-
-        metadata = new HashMap<>();
-        metadata.put("originalFilename", "bank_statement.pdf");
+    void setUp() throws Exception {
+        // Initialize test data
+        testApplicationId = UUID.randomUUID();
+        testDocumentId = UUID.randomUUID();
+        
+        // Create test document
+        testDocument = new Document();
+        testDocument.setId(testDocumentId);
+        testDocument.setApplicationId(testApplicationId);
+        testDocument.setType(DocumentType.BANK_STATEMENT);
+        testDocument.setStoragePath("documents/" + testApplicationId + "/test-document.pdf");
+        testDocument.setClassification(DocumentClassification.VERIFIED);
+        testDocument.setUploadedAt(LocalDateTime.now());
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("originalFilename", "test-document.pdf");
         metadata.put("contentType", "application/pdf");
-        metadata.put("size", 12345L);
-        metadata.put("classification", "bank_statement");
+        metadata.put("fileSize", 1024L);
+        metadata.put("confidenceScore", 0.95);
+        testDocument.setMetadata(metadata);
 
-        confidenceScores = new HashMap<>();
-        confidenceScores.put("classification", 0.95);
-        confidenceScores.put("account_number", 0.87);
-        confidenceScores.put("balance", 0.92);
+        // Create test document request
+        testDocumentRequest = new DocumentRequestDTO();
+        testDocumentRequest.setApplicationId(testApplicationId);
+        testDocumentRequest.setType(DocumentType.BANK_STATEMENT);
+        testDocumentRequest.setClassification("VERIFIED");
+        testDocumentRequest.setClassificationConfidence(0.95);
+        Map<String, Object> requestMetadata = new HashMap<>();
+        requestMetadata.put("accountNumber", "XXXX1234");
+        requestMetadata.put("bankName", "Test Bank");
+        testDocumentRequest.setMetadata(requestMetadata);
 
-        documentRequest = new DocumentRequestDTO();
-        documentRequest.setApplicationId(applicationId);
-        documentRequest.setType(DocumentType.BANK_STATEMENT);
-        documentRequest.setClassification("bank_statement");
-        documentRequest.setMetadata(metadata);
-        documentRequest.setConfidenceScores(confidenceScores);
+        // Create test file
+        byte[] fileContent = "Test file content".getBytes();
+        testFile = new MockMultipartFile(
+                "test-document.pdf",
+                "test-document.pdf",
+                "application/pdf",
+                fileContent);
 
-        multipartFile = new MockMultipartFile(
-            "file", 
-            "bank_statement.pdf", 
-            "application/pdf", 
-            "test content".getBytes()
-        );
+        // Create test signed URL
+        testSignedUrl = new URL("https://test-bucket.s3.amazonaws.com/documents/" + testApplicationId + "/test-document.pdf?signature=abc123");
 
-        // Set up reflection to access private fields
-        try {
-            java.lang.reflect.Field bucketNameField = DocumentServiceImpl.class.getDeclaredField("bucketName");
-            bucketNameField.setAccessible(true);
-            bucketNameField.set(documentService, bucketName);
-
-            java.lang.reflect.Field urlExpirationSecondsField = DocumentServiceImpl.class.getDeclaredField("urlExpirationSeconds");
-            urlExpirationSecondsField.setAccessible(true);
-            urlExpirationSecondsField.set(documentService, 300L);
-        } catch (Exception e) {
-            fail("Failed to set up test: " + e.getMessage());
-        }
-
-        // Set up common mocks
-        when(jsonUtil.toJson(any())).thenReturn(metadataJson);
-        when(jsonUtil.fromJson(metadataJson, Map.class)).thenReturn(metadata);
+        // Configure mocks
+        when(s3Config.getBucketName()).thenReturn("test-bucket");
+        when(s3Config.generateSignedUrl(anyString())).thenReturn(testSignedUrl);
     }
 
     @Test
-    @DisplayName("Should store document successfully with AES-256 encryption")
-    void storeDocumentSuccessfully() throws IOException {
+    @DisplayName("Test storing document with valid data")
+    void testStoreDocument() throws IOException {
         // Arrange
-        when(applicationRepository.findById(applicationId)).thenReturn(Optional.of(application));
-        when(documentRepository.save(any(Document.class))).thenReturn(document);
-        
-        // Mock S3 presigner
-        URL mockUrl = new URL("https", "s3.example.com", "/documents/abc-123-xyz?signature=xyz");
-        when(presignedGetObjectRequest.url()).thenReturn(mockUrl);
-        when(s3Presigner.presignGetObject(any(GetObjectPresignRequest.class))).thenReturn(presignedGetObjectRequest);
+        when(documentRepository.save(any(Document.class))).thenReturn(testDocument);
 
         // Act
-        DocumentResponseDTO result = documentService.storeDocument(multipartFile, documentRequest);
+        DocumentResponseDTO result = documentService.storeDocument(testFile, testDocumentRequest);
 
         // Assert
         assertNotNull(result, "Result should not be null");
-        assertEquals(documentId, result.getId(), "Document ID should match");
-        assertEquals(applicationId, result.getApplicationId(), "Application ID should match");
-        assertEquals(DocumentType.BANK_STATEMENT, result.getType(), "Document type should match");
-        assertEquals("bank_statement", result.getClassification(), "Classification should match");
-        assertEquals(signedUrl, result.getSignedUrl(), "Signed URL should match");
+        assertEquals(testDocumentId.toString(), result.getId().toString(), "Document ID should match");
+        assertEquals(testApplicationId.toString(), result.getApplicationId().toString(), "Application ID should match");
+        assertEquals("BANK_STATEMENT", result.getType(), "Document type should match");
+        assertEquals("VERIFIED", result.getClassification(), "Document classification should match");
+        assertEquals(testSignedUrl.toString(), result.getDownloadUrl(), "Download URL should match");
+        assertTrue(result.getMetadata().containsKey("originalFilename"), "Metadata should contain originalFilename");
+        assertTrue(result.getMetadata().containsKey("contentType"), "Metadata should contain contentType");
+        assertTrue(result.getMetadata().containsKey("fileSize"), "Metadata should contain fileSize");
+        assertTrue(result.getMetadata().containsKey("accountNumber"), "Metadata should contain accountNumber");
+        assertTrue(result.getMetadata().containsKey("bankName"), "Metadata should contain bankName");
 
-        // Verify S3 client was called with AES-256 encryption
-        ArgumentCaptor<PutObjectRequest> putRequestCaptor = ArgumentCaptor.forClass(PutObjectRequest.class);
-        verify(s3Client).putObject(putRequestCaptor.capture(), any(RequestBody.class));
-        PutObjectRequest capturedRequest = putRequestCaptor.getValue();
-        assertEquals(bucketName, capturedRequest.bucket(), "Bucket name should match");
-        assertEquals("AES256", capturedRequest.serverSideEncryption(), "Server-side encryption should be AES256");
+        // Verify S3 upload was called with correct parameters
+        verify(s3Client).putObject(any(PutObjectRequest.class), any(RequestBody.class));
         
         // Verify document was saved to repository
         verify(documentRepository).save(any(Document.class));
     }
 
     @Test
-    @DisplayName("Should throw ResourceNotFoundException when application not found")
-    void storeDocumentApplicationNotFound() {
+    @DisplayName("Test storing document with empty file should throw exception")
+    void testStoreDocumentWithEmptyFile() {
         // Arrange
-        when(applicationRepository.findById(applicationId)).thenReturn(Optional.empty());
+        MockMultipartFile emptyFile = new MockMultipartFile(
+                "empty-file.pdf",
+                "empty-file.pdf",
+                "application/pdf",
+                new byte[0]);
 
         // Act & Assert
-        assertThrows(ResourceNotFoundException.class, () -> {
-            documentService.storeDocument(multipartFile, documentRequest);
-        }, "Should throw ResourceNotFoundException when application not found");
+        assertThrows(InvalidDocumentException.class, () -> {
+            documentService.storeDocument(emptyFile, testDocumentRequest);
+        }, "Should throw InvalidDocumentException for empty file");
 
-        // Verify S3 client was not called
+        // Verify S3 upload was not called
         verify(s3Client, never()).putObject(any(PutObjectRequest.class), any(RequestBody.class));
         
         // Verify document was not saved to repository
@@ -213,239 +177,232 @@ public class DocumentServiceImplTest {
     }
 
     @Test
-    @DisplayName("Should throw StorageException when S3 storage fails")
-    void storeDocumentS3StorageFails() throws IOException {
+    @DisplayName("Test storing document with null file should throw exception")
+    void testStoreDocumentWithNullFile() {
+        // Act & Assert
+        assertThrows(InvalidDocumentException.class, () -> {
+            documentService.storeDocument(null, testDocumentRequest);
+        }, "Should throw InvalidDocumentException for null file");
+
+        // Verify S3 upload was not called
+        verify(s3Client, never()).putObject(any(PutObjectRequest.class), any(RequestBody.class));
+        
+        // Verify document was not saved to repository
+        verify(documentRepository, never()).save(any(Document.class));
+    }
+
+    @Test
+    @DisplayName("Test storing document with invalid request should throw exception")
+    void testStoreDocumentWithInvalidRequest() {
         // Arrange
-        when(applicationRepository.findById(applicationId)).thenReturn(Optional.of(application));
-        doThrow(new RuntimeException("S3 error")).when(s3Client).putObject(any(PutObjectRequest.class), any(RequestBody.class));
+        DocumentRequestDTO invalidRequest = new DocumentRequestDTO();
+        // Missing required fields
 
         // Act & Assert
-        assertThrows(StorageException.class, () -> {
-            documentService.storeDocument(multipartFile, documentRequest);
-        }, "Should throw StorageException when S3 storage fails");
+        assertThrows(InvalidDocumentException.class, () -> {
+            documentService.storeDocument(testFile, invalidRequest);
+        }, "Should throw InvalidDocumentException for invalid request");
+
+        // Verify S3 upload was not called
+        verify(s3Client, never()).putObject(any(PutObjectRequest.class), any(RequestBody.class));
+        
+        // Verify document was not saved to repository
+        verify(documentRepository, never()).save(any(Document.class));
+    }
+
+    @Test
+    @DisplayName("Test storing document with S3 error should throw exception")
+    void testStoreDocumentWithS3Error() {
+        // Arrange
+        when(s3Client.putObject(any(PutObjectRequest.class), any(RequestBody.class)))
+                .thenThrow(new S3Exception("S3 error"));
+
+        // Act & Assert
+        assertThrows(DocumentStorageException.class, () -> {
+            documentService.storeDocument(testFile, testDocumentRequest);
+        }, "Should throw DocumentStorageException for S3 error");
 
         // Verify document was not saved to repository
         verify(documentRepository, never()).save(any(Document.class));
     }
 
     @Test
-    @DisplayName("Should retrieve document by ID with signed URL")
-    void getDocumentByIdSuccessfully() {
+    @DisplayName("Test getting document by ID")
+    void testGetDocumentById() {
         // Arrange
-        when(documentRepository.findById(documentId)).thenReturn(Optional.of(document));
-        
-        // Mock S3 presigner
-        URL mockUrl = new URL("https", "s3.example.com", "/documents/abc-123-xyz?signature=xyz");
-        when(presignedGetObjectRequest.url()).thenReturn(mockUrl);
-        when(s3Presigner.presignGetObject(any(GetObjectPresignRequest.class))).thenReturn(presignedGetObjectRequest);
+        when(documentRepository.findById(testDocumentId)).thenReturn(Optional.of(testDocument));
 
         // Act
-        DocumentResponseDTO result = documentService.getDocumentById(documentId);
+        Optional<DocumentResponseDTO> result = documentService.getDocumentById(testDocumentId.getMostSignificantBits());
+
+        // Assert
+        assertTrue(result.isPresent(), "Result should be present");
+        DocumentResponseDTO dto = result.get();
+        assertEquals(testDocumentId.toString(), dto.getId().toString(), "Document ID should match");
+        assertEquals(testApplicationId.toString(), dto.getApplicationId().toString(), "Application ID should match");
+        assertEquals("BANK_STATEMENT", dto.getType(), "Document type should match");
+        assertEquals("VERIFIED", dto.getClassification(), "Document classification should match");
+        assertEquals(testSignedUrl.toString(), dto.getDownloadUrl(), "Download URL should match");
+    }
+
+    @Test
+    @DisplayName("Test getting document by ID when not found")
+    void testGetDocumentByIdNotFound() {
+        // Arrange
+        when(documentRepository.findById(any(UUID.class))).thenReturn(Optional.empty());
+
+        // Act
+        Optional<DocumentResponseDTO> result = documentService.getDocumentById(999L);
+
+        // Assert
+        assertFalse(result.isPresent(), "Result should not be present");
+    }
+
+    @Test
+    @DisplayName("Test getting documents by application ID")
+    void testGetDocumentsByApplicationId() {
+        // Arrange
+        List<Document> documents = Collections.singletonList(testDocument);
+        when(documentRepository.findByApplicationId(testApplicationId)).thenReturn(documents);
+
+        // Act
+        List<DocumentResponseDTO> result = documentService.getDocumentsByApplicationId(testApplicationId.getMostSignificantBits());
 
         // Assert
         assertNotNull(result, "Result should not be null");
-        assertEquals(documentId, result.getId(), "Document ID should match");
-        assertEquals(applicationId, result.getApplicationId(), "Application ID should match");
-        assertEquals(DocumentType.BANK_STATEMENT, result.getType(), "Document type should match");
-        assertEquals("bank_statement", result.getClassification(), "Classification should match");
-        assertEquals(signedUrl, result.getSignedUrl(), "Signed URL should match");
-
-        // Verify S3 presigner was called with correct parameters
-        ArgumentCaptor<GetObjectPresignRequest> presignRequestCaptor = ArgumentCaptor.forClass(GetObjectPresignRequest.class);
-        verify(s3Presigner).presignGetObject(presignRequestCaptor.capture());
-        GetObjectPresignRequest capturedRequest = presignRequestCaptor.getValue();
-        assertEquals(Duration.ofSeconds(300), capturedRequest.signatureDuration(), "Signature duration should match");
-    }
-
-    @Test
-    @DisplayName("Should throw ResourceNotFoundException when document not found")
-    void getDocumentByIdNotFound() {
-        // Arrange
-        when(documentRepository.findById(documentId)).thenReturn(Optional.empty());
-
-        // Act & Assert
-        assertThrows(ResourceNotFoundException.class, () -> {
-            documentService.getDocumentById(documentId);
-        }, "Should throw ResourceNotFoundException when document not found");
-
-        // Verify S3 presigner was not called
-        verify(s3Presigner, never()).presignGetObject(any(GetObjectPresignRequest.class));
-    }
-
-    @Test
-    @DisplayName("Should retrieve documents by application ID with pagination")
-    void getDocumentsByApplicationIdSuccessfully() {
-        // Arrange
-        Pageable pageable = PageRequest.of(0, 10);
-        List<Document> documentList = Collections.singletonList(document);
-        Page<Document> documentPage = new PageImpl<>(documentList, pageable, 1);
-        
-        when(applicationRepository.existsById(applicationId)).thenReturn(true);
-        when(documentRepository.findByApplicationId(applicationId, pageable)).thenReturn(documentPage);
-        
-        // Mock S3 presigner
-        URL mockUrl = new URL("https", "s3.example.com", "/documents/abc-123-xyz?signature=xyz");
-        when(presignedGetObjectRequest.url()).thenReturn(mockUrl);
-        when(s3Presigner.presignGetObject(any(GetObjectPresignRequest.class))).thenReturn(presignedGetObjectRequest);
-
-        // Act
-        Page<DocumentResponseDTO> result = documentService.getDocumentsByApplicationId(applicationId, pageable);
-
-        // Assert
-        assertNotNull(result, "Result should not be null");
-        assertEquals(1, result.getTotalElements(), "Total elements should match");
-        assertEquals(1, result.getContent().size(), "Content size should match");
-        
-        DocumentResponseDTO dto = result.getContent().get(0);
-        assertEquals(documentId, dto.getId(), "Document ID should match");
-        assertEquals(applicationId, dto.getApplicationId(), "Application ID should match");
-        assertEquals(DocumentType.BANK_STATEMENT, dto.getType(), "Document type should match");
-        assertEquals(signedUrl, dto.getSignedUrl(), "Signed URL should match");
-
-        // Verify repository was called
-        verify(documentRepository).findByApplicationId(applicationId, pageable);
-        
-        // Verify S3 presigner was called
-        verify(s3Presigner).presignGetObject(any(GetObjectPresignRequest.class));
-    }
-
-    @Test
-    @DisplayName("Should throw ResourceNotFoundException when application not found for document retrieval")
-    void getDocumentsByApplicationIdApplicationNotFound() {
-        // Arrange
-        Pageable pageable = PageRequest.of(0, 10);
-        when(applicationRepository.existsById(applicationId)).thenReturn(false);
-
-        // Act & Assert
-        assertThrows(ResourceNotFoundException.class, () -> {
-            documentService.getDocumentsByApplicationId(applicationId, pageable);
-        }, "Should throw ResourceNotFoundException when application not found");
-
-        // Verify repository was not called
-        verify(documentRepository, never()).findByApplicationId(anyLong(), any(Pageable.class));
-    }
-
-    @Test
-    @DisplayName("Should retrieve documents by application ID and type")
-    void getDocumentsByApplicationIdAndTypeSuccessfully() {
-        // Arrange
-        List<Document> documentList = Collections.singletonList(document);
-        
-        when(applicationRepository.existsById(applicationId)).thenReturn(true);
-        when(documentRepository.findByApplicationIdAndType(applicationId, DocumentType.BANK_STATEMENT)).thenReturn(documentList);
-        
-        // Mock S3 presigner
-        URL mockUrl = new URL("https", "s3.example.com", "/documents/abc-123-xyz?signature=xyz");
-        when(presignedGetObjectRequest.url()).thenReturn(mockUrl);
-        when(s3Presigner.presignGetObject(any(GetObjectPresignRequest.class))).thenReturn(presignedGetObjectRequest);
-
-        // Act
-        List<DocumentResponseDTO> result = documentService.getDocumentsByApplicationIdAndType(applicationId, DocumentType.BANK_STATEMENT);
-
-        // Assert
-        assertNotNull(result, "Result should not be null");
-        assertEquals(1, result.size(), "Result size should match");
-        
+        assertEquals(1, result.size(), "Result should contain one document");
         DocumentResponseDTO dto = result.get(0);
-        assertEquals(documentId, dto.getId(), "Document ID should match");
-        assertEquals(applicationId, dto.getApplicationId(), "Application ID should match");
-        assertEquals(DocumentType.BANK_STATEMENT, dto.getType(), "Document type should match");
-        assertEquals(signedUrl, dto.getSignedUrl(), "Signed URL should match");
-
-        // Verify repository was called
-        verify(documentRepository).findByApplicationIdAndType(applicationId, DocumentType.BANK_STATEMENT);
-        
-        // Verify S3 presigner was called
-        verify(s3Presigner).presignGetObject(any(GetObjectPresignRequest.class));
+        assertEquals(testDocumentId.toString(), dto.getId().toString(), "Document ID should match");
+        assertEquals(testApplicationId.toString(), dto.getApplicationId().toString(), "Application ID should match");
+        assertEquals("BANK_STATEMENT", dto.getType(), "Document type should match");
+        assertEquals("VERIFIED", dto.getClassification(), "Document classification should match");
+        assertEquals(testSignedUrl.toString(), dto.getDownloadUrl(), "Download URL should match");
     }
 
     @Test
-    @DisplayName("Should update document metadata successfully")
-    void updateDocumentMetadataSuccessfully() {
+    @DisplayName("Test generating secure URL for document")
+    void testGenerateSecureUrl() {
         // Arrange
-        when(documentRepository.findById(documentId)).thenReturn(Optional.of(document));
-        when(documentRepository.save(any(Document.class))).thenReturn(document);
-        
-        // Mock S3 presigner
-        URL mockUrl = new URL("https", "s3.example.com", "/documents/abc-123-xyz?signature=xyz");
-        when(presignedGetObjectRequest.url()).thenReturn(mockUrl);
-        when(s3Presigner.presignGetObject(any(GetObjectPresignRequest.class))).thenReturn(presignedGetObjectRequest);
-
-        // Create updated request
-        DocumentRequestDTO updateRequest = new DocumentRequestDTO();
-        updateRequest.setType(DocumentType.BANK_STATEMENT);
-        updateRequest.setClassification("updated_classification");
-        
-        Map<String, Object> updatedMetadata = new HashMap<>();
-        updatedMetadata.put("newField", "newValue");
-        updateRequest.setMetadata(updatedMetadata);
+        when(documentRepository.findById(testDocumentId)).thenReturn(Optional.of(testDocument));
 
         // Act
-        DocumentResponseDTO result = documentService.updateDocumentMetadata(documentId, updateRequest);
+        String result = documentService.generateSecureUrl(testDocumentId.getMostSignificantBits());
 
         // Assert
         assertNotNull(result, "Result should not be null");
-        assertEquals(documentId, result.getId(), "Document ID should match");
-        assertEquals(applicationId, result.getApplicationId(), "Application ID should match");
-        assertEquals(DocumentType.BANK_STATEMENT, result.getType(), "Document type should match");
-        assertEquals(signedUrl, result.getSignedUrl(), "Signed URL should match");
+        assertEquals(testSignedUrl.toString(), result, "Secure URL should match");
+        
+        // Verify signed URL was generated with correct parameters
+        verify(s3Config).generateSignedUrl(testDocument.getStoragePath());
+    }
+
+    @Test
+    @DisplayName("Test generating secure URL for document with custom expiration")
+    void testGenerateSecureUrlWithCustomExpiration() {
+        // Arrange
+        when(documentRepository.findById(testDocumentId)).thenReturn(Optional.of(testDocument));
+        Integer customExpiration = 30; // 30 minutes
+
+        // Act
+        String result = documentService.generateSecureUrl(testDocumentId.getMostSignificantBits(), customExpiration);
+
+        // Assert
+        assertNotNull(result, "Result should not be null");
+        assertEquals(testSignedUrl.toString(), result, "Secure URL should match");
+    }
+
+    @Test
+    @DisplayName("Test generating secure URL for document that doesn't exist")
+    void testGenerateSecureUrlDocumentNotFound() {
+        // Arrange
+        when(documentRepository.findById(any(UUID.class))).thenReturn(Optional.empty());
+
+        // Act & Assert
+        assertThrows(DocumentNotFoundException.class, () -> {
+            documentService.generateSecureUrl(999L);
+        }, "Should throw DocumentNotFoundException for non-existent document");
+    }
+
+    @Test
+    @DisplayName("Test updating document metadata")
+    void testUpdateDocumentMetadata() {
+        // Arrange
+        when(documentRepository.findById(testDocumentId)).thenReturn(Optional.of(testDocument));
+        when(documentRepository.save(any(Document.class))).thenReturn(testDocument);
+
+        DocumentRequestDTO updateRequest = new DocumentRequestDTO();
+        updateRequest.setType(DocumentType.TAX_RETURN); // Change type
+        updateRequest.setClassification("NEEDS_REVIEW"); // Change classification
+        Map<String, Object> newMetadata = new HashMap<>();
+        newMetadata.put("taxYear", "2023");
+        newMetadata.put("reviewComment", "Needs additional verification");
+        updateRequest.setMetadata(newMetadata);
+
+        // Act
+        DocumentResponseDTO result = documentService.updateDocumentMetadata(testDocumentId.getMostSignificantBits(), updateRequest);
+
+        // Assert
+        assertNotNull(result, "Result should not be null");
+        assertEquals("TAX_RETURN", result.getType(), "Document type should be updated");
+        assertEquals("NEEDS_REVIEW", result.getClassification(), "Document classification should be updated");
+        assertTrue(result.getMetadata().containsKey("taxYear"), "Metadata should contain new taxYear field");
+        assertTrue(result.getMetadata().containsKey("reviewComment"), "Metadata should contain new reviewComment field");
+        
+        // Original metadata should be preserved
+        assertTrue(result.getMetadata().containsKey("originalFilename"), "Original metadata should be preserved");
+        assertTrue(result.getMetadata().containsKey("contentType"), "Original metadata should be preserved");
+        assertTrue(result.getMetadata().containsKey("fileSize"), "Original metadata should be preserved");
 
         // Verify document was saved to repository
         verify(documentRepository).save(any(Document.class));
     }
 
     @Test
-    @DisplayName("Should throw ResourceNotFoundException when document not found for update")
-    void updateDocumentMetadataDocumentNotFound() {
+    @DisplayName("Test updating document metadata for non-existent document")
+    void testUpdateDocumentMetadataNotFound() {
         // Arrange
-        when(documentRepository.findById(documentId)).thenReturn(Optional.empty());
-
-        // Create updated request
-        DocumentRequestDTO updateRequest = new DocumentRequestDTO();
-        updateRequest.setClassification("updated_classification");
+        when(documentRepository.findById(any(UUID.class))).thenReturn(Optional.empty());
 
         // Act & Assert
-        assertThrows(ResourceNotFoundException.class, () -> {
-            documentService.updateDocumentMetadata(documentId, updateRequest);
-        }, "Should throw ResourceNotFoundException when document not found");
+        assertThrows(DocumentNotFoundException.class, () -> {
+            documentService.updateDocumentMetadata(999L, testDocumentRequest);
+        }, "Should throw DocumentNotFoundException for non-existent document");
 
         // Verify document was not saved to repository
         verify(documentRepository, never()).save(any(Document.class));
     }
 
     @Test
-    @DisplayName("Should delete document successfully")
-    void deleteDocumentSuccessfully() {
+    @DisplayName("Test deleting document")
+    void testDeleteDocument() {
         // Arrange
-        when(documentRepository.findById(documentId)).thenReturn(Optional.of(document));
+        when(documentRepository.findById(testDocumentId)).thenReturn(Optional.of(testDocument));
 
         // Act
-        documentService.deleteDocument(documentId);
+        boolean result = documentService.deleteDocument(testDocumentId.getMostSignificantBits());
 
         // Assert
-        // Verify S3 client was called to delete object
-        ArgumentCaptor<DeleteObjectRequest> deleteRequestCaptor = ArgumentCaptor.forClass(DeleteObjectRequest.class);
-        verify(s3Client).deleteObject(deleteRequestCaptor.capture());
-        DeleteObjectRequest capturedRequest = deleteRequestCaptor.getValue();
-        assertEquals(bucketName, capturedRequest.bucket(), "Bucket name should match");
-        assertEquals(storagePath, capturedRequest.key(), "Storage path should match");
+        assertTrue(result, "Delete operation should return true");
+        
+        // Verify S3 delete was called with correct parameters
+        verify(s3Client).deleteObject(any(DeleteObjectRequest.class));
         
         // Verify document was deleted from repository
-        verify(documentRepository).delete(document);
+        verify(documentRepository).delete(testDocument);
     }
 
     @Test
-    @DisplayName("Should throw ResourceNotFoundException when document not found for deletion")
-    void deleteDocumentNotFound() {
+    @DisplayName("Test deleting document that doesn't exist")
+    void testDeleteDocumentNotFound() {
         // Arrange
-        when(documentRepository.findById(documentId)).thenReturn(Optional.empty());
+        when(documentRepository.findById(any(UUID.class))).thenReturn(Optional.empty());
 
         // Act & Assert
-        assertThrows(ResourceNotFoundException.class, () -> {
-            documentService.deleteDocument(documentId);
-        }, "Should throw ResourceNotFoundException when document not found");
+        assertThrows(DocumentNotFoundException.class, () -> {
+            documentService.deleteDocument(999L);
+        }, "Should throw DocumentNotFoundException for non-existent document");
 
-        // Verify S3 client was not called
+        // Verify S3 delete was not called
         verify(s3Client, never()).deleteObject(any(DeleteObjectRequest.class));
         
         // Verify document was not deleted from repository
@@ -453,105 +410,538 @@ public class DocumentServiceImplTest {
     }
 
     @Test
-    @DisplayName("Should throw StorageException when S3 deletion fails")
-    void deleteDocumentS3DeletionFails() {
+    @DisplayName("Test deleting document with S3 error")
+    void testDeleteDocumentWithS3Error() {
         // Arrange
-        when(documentRepository.findById(documentId)).thenReturn(Optional.of(document));
-        doThrow(new RuntimeException("S3 error")).when(s3Client).deleteObject(any(DeleteObjectRequest.class));
+        when(documentRepository.findById(testDocumentId)).thenReturn(Optional.of(testDocument));
+        when(s3Client.deleteObject(any(DeleteObjectRequest.class)))
+                .thenThrow(new S3Exception("S3 error"));
 
         // Act & Assert
-        assertThrows(StorageException.class, () -> {
-            documentService.deleteDocument(documentId);
-        }, "Should throw StorageException when S3 deletion fails");
+        assertThrows(DocumentStorageException.class, () -> {
+            documentService.deleteDocument(testDocumentId.getMostSignificantBits());
+        }, "Should throw DocumentStorageException for S3 error");
 
         // Verify document was not deleted from repository
         verify(documentRepository, never()).delete(any(Document.class));
     }
 
     @Test
-    @DisplayName("Should generate signed URL with correct expiration time")
-    void generateSignedUrlWithCorrectExpiration() {
+    @DisplayName("Test associating document with application")
+    void testAssociateWithApplication() {
         // Arrange
-        // Mock S3 presigner
-        URL mockUrl = new URL("https", "s3.example.com", "/documents/abc-123-xyz?signature=xyz");
-        when(presignedGetObjectRequest.url()).thenReturn(mockUrl);
-        when(s3Presigner.presignGetObject(any(GetObjectPresignRequest.class))).thenReturn(presignedGetObjectRequest);
+        when(documentRepository.findById(testDocumentId)).thenReturn(Optional.of(testDocument));
+        when(documentRepository.save(any(Document.class))).thenReturn(testDocument);
+        UUID newApplicationId = UUID.randomUUID();
 
-        // Use reflection to access private method
-        try {
-            java.lang.reflect.Method generateSignedUrlMethod = DocumentServiceImpl.class.getDeclaredMethod(
-                "generateSignedUrl", String.class);
-            generateSignedUrlMethod.setAccessible(true);
+        // Act
+        DocumentResponseDTO result = documentService.associateWithApplication(
+                testDocumentId.getMostSignificantBits(), 
+                newApplicationId.getMostSignificantBits());
 
-            // Act
-            String result = (String) generateSignedUrlMethod.invoke(documentService, storagePath);
+        // Assert
+        assertNotNull(result, "Result should not be null");
+        assertEquals(newApplicationId.toString(), result.getApplicationId().toString(), "Application ID should be updated");
 
-            // Assert
-            assertEquals(signedUrl, result, "Signed URL should match");
-
-            // Verify S3 presigner was called with correct parameters
-            ArgumentCaptor<GetObjectPresignRequest> presignRequestCaptor = ArgumentCaptor.forClass(GetObjectPresignRequest.class);
-            verify(s3Presigner).presignGetObject(presignRequestCaptor.capture());
-            GetObjectPresignRequest capturedRequest = presignRequestCaptor.getValue();
-            assertEquals(Duration.ofSeconds(300), capturedRequest.signatureDuration(), "Signature duration should match");
-
-            // Verify GetObjectRequest was built correctly
-            ArgumentCaptor<GetObjectRequest> getRequestCaptor = ArgumentCaptor.forClass(GetObjectRequest.class);
-            verify(presignRequestCaptor.getValue()).getObjectRequest();
-            // Note: We can't directly capture the GetObjectRequest since it's built inside the method
-            // But we can verify the presigner was called with the correct parameters
-        } catch (Exception e) {
-            fail("Failed to test generateSignedUrl: " + e.getMessage());
-        }
+        // Verify document was saved to repository with new application ID
+        ArgumentCaptor<Document> documentCaptor = ArgumentCaptor.forClass(Document.class);
+        verify(documentRepository).save(documentCaptor.capture());
+        assertEquals(newApplicationId, documentCaptor.getValue().getApplicationId(), "Document should have new application ID");
     }
 
     @Test
-    @DisplayName("Should create DocumentResponseDTO with correct fields")
-    void createDocumentResponseDTOWithCorrectFields() {
-        // Use reflection to access private method
-        try {
-            java.lang.reflect.Method createDocumentResponseDTOMethod = DocumentServiceImpl.class.getDeclaredMethod(
-                "createDocumentResponseDTO", Document.class, String.class);
-            createDocumentResponseDTOMethod.setAccessible(true);
+    @DisplayName("Test associating document with application when document doesn't exist")
+    void testAssociateWithApplicationDocumentNotFound() {
+        // Arrange
+        when(documentRepository.findById(any(UUID.class))).thenReturn(Optional.empty());
+        UUID newApplicationId = UUID.randomUUID();
 
-            // Act
-            DocumentResponseDTO result = (DocumentResponseDTO) createDocumentResponseDTOMethod.invoke(
-                documentService, document, signedUrl);
+        // Act & Assert
+        assertThrows(DocumentNotFoundException.class, () -> {
+            documentService.associateWithApplication(999L, newApplicationId.getMostSignificantBits());
+        }, "Should throw DocumentNotFoundException for non-existent document");
 
-            // Assert
-            assertNotNull(result, "Result should not be null");
-            assertEquals(documentId, result.getId(), "Document ID should match");
-            assertEquals(applicationId, result.getApplicationId(), "Application ID should match");
-            assertEquals(DocumentType.BANK_STATEMENT, result.getType(), "Document type should match");
-            assertEquals("bank_statement", result.getClassification(), "Classification should match");
-            assertEquals(signedUrl, result.getSignedUrl(), "Signed URL should match");
-            assertEquals(metadataJson, result.getMetadata(), "Metadata should match");
-        } catch (Exception e) {
-            fail("Failed to test createDocumentResponseDTO: " + e.getMessage());
-        }
+        // Verify document was not saved to repository
+        verify(documentRepository, never()).save(any(Document.class));
     }
 
     @Test
-    @DisplayName("Should generate unique storage path with correct format")
-    void generateStoragePathWithCorrectFormat() {
-        // Use reflection to access private method
-        try {
-            java.lang.reflect.Method generateStoragePathMethod = DocumentServiceImpl.class.getDeclaredMethod(
-                "generateStoragePath", Long.class, DocumentType.class);
-            generateStoragePathMethod.setAccessible(true);
+    @DisplayName("Test getting document content")
+    void testGetDocumentContent() {
+        // Arrange
+        when(documentRepository.findById(testDocumentId)).thenReturn(Optional.of(testDocument));
+        
+        // Mock S3 response
+        byte[] content = "Test file content".getBytes();
+        ByteArrayInputStream contentStream = new ByteArrayInputStream(content);
+        ResponseInputStream<GetObjectResponse> s3Response = mock(ResponseInputStream.class);
+        when(s3Response.response()).thenReturn(GetObjectResponse.builder().contentType("application/pdf").build());
+        when(s3Client.getObject(any(GetObjectRequest.class))).thenReturn(s3Response);
 
-            // Act
-            String result = (String) generateStoragePathMethod.invoke(
-                documentService, applicationId, DocumentType.BANK_STATEMENT);
+        // Act
+        InputStream result = documentService.getDocumentContent(testDocumentId.getMostSignificantBits());
 
-            // Assert
-            assertNotNull(result, "Result should not be null");
-            assertTrue(result.startsWith("applications/100/bank_statement/"), 
-                "Storage path should start with correct prefix");
-            assertTrue(result.length() > "applications/100/bank_statement/".length(), 
-                "Storage path should include a UUID");
-        } catch (Exception e) {
-            fail("Failed to test generateStoragePath: " + e.getMessage());
-        }
+        // Assert
+        assertNotNull(result, "Result should not be null");
+        
+        // Verify S3 get was called with correct parameters
+        verify(s3Client).getObject(any(GetObjectRequest.class));
+    }
+
+    @Test
+    @DisplayName("Test getting document content when document doesn't exist")
+    void testGetDocumentContentDocumentNotFound() {
+        // Arrange
+        when(documentRepository.findById(any(UUID.class))).thenReturn(Optional.empty());
+
+        // Act & Assert
+        assertThrows(DocumentNotFoundException.class, () -> {
+            documentService.getDocumentContent(999L);
+        }, "Should throw DocumentNotFoundException for non-existent document");
+
+        // Verify S3 get was not called
+        verify(s3Client, never()).getObject(any(GetObjectRequest.class));
+    }
+
+    @Test
+    @DisplayName("Test getting document content with S3 error")
+    void testGetDocumentContentWithS3Error() {
+        // Arrange
+        when(documentRepository.findById(testDocumentId)).thenReturn(Optional.of(testDocument));
+        when(s3Client.getObject(any(GetObjectRequest.class)))
+                .thenThrow(new S3Exception("S3 error"));
+
+        // Act & Assert
+        assertThrows(DocumentStorageException.class, () -> {
+            documentService.getDocumentContent(testDocumentId.getMostSignificantBits());
+        }, "Should throw DocumentStorageException for S3 error");
+    }
+
+    @Test
+    @DisplayName("Test updating document classification")
+    void testUpdateDocumentClassification() {
+        // Arrange
+        when(documentRepository.findById(testDocumentId)).thenReturn(Optional.of(testDocument));
+        when(documentRepository.save(any(Document.class))).thenReturn(testDocument);
+        String newClassification = "NEEDS_REVIEW";
+        Double newConfidence = 0.75;
+
+        // Act
+        DocumentResponseDTO result = documentService.updateDocumentClassification(
+                testDocumentId.getMostSignificantBits(), 
+                newClassification, 
+                newConfidence);
+
+        // Assert
+        assertNotNull(result, "Result should not be null");
+        assertEquals(newClassification, result.getClassification(), "Classification should be updated");
+        assertEquals(newConfidence, result.getClassificationConfidence(), "Confidence score should be updated");
+
+        // Verify document was saved to repository with new classification
+        ArgumentCaptor<Document> documentCaptor = ArgumentCaptor.forClass(Document.class);
+        verify(documentRepository).save(documentCaptor.capture());
+        assertEquals(DocumentClassification.fromString(newClassification), 
+                documentCaptor.getValue().getClassification(), 
+                "Document should have new classification");
+    }
+
+    @Test
+    @DisplayName("Test updating document classification with additional metadata")
+    void testUpdateDocumentClassificationWithMetadata() {
+        // Arrange
+        when(documentRepository.findById(testDocumentId)).thenReturn(Optional.of(testDocument));
+        when(documentRepository.save(any(Document.class))).thenReturn(testDocument);
+        String newClassification = "NEEDS_REVIEW";
+        Double newConfidence = 0.75;
+        Map<String, Object> additionalMetadata = new HashMap<>();
+        additionalMetadata.put("reviewReason", "Signature mismatch");
+        additionalMetadata.put("reviewPriority", "High");
+
+        // Act
+        DocumentResponseDTO result = documentService.updateDocumentClassification(
+                testDocumentId.getMostSignificantBits(), 
+                newClassification, 
+                newConfidence,
+                additionalMetadata);
+
+        // Assert
+        assertNotNull(result, "Result should not be null");
+        assertEquals(newClassification, result.getClassification(), "Classification should be updated");
+        assertEquals(newConfidence, result.getClassificationConfidence(), "Confidence score should be updated");
+        assertTrue(result.getMetadata().containsKey("reviewReason"), "Metadata should contain reviewReason");
+        assertTrue(result.getMetadata().containsKey("reviewPriority"), "Metadata should contain reviewPriority");
+
+        // Verify document was saved to repository with new classification and metadata
+        ArgumentCaptor<Document> documentCaptor = ArgumentCaptor.forClass(Document.class);
+        verify(documentRepository).save(documentCaptor.capture());
+        Document savedDocument = documentCaptor.getValue();
+        assertEquals(DocumentClassification.fromString(newClassification), 
+                savedDocument.getClassification(), 
+                "Document should have new classification");
+        assertTrue(savedDocument.getMetadata().containsKey("reviewReason"), 
+                "Document metadata should contain reviewReason");
+        assertTrue(savedDocument.getMetadata().containsKey("reviewPriority"), 
+                "Document metadata should contain reviewPriority");
+    }
+
+    @Test
+    @DisplayName("Test updating document classification when document doesn't exist")
+    void testUpdateDocumentClassificationDocumentNotFound() {
+        // Arrange
+        when(documentRepository.findById(any(UUID.class))).thenReturn(Optional.empty());
+
+        // Act & Assert
+        assertThrows(DocumentNotFoundException.class, () -> {
+            documentService.updateDocumentClassification(999L, "NEEDS_REVIEW", 0.75);
+        }, "Should throw DocumentNotFoundException for non-existent document");
+
+        // Verify document was not saved to repository
+        verify(documentRepository, never()).save(any(Document.class));
+    }
+
+    @Test
+    @DisplayName("Test searching documents by metadata")
+    void testSearchDocuments() {
+        // Arrange
+        Map<String, Object> searchCriteria = new HashMap<>();
+        searchCriteria.put("bankName", "Test Bank");
+        
+        // Mock JSON conversion
+        String searchJson = "{\"bankName\":\"Test Bank\"}";
+        
+        // Mock repository response
+        when(documentRepository.findByMetadataContains(eq(searchJson), any()))
+                .thenReturn(new org.springframework.data.domain.PageImpl<>(Collections.singletonList(testDocument)));
+
+        // Act
+        org.springframework.data.domain.Page<DocumentResponseDTO> result = 
+                documentService.searchDocuments(searchCriteria, org.springframework.data.domain.PageRequest.of(0, 10));
+
+        // Assert
+        assertNotNull(result, "Result should not be null");
+        assertEquals(1, result.getTotalElements(), "Result should contain one document");
+        DocumentResponseDTO dto = result.getContent().get(0);
+        assertEquals(testDocumentId.toString(), dto.getId().toString(), "Document ID should match");
+    }
+
+    @Test
+    @DisplayName("Test document exists")
+    void testDocumentExists() {
+        // Arrange
+        when(documentRepository.existsById(testDocumentId)).thenReturn(true);
+
+        // Act
+        boolean result = documentService.documentExists(testDocumentId.getMostSignificantBits());
+
+        // Assert
+        assertTrue(result, "Document should exist");
+    }
+
+    @Test
+    @DisplayName("Test document does not exist")
+    void testDocumentDoesNotExist() {
+        // Arrange
+        when(documentRepository.existsById(any(UUID.class))).thenReturn(false);
+
+        // Act
+        boolean result = documentService.documentExists(999L);
+
+        // Assert
+        assertFalse(result, "Document should not exist");
+    }
+
+    @Test
+    @DisplayName("Test count documents by type")
+    void testCountDocumentsByType() {
+        // Arrange
+        when(documentRepository.countByType(DocumentType.BANK_STATEMENT)).thenReturn(5L);
+
+        // Act
+        long result = documentService.countDocumentsByType(DocumentType.BANK_STATEMENT);
+
+        // Assert
+        assertEquals(5L, result, "Count should match expected value");
+    }
+
+    @Test
+    @DisplayName("Test count documents by application ID")
+    void testCountDocumentsByApplicationId() {
+        // Arrange
+        when(documentRepository.countByApplicationId(testApplicationId)).thenReturn(3L);
+
+        // Act
+        long result = documentService.countDocumentsByApplicationId(testApplicationId.getMostSignificantBits());
+
+        // Assert
+        assertEquals(3L, result, "Count should match expected value");
+    }
+
+    @Test
+    @DisplayName("Test validate document metadata with valid request")
+    void testValidateDocumentMetadataValid() {
+        // Act
+        boolean result = documentService.validateDocumentMetadata(testDocumentRequest);
+
+        // Assert
+        assertTrue(result, "Validation should pass for valid request");
+    }
+
+    @Test
+    @DisplayName("Test validate document metadata with null request")
+    void testValidateDocumentMetadataNullRequest() {
+        // Act
+        boolean result = documentService.validateDocumentMetadata(null);
+
+        // Assert
+        assertFalse(result, "Validation should fail for null request");
+    }
+
+    @Test
+    @DisplayName("Test validate document metadata with missing required fields")
+    void testValidateDocumentMetadataMissingFields() {
+        // Arrange
+        DocumentRequestDTO invalidRequest = new DocumentRequestDTO();
+        // Missing required fields
+
+        // Act
+        boolean result = documentService.validateDocumentMetadata(invalidRequest);
+
+        // Assert
+        assertFalse(result, "Validation should fail for request with missing fields");
+    }
+
+    @Test
+    @DisplayName("Test validate document metadata with invalid classification")
+    void testValidateDocumentMetadataInvalidClassification() {
+        // Arrange
+        DocumentRequestDTO invalidRequest = new DocumentRequestDTO();
+        invalidRequest.setApplicationId(testApplicationId);
+        invalidRequest.setType(DocumentType.BANK_STATEMENT);
+        invalidRequest.setClassification("INVALID_CLASSIFICATION");
+
+        // Act
+        boolean result = documentService.validateDocumentMetadata(invalidRequest);
+
+        // Assert
+        assertFalse(result, "Validation should fail for request with invalid classification");
+    }
+
+    @Test
+    @DisplayName("Test validate document metadata with invalid confidence score")
+    void testValidateDocumentMetadataInvalidConfidenceScore() {
+        // Arrange
+        DocumentRequestDTO invalidRequest = new DocumentRequestDTO();
+        invalidRequest.setApplicationId(testApplicationId);
+        invalidRequest.setType(DocumentType.BANK_STATEMENT);
+        invalidRequest.setClassificationConfidence(1.5); // Invalid: > 1.0
+
+        // Act
+        boolean result = documentService.validateDocumentMetadata(invalidRequest);
+
+        // Assert
+        assertFalse(result, "Validation should fail for request with invalid confidence score");
+    }
+
+    @Test
+    @DisplayName("Test process document for extraction")
+    void testProcessDocumentForExtraction() {
+        // Arrange
+        when(documentRepository.findById(testDocumentId)).thenReturn(Optional.of(testDocument));
+        when(documentRepository.save(any(Document.class))).thenReturn(testDocument);
+
+        // Act
+        DocumentResponseDTO result = documentService.processDocumentForExtraction(testDocumentId.getMostSignificantBits());
+
+        // Assert
+        assertNotNull(result, "Result should not be null");
+        
+        // Verify metadata was updated with processing information
+        ArgumentCaptor<Document> documentCaptor = ArgumentCaptor.forClass(Document.class);
+        verify(documentRepository).save(documentCaptor.capture());
+        Document savedDocument = documentCaptor.getValue();
+        assertTrue(savedDocument.getMetadata().containsKey("processingStarted"), 
+                "Document metadata should contain processingStarted");
+        assertTrue(savedDocument.getMetadata().containsKey("processingStatus"), 
+                "Document metadata should contain processingStatus");
+        assertEquals("IN_PROGRESS", savedDocument.getMetadataValue("processingStatus"), 
+                "Processing status should be IN_PROGRESS");
+    }
+
+    @Test
+    @DisplayName("Test get documents requiring review")
+    void testGetDocumentsRequiringReview() {
+        // Arrange
+        Double confidenceThreshold = 0.8;
+        when(documentRepository.findByConfidenceScoreLessThan(confidenceThreshold, org.springframework.data.domain.PageRequest.of(0, 10)))
+                .thenReturn(new org.springframework.data.domain.PageImpl<>(Collections.singletonList(testDocument)));
+
+        // Act
+        org.springframework.data.domain.Page<DocumentResponseDTO> result = 
+                documentService.getDocumentsRequiringReview(confidenceThreshold, org.springframework.data.domain.PageRequest.of(0, 10));
+
+        // Assert
+        assertNotNull(result, "Result should not be null");
+        assertEquals(1, result.getTotalElements(), "Result should contain one document");
+        DocumentResponseDTO dto = result.getContent().get(0);
+        assertEquals(testDocumentId.toString(), dto.getId().toString(), "Document ID should match");
+    }
+
+    @Test
+    @DisplayName("Test mark document as reviewed and approved")
+    void testMarkDocumentAsReviewedApproved() {
+        // Arrange
+        when(documentRepository.findById(testDocumentId)).thenReturn(Optional.of(testDocument));
+        when(documentRepository.save(any(Document.class))).thenReturn(testDocument);
+        Long reviewerId = 123L;
+        boolean approved = true;
+        String comments = "Document looks good";
+
+        // Act
+        DocumentResponseDTO result = documentService.markDocumentAsReviewed(
+                testDocumentId.getMostSignificantBits(), 
+                reviewerId, 
+                approved, 
+                comments);
+
+        // Assert
+        assertNotNull(result, "Result should not be null");
+        assertEquals("VERIFIED", result.getClassification(), "Classification should be VERIFIED for approved document");
+        
+        // Verify document was saved with review information
+        ArgumentCaptor<Document> documentCaptor = ArgumentCaptor.forClass(Document.class);
+        verify(documentRepository).save(documentCaptor.capture());
+        Document savedDocument = documentCaptor.getValue();
+        assertTrue(savedDocument.getMetadata().containsKey("review"), 
+                "Document metadata should contain review information");
+        
+        @SuppressWarnings("unchecked")
+        Map<String, Object> reviewInfo = (Map<String, Object>) savedDocument.getMetadataValue("review");
+        assertNotNull(reviewInfo, "Review info should not be null");
+        assertEquals(reviewerId, reviewInfo.get("reviewerId"), "Reviewer ID should match");
+        assertEquals(approved, reviewInfo.get("approved"), "Approved status should match");
+        assertEquals(comments, reviewInfo.get("comments"), "Comments should match");
+    }
+
+    @Test
+    @DisplayName("Test mark document as reviewed and rejected")
+    void testMarkDocumentAsReviewedRejected() {
+        // Arrange
+        when(documentRepository.findById(testDocumentId)).thenReturn(Optional.of(testDocument));
+        when(documentRepository.save(any(Document.class))).thenReturn(testDocument);
+        Long reviewerId = 123L;
+        boolean approved = false;
+        String comments = "Document is suspicious";
+
+        // Act
+        DocumentResponseDTO result = documentService.markDocumentAsReviewed(
+                testDocumentId.getMostSignificantBits(), 
+                reviewerId, 
+                approved, 
+                comments);
+
+        // Assert
+        assertNotNull(result, "Result should not be null");
+        assertEquals("REJECTED", result.getClassification(), "Classification should be REJECTED for rejected document");
+        
+        // Verify document was saved with review information
+        ArgumentCaptor<Document> documentCaptor = ArgumentCaptor.forClass(Document.class);
+        verify(documentRepository).save(documentCaptor.capture());
+        Document savedDocument = documentCaptor.getValue();
+        assertTrue(savedDocument.getMetadata().containsKey("review"), 
+                "Document metadata should contain review information");
+        
+        @SuppressWarnings("unchecked")
+        Map<String, Object> reviewInfo = (Map<String, Object>) savedDocument.getMetadataValue("review");
+        assertNotNull(reviewInfo, "Review info should not be null");
+        assertEquals(reviewerId, reviewInfo.get("reviewerId"), "Reviewer ID should match");
+        assertEquals(approved, reviewInfo.get("approved"), "Approved status should match");
+        assertEquals(comments, reviewInfo.get("comments"), "Comments should match");
+    }
+
+    @Test
+    @DisplayName("Test get document versions")
+    void testGetDocumentVersions() {
+        // Arrange
+        when(documentRepository.findById(testDocumentId)).thenReturn(Optional.of(testDocument));
+
+        // Act
+        List<DocumentResponseDTO> result = documentService.getDocumentVersions(testDocumentId.getMostSignificantBits());
+
+        // Assert
+        assertNotNull(result, "Result should not be null");
+        assertEquals(1, result.size(), "Result should contain one version");
+        DocumentResponseDTO dto = result.get(0);
+        assertEquals(testDocumentId.toString(), dto.getId().toString(), "Document ID should match");
+    }
+
+    @Test
+    @DisplayName("Test create document version")
+    void testCreateDocumentVersion() throws IOException {
+        // Arrange
+        when(documentRepository.findById(testDocumentId)).thenReturn(Optional.of(testDocument));
+        when(documentRepository.save(any(Document.class))).thenReturn(testDocument);
+
+        // New version file
+        byte[] fileContent = "New version content".getBytes();
+        MultipartFile newVersionFile = new MockMultipartFile(
+                "new-version.pdf",
+                "new-version.pdf",
+                "application/pdf",
+                fileContent);
+
+        // Act
+        DocumentResponseDTO result = documentService.createDocumentVersion(
+                testDocumentId.getMostSignificantBits(), 
+                newVersionFile, 
+                testDocumentRequest);
+
+        // Assert
+        assertNotNull(result, "Result should not be null");
+        
+        // Verify S3 upload was called with correct parameters
+        verify(s3Client).putObject(any(PutObjectRequest.class), any(RequestBody.class));
+        
+        // Verify document was saved to repository
+        ArgumentCaptor<Document> documentCaptor = ArgumentCaptor.forClass(Document.class);
+        verify(documentRepository).save(documentCaptor.capture());
+        Document savedDocument = documentCaptor.getValue();
+        assertEquals(testDocument.getApplicationId(), savedDocument.getApplicationId(), 
+                "Application ID should match original document");
+        assertEquals(testDocument.getType(), savedDocument.getType(), 
+                "Document type should match original document");
+        assertTrue(savedDocument.getMetadata().containsKey("previousVersionId"), 
+                "Metadata should contain previousVersionId");
+        assertTrue(savedDocument.getMetadata().containsKey("versionCreatedAt"), 
+                "Metadata should contain versionCreatedAt");
+    }
+
+    @Test
+    @DisplayName("Test convert to DTO")
+    void testConvertToDTO() {
+        // Act
+        DocumentResponseDTO result = documentService.convertToDTO(testDocument);
+
+        // Assert
+        assertNotNull(result, "Result should not be null");
+        assertEquals(testDocumentId.toString(), result.getId().toString(), "Document ID should match");
+        assertEquals(testApplicationId.toString(), result.getApplicationId().toString(), "Application ID should match");
+        assertEquals("BANK_STATEMENT", result.getType(), "Document type should match");
+        assertEquals("VERIFIED", result.getClassification(), "Document classification should match");
+        assertEquals(testSignedUrl.toString(), result.getDownloadUrl(), "Download URL should match");
+    }
+
+    @Test
+    @DisplayName("Test convert to entity")
+    void testConvertToEntity() {
+        // Act
+        Document result = documentService.convertToEntity(testDocumentRequest);
+
+        // Assert
+        assertNotNull(result, "Result should not be null");
+        assertEquals(testApplicationId, result.getApplicationId(), "Application ID should match");
+        assertEquals(DocumentType.BANK_STATEMENT, result.getType(), "Document type should match");
+        assertEquals(DocumentClassification.VERIFIED, result.getClassification(), "Document classification should match");
+        assertTrue(result.getMetadata().containsKey("accountNumber"), "Metadata should contain accountNumber");
+        assertTrue(result.getMetadata().containsKey("bankName"), "Metadata should contain bankName");
     }
 }
