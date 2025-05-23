@@ -4,47 +4,44 @@
 """
 OCR Service Test Configuration Package
 
-This package provides testing utilities and fixtures for the OCR Service configuration modules.
-It makes the test module discoverable by pytest and enables importing test utilities across test files.
+This package contains test utilities and fixtures for testing the OCR Service's
+configuration modules. It makes the test module discoverable by pytest and enables
+importing test utilities across test files.
 
-The test_config package contains tests for all configuration components:
-
-- test_app_config: Tests for core application configuration
-- test_rabbitmq_config: Tests for RabbitMQ connection and messaging settings
-- test_s3_config: Tests for S3-compatible storage client configuration
-- test_tensorflow_config: Tests for TensorFlow models configuration
-- test_logging_config: Tests for logging system configuration
-- test_init: Tests for the configuration package structure itself
-
-This package also provides shared fixtures and utilities through conftest.py that can be used
-across all test modules to ensure consistent testing environments.
+The test_config module provides specialized test fixtures and utilities for verifying
+that the OCR Service configuration correctly handles:
+- Environment variable loading and validation
+- TensorFlow model configuration with GPU acceleration
+- S3 storage configuration with encryption settings
+- RabbitMQ connection and queue configuration
+- Logging setup across different environments
 
 Example usage in test files:
-    from tests.test_config import get_mock_environment_variables
+    from tests.test_config import mock_environment_variables
+    from tests.test_config import create_test_config
+    from tests.test_config import TEST_MODEL_PATHS
     
-    def test_something():
-        # Use shared test utilities
-        mock_env_vars = get_mock_environment_variables('development')
-        with mock_env_vars:
-            # Test with mocked environment variables
-            ...
+    def test_tensorflow_config_loading(mock_environment_variables):
+        # Test implementation using the imported fixtures
+        ...
 """
 
-# Import and re-export shared test utilities and fixtures from conftest.py
-from .conftest import (
-    mock_environment,
-    get_mock_environment_variables,
-    mock_tensorflow_config,
-    mock_s3_config,
-    mock_rabbitmq_config,
-    mock_app_config,
-    mock_logging_config
-)
+# Package version for tracking test compatibility with implementation
+__version__ = '0.1.0'
 
-# Version of the test_config package - should match the version of the package being tested
-__version__ = '1.0.0'
+# Test environment constants that can be imported by test modules
+TEST_ENVIRONMENTS = ['development', 'staging', 'production']
+TEST_LOG_LEVELS = ['DEBUG', 'INFO', 'WARNING', 'ERROR']
 
-# Package metadata
-__author__ = 'Dollar Funding OCR Team'
-__email__ = 'ocr-team@dollarfunding.com'
-__description__ = 'Test configuration package for the OCR Service'
+# Define what should be imported with 'from tests.test_config import *'
+__all__ = [
+    # Version information
+    '__version__',
+    
+    # Test environment constants
+    'TEST_ENVIRONMENTS',
+    'TEST_LOG_LEVELS',
+    
+    # The package doesn't export any fixtures directly as they should be
+    # imported from conftest.py by pytest automatically
+]
