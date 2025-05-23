@@ -1,10 +1,14 @@
+# --------------------------------------------------------
 # Kubernetes Module Variables
-# This file defines all input variables for the Kubernetes module, enabling flexible and reusable
-# infrastructure configuration across development, staging, and production environments.
+# --------------------------------------------------------
+# This file defines all input variables for the Kubernetes module,
+# enabling flexible and reusable infrastructure configuration across
+# development, staging, and production environments for the
+# Merchant Cash Advance (MCA) Application Processing System.
 
-# ---------------------------------------------------------------------------------------------------------------------
-# CLUSTER CONFIGURATION VARIABLES
-# ---------------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------
+# Cluster Configuration Variables
+# --------------------------------------------------------
 
 variable "cluster_name" {
   description = "Name of the Kubernetes cluster"
@@ -14,35 +18,35 @@ variable "cluster_name" {
 variable "kubernetes_version" {
   description = "Kubernetes version to use for the cluster"
   type        = string
-  default     = "1.25.0"
-}
-
-variable "cloud_provider" {
-  description = "Cloud provider where the cluster will be deployed (aws, azure, gcp)"
-  type        = string
-  validation {
-    condition     = contains(["aws", "azure", "gcp", "on-prem"], var.cloud_provider)
-    error_message = "Allowed values for cloud_provider are: aws, azure, gcp, or on-prem."
-  }
+  default     = "1.27"
 }
 
 variable "region" {
-  description = "Primary region where the cluster will be deployed"
+  description = "Region where the Kubernetes cluster will be created"
   type        = string
 }
 
 variable "additional_regions" {
-  description = "Additional regions for multi-region cluster configuration (for high availability)"
+  description = "Additional regions for multi-region cluster configuration"
   type        = list(string)
   default     = []
 }
 
+variable "cloud_provider" {
+  description = "Cloud provider where the Kubernetes cluster will be deployed (aws, azure, gcp)"
+  type        = string
+  validation {
+    condition     = contains(["aws", "azure", "gcp"], var.cloud_provider)
+    error_message = "Cloud provider must be one of: aws, azure, gcp."
+  }
+}
+
 variable "environment" {
-  description = "Deployment environment (development, staging, production)"
+  description = "Environment name (development, staging, production)"
   type        = string
   validation {
     condition     = contains(["development", "staging", "production"], var.environment)
-    error_message = "Allowed values for environment are: development, staging, or production."
+    error_message = "Environment must be one of: development, staging, production."
   }
 }
 
@@ -52,55 +56,9 @@ variable "tags" {
   default     = {}
 }
 
-# ---------------------------------------------------------------------------------------------------------------------
-# NETWORKING CONFIGURATION VARIABLES
-# ---------------------------------------------------------------------------------------------------------------------
-
-variable "vpc_id" {
-  description = "ID of the VPC where the cluster will be deployed"
-  type        = string
-  default     = ""
-}
-
-variable "subnet_ids" {
-  description = "List of subnet IDs where the cluster nodes will be deployed"
-  type        = list(string)
-  default     = []
-}
-
-variable "pod_cidr" {
-  description = "CIDR block for pod IP addresses"
-  type        = string
-  default     = "10.244.0.0/16"
-}
-
-variable "service_cidr" {
-  description = "CIDR block for service IP addresses"
-  type        = string
-  default     = "10.96.0.0/16"
-}
-
-variable "enable_private_endpoint" {
-  description = "Whether to enable private endpoint for the Kubernetes API server"
-  type        = bool
-  default     = true
-}
-
-variable "enable_private_nodes" {
-  description = "Whether to enable private nodes (no public IP addresses)"
-  type        = bool
-  default     = true
-}
-
-variable "authorized_networks" {
-  description = "List of CIDR blocks that can access the Kubernetes API server"
-  type        = list(string)
-  default     = []
-}
-
-# ---------------------------------------------------------------------------------------------------------------------
-# NODE POOL CONFIGURATION VARIABLES
-# ---------------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------
+# Node Pool Configuration Variables
+# --------------------------------------------------------
 
 variable "default_node_pool_name" {
   description = "Name of the default node pool"
@@ -108,83 +66,86 @@ variable "default_node_pool_name" {
   default     = "default"
 }
 
-variable "default_node_pool_machine_type" {
-  description = "Machine type for the default node pool"
-  type        = string
-  default     = "n2-standard-4"
-}
-
-variable "default_node_pool_min_count" {
-  description = "Minimum number of nodes in the default node pool"
+variable "default_node_count" {
+  description = "Number of nodes in the default node pool"
   type        = number
-  default     = 1
+  default     = 3
 }
 
-variable "default_node_pool_max_count" {
-  description = "Maximum number of nodes in the default node pool"
+variable "default_node_min_count" {
+  description = "Minimum number of nodes for autoscaling the default node pool"
   type        = number
-  default     = 5
+  default     = 3
 }
 
-variable "default_node_pool_disk_size_gb" {
-  description = "Disk size (in GB) for each node in the default node pool"
+variable "default_node_max_count" {
+  description = "Maximum number of nodes for autoscaling the default node pool"
+  type        = number
+  default     = 10
+}
+
+variable "default_node_disk_size" {
+  description = "Disk size in GB for default node pool VMs"
   type        = number
   default     = 100
 }
 
+variable "default_node_machine_type" {
+  description = "Machine type for default node pool VMs"
+  type        = string
+  default     = "Standard_D4s_v3" # Azure default, will be mapped to equivalent in other clouds
+}
+
+# GPU Node Pool for OCR Service
 variable "enable_gpu_node_pool" {
-  description = "Whether to create a GPU-enabled node pool for OCR service"
+  description = "Whether to create a GPU-enabled node pool for the OCR service"
   type        = bool
   default     = true
 }
 
 variable "gpu_node_pool_name" {
-  description = "Name of the GPU-enabled node pool"
+  description = "Name of the GPU node pool for OCR service"
   type        = string
   default     = "gpu-pool"
 }
 
-variable "gpu_node_pool_machine_type" {
-  description = "Machine type for the GPU-enabled node pool"
-  type        = string
-  default     = "n1-standard-8"
+variable "gpu_node_count" {
+  description = "Number of GPU nodes for OCR service"
+  type        = number
+  default     = 2
 }
 
-variable "gpu_node_pool_accelerator_type" {
-  description = "GPU accelerator type for the GPU-enabled node pool"
-  type        = string
-  default     = "nvidia-tesla-t4"
-}
-
-variable "gpu_node_pool_accelerator_count" {
-  description = "Number of GPUs per node in the GPU-enabled node pool"
+variable "gpu_node_min_count" {
+  description = "Minimum number of GPU nodes for autoscaling"
   type        = number
   default     = 1
 }
 
-variable "gpu_node_pool_min_count" {
-  description = "Minimum number of nodes in the GPU-enabled node pool"
+variable "gpu_node_max_count" {
+  description = "Maximum number of GPU nodes for autoscaling"
   type        = number
-  default     = 0
+  default     = 5
 }
 
-variable "gpu_node_pool_max_count" {
-  description = "Maximum number of nodes in the GPU-enabled node pool"
-  type        = number
-  default     = 3
+variable "gpu_node_machine_type" {
+  description = "Machine type for GPU nodes (should support NVIDIA GPUs)"
+  type        = string
+  default     = "Standard_NC6s_v3" # Azure GPU VM, will be mapped to equivalent in other clouds
 }
 
-variable "gpu_node_pool_disk_size_gb" {
-  description = "Disk size (in GB) for each node in the GPU-enabled node pool"
-  type        = number
-  default     = 100
+variable "gpu_type" {
+  description = "Type of GPU to use for the OCR service"
+  type        = string
+  default     = "nvidia-tesla-v100"
 }
 
+# Additional Node Pools
 variable "additional_node_pools" {
-  description = "Additional node pools to create (for specialized workloads)"
+  description = "Additional node pools to create in the cluster"
   type = list(object({
     name                = string
     machine_type        = string
+    node_count          = number
     min_count           = number
     max_count           = number
     disk_size_gb        = number
@@ -197,265 +158,252 @@ variable "additional_node_pools" {
   default = []
 }
 
-# ---------------------------------------------------------------------------------------------------------------------
-# MONITORING AND LOGGING CONFIGURATION VARIABLES
-# ---------------------------------------------------------------------------------------------------------------------
+# --------------------------------------------------------
+# Networking Variables
+# --------------------------------------------------------
+
+variable "network_plugin" {
+  description = "Network plugin to use for the Kubernetes cluster (kubenet, azure, calico)"
+  type        = string
+  default     = "kubenet"
+}
+
+variable "network_policy" {
+  description = "Network policy to use for the Kubernetes cluster (calico, azure)"
+  type        = string
+  default     = "calico"
+}
+
+variable "pod_cidr" {
+  description = "CIDR block for pod IP addresses"
+  type        = string
+  default     = "10.244.0.0/16"
+}
+
+variable "service_cidr" {
+  description = "CIDR block for Kubernetes service IP addresses"
+  type        = string
+  default     = "10.0.0.0/16"
+}
+
+variable "dns_service_ip" {
+  description = "IP address for Kubernetes DNS service"
+  type        = string
+  default     = "10.0.0.10"
+}
+
+variable "docker_bridge_cidr" {
+  description = "CIDR block for Docker bridge network"
+  type        = string
+  default     = "172.17.0.1/16"
+}
+
+variable "vnet_subnet_id" {
+  description = "ID of the subnet where the Kubernetes cluster will be deployed"
+  type        = string
+  default     = null
+}
+
+variable "load_balancer_sku" {
+  description = "SKU of the load balancer for Kubernetes services (basic or standard)"
+  type        = string
+  default     = "standard"
+}
+
+variable "private_cluster_enabled" {
+  description = "Whether to create a private Kubernetes cluster"
+  type        = bool
+  default     = false
+}
+
+# --------------------------------------------------------
+# Authentication and RBAC Variables
+# --------------------------------------------------------
+
+variable "rbac_enabled" {
+  description = "Whether to enable RBAC for the Kubernetes cluster"
+  type        = bool
+  default     = true
+}
+
+variable "admin_group_object_ids" {
+  description = "Object IDs of Azure AD groups with admin access to the cluster"
+  type        = list(string)
+  default     = []
+}
+
+variable "service_account_issuer" {
+  description = "Issuer URL for service account tokens"
+  type        = string
+  default     = ""
+}
+
+# --------------------------------------------------------
+# Monitoring and Logging Variables
+# --------------------------------------------------------
 
 variable "enable_monitoring" {
-  description = "Whether to enable monitoring for the cluster"
+  description = "Whether to enable monitoring for the Kubernetes cluster"
   type        = bool
   default     = true
 }
 
-variable "monitoring_service" {
-  description = "Monitoring service to use (stackdriver, datadog, prometheus)"
+variable "log_analytics_workspace_id" {
+  description = "ID of the Log Analytics workspace for cluster monitoring"
   type        = string
-  default     = "stackdriver"
+  default     = null
 }
 
-variable "enable_logging" {
-  description = "Whether to enable logging for the cluster"
+variable "enable_log_analytics_solution" {
+  description = "Whether to enable the Log Analytics solution for container insights"
   type        = bool
   default     = true
 }
 
-variable "logging_service" {
-  description = "Logging service to use (stackdriver, elasticsearch, loki)"
-  type        = string
-  default     = "stackdriver"
-}
-
-variable "log_retention_days" {
-  description = "Number of days to retain logs"
+variable "metrics_retention_days" {
+  description = "Number of days to retain metrics"
   type        = number
   default     = 30
 }
 
-# ---------------------------------------------------------------------------------------------------------------------
-# SECURITY CONFIGURATION VARIABLES
-# ---------------------------------------------------------------------------------------------------------------------
-
-variable "enable_network_policy" {
-  description = "Whether to enable Kubernetes NetworkPolicy"
-  type        = bool
-  default     = true
-}
-
-variable "enable_pod_security_policy" {
-  description = "Whether to enable PodSecurityPolicy"
-  type        = bool
-  default     = true
-}
-
-variable "enable_rbac" {
-  description = "Whether to enable RBAC authorization"
-  type        = bool
-  default     = true
-}
-
-variable "enable_shielded_nodes" {
-  description = "Whether to enable Shielded Nodes features on all nodes"
-  type        = bool
-  default     = true
-}
-
-variable "enable_binary_authorization" {
-  description = "Whether to enable Binary Authorization"
+variable "enable_datadog_integration" {
+  description = "Whether to enable Datadog integration for monitoring"
   type        = bool
   default     = false
 }
 
-variable "master_authorized_networks_config_cidr_blocks" {
-  description = "List of CIDR blocks to allow access to the Kubernetes master"
-  type = list(object({
-    cidr_block   = string
-    display_name = string
-  }))
-  default = []
-}
+# --------------------------------------------------------
+# Add-ons Variables
+# --------------------------------------------------------
 
-# ---------------------------------------------------------------------------------------------------------------------
-# ENVIRONMENT-SPECIFIC CONFIGURATION VARIABLES
-# ---------------------------------------------------------------------------------------------------------------------
-
-variable "development_node_count" {
-  description = "Number of nodes for development environment"
-  type        = number
-  default     = 1
-}
-
-variable "staging_node_count" {
-  description = "Number of nodes for staging environment"
-  type        = number
-  default     = 2
-}
-
-variable "production_node_count" {
-  description = "Number of nodes for production environment"
-  type        = number
-  default     = 3
-}
-
-variable "development_machine_type" {
-  description = "Machine type for development environment"
-  type        = string
-  default     = "n2-standard-2"
-}
-
-variable "staging_machine_type" {
-  description = "Machine type for staging environment"
-  type        = string
-  default     = "n2-standard-4"
-}
-
-variable "production_machine_type" {
-  description = "Machine type for production environment"
-  type        = string
-  default     = "n2-standard-8"
-}
-
-# ---------------------------------------------------------------------------------------------------------------------
-# RESOURCE ALLOCATION VARIABLES
-# ---------------------------------------------------------------------------------------------------------------------
-
-variable "resource_quotas" {
-  description = "Resource quotas for each namespace"
-  type = map(object({
-    cpu_request     = string
-    memory_request  = string
-    cpu_limit       = string
-    memory_limit    = string
-    pods            = number
-    services        = number
-    persistent_volumes = number
-  }))
-  default = {
-    "email-service" = {
-      cpu_request     = "1"
-      memory_request  = "2Gi"
-      cpu_limit       = "2"
-      memory_limit    = "4Gi"
-      pods            = 10
-      services        = 5
-      persistent_volumes = 2
-    },
-    "document-service" = {
-      cpu_request     = "2"
-      memory_request  = "4Gi"
-      cpu_limit       = "4"
-      memory_limit    = "8Gi"
-      pods            = 10
-      services        = 5
-      persistent_volumes = 5
-    },
-    "ocr-service" = {
-      cpu_request     = "4"
-      memory_request  = "8Gi"
-      cpu_limit       = "8"
-      memory_limit    = "16Gi"
-      pods            = 10
-      services        = 5
-      persistent_volumes = 10
-    },
-    "data-service" = {
-      cpu_request     = "2"
-      memory_request  = "4Gi"
-      cpu_limit       = "4"
-      memory_limit    = "8Gi"
-      pods            = 10
-      services        = 5
-      persistent_volumes = 5
-    },
-    "notification-service" = {
-      cpu_request     = "1"
-      memory_request  = "2Gi"
-      cpu_limit       = "2"
-      memory_limit    = "4Gi"
-      pods            = 10
-      services        = 5
-      persistent_volumes = 2
-    }
-  }
-}
-
-variable "limit_ranges" {
-  description = "Default container resource limits for each namespace"
-  type = map(object({
-    default_request_cpu    = string
-    default_request_memory = string
-    default_limit_cpu      = string
-    default_limit_memory   = string
-  }))
-  default = {
-    "email-service" = {
-      default_request_cpu    = "100m"
-      default_request_memory = "256Mi"
-      default_limit_cpu      = "500m"
-      default_limit_memory   = "512Mi"
-    },
-    "document-service" = {
-      default_request_cpu    = "200m"
-      default_request_memory = "512Mi"
-      default_limit_cpu      = "1"
-      default_limit_memory   = "1Gi"
-    },
-    "ocr-service" = {
-      default_request_cpu    = "500m"
-      default_request_memory = "1Gi"
-      default_limit_cpu      = "2"
-      default_limit_memory   = "4Gi"
-    },
-    "data-service" = {
-      default_request_cpu    = "200m"
-      default_request_memory = "512Mi"
-      default_limit_cpu      = "1"
-      default_limit_memory   = "1Gi"
-    },
-    "notification-service" = {
-      default_request_cpu    = "100m"
-      default_request_memory = "256Mi"
-      default_limit_cpu      = "500m"
-      default_limit_memory   = "512Mi"
-    }
-  }
-}
-
-# ---------------------------------------------------------------------------------------------------------------------
-# ADDON CONFIGURATION VARIABLES
-# ---------------------------------------------------------------------------------------------------------------------
-
-variable "enable_horizontal_pod_autoscaler" {
-  description = "Whether to enable the Horizontal Pod Autoscaler addon"
-  type        = bool
-  default     = true
-}
-
-variable "enable_http_load_balancing" {
-  description = "Whether to enable the HTTP (L7) load balancing addon"
-  type        = bool
-  default     = true
-}
-
-variable "enable_network_policy_config" {
-  description = "Whether to enable NetworkPolicy addon"
-  type        = bool
-  default     = true
-}
-
-variable "enable_dns_cache" {
-  description = "Whether to enable NodeLocal DNSCache addon"
-  type        = bool
-  default     = true
-}
-
-variable "enable_config_connector" {
-  description = "Whether to enable Config Connector addon"
+variable "enable_http_application_routing" {
+  description = "Whether to enable HTTP application routing"
   type        = bool
   default     = false
 }
 
-variable "enable_gce_persistent_disk_csi_driver" {
-  description = "Whether to enable the GCE PD CSI driver addon"
+variable "enable_kube_dashboard" {
+  description = "Whether to enable the Kubernetes dashboard"
+  type        = bool
+  default     = false
+}
+
+variable "enable_azure_policy" {
+  description = "Whether to enable Azure Policy for Kubernetes"
+  type        = bool
+  default     = false
+}
+
+variable "enable_auto_scaling" {
+  description = "Whether to enable cluster autoscaler"
   type        = bool
   default     = true
+}
+
+variable "enable_host_encryption" {
+  description = "Whether to enable host encryption"
+  type        = bool
+  default     = false
+}
+
+# --------------------------------------------------------
+# Environment-specific Variables
+# --------------------------------------------------------
+
+variable "development_settings" {
+  description = "Development environment specific settings"
+  type = object({
+    default_node_count = number
+    default_node_min_count = number
+    default_node_max_count = number
+    enable_gpu_node_pool = bool
+    gpu_node_count = number
+  })
+  default = {
+    default_node_count = 2
+    default_node_min_count = 2
+    default_node_max_count = 4
+    enable_gpu_node_pool = true
+    gpu_node_count = 1
+  }
+}
+
+variable "staging_settings" {
+  description = "Staging environment specific settings"
+  type = object({
+    default_node_count = number
+    default_node_min_count = number
+    default_node_max_count = number
+    enable_gpu_node_pool = bool
+    gpu_node_count = number
+  })
+  default = {
+    default_node_count = 3
+    default_node_min_count = 3
+    default_node_max_count = 6
+    enable_gpu_node_pool = true
+    gpu_node_count = 2
+  }
+}
+
+variable "production_settings" {
+  description = "Production environment specific settings"
+  type = object({
+    default_node_count = number
+    default_node_min_count = number
+    default_node_max_count = number
+    enable_gpu_node_pool = bool
+    gpu_node_count = number
+  })
+  default = {
+    default_node_count = 5
+    default_node_min_count = 5
+    default_node_max_count = 10
+    enable_gpu_node_pool = true
+    gpu_node_count = 3
+  }
+}
+
+# --------------------------------------------------------
+# Maintenance Variables
+# --------------------------------------------------------
+
+variable "maintenance_window" {
+  description = "Maintenance window for the Kubernetes cluster"
+  type = object({
+    day   = string
+    hours = list(number)
+  })
+  default = {
+    day   = "Sunday"
+    hours = [2, 3, 4]
+  }
+}
+
+variable "auto_upgrade_channel" {
+  description = "Auto-upgrade channel for the Kubernetes cluster (none, patch, stable, rapid, node-image)"
+  type        = string
+  default     = "stable"
+}
+
+# --------------------------------------------------------
+# Backup and Disaster Recovery Variables
+# --------------------------------------------------------
+
+variable "enable_backup" {
+  description = "Whether to enable backup for the Kubernetes cluster"
+  type        = bool
+  default     = true
+}
+
+variable "backup_retention_days" {
+  description = "Number of days to retain backups"
+  type        = number
+  default     = 30
+}
+
+variable "enable_disaster_recovery" {
+  description = "Whether to enable disaster recovery for the Kubernetes cluster"
+  type        = bool
+  default     = false
 }
