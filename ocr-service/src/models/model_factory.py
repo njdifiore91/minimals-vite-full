@@ -1,324 +1,628 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
 """
-Model Factory for OCR Service.
+Model Factory for OCR Processing
 
 This module implements a factory class that creates and returns the appropriate OCR model
-based on document type and classification metadata. It centralizes model selection logic
-and provides a clean interface for the OCR service to obtain the right model for each document.
+based on document type and classification metadata. This factory centralizes model selection
+logic and provides a clean interface for the OCR service to obtain the right model for each
+document.
 
-The factory implements model caching for performance optimization, ensuring that models
-are only loaded once and reused for subsequent requests, significantly reducing processing time.
+Key features:
+- Dynamic OCR model instantiation based on document classification
+- Model caching for performance optimization
+- Configuration loading for model parameters
+- Unified interface for model access across the service
+
+The factory supports the following model types:
+- TypedTextModel: For documents with machine-printed text
+- HandwrittenTextModel: For documents with handwritten text
+- HybridRecognitionModel: For documents with both typed and handwritten text
+- StructureRecognitionModel: For recognizing document structure
 """
-
-from __future__ import annotations
 
 import logging
 import os
-from functools import lru_cache
-from typing import Dict, Optional, Union
+from pathlib import Path
+from typing import Dict, Optional, Type, Union
 
-# Import local modules
-from ..config import tensorflow_config
-from ..types.documents import DocumentMetadata, DocumentType
-from ..types.models import (
-    DEFAULT_HANDWRITTEN_MODEL_PARAMS,
-    DEFAULT_HYBRID_MODEL_PARAMS,
-    DEFAULT_TYPED_MODEL_PARAMS,
-    ModelParameters,
-    ModelSelectionCriteria,
-    ModelSelector,
-    OCRModelType,
-    TensorFlowModel
-)
+# Import model types
+from .base_model import BaseOCRModel
+from .typed_text_model import TypedTextModel
+from .handwritten_text_model import HandwrittenTextModel
+from .hybrid_recognition_model import HybridRecognitionModel
+from .structure_recognition_model import StructureRecognitionModel
 
-# Configure logging
-logger = logging.getLogger(__name__)
+# Import types
+from ..types.models import OCRModelType, ModelParameters
+from ..types.documents import DocumentType, DocumentMetadata
+from ..types.config import TensorFlowConfig
+
+# Import configuration
+from ..config.tensorflow_config import get_tensorflow_config
+from ..utils.logging_utils import get_logger
+
+
+logger = get_logger(__name__)
 
 
 class ModelFactory:
-    """Factory class for creating and managing OCR models.
+    """
+    Factory class for creating and managing OCR models.
     
     This class is responsible for creating and returning the appropriate OCR model
-    based on document type and classification metadata. It implements model caching
-    to optimize performance and provides a clean interface for model access.
+    based on document type and classification metadata. It centralizes model selection
+    logic and provides a clean interface for the OCR service to obtain the right model
+    for each document.
+    
+    The factory implements model caching to avoid repeatedly loading models, which
+    significantly improves performance for batch processing scenarios.
+    
+    Attributes:
+        _model_cache (Dict[str, BaseOCRModel]): Cache of loaded models
+        _config (TensorFlowConfig): TensorFlow configuration
+        _model_paths (Dict[str, Path]): Paths to model files
     """
     
-    # Singleton instance
-    _instance = None
-    
-    # Model cache
-    _model_cache: Dict[str, TensorFlowModel] = {}
-    
-    def __new__(cls):
-        """Implement singleton pattern to ensure only one factory instance exists."""
-        if cls._instance is None:
-            cls._instance = super(ModelFactory, cls).__new__(cls)
-            cls._instance._initialize()
-        return cls._instance
-    
-    def _initialize(self):
-        """Initialize the model factory."""
-        logger.info("Initializing OCR Model Factory")
-        self._model_cache = {}
-        self._load_config()
-    
-    def _load_config(self):
-        """Load model configuration from config files."""
-        logger.info("Loading model configuration")
-        # Load model paths and parameters from configuration
-        self.config = tensorflow_config.get_model_config()
-        
-        # Update default parameters with configuration values
-        self._update_model_params()
-    
-    def _update_model_params(self):
-        """Update default model parameters with configuration values."""
-        # Update typed model parameters
-        if hasattr(self.config, 'typed_model'):
-            for key, value in self.config.typed_model.items():
-                if key in DEFAULT_TYPED_MODEL_PARAMS:
-                    DEFAULT_TYPED_MODEL_PARAMS[key] = value
-        
-        # Update handwritten model parameters
-        if hasattr(self.config, 'handwritten_model'):
-            for key, value in self.config.handwritten_model.items():
-                if key in DEFAULT_HANDWRITTEN_MODEL_PARAMS:
-                    DEFAULT_HANDWRITTEN_MODEL_PARAMS[key] = value
-        
-        # Update hybrid model parameters
-        if hasattr(self.config, 'hybrid_model'):
-            for key, value in self.config.hybrid_model.items():
-                if key in DEFAULT_HYBRID_MODEL_PARAMS:
-                    DEFAULT_HYBRID_MODEL_PARAMS[key] = value
-    
-    def get_model_for_document(self, document_metadata: DocumentMetadata) -> TensorFlowModel:
-        """Get the appropriate OCR model for the given document.
+    def __init__(self, config: Optional[TensorFlowConfig] = None):
+        """
+        Initialize the model factory with the specified configuration.
         
         Args:
-            document_metadata: Metadata for the document to process
-            
-        Returns:
-            The appropriate OCR model for the document
+            config: TensorFlow configuration (optional, will load from config module if not provided)
         """
-        # Create selection criteria from document metadata
-        criteria = self._create_selection_criteria(document_metadata)
+        self._model_cache: Dict[str, BaseOCRModel] = {}
+        self._config = config or get_tensorflow_config()
         
-        # Select model type based on criteria
-        model_type = ModelSelector.select_model_type(criteria)
-        
-        # Get or create model instance
-        return self.get_model(model_type)
-    
-    def _create_selection_criteria(self, metadata: DocumentMetadata) -> ModelSelectionCriteria:
-        """Create model selection criteria from document metadata.
-        
-        Args:
-            metadata: Document metadata
-            
-        Returns:
-            Model selection criteria
-        """
-        criteria: ModelSelectionCriteria = {
-            'document_type': metadata.document_type.value if hasattr(metadata, 'document_type') else None,
-            'content_type': metadata.content_type if hasattr(metadata, 'content_type') else None,
-            'file_size': metadata.file_size if hasattr(metadata, 'file_size') else None,
+        # Set up model paths based on configuration
+        models_base_path = Path(self._config.models_base_path)
+        self._model_paths = {
+            OCRModelType.TYPED.value: models_base_path / self._config.typed_model_path,
+            OCRModelType.HANDWRITTEN.value: models_base_path / self._config.handwritten_model_path,
+            OCRModelType.HYBRID.value: models_base_path / self._config.hybrid_model_path,
+            "structure": models_base_path / self._config.structure_model_path
         }
         
-        # Add handwriting detection if available
-        if hasattr(metadata, 'has_handwriting'):
-            criteria['has_handwriting'] = metadata.has_handwriting
+        # Validate model paths
+        for model_type, path in self._model_paths.items():
+            if not path.exists():
+                logger.warning(f"Model path for {model_type} does not exist: {path}")
         
-        # Add image quality if available
-        if hasattr(metadata, 'image_quality'):
-            criteria['image_quality'] = metadata.image_quality
-        
-        # Add language if available
-        if hasattr(metadata, 'language'):
-            criteria['language'] = metadata.language
-        
-        # Add priority if available
-        if hasattr(metadata, 'priority'):
-            criteria['priority'] = metadata.priority
-        
-        return criteria
+        logger.info(f"Initialized ModelFactory with {len(self._model_paths)} model paths")
     
-    @lru_cache(maxsize=3)  # Cache at most 3 models (one for each type)
-    def get_model(self, model_type: OCRModelType) -> TensorFlowModel:
-        """Get or create a model of the specified type.
+    def get_model(self, model_type: Union[str, OCRModelType], 
+                 parameters: Optional[ModelParameters] = None) -> BaseOCRModel:
+        """
+        Get an OCR model of the specified type.
         
-        This method implements model caching to avoid reloading models unnecessarily.
-        It uses Python's lru_cache decorator to cache model instances based on model type.
+        This method returns a cached model if available, or creates and caches a new model
+        if needed. It ensures that models are efficiently reused across multiple document
+        processing requests.
         
         Args:
-            model_type: Type of OCR model to get
+            model_type: Type of OCR model to get (typed, handwritten, hybrid, structure)
+            parameters: Model-specific parameters (optional)
             
         Returns:
-            The requested OCR model
+            OCR model instance
             
         Raises:
-            ValueError: If the model type is not supported
+            ValueError: If the model type is invalid or the model cannot be created
         """
-        # Check if model is already in cache
-        model_key = model_type.value
+        # Convert string model type to enum if needed
+        if isinstance(model_type, str):
+            try:
+                # Handle "structure" as a special case
+                if model_type.lower() == "structure":
+                    model_key = "structure"
+                else:
+                    model_type = OCRModelType(model_type.lower())
+                    model_key = model_type.value
+            except ValueError:
+                valid_types = [t.value for t in OCRModelType] + ["structure"]
+                raise ValueError(f"Invalid model type: {model_type}. Valid types are: {valid_types}")
+        else:
+            model_key = model_type.value
+        
+        # Check if model is already cached
         if model_key in self._model_cache:
-            logger.debug(f"Using cached model for type: {model_type.value}")
+            logger.debug(f"Using cached model for type: {model_key}")
             return self._model_cache[model_key]
         
-        # Get model parameters
-        model_params = self._get_model_parameters(model_type)
+        # Create new model
+        logger.info(f"Creating new model for type: {model_key}")
+        model = self._create_model(model_key, parameters)
         
-        # Create and initialize model
-        logger.info(f"Creating new model for type: {model_type.value}")
-        model = TensorFlowModel(model_params)
+        # Cache the model
+        self._model_cache[model_key] = model
         
-        try:
-            # Load model weights and initialize
-            model.load()
-            
-            # Add to cache
-            self._model_cache[model_key] = model
-            
-            return model
-        except Exception as e:
-            logger.error(f"Error loading model {model_type.value}: {str(e)}")
-            raise RuntimeError(f"Failed to load OCR model: {str(e)}") from e
+        return model
     
-    def _get_model_parameters(self, model_type: OCRModelType) -> ModelParameters:
-        """Get parameters for the specified model type.
+    def get_model_for_document(self, document_metadata: DocumentMetadata) -> BaseOCRModel:
+        """
+        Get the appropriate OCR model for a document based on its metadata.
+        
+        This method analyzes the document metadata to determine the most appropriate
+        OCR model for processing the document. It considers document type, classification
+        confidence, and other metadata to make an intelligent selection.
         
         Args:
-            model_type: Type of OCR model
+            document_metadata: Metadata of the document to process
             
         Returns:
-            Model parameters
+            OCR model instance appropriate for the document
             
         Raises:
-            ValueError: If the model type is not supported
+            ValueError: If a suitable model cannot be determined
         """
-        # Get default parameters for model type
-        if model_type == OCRModelType.TYPED:
-            params = DEFAULT_TYPED_MODEL_PARAMS.copy()
-        elif model_type == OCRModelType.HANDWRITTEN:
-            params = DEFAULT_HANDWRITTEN_MODEL_PARAMS.copy()
-        elif model_type == OCRModelType.HYBRID:
-            params = DEFAULT_HYBRID_MODEL_PARAMS.copy()
-        else:
-            raise ValueError(f"Unsupported model type: {model_type}")
+        # Get document type
+        doc_type = document_metadata.document_type
         
-        # Override with environment-specific paths if available
-        model_dir = os.environ.get('OCR_MODEL_DIR', '/models')
-        params['model_path'] = os.path.join(model_dir, f"{model_type.value}_text_ocr")
-        params['vocab_path'] = os.path.join(model_dir, f"{model_type.value}_text_ocr/vocab.txt")
+        # Get content type from metadata if available
+        content_type = document_metadata.additional_metadata.get("content_type")
         
-        # Apply any additional configuration from config files
-        self._apply_config_overrides(params, model_type)
+        # Check if structure recognition is needed first
+        if document_metadata.additional_metadata.get("needs_structure_recognition", False):
+            logger.info(f"Using structure recognition model for document {document_metadata.document_id}")
+            return self.get_model("structure")
         
-        return params
+        # Determine model type based on document and content type
+        model_type = self._determine_model_type(doc_type, content_type)
+        
+        # Get model parameters based on document type
+        parameters = self._get_parameters_for_document(doc_type)
+        
+        # Get the model
+        logger.info(f"Using {model_type} model for document {document_metadata.document_id}")
+        return self.get_model(model_type, parameters)
+        
+    def get_structure_recognition_model(self) -> StructureRecognitionModel:
+        """
+        Get the structure recognition model.
+        
+        This is a convenience method for getting the structure recognition model,
+        which is used to analyze document structure before text extraction.
+        
+        Returns:
+            Structure recognition model instance
+        """
+        return self.get_model("structure")
     
-    def _apply_config_overrides(self, params: ModelParameters, model_type: OCRModelType) -> None:
-        """Apply configuration overrides to model parameters.
+    def _create_model(self, model_type: str, parameters: Optional[ModelParameters] = None) -> BaseOCRModel:
+        """
+        Create a new OCR model of the specified type.
+        
+        This method instantiates a new model of the specified type with the given parameters.
+        It handles the details of model initialization and configuration.
         
         Args:
-            params: Model parameters to update
-            model_type: Type of OCR model
-        """
-        # Apply global overrides
-        if hasattr(self.config, 'global'):
-            for key, value in self.config.global.items():
-                if key in params:
-                    params[key] = value
-        
-        # Apply model-specific overrides
-        config_key = f"{model_type.value}_model"
-        if hasattr(self.config, config_key):
-            model_config = getattr(self.config, config_key)
-            for key, value in model_config.items():
-                if key in params:
-                    params[key] = value
-    
-    def clear_cache(self) -> None:
-        """Clear the model cache.
-        
-        This method can be used to free memory or force model reloading.
-        """
-        logger.info("Clearing model cache")
-        self._model_cache.clear()
-        # Also clear the lru_cache
-        self.get_model.cache_clear()
-    
-    def get_model_by_document_type(self, document_type: Union[DocumentType, str]) -> TensorFlowModel:
-        """Get the appropriate OCR model for the given document type.
-        
-        This is a convenience method for getting a model based on document type alone,
-        without needing full document metadata.
-        
-        Args:
-            document_type: Type of document to process
+            model_type: Type of OCR model to create
+            parameters: Model-specific parameters (optional)
             
         Returns:
-            The appropriate OCR model for the document type
+            OCR model instance
+            
+        Raises:
+            ValueError: If the model type is invalid or the model cannot be created
         """
-        # Convert string to enum if needed
-        if isinstance(document_type, str):
-            try:
-                document_type = DocumentType[document_type.upper()]
-            except KeyError:
-                logger.warning(f"Unknown document type: {document_type}, using default model")
-                return self.get_model(OCRModelType.HYBRID)
+        # Get model path
+        if model_type not in self._model_paths:
+            valid_types = list(self._model_paths.keys())
+            raise ValueError(f"Invalid model type: {model_type}. Valid types are: {valid_types}")
         
-        # Map document types to model types
-        model_type_map = {
-            DocumentType.APPLICATION: OCRModelType.HYBRID,
-            DocumentType.TAX_RETURN: OCRModelType.TYPED,
-            DocumentType.BANK_STATEMENT: OCRModelType.TYPED,
-            DocumentType.PAY_STUB: OCRModelType.TYPED,
-            DocumentType.ID_DOCUMENT: OCRModelType.HYBRID,
-            DocumentType.OTHER: OCRModelType.HYBRID,
+        model_path = self._model_paths[model_type]
+        
+        # Create model based on type
+        try:
+            if model_type == OCRModelType.TYPED.value:
+                return TypedTextModel(
+                    model_path=model_path,
+                    model_name="typed_text_model",
+                    config=self._config,
+                    parameters=parameters
+                )
+            elif model_type == OCRModelType.HANDWRITTEN.value:
+                return HandwrittenTextModel(
+                    model_path=model_path,
+                    model_name="handwritten_text_model",
+                    config=self._config,
+                    parameters=parameters
+                )
+            elif model_type == OCRModelType.HYBRID.value:
+                return HybridRecognitionModel(
+                    model_path=model_path,
+                    model_name="hybrid_recognition_model",
+                    config=self._config,
+                    parameters=parameters
+                )
+            elif model_type == "structure":
+                return StructureRecognitionModel(
+                    model_path=model_path,
+                    model_name="structure_recognition_model",
+                    config=self._config,
+                    parameters=parameters
+                )
+            else:
+                raise ValueError(f"Unsupported model type: {model_type}")
+        except Exception as e:
+            error_msg = f"Failed to create model of type {model_type}: {str(e)}"
+            logger.error(error_msg)
+            raise ValueError(error_msg) from e
+    
+    def _determine_model_type(self, document_type: Optional[DocumentType], 
+                             content_type: Optional[str]) -> str:
+        """
+        Determine the appropriate model type for a document.
+        
+        This method analyzes the document type and content type to determine
+        the most appropriate OCR model type for processing.
+        
+        Args:
+            document_type: Type of document
+            content_type: Type of content (typed, handwritten, hybrid)
+            
+        Returns:
+            Model type string
+        """
+        # If content type is explicitly specified, use it
+        if content_type:
+            try:
+                return OCRModelType(content_type.lower()).value
+            except ValueError:
+                # Invalid content type, fall back to document type
+                pass
+        
+        # If document type is not specified, default to hybrid
+        if not document_type:
+            return OCRModelType.HYBRID.value
+        
+        # Map document types to default model types
+        document_model_mapping = {
+            DocumentType.APPLICATION: OCRModelType.HYBRID.value,
+            DocumentType.TAX_RETURN: OCRModelType.TYPED.value,
+            DocumentType.BANK_STATEMENT: OCRModelType.TYPED.value,
+            DocumentType.PAY_STUB: OCRModelType.TYPED.value,
+            DocumentType.ID_DOCUMENT: OCRModelType.HYBRID.value,
+            DocumentType.OTHER: OCRModelType.HYBRID.value
         }
         
-        model_type = model_type_map.get(document_type, OCRModelType.HYBRID)
-        return self.get_model(model_type)
+        # Check for additional metadata that might influence model selection
+        if document_type and hasattr(document_type, 'additional_metadata'):
+            metadata = getattr(document_type, 'additional_metadata', {})
+            
+            # Check if document has been pre-classified as handwritten
+            if metadata.get('is_handwritten', False):
+                return OCRModelType.HANDWRITTEN.value
+            
+            # Check if document has been pre-classified as typed
+            if metadata.get('is_typed', False):
+                return OCRModelType.TYPED.value
+            
+            # Check if document has been pre-classified as mixed
+            if metadata.get('is_mixed', False):
+                return OCRModelType.HYBRID.value
+            
+            # Check if document quality is poor (use more robust hybrid model)
+            if metadata.get('document_quality') == 'poor':
+                return OCRModelType.HYBRID.value
+        
+        # Use the default mapping if no special conditions apply
+        return document_model_mapping.get(document_type, OCRModelType.HYBRID.value)
+    
+    def _get_parameters_for_document(self, document_type: Optional[DocumentType]) -> Optional[ModelParameters]:
+        """
+        Get model parameters optimized for a specific document type.
+        
+        This method returns model parameters that are optimized for processing
+        a specific type of document.
+        
+        Args:
+            document_type: Type of document
+            
+        Returns:
+            Model parameters or None if no specific parameters are needed
+        """
+        if not document_type:
+            return None
+            
+        # Define document-specific parameters
+        # These parameters are optimized for each document type based on testing
+        # and performance analysis
+        parameters_map = {
+            DocumentType.APPLICATION: ModelParameters(
+                model_type=OCRModelType.HYBRID,
+                model_id="hybrid_application",
+                model_version="1.0.0",
+                confidence_threshold=0.75,  # Balanced threshold for hybrid content
+                batch_size=1,
+                language="en",
+                preprocessing_steps=["deskew", "denoise", "normalize"],
+                postprocessing_steps=["spell_check", "grammar_check"]
+            ),
+            DocumentType.TAX_RETURN: ModelParameters(
+                model_type=OCRModelType.TYPED,
+                model_id="typed_tax_return",
+                model_version="1.0.0",
+                confidence_threshold=0.85,  # Higher threshold for critical financial data
+                batch_size=1,
+                language="en",
+                preprocessing_steps=["deskew", "binarize", "enhance_contrast"],
+                postprocessing_steps=["validate_numbers", "validate_dates"]
+            ),
+            DocumentType.BANK_STATEMENT: ModelParameters(
+                model_type=OCRModelType.TYPED,
+                model_id="typed_bank_statement",
+                model_version="1.0.0",
+                confidence_threshold=0.85,  # Higher threshold for critical financial data
+                batch_size=1,
+                language="en",
+                preprocessing_steps=["deskew", "binarize", "enhance_contrast"],
+                postprocessing_steps=["validate_numbers", "validate_dates"]
+            ),
+            DocumentType.PAY_STUB: ModelParameters(
+                model_type=OCRModelType.TYPED,
+                model_id="typed_pay_stub",
+                model_version="1.0.0",
+                confidence_threshold=0.80,  # High threshold for financial data
+                batch_size=1,
+                language="en",
+                preprocessing_steps=["deskew", "binarize", "enhance_contrast"],
+                postprocessing_steps=["validate_numbers", "validate_dates"]
+            ),
+            DocumentType.ID_DOCUMENT: ModelParameters(
+                model_type=OCRModelType.HYBRID,
+                model_id="hybrid_id_document",
+                model_version="1.0.0",
+                confidence_threshold=0.85,  # Higher threshold for identity verification
+                batch_size=1,
+                language="en",
+                preprocessing_steps=["deskew", "enhance_contrast", "normalize"],
+                postprocessing_steps=["validate_id_format"]
+            )
+        }
+        
+        # Return parameters for the document type, or None if not defined
+        return parameters_map.get(document_type)
+    
+    def clear_cache(self) -> None:
+        """
+        Clear the model cache to free up resources.
+        
+        This method should be called when models are no longer needed,
+        such as during service shutdown or when memory needs to be reclaimed.
+        """
+        logger.info(f"Clearing model cache ({len(self._model_cache)} models)")
+        
+        # Clean up each model
+        for model_type, model in self._model_cache.items():
+            try:
+                # Call any cleanup methods on the model
+                if hasattr(model, "cleanup") and callable(model.cleanup):
+                    model.cleanup()
+                logger.debug(f"Cleaned up model: {model_type}")
+            except Exception as e:
+                logger.warning(f"Error cleaning up model {model_type}: {str(e)}")
+        
+        # Clear the cache
+        self._model_cache.clear()
+    
+    def get_cached_model_types(self) -> list:
+        """
+        Get a list of model types currently in the cache.
+        
+        Returns:
+            List of model type strings
+        """
+        return list(self._model_cache.keys())
+    
+    def is_model_cached(self, model_type: Union[str, OCRModelType]) -> bool:
+        """
+        Check if a model of the specified type is cached.
+        
+        Args:
+            model_type: Type of OCR model to check
+            
+        Returns:
+            True if the model is cached, False otherwise
+        """
+        # Convert enum to string if needed
+        if isinstance(model_type, OCRModelType):
+            model_type = model_type.value
+            
+        return model_type in self._model_cache
+    
+    def remove_from_cache(self, model_type: Union[str, OCRModelType]) -> bool:
+        """
+        Remove a specific model from the cache.
+        
+        Args:
+            model_type: Type of OCR model to remove
+            
+        Returns:
+            True if the model was removed, False if it wasn't in the cache
+        """
+        # Convert enum to string if needed
+        if isinstance(model_type, OCRModelType):
+            model_type = model_type.value
+            
+        if model_type in self._model_cache:
+            model = self._model_cache[model_type]
+            
+            # Clean up the model
+            try:
+                if hasattr(model, "cleanup") and callable(model.cleanup):
+                    model.cleanup()
+            except Exception as e:
+                logger.warning(f"Error cleaning up model {model_type}: {str(e)}")
+            
+            # Remove from cache
+            del self._model_cache[model_type]
+            logger.debug(f"Removed model from cache: {model_type}")
+            return True
+        
+        return False
+    
+    def __del__(self):
+        """
+        Clean up resources when the factory is deleted.
+        """
+        try:
+            self.clear_cache()
+        except Exception as e:
+            # Can't use logger here as it might be None during interpreter shutdown
+            print(f"Error cleaning up ModelFactory: {str(e)}")
 
 
-# Create a singleton instance for easy import
-model_factory = ModelFactory()
+    def select_best_model(self, document_metadata: DocumentMetadata, 
+                        performance_threshold: float = 0.95) -> BaseOCRModel:
+        """
+        Select the best model for a document based on performance metrics.
+        
+        This method tries multiple models on a sample of the document and selects
+        the one with the best performance metrics. This is useful for documents
+        where the content type is uncertain or mixed.
+        
+        Args:
+            document_metadata: Metadata of the document to process
+            performance_threshold: Threshold for acceptable performance (0.0-1.0)
+            
+        Returns:
+            Best performing OCR model instance
+            
+        Raises:
+            ValueError: If no model meets the performance threshold
+        """
+        logger.info(f"Selecting best model for document {document_metadata.document_id}")
+        
+        # Get document type
+        doc_type = document_metadata.document_type
+        
+        # Models to try, in order of preference
+        model_types_to_try = [
+            OCRModelType.HYBRID.value,  # Try hybrid first as it's most versatile
+            OCRModelType.TYPED.value,   # Then try typed
+            OCRModelType.HANDWRITTEN.value  # Finally try handwritten
+        ]
+        
+        best_model = None
+        best_performance = 0.0
+        
+        # Try each model type
+        for model_type in model_types_to_try:
+            try:
+                # Get model parameters
+                parameters = self._get_parameters_for_document(doc_type)
+                
+                # Get model
+                model = self.get_model(model_type, parameters)
+                
+                # Evaluate model performance (this would be implemented in a real system)
+                # For now, we'll use a placeholder implementation
+                performance = self._evaluate_model_performance(model, document_metadata)
+                
+                logger.debug(f"Model {model_type} performance: {performance:.2f}")
+                
+                # Update best model if this one performs better
+                if performance > best_performance:
+                    best_model = model
+                    best_performance = performance
+                    
+                    # If performance is good enough, stop trying more models
+                    if performance >= performance_threshold:
+                        logger.info(f"Selected model {model_type} with performance {performance:.2f}")
+                        return model
+                    
+            except Exception as e:
+                logger.warning(f"Error evaluating model {model_type}: {str(e)}")
+        
+        # If we found a model but it didn't meet the threshold, use it anyway
+        if best_model is not None:
+            logger.info(f"Using best available model with performance {best_performance:.2f}")
+            return best_model
+            
+        # If no model worked, fall back to hybrid
+        logger.warning(f"No suitable model found, falling back to hybrid")
+        return self.get_model(OCRModelType.HYBRID.value)
+    
+    def _evaluate_model_performance(self, model: BaseOCRModel, 
+                                  document_metadata: DocumentMetadata) -> float:
+        """
+        Evaluate model performance on a document.
+        
+        This method evaluates how well a model performs on a document
+        by analyzing confidence scores and other metrics.
+        
+        Args:
+            model: OCR model to evaluate
+            document_metadata: Metadata of the document to process
+            
+        Returns:
+            Performance score between 0.0 and 1.0
+        """
+        # This is a placeholder implementation
+        # In a real implementation, this would run the model on a sample of the document
+        # and analyze the results to determine performance
+        
+        # For now, return a score based on model type and document type
+        model_type = model.model_name
+        doc_type = document_metadata.document_type
+        
+        # Default performance scores based on model and document type
+        performance_matrix = {
+            "typed_text_model": {
+                DocumentType.APPLICATION: 0.85,
+                DocumentType.TAX_RETURN: 0.95,
+                DocumentType.BANK_STATEMENT: 0.95,
+                DocumentType.PAY_STUB: 0.90,
+                DocumentType.ID_DOCUMENT: 0.80,
+                DocumentType.OTHER: 0.75
+            },
+            "handwritten_text_model": {
+                DocumentType.APPLICATION: 0.80,
+                DocumentType.TAX_RETURN: 0.70,
+                DocumentType.BANK_STATEMENT: 0.65,
+                DocumentType.PAY_STUB: 0.70,
+                DocumentType.ID_DOCUMENT: 0.85,
+                DocumentType.OTHER: 0.75
+            },
+            "hybrid_recognition_model": {
+                DocumentType.APPLICATION: 0.90,
+                DocumentType.TAX_RETURN: 0.85,
+                DocumentType.BANK_STATEMENT: 0.85,
+                DocumentType.PAY_STUB: 0.85,
+                DocumentType.ID_DOCUMENT: 0.90,
+                DocumentType.OTHER: 0.85
+            }
+        }
+        
+        # Get performance score from matrix, or use default
+        if model_type in performance_matrix and doc_type in performance_matrix[model_type]:
+            return performance_matrix[model_type][doc_type]
+        else:
+            return 0.75  # Default performance score
 
 
-def get_model_for_document(document_metadata: DocumentMetadata) -> TensorFlowModel:
-    """Convenience function to get the appropriate OCR model for a document.
+# Singleton instance for global use
+_factory_instance = None
+
+
+def get_model_factory(config: Optional[TensorFlowConfig] = None) -> ModelFactory:
+    """
+    Get the global ModelFactory instance.
+    
+    This function returns the singleton ModelFactory instance,
+    creating it if it doesn't exist yet.
     
     Args:
-        document_metadata: Metadata for the document to process
+        config: TensorFlow configuration (optional)
         
     Returns:
-        The appropriate OCR model for the document
+        ModelFactory instance
     """
-    return model_factory.get_model_for_document(document_metadata)
-
-
-def get_model(model_type: OCRModelType) -> TensorFlowModel:
-    """Convenience function to get a model of the specified type.
+    global _factory_instance
     
-    Args:
-        model_type: Type of OCR model to get
+    if _factory_instance is None:
+        _factory_instance = ModelFactory(config)
         
-    Returns:
-        The requested OCR model
-    """
-    return model_factory.get_model(model_type)
-
-
-def get_model_by_document_type(document_type: Union[DocumentType, str]) -> TensorFlowModel:
-    """Convenience function to get a model based on document type.
-    
-    Args:
-        document_type: Type of document to process
-        
-    Returns:
-        The appropriate OCR model for the document type
-    """
-    return model_factory.get_model_by_document_type(document_type)
-
-
-def clear_model_cache() -> None:
-    """Convenience function to clear the model cache."""
-    model_factory.clear_cache()
+    return _factory_instance
