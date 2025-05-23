@@ -1,55 +1,49 @@
 package com.dollarfunding.mca.service;
 
+import com.dollarfunding.mca.dto.ApplicationResponseDTO;
+import com.dollarfunding.mca.dto.DocumentResponseDTO;
 import com.dollarfunding.mca.entity.Application;
 import com.dollarfunding.mca.entity.ApplicationStatus;
 import com.dollarfunding.mca.entity.Document;
 import com.dollarfunding.mca.entity.DocumentType;
 import com.dollarfunding.mca.entity.MerchantDetails;
 import com.dollarfunding.mca.entity.ReviewStatus;
-import com.dollarfunding.mca.exception.BusinessRuleException;
-import com.dollarfunding.mca.exception.DocumentProcessingException;
-import com.dollarfunding.mca.exception.ResourceNotFoundException;
-import com.dollarfunding.mca.exception.ValidationException;
-import com.dollarfunding.mca.messaging.DocumentProcessingMessage;
+import com.dollarfunding.mca.exception.ProcessingException;
 import com.dollarfunding.mca.repository.ApplicationRepository;
 import com.dollarfunding.mca.repository.DocumentRepository;
-import com.dollarfunding.mca.repository.MerchantDetailsRepository;
+import com.dollarfunding.mca.service.ValidationService.ValidationResult;
+import com.dollarfunding.mca.service.ValidationService.ValidationSeverity;
 
-import org.junit.Before;
-import org.junit.Test;
-import org.junit.runner.RunWith;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.Captor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
-import org.mockito.Mockito;
-import org.mockito.junit.MockitoJUnitRunner;
+import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
-import static org.junit.Assert.*;
+import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 /**
  * Unit tests for the ProcessingServiceImpl class.
  * 
- * These tests verify the functionality of the ProcessingServiceImpl class, which manages
- * application processing workflows for the MCA application. The tests cover processing of
- * new applications, updates to existing applications, application lifecycle management,
- * processing status tracking, and exception handling.
- * 
- * The tests use Mockito to mock dependencies including ApplicationRepository, DocumentRepository,
- * MerchantDetailsRepository, ValidationService, DocumentService, and NotificationService.
+ * These tests verify the orchestration of the application processing pipeline,
+ * application of business rules, management of interactions between services,
+ * tracking of processing status, and handling of exceptions.
  */
-@RunWith(MockitoJUnitRunner.class)
+@ExtendWith(MockitoExtension.class)
 public class ProcessingServiceImplTest {
 
     @Mock
@@ -57,9 +51,6 @@ public class ProcessingServiceImplTest {
     
     @Mock
     private DocumentRepository documentRepository;
-    
-    @Mock
-    private MerchantDetailsRepository merchantDetailsRepository;
     
     @Mock
     private ValidationService validationService;
@@ -73,1186 +64,603 @@ public class ProcessingServiceImplTest {
     @InjectMocks
     private ProcessingServiceImpl processingService;
     
-    // Test data
-    private DocumentProcessingMessage validApplicationMessage;
-    private DocumentProcessingMessage validBankStatementMessage;
-    private DocumentProcessingMessage validTaxReturnMessage;
-    private DocumentProcessingMessage validIdDocumentMessage;
-    private DocumentProcessingMessage invalidMessage;
-    private Application testApplication;
-    private Document testDocument;
-    private MerchantDetails testMerchantDetails;
-    private String testApplicationId;
-    private String testDocumentId;
+    @Captor
+    private ArgumentCaptor<Application> applicationCaptor;
     
-    @Before
-    public void setUp() {
+    @Captor
+    private ArgumentCaptor<Document> documentCaptor;
+    
+    private UUID applicationId;
+    private UUID documentId;
+    private Application application;
+    private Document document;
+    private MerchantDetails merchantDetails;
+    private Map<String, Object> extractedData;
+    private ValidationResult validValidationResult;
+    private ValidationResult invalidValidationResult;
+    private ValidationResult warningValidationResult;
+    
+    @BeforeEach
+    void setUp() {
         // Initialize test data
-        testApplicationId = UUID.randomUUID().toString();
-        testDocumentId = UUID.randomUUID().toString();
+        applicationId = UUID.randomUUID();
+        documentId = UUID.randomUUID();
         
-        // Create test application
-        testApplication = new Application();
-        testApplication.setId(UUID.fromString(testApplicationId));
-        testApplication.setStatus(ApplicationStatus.NEW);
-        testApplication.setReviewStatus(ReviewStatus.NOT_REVIEWED);
-        testApplication.setCreatedAt(LocalDateTime.now());
-        testApplication.setUpdatedAt(LocalDateTime.now());
-        Map<String, Object> appMetadata = new HashMap<>();
-        appMetadata.put("source", "email");
-        testApplication.setMetadata(appMetadata);
+        // Create application
+        application = new Application(ApplicationStatus.PROCESSING);
+        application.setId(applicationId);
+        application.setCreatedAt(LocalDateTime.now());
+        application.setUpdatedAt(LocalDateTime.now());
+        application.setReviewStatus(ReviewStatus.NOT_REVIEWED);
         
-        // Create test document
-        testDocument = new Document();
-        testDocument.setId(UUID.fromString(testDocumentId));
-        testDocument.setApplicationId(UUID.fromString(testApplicationId));
-        testDocument.setType(DocumentType.APPLICATION_FORM);
-        testDocument.setClassification("Application Form");
-        testDocument.setStoragePath("s3://mca-documents-staging/applications/" + testDocumentId + ".pdf");
-        testDocument.setUploadedAt(LocalDateTime.now());
-        Map<String, Object> docMetadata = new HashMap<>();
-        docMetadata.put("pageCount", 3);
-        docMetadata.put("fileSize", 1024567);
-        testDocument.setMetadata(docMetadata);
+        // Create merchant details
+        merchantDetails = new MerchantDetails();
+        merchantDetails.setLegalName("Test Business LLC");
+        merchantDetails.setDbaName("Test Business");
+        merchantDetails.setEin("12-3456789");
+        merchantDetails.setAddress("123 Test St, Test City, TS 12345");
+        merchantDetails.setIndustry("Technology");
+        merchantDetails.setRevenue(500000.0);
+        merchantDetails.setApplication(application);
+        application.setMerchantDetails(merchantDetails);
         
-        // Create test merchant details
-        testMerchantDetails = new MerchantDetails();
-        testMerchantDetails.setId(UUID.randomUUID().toString());
-        testMerchantDetails.setApplication(testApplication);
-        testMerchantDetails.setLegalName("Acme Corporation");
-        testMerchantDetails.setDbaName("Acme Corp");
-        testMerchantDetails.setEin("12-3456789");
-        Map<String, String> address = new HashMap<>();
-        address.put("line1", "123 Main St");
-        address.put("city", "Anytown");
-        address.put("state", "CA");
-        address.put("zip", "12345");
-        testMerchantDetails.setAddress(address);
-        testMerchantDetails.setIndustry("Retail");
-        testMerchantDetails.setRevenue(1000000.0);
+        // Create document
+        document = new Document();
+        document.setId(documentId);
+        document.setType(DocumentType.BANK_STATEMENT);
+        document.setClassification("Bank Statement");
+        document.setStoragePath("s3://mca-documents-staging/" + documentId);
+        document.setUploadedAt(LocalDateTime.now());
         
-        // Create valid application message
-        validApplicationMessage = createTestMessage(
-                testDocumentId,
-                DocumentProcessingMessage.DocumentType.APPLICATION_FORM,
-                "Application Form",
-                95.0,
-                DocumentProcessingMessage.ProcessingAction.CREATE_NEW_APPLICATION,
-                null,
-                createTestExtractedFields());
+        // Create extracted data
+        extractedData = new HashMap<>();
+        extractedData.put("accountNumber", "123456789");
+        extractedData.put("bankName", "Test Bank");
+        extractedData.put("statementDate", "2023-01-01");
+        extractedData.put("balance", "50000.00");
+        extractedData.put("averageBalance", "45000.00");
         
-        // Create valid bank statement message
-        validBankStatementMessage = createTestMessage(
-                UUID.randomUUID().toString(),
-                DocumentProcessingMessage.DocumentType.BANK_STATEMENT,
-                "Bank Statement",
-                90.0,
-                DocumentProcessingMessage.ProcessingAction.UPDATE_EXISTING_APPLICATION,
-                testApplicationId,
-                createBankStatementExtractedFields());
+        Map<String, Object> merchantData = new HashMap<>();
+        merchantData.put("legalName", "Test Business LLC");
+        merchantData.put("dbaName", "Test Business");
+        merchantData.put("ein", "12-3456789");
+        merchantData.put("address", "123 Test St, Test City, TS 12345");
+        merchantData.put("industry", "Technology");
+        merchantData.put("revenue", "500000.00");
+        extractedData.put("merchantDetails", merchantData);
         
-        // Create valid tax return message
-        validTaxReturnMessage = createTestMessage(
-                UUID.randomUUID().toString(),
-                DocumentProcessingMessage.DocumentType.TAX_RETURN,
-                "Tax Return",
-                85.0,
-                DocumentProcessingMessage.ProcessingAction.UPDATE_EXISTING_APPLICATION,
-                testApplicationId,
-                createTaxReturnExtractedFields());
+        // Create validation results
+        validValidationResult = new ValidationResult(true, ValidationSeverity.NONE, new ArrayList<>());
         
-        // Create valid ID document message
-        validIdDocumentMessage = createTestMessage(
-                UUID.randomUUID().toString(),
-                DocumentProcessingMessage.DocumentType.IDENTITY_DOCUMENT,
-                "Driver's License",
-                92.0,
-                DocumentProcessingMessage.ProcessingAction.UPDATE_EXISTING_APPLICATION,
-                testApplicationId,
-                createIdDocumentExtractedFields());
+        List<String> errors = new ArrayList<>();
+        errors.add("Missing required field: revenue");
+        invalidValidationResult = new ValidationResult(false, ValidationSeverity.ERROR, errors);
         
-        // Create invalid message (missing required fields)
-        invalidMessage = new DocumentProcessingMessage();
-        invalidMessage.setDocumentId(testDocumentId);
-        // Missing other required fields
+        List<String> warnings = new ArrayList<>();
+        warnings.add("Low confidence on field: accountNumber");
+        warningValidationResult = new ValidationResult(false, ValidationSeverity.WARNING, warnings);
     }
     
-    /**
-     * Helper method to create a test DocumentProcessingMessage.
-     */
-    private DocumentProcessingMessage createTestMessage(
-            String documentId,
-            DocumentProcessingMessage.DocumentType documentType,
-            String classification,
-            Double classificationConfidence,
-            DocumentProcessingMessage.ProcessingAction processingAction,
-            String applicationId,
-            Map<String, DocumentProcessingMessage.ExtractedField> extractedFields) {
+    @Test
+    @DisplayName("Should process new application successfully")
+    void processNewApplication_Success() throws ProcessingException {
+        // Arrange
+        when(documentRepository.findById(documentId)).thenReturn(Optional.of(document));
+        when(validationService.validateExtractedData(any(DocumentType.class), anyMap())).thenReturn(validValidationResult);
+        when(applicationRepository.save(any(Application.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        doNothing().when(notificationService).sendApplicationCreatedNotification(any(Application.class));
         
-        DocumentProcessingMessage message = new DocumentProcessingMessage();
-        message.setId(UUID.randomUUID().toString());
-        message.setDocumentId(documentId);
-        message.setDocumentType(documentType);
-        message.setClassification(classification);
-        message.setClassificationConfidence(classificationConfidence);
-        message.setProcessingAction(processingAction);
-        message.setApplicationId(applicationId);
-        message.setTimestamp(LocalDateTime.now());
-        message.setStoragePath("s3://mca-documents-staging/documents/" + documentId + ".pdf");
-        message.setExtractedFields(extractedFields);
+        // Act
+        ApplicationResponseDTO result = processingService.processNewApplication(documentId, extractedData);
         
-        DocumentProcessingMessage.ProcessingMetadata metadata = new DocumentProcessingMessage.ProcessingMetadata();
-        metadata.setProcessingTimeMs(1234L);
-        metadata.setOcrEngine("TesseractOCR");
-        metadata.setOcrEngineVersion("5.0.1");
-        metadata.setClassificationModel("DocumentClassifier-v2");
-        metadata.setClassificationModelVersion("2.1.0");
-        metadata.setProcessingNode("ocr-service-pod-1");
-        metadata.setRetryCount(0);
-        metadata.setProcessingNotes(Arrays.asList("Processed successfully"));
-        message.setProcessingMetadata(metadata);
+        // Assert
+        assertNotNull(result, "Result should not be null");
+        verify(documentRepository).findById(documentId);
+        verify(validationService).validateExtractedData(eq(DocumentType.BANK_STATEMENT), eq(extractedData));
+        verify(applicationRepository).save(applicationCaptor.capture());
+        verify(documentRepository).save(documentCaptor.capture());
+        verify(notificationService).sendApplicationCreatedNotification(any(Application.class));
         
-        return message;
+        Application capturedApplication = applicationCaptor.getValue();
+        assertEquals(ApplicationStatus.PROCESSING, capturedApplication.getStatus(), "Application status should be PROCESSING");
+        
+        Document capturedDocument = documentCaptor.getValue();
+        assertNotNull(capturedDocument.getApplicationId(), "Document should have application ID set");
     }
     
-    /**
-     * Helper method to create extracted fields for an application form.
-     */
-    private Map<String, DocumentProcessingMessage.ExtractedField> createTestExtractedFields() {
-        Map<String, DocumentProcessingMessage.ExtractedField> fields = new HashMap<>();
+    @Test
+    @DisplayName("Should throw exception when document not found during new application processing")
+    void processNewApplication_DocumentNotFound() {
+        // Arrange
+        when(documentRepository.findById(documentId)).thenReturn(Optional.empty());
         
-        fields.put("legal_name", new DocumentProcessingMessage.ExtractedField("Acme Corporation", 95.0));
-        fields.put("dba_name", new DocumentProcessingMessage.ExtractedField("Acme Corp", 92.0));
-        fields.put("ein", new DocumentProcessingMessage.ExtractedField("12-3456789", 98.0));
-        fields.put("address_line1", new DocumentProcessingMessage.ExtractedField("123 Main St", 90.0));
-        fields.put("city", new DocumentProcessingMessage.ExtractedField("Anytown", 94.0));
-        fields.put("state", new DocumentProcessingMessage.ExtractedField("CA", 99.0));
-        fields.put("zip_code", new DocumentProcessingMessage.ExtractedField("12345", 97.0));
-        fields.put("industry", new DocumentProcessingMessage.ExtractedField("Retail", 85.0));
-        fields.put("annual_revenue", new DocumentProcessingMessage.ExtractedField("1000000", 80.0));
-        fields.put("years_in_business", new DocumentProcessingMessage.ExtractedField("5", 90.0));
-        fields.put("requested_amount", new DocumentProcessingMessage.ExtractedField("250000", 88.0));
+        // Act & Assert
+        ProcessingException exception = assertThrows(ProcessingException.class, 
+                () -> processingService.processNewApplication(documentId, extractedData));
         
-        return fields;
+        assertEquals("Failed to process new application from document ID: " + documentId, exception.getMessage());
+        verify(documentRepository).findById(documentId);
+        verify(applicationRepository, never()).save(any(Application.class));
+        verify(notificationService, never()).sendApplicationCreatedNotification(any(Application.class));
     }
     
-    /**
-     * Helper method to create extracted fields for a bank statement.
-     */
-    private Map<String, DocumentProcessingMessage.ExtractedField> createBankStatementExtractedFields() {
-        Map<String, DocumentProcessingMessage.ExtractedField> fields = new HashMap<>();
+    @Test
+    @DisplayName("Should throw exception when validation fails during new application processing")
+    void processNewApplication_ValidationFails() {
+        // Arrange
+        when(documentRepository.findById(documentId)).thenReturn(Optional.of(document));
+        when(validationService.validateExtractedData(any(DocumentType.class), anyMap())).thenReturn(invalidValidationResult);
         
-        fields.put("account_holder", new DocumentProcessingMessage.ExtractedField("Acme Corporation", 92.0));
-        fields.put("account_number", new DocumentProcessingMessage.ExtractedField("XXXX1234", 95.0));
-        fields.put("bank_name", new DocumentProcessingMessage.ExtractedField("First National Bank", 98.0));
-        fields.put("statement_date", new DocumentProcessingMessage.ExtractedField("2023-05-31", 96.0));
-        fields.put("opening_balance", new DocumentProcessingMessage.ExtractedField("125000.45", 90.0));
-        fields.put("closing_balance", new DocumentProcessingMessage.ExtractedField("142567.89", 91.0));
-        fields.put("total_deposits", new DocumentProcessingMessage.ExtractedField("87500.00", 88.0));
-        fields.put("total_withdrawals", new DocumentProcessingMessage.ExtractedField("69932.56", 89.0));
-        fields.put("average_daily_balance", new DocumentProcessingMessage.ExtractedField("135245.67", 85.0));
+        // Act & Assert
+        ProcessingException exception = assertThrows(ProcessingException.class, 
+                () -> processingService.processNewApplication(documentId, extractedData));
         
-        return fields;
+        assertEquals("Failed to process new application from document ID: " + documentId, exception.getMessage());
+        verify(documentRepository).findById(documentId);
+        verify(validationService).validateExtractedData(eq(DocumentType.BANK_STATEMENT), eq(extractedData));
+        verify(applicationRepository, never()).save(any(Application.class));
+        verify(notificationService, never()).sendApplicationCreatedNotification(any(Application.class));
     }
     
-    /**
-     * Helper method to create extracted fields for a tax return.
-     */
-    private Map<String, DocumentProcessingMessage.ExtractedField> createTaxReturnExtractedFields() {
-        Map<String, DocumentProcessingMessage.ExtractedField> fields = new HashMap<>();
+    @Test
+    @DisplayName("Should update application with document successfully")
+    void updateApplicationWithDocument_Success() throws ProcessingException {
+        // Arrange
+        when(applicationRepository.findById(applicationId)).thenReturn(Optional.of(application));
+        when(documentRepository.findById(documentId)).thenReturn(Optional.of(document));
+        when(validationService.validateExtractedData(any(DocumentType.class), anyMap())).thenReturn(validValidationResult);
+        when(applicationRepository.save(any(Application.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        doNothing().when(notificationService).sendDocumentProcessedNotification(any(Document.class), any(UUID.class), anyMap());
         
-        fields.put("taxpayer_name", new DocumentProcessingMessage.ExtractedField("Acme Corporation", 94.0));
-        fields.put("ein", new DocumentProcessingMessage.ExtractedField("12-3456789", 97.0));
-        fields.put("tax_year", new DocumentProcessingMessage.ExtractedField("2022", 99.0));
-        fields.put("gross_receipts", new DocumentProcessingMessage.ExtractedField("1250000.00", 92.0));
-        fields.put("total_income", new DocumentProcessingMessage.ExtractedField("1250000.00", 93.0));
-        fields.put("total_deductions", new DocumentProcessingMessage.ExtractedField("850000.00", 91.0));
-        fields.put("taxable_income", new DocumentProcessingMessage.ExtractedField("400000.00", 90.0));
-        fields.put("total_tax", new DocumentProcessingMessage.ExtractedField("84000.00", 95.0));
+        // Act
+        ApplicationResponseDTO result = processingService.updateApplicationWithDocument(applicationId, documentId, extractedData);
         
-        return fields;
+        // Assert
+        assertNotNull(result, "Result should not be null");
+        verify(applicationRepository).findById(applicationId);
+        verify(documentRepository).findById(documentId);
+        verify(validationService).validateExtractedData(eq(DocumentType.BANK_STATEMENT), eq(extractedData));
+        verify(applicationRepository).save(applicationCaptor.capture());
+        verify(documentRepository).save(documentCaptor.capture());
+        verify(notificationService).sendDocumentProcessedNotification(eq(document), eq(applicationId), eq(extractedData));
+        
+        Application capturedApplication = applicationCaptor.getValue();
+        assertEquals(applicationId, capturedApplication.getId(), "Application ID should match");
+        
+        Document capturedDocument = documentCaptor.getValue();
+        assertEquals(applicationId, capturedDocument.getApplicationId(), "Document should have correct application ID");
     }
     
-    /**
-     * Helper method to create extracted fields for an ID document.
-     */
-    private Map<String, DocumentProcessingMessage.ExtractedField> createIdDocumentExtractedFields() {
-        Map<String, DocumentProcessingMessage.ExtractedField> fields = new HashMap<>();
+    @Test
+    @DisplayName("Should throw exception when application not found during update")
+    void updateApplicationWithDocument_ApplicationNotFound() {
+        // Arrange
+        when(applicationRepository.findById(applicationId)).thenReturn(Optional.empty());
         
-        fields.put("document_type", new DocumentProcessingMessage.ExtractedField("Driver's License", 98.0));
-        fields.put("id_number", new DocumentProcessingMessage.ExtractedField("D1234567", 95.0));
-        fields.put("full_name", new DocumentProcessingMessage.ExtractedField("John A. Smith", 96.0));
-        fields.put("address", new DocumentProcessingMessage.ExtractedField("123 Main St, Anytown, CA 12345", 90.0));
-        fields.put("date_of_birth", new DocumentProcessingMessage.ExtractedField("1980-05-15", 94.0));
-        fields.put("issue_date", new DocumentProcessingMessage.ExtractedField("2020-06-01", 93.0));
-        fields.put("expiration_date", new DocumentProcessingMessage.ExtractedField("2028-06-01", 92.0));
-        fields.put("issuing_state", new DocumentProcessingMessage.ExtractedField("CA", 99.0));
+        // Act & Assert
+        ProcessingException exception = assertThrows(ProcessingException.class, 
+                () -> processingService.updateApplicationWithDocument(applicationId, documentId, extractedData));
         
-        return fields;
+        assertEquals("Failed to update application ID: " + applicationId + " with document ID: " + documentId, exception.getMessage());
+        verify(applicationRepository).findById(applicationId);
+        verify(documentRepository, never()).findById(any(UUID.class));
+        verify(applicationRepository, never()).save(any(Application.class));
     }
     
-    /**
-     * Helper method to set up mocks for processing a new application.
-     */
-    private void setupMocksForNewApplication() {
-        // Mock application repository save
+    @Test
+    @DisplayName("Should process document and create new application when no matching application found")
+    void processDocument_CreateNewApplication() throws ProcessingException {
+        // Arrange
+        when(documentRepository.findById(documentId)).thenReturn(Optional.of(document));
+        when(validationService.validateExtractedData(any(DocumentType.class), anyMap())).thenReturn(validValidationResult);
+        when(applicationRepository.findByMerchantDetailsEin(anyString())).thenReturn(new ArrayList<>());
+        when(applicationRepository.findByMerchantDetailsLegalName(anyString())).thenReturn(new ArrayList<>());
+        when(applicationRepository.findByMerchantDetailsDbaName(anyString())).thenReturn(new ArrayList<>());
         when(applicationRepository.save(any(Application.class))).thenAnswer(invocation -> {
             Application app = invocation.getArgument(0);
             if (app.getId() == null) {
-                app.setId(UUID.fromString(testApplicationId));
+                app.setId(UUID.randomUUID());
             }
             return app;
         });
+        doNothing().when(notificationService).sendApplicationCreatedNotification(any(Application.class));
         
-        // Mock document repository save
-        when(documentRepository.save(any(Document.class))).thenAnswer(invocation -> {
-            Document doc = invocation.getArgument(0);
-            if (doc.getId() == null) {
-                doc.setId(UUID.fromString(testDocumentId));
-            }
-            return doc;
-        });
+        // Act
+        ApplicationResponseDTO result = processingService.processDocument(documentId, extractedData);
         
-        // Mock merchant details repository save
-        when(merchantDetailsRepository.save(any(MerchantDetails.class))).thenAnswer(invocation -> {
-            MerchantDetails merchant = invocation.getArgument(0);
-            if (merchant.getId() == null) {
-                merchant.setId(UUID.randomUUID().toString());
-            }
-            return merchant;
-        });
-        
-        // Mock validation service
-        when(validationService.validateApplication(anyString())).thenReturn(true);
-        
-        // Mock notification service
-        when(notificationService.sendApplicationStatusNotification(anyString(), anyString())).thenReturn(true);
+        // Assert
+        assertNotNull(result, "Result should not be null");
+        verify(documentRepository).findById(documentId);
+        verify(validationService).validateExtractedData(eq(DocumentType.BANK_STATEMENT), eq(extractedData));
+        verify(applicationRepository).findByMerchantDetailsEin("12-3456789");
+        verify(applicationRepository).save(any(Application.class));
+        verify(documentRepository).save(any(Document.class));
+        verify(notificationService).sendApplicationCreatedNotification(any(Application.class));
     }
     
-    /**
-     * Helper method to set up mocks for updating an existing application.
-     */
-    private void setupMocksForExistingApplication() {
-        // Mock application repository findById
-        when(applicationRepository.findById(any(UUID.class))).thenReturn(Optional.of(testApplication));
+    @Test
+    @DisplayName("Should process document and update existing application when matching application found")
+    void processDocument_UpdateExistingApplication() throws ProcessingException {
+        // Arrange
+        when(documentRepository.findById(documentId)).thenReturn(Optional.of(document));
+        when(validationService.validateExtractedData(any(DocumentType.class), anyMap())).thenReturn(validValidationResult);
+        when(applicationRepository.findByMerchantDetailsEin(anyString())).thenReturn(List.of(application));
+        when(applicationRepository.findById(applicationId)).thenReturn(Optional.of(application));
+        when(applicationRepository.save(any(Application.class))).thenReturn(application);
+        doNothing().when(notificationService).sendDocumentProcessedNotification(any(Document.class), any(UUID.class), anyMap());
         
-        // Mock document repository save
-        when(documentRepository.save(any(Document.class))).thenAnswer(invocation -> {
-            Document doc = invocation.getArgument(0);
-            if (doc.getId() == null) {
-                doc.setId(UUID.randomUUID());
-            }
-            return doc;
-        });
+        // Act
+        ApplicationResponseDTO result = processingService.processDocument(documentId, extractedData);
         
-        // Mock merchant details repository findByApplicationId
-        when(merchantDetailsRepository.findByApplicationId(any(UUID.class))).thenReturn(Optional.of(testMerchantDetails));
-        
-        // Mock merchant details repository save
-        when(merchantDetailsRepository.save(any(MerchantDetails.class))).thenReturn(testMerchantDetails);
-        
-        // Mock validation service
-        when(validationService.validateApplication(anyString())).thenReturn(true);
-        
-        // Mock notification service
-        when(notificationService.sendApplicationStatusNotification(anyString(), anyString())).thenReturn(true);
+        // Assert
+        assertNotNull(result, "Result should not be null");
+        verify(documentRepository).findById(documentId);
+        verify(validationService).validateExtractedData(eq(DocumentType.BANK_STATEMENT), eq(extractedData));
+        verify(applicationRepository).findByMerchantDetailsEin("12-3456789");
+        verify(applicationRepository).findById(applicationId);
+        verify(applicationRepository).save(any(Application.class));
+        verify(documentRepository).save(any(Document.class));
+        verify(notificationService).sendDocumentProcessedNotification(any(Document.class), any(UUID.class), anyMap());
     }
     
-    /**
-     * Helper method to set up mocks for evaluating application completeness.
-     */
-    private void setupMocksForCompleteness(boolean hasAllDocuments) {
-        // Mock application repository findById
-        when(applicationRepository.findById(any(UUID.class))).thenReturn(Optional.of(testApplication));
+    @Test
+    @DisplayName("Should update application status successfully")
+    void updateApplicationStatus_Success() throws ProcessingException {
+        // Arrange
+        when(applicationRepository.findById(applicationId)).thenReturn(Optional.of(application));
+        when(applicationRepository.save(any(Application.class))).thenReturn(application);
+        doNothing().when(notificationService).sendApplicationStatusNotification(any(Application.class), anyString(), anyString());
         
-        // Create test documents
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("reason", "All documents verified");
+        
+        // Act
+        ApplicationResponseDTO result = processingService.updateApplicationStatus(applicationId, ApplicationStatus.APPROVED, metadata);
+        
+        // Assert
+        assertNotNull(result, "Result should not be null");
+        verify(applicationRepository).findById(applicationId);
+        verify(applicationRepository).save(applicationCaptor.capture());
+        verify(notificationService).sendApplicationStatusNotification(eq(application), eq("PROCESSING"), eq("APPROVED"));
+        verify(notificationService).sendApplicationApprovedNotification(application);
+        
+        Application capturedApplication = applicationCaptor.getValue();
+        assertEquals(ApplicationStatus.APPROVED, capturedApplication.getStatus(), "Application status should be APPROVED");
+        assertTrue(capturedApplication.getMetadata().containsKey("reason"), "Metadata should contain reason");
+        assertTrue(capturedApplication.getMetadata().containsKey("statusChangedAt"), "Metadata should contain statusChangedAt");
+    }
+    
+    @Test
+    @DisplayName("Should throw exception for invalid status transition")
+    void updateApplicationStatus_InvalidTransition() {
+        // Arrange
+        application.setStatus(ApplicationStatus.REJECTED);
+        when(applicationRepository.findById(applicationId)).thenReturn(Optional.of(application));
+        
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("reason", "Trying to approve a rejected application");
+        
+        // Act & Assert
+        ProcessingException exception = assertThrows(ProcessingException.class, 
+                () -> processingService.updateApplicationStatus(applicationId, ApplicationStatus.APPROVED, metadata));
+        
+        assertTrue(exception.getMessage().contains("Invalid status transition"), "Exception should mention invalid transition");
+        verify(applicationRepository).findById(applicationId);
+        verify(applicationRepository, never()).save(any(Application.class));
+        verify(notificationService, never()).sendApplicationStatusNotification(any(Application.class), anyString(), anyString());
+    }
+    
+    @Test
+    @DisplayName("Should calculate processing time when completing application")
+    void updateApplicationStatus_CalculateProcessingTime() throws ProcessingException {
+        // Arrange
+        LocalDateTime creationTime = LocalDateTime.now().minusMinutes(3); // 3 minutes ago
+        application.setCreatedAt(creationTime);
+        
+        when(applicationRepository.findById(applicationId)).thenReturn(Optional.of(application));
+        when(applicationRepository.save(any(Application.class))).thenReturn(application);
+        doNothing().when(notificationService).sendApplicationStatusNotification(any(Application.class), anyString(), anyString());
+        
+        // Act
+        ApplicationResponseDTO result = processingService.updateApplicationStatus(applicationId, ApplicationStatus.COMPLETED, null);
+        
+        // Assert
+        assertNotNull(result, "Result should not be null");
+        verify(applicationRepository).save(applicationCaptor.capture());
+        
+        Application capturedApplication = applicationCaptor.getValue();
+        assertTrue(capturedApplication.getMetadata().containsKey("processingTimeMillis"), "Metadata should contain processingTimeMillis");
+        assertTrue(capturedApplication.getMetadata().containsKey("processingTimeMinutes"), "Metadata should contain processingTimeMinutes");
+        assertTrue(capturedApplication.getMetadata().containsKey("completedAt"), "Metadata should contain completedAt");
+        assertTrue(capturedApplication.getMetadata().containsKey("processedWithinTarget"), "Metadata should contain processedWithinTarget");
+    }
+    
+    @Test
+    @DisplayName("Should check if application is complete successfully")
+    void isApplicationComplete_Success() throws ProcessingException {
+        // Arrange
+        when(applicationRepository.findById(applicationId)).thenReturn(Optional.of(application));
+        when(validationService.evaluateApplicationCompleteness(any(Application.class))).thenReturn(validValidationResult);
+        
+        // Act
+        boolean result = processingService.isApplicationComplete(applicationId);
+        
+        // Assert
+        assertTrue(result, "Application should be complete");
+        verify(applicationRepository).findById(applicationId);
+        verify(validationService).evaluateApplicationCompleteness(application);
+    }
+    
+    @Test
+    @DisplayName("Should return false when application is not complete")
+    void isApplicationComplete_Incomplete() throws ProcessingException {
+        // Arrange
+        when(applicationRepository.findById(applicationId)).thenReturn(Optional.of(application));
+        when(validationService.evaluateApplicationCompleteness(any(Application.class))).thenReturn(invalidValidationResult);
+        
+        // Act
+        boolean result = processingService.isApplicationComplete(applicationId);
+        
+        // Assert
+        assertFalse(result, "Application should not be complete");
+        verify(applicationRepository).findById(applicationId);
+        verify(validationService).evaluateApplicationCompleteness(application);
+    }
+    
+    @Test
+    @DisplayName("Should get processing status successfully")
+    void getProcessingStatus_Success() throws ProcessingException {
+        // Arrange
         List<Document> documents = new ArrayList<>();
+        documents.add(document);
+        application.setDocuments(documents);
         
-        // Always add application form
-        Document applicationForm = new Document();
-        applicationForm.setId(UUID.randomUUID());
-        applicationForm.setApplicationId(UUID.fromString(testApplicationId));
-        applicationForm.setType(DocumentType.APPLICATION_FORM);
-        documents.add(applicationForm);
+        when(applicationRepository.findById(applicationId)).thenReturn(Optional.of(application));
+        when(validationService.evaluateApplicationCompleteness(any(Application.class))).thenReturn(validValidationResult);
+        when(validationService.validateApplication(any(Application.class))).thenReturn(validValidationResult);
         
-        if (hasAllDocuments) {
-            // Add ID verification document
-            Document idDocument = new Document();
-            idDocument.setId(UUID.randomUUID());
-            idDocument.setApplicationId(UUID.fromString(testApplicationId));
-            idDocument.setType(DocumentType.ID_VERIFICATION);
-            documents.add(idDocument);
-            
-            // Add bank statement
-            Document bankStatement = new Document();
-            bankStatement.setId(UUID.randomUUID());
-            bankStatement.setApplicationId(UUID.fromString(testApplicationId));
-            bankStatement.setType(DocumentType.BANK_STATEMENT);
-            documents.add(bankStatement);
-            
-            // Add tax return
-            Document taxReturn = new Document();
-            taxReturn.setId(UUID.randomUUID());
-            taxReturn.setApplicationId(UUID.fromString(testApplicationId));
-            taxReturn.setType(DocumentType.TAX_RETURN);
-            documents.add(taxReturn);
-            
-            // Add business license
-            Document businessLicense = new Document();
-            businessLicense.setId(UUID.randomUUID());
-            businessLicense.setApplicationId(UUID.fromString(testApplicationId));
-            businessLicense.setType(DocumentType.BUSINESS_LICENSE);
-            documents.add(businessLicense);
-        }
+        // Act
+        Map<String, Object> result = processingService.getProcessingStatus(applicationId);
         
-        // Mock document repository findByApplicationId
-        when(documentRepository.findByApplicationId(any(UUID.class))).thenReturn(documents);
+        // Assert
+        assertNotNull(result, "Result should not be null");
+        assertEquals(applicationId, result.get("applicationId"), "Application ID should match");
+        assertEquals("PROCESSING", result.get("status"), "Status should match");
+        assertEquals("NOT_REVIEWED", result.get("reviewStatus"), "Review status should match");
+        assertEquals(1, result.get("documentCount"), "Document count should be 1");
+        assertTrue((Boolean) result.get("isComplete"), "Application should be complete");
+        assertTrue((Boolean) result.get("validationPassed"), "Validation should pass");
         
-        // Mock merchant details repository findByApplicationId
-        when(merchantDetailsRepository.findByApplicationId(any(UUID.class))).thenReturn(Optional.of(testMerchantDetails));
+        verify(applicationRepository).findById(applicationId);
+        verify(validationService).evaluateApplicationCompleteness(application);
+        verify(validationService).validateApplication(application);
     }
     
-    /*
-     * Tests for processing new applications
-     */
+    @Test
+    @DisplayName("Should get required documents successfully")
+    void getRequiredDocuments_Success() throws ProcessingException {
+        // Arrange
+        List<Document> documents = new ArrayList<>();
+        documents.add(document); // Only has BANK_STATEMENT
+        application.setDocuments(documents);
+        
+        when(applicationRepository.findById(applicationId)).thenReturn(Optional.of(application));
+        
+        // Act
+        List<String> result = processingService.getRequiredDocuments(applicationId);
+        
+        // Assert
+        assertNotNull(result, "Result should not be null");
+        assertEquals(3, result.size(), "Should have 3 required documents remaining");
+        assertTrue(result.contains("Tax Return"), "Should require Tax Return");
+        assertTrue(result.contains("Business License"), "Should require Business License");
+        assertTrue(result.contains("ID Verification"), "Should require ID Verification");
+        
+        verify(applicationRepository).findById(applicationId);
+    }
     
     @Test
-    public void testProcessNewApplication_Success() {
-        // Setup
-        setupMocksForNewApplication();
+    @DisplayName("Should reprocess application successfully")
+    void reprocessApplication_Success() throws ProcessingException {
+        // Arrange
+        List<Document> documents = new ArrayList<>();
+        documents.add(document);
+        application.setDocuments(documents);
         
-        // Execute
-        String applicationId = processingService.processNewApplication(validApplicationMessage);
+        when(applicationRepository.findById(applicationId)).thenReturn(Optional.of(application));
+        when(applicationRepository.save(any(Application.class))).thenReturn(application);
+        when(validationService.validateBusinessRules(any(Application.class), any(MerchantDetails.class), anyList()))
+                .thenReturn(validValidationResult);
+        when(validationService.evaluateApplicationCompleteness(any(Application.class))).thenReturn(validValidationResult);
+        when(validationService.validateApprovalRequirements(any(Application.class), any(MerchantDetails.class), anyList()))
+                .thenReturn(validValidationResult);
+        doNothing().when(notificationService).sendApplicationStatusNotification(any(Application.class), anyString(), anyString());
+        doNothing().when(notificationService).sendApplicationApprovedNotification(any(Application.class));
         
-        // Verify
-        assertNotNull("Application ID should not be null", applicationId);
-        assertEquals("Application ID should match test ID", testApplicationId, applicationId);
+        // Act
+        ApplicationResponseDTO result = processingService.reprocessApplication(applicationId);
         
-        // Verify application was saved
-        ArgumentCaptor<Application> applicationCaptor = ArgumentCaptor.forClass(Application.class);
-        verify(applicationRepository, times(2)).save(applicationCaptor.capture());
-        Application savedApplication = applicationCaptor.getValue();
-        assertEquals("Application status should be PENDING", ApplicationStatus.PENDING, savedApplication.getStatus());
+        // Assert
+        assertNotNull(result, "Result should not be null");
+        verify(applicationRepository).findById(applicationId);
+        verify(applicationRepository, times(2)).save(any(Application.class)); // Once for status update, once for final save
+        verify(validationService).validateBusinessRules(eq(application), eq(merchantDetails), anyList());
+        verify(validationService).evaluateApplicationCompleteness(application);
+        verify(validationService).validateApprovalRequirements(eq(application), eq(merchantDetails), anyList());
         
-        // Verify document was created and saved
-        ArgumentCaptor<Document> documentCaptor = ArgumentCaptor.forClass(Document.class);
+        // Verify application was set to PROCESSING status during reprocessing
+        verify(applicationRepository).save(applicationCaptor.capture());
+        Application capturedApplication = applicationCaptor.getAllValues().get(0);
+        assertEquals(ApplicationStatus.PROCESSING, capturedApplication.getStatus(), "Application status should be set to PROCESSING");
+        assertTrue(capturedApplication.getMetadata().containsKey("reprocessedAt"), "Metadata should contain reprocessedAt");
+    }
+    
+    @Test
+    @DisplayName("Should handle processing exception successfully")
+    void handleProcessingException_Success() {
+        // Arrange
+        Exception testException = new RuntimeException("Test exception");
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("processingStage", "document_validation");
+        
+        when(applicationRepository.findById(applicationId)).thenReturn(Optional.of(application));
+        when(documentRepository.findById(documentId)).thenReturn(Optional.of(document));
+        when(applicationRepository.save(any(Application.class))).thenReturn(application);
+        when(documentRepository.save(any(Document.class))).thenReturn(document);
+        doNothing().when(notificationService).sendSystemEventNotification(any(), anyMap());
+        
+        // Act
+        processingService.handleProcessingException(documentId, applicationId, testException, metadata);
+        
+        // Assert
+        verify(applicationRepository).findById(applicationId);
+        verify(documentRepository).findById(documentId);
+        verify(applicationRepository).save(applicationCaptor.capture());
         verify(documentRepository).save(documentCaptor.capture());
-        Document savedDocument = documentCaptor.getValue();
-        assertEquals("Document type should match", DocumentType.APPLICATION_FORM, savedDocument.getType());
-        assertEquals("Document classification should match", "Application Form", savedDocument.getClassification());
+        verify(notificationService, times(2)).sendSystemEventNotification(any(), anyMap());
         
-        // Verify merchant details were created and saved
-        ArgumentCaptor<MerchantDetails> merchantCaptor = ArgumentCaptor.forClass(MerchantDetails.class);
-        verify(merchantDetailsRepository).save(merchantCaptor.capture());
-        MerchantDetails savedMerchant = merchantCaptor.getValue();
-        assertEquals("Merchant legal name should match", "Acme Corporation", savedMerchant.getLegalName());
+        Application capturedApplication = applicationCaptor.getValue();
+        assertEquals(ApplicationStatus.ERROR, capturedApplication.getStatus(), "Application status should be ERROR");
+        assertTrue(capturedApplication.getMetadata().containsKey("processingError"), "Metadata should contain processingError");
         
-        // Verify validation was performed
-        verify(validationService).validateApplication(applicationId);
-        
-        // Verify notification was sent
-        verify(notificationService).sendApplicationStatusNotification(applicationId, ApplicationStatus.NEW.name());
-    }
-    
-    @Test(expected = ValidationException.class)
-    public void testProcessNewApplication_InvalidMessage() {
-        // Execute with invalid message
-        processingService.processNewApplication(invalidMessage);
-        
-        // Should throw ValidationException
-    }
-    
-    @Test(expected = ValidationException.class)
-    public void testProcessNewApplication_WrongDocumentType() {
-        // Execute with wrong document type
-        processingService.processNewApplication(validBankStatementMessage);
-        
-        // Should throw ValidationException
+        Document capturedDocument = documentCaptor.getValue();
+        assertTrue(capturedDocument.getMetadata().containsKey("processingError"), "Document metadata should contain processingError");
     }
     
     @Test
-    public void testProcessNewApplication_ValidationFailed() {
-        // Setup
-        setupMocksForNewApplication();
-        when(validationService.validateApplication(anyString())).thenReturn(false);
+    @DisplayName("Should get application documents successfully")
+    void getApplicationDocuments_Success() throws ProcessingException {
+        // Arrange
+        List<Document> documents = new ArrayList<>();
+        documents.add(document);
+        application.setDocuments(documents);
         
-        // Execute
-        String applicationId = processingService.processNewApplication(validApplicationMessage);
+        when(applicationRepository.findById(applicationId)).thenReturn(Optional.of(application));
+        when(documentService.generateSecureUrl(any(UUID.class))).thenReturn("https://example.com/secure-document-url");
         
-        // Verify
-        assertNotNull("Application ID should not be null", applicationId);
+        // Act
+        List<DocumentResponseDTO> result = processingService.getApplicationDocuments(applicationId);
         
-        // Verify application status was updated to PENDING
-        ArgumentCaptor<Application> applicationCaptor = ArgumentCaptor.forClass(Application.class);
-        verify(applicationRepository, times(2)).save(applicationCaptor.capture());
-        Application savedApplication = applicationCaptor.getValue();
-        assertEquals("Application status should be PENDING", ApplicationStatus.PENDING, savedApplication.getStatus());
+        // Assert
+        assertNotNull(result, "Result should not be null");
+        assertEquals(1, result.size(), "Should have 1 document");
+        assertEquals(documentId, result.get(0).getId(), "Document ID should match");
+        assertEquals("https://example.com/secure-document-url", result.get(0).getDownloadUrl(), "Download URL should match");
         
-        // Verify notification was sent
-        verify(notificationService).sendApplicationStatusNotification(applicationId, ApplicationStatus.NEW.name());
+        verify(applicationRepository).findById(applicationId);
+        verify(documentService).generateSecureUrl(documentId);
     }
     
     @Test
-    public void testProcessNewApplication_WithLowConfidenceFields() {
-        // Setup
-        setupMocksForNewApplication();
+    @DisplayName("Should apply business rules and approve application")
+    void applyBusinessRules_Approve() throws ProcessingException {
+        // Arrange
+        when(applicationRepository.findById(applicationId)).thenReturn(Optional.of(application));
+        when(validationService.validateBusinessRules(any(Application.class), any(MerchantDetails.class), anyList()))
+                .thenReturn(validValidationResult);
+        when(validationService.evaluateApplicationCompleteness(any(Application.class))).thenReturn(validValidationResult);
+        when(validationService.validateApprovalRequirements(any(Application.class), any(MerchantDetails.class), anyList()))
+                .thenReturn(validValidationResult);
+        when(applicationRepository.save(any(Application.class))).thenReturn(application);
+        doNothing().when(notificationService).sendApplicationStatusNotification(any(Application.class), anyString(), anyString());
+        doNothing().when(notificationService).sendApplicationApprovedNotification(any(Application.class));
         
-        // Modify message to have low confidence fields
-        Map<String, DocumentProcessingMessage.ExtractedField> fields = validApplicationMessage.getExtractedFields();
-        fields.put("industry", new DocumentProcessingMessage.ExtractedField("Retail", 65.0)); // Below threshold
-        fields.put("annual_revenue", new DocumentProcessingMessage.ExtractedField("1000000", 70.0)); // Below threshold
-        validApplicationMessage.setExtractedFields(fields);
+        // Act
+        ApplicationResponseDTO result = processingService.applyBusinessRules(applicationId);
         
-        // Execute
-        String applicationId = processingService.processNewApplication(validApplicationMessage);
-        
-        // Verify
-        assertNotNull("Application ID should not be null", applicationId);
-        
-        // Verify application was saved with low confidence fields in metadata
-        ArgumentCaptor<Application> applicationCaptor = ArgumentCaptor.forClass(Application.class);
-        verify(applicationRepository, times(2)).save(applicationCaptor.capture());
-        Application savedApplication = applicationCaptor.getValue();
-        Map<String, Object> metadata = savedApplication.getMetadata();
-        assertTrue("Metadata should contain low_confidence_fields", metadata.containsKey("low_confidence_fields"));
-        
-        @SuppressWarnings("unchecked")
-        Map<String, Object> lowConfidenceFields = (Map<String, Object>) metadata.get("low_confidence_fields");
-        assertTrue("Low confidence fields should include industry", lowConfidenceFields.containsKey("industry"));
-        assertTrue("Low confidence fields should include annual_revenue", lowConfidenceFields.containsKey("annual_revenue"));
-    }
-    
-    /*
-     * Tests for updating existing applications
-     */
-    
-    @Test
-    public void testUpdateExistingApplication_Success() {
-        // Setup
-        setupMocksForExistingApplication();
-        
-        // Execute
-        String applicationId = processingService.updateExistingApplication(validBankStatementMessage);
-        
-        // Verify
-        assertNotNull("Application ID should not be null", applicationId);
-        assertEquals("Application ID should match test ID", testApplicationId, applicationId);
-        
-        // Verify application was retrieved and saved
-        verify(applicationRepository).findById(UUID.fromString(testApplicationId));
-        verify(applicationRepository).save(any(Application.class));
-        
-        // Verify document was created and saved
-        verify(documentRepository).save(any(Document.class));
-        
-        // Verify merchant details were retrieved and updated
-        verify(merchantDetailsRepository).findByApplicationId(UUID.fromString(testApplicationId));
-        verify(merchantDetailsRepository).save(any(MerchantDetails.class));
-        
-        // Verify validation was performed
-        verify(validationService).validateApplication(applicationId);
-        
-        // Verify notification was sent
-        verify(notificationService).sendApplicationStatusNotification(eq(applicationId), anyString());
-    }
-    
-    @Test(expected = ValidationException.class)
-    public void testUpdateExistingApplication_MissingApplicationId() {
-        // Create message without application ID
-        DocumentProcessingMessage message = createTestMessage(
-                UUID.randomUUID().toString(),
-                DocumentProcessingMessage.DocumentType.BANK_STATEMENT,
-                "Bank Statement",
-                90.0,
-                DocumentProcessingMessage.ProcessingAction.UPDATE_EXISTING_APPLICATION,
-                null, // Missing application ID
-                createBankStatementExtractedFields());
-        
-        // Execute
-        processingService.updateExistingApplication(message);
-        
-        // Should throw ValidationException
-    }
-    
-    @Test(expected = ResourceNotFoundException.class)
-    public void testUpdateExistingApplication_ApplicationNotFound() {
-        // Setup
-        when(applicationRepository.findById(any(UUID.class))).thenReturn(Optional.empty());
-        
-        // Execute
-        processingService.updateExistingApplication(validBankStatementMessage);
-        
-        // Should throw ResourceNotFoundException
-    }
-    
-    @Test
-    public void testUpdateExistingApplication_WithLowConfidenceFields() {
-        // Setup
-        setupMocksForExistingApplication();
-        
-        // Modify message to have low confidence fields
-        Map<String, DocumentProcessingMessage.ExtractedField> fields = validBankStatementMessage.getExtractedFields();
-        fields.put("opening_balance", new DocumentProcessingMessage.ExtractedField("125000.45", 65.0)); // Below threshold
-        fields.put("closing_balance", new DocumentProcessingMessage.ExtractedField("142567.89", 70.0)); // Below threshold
-        validBankStatementMessage.setExtractedFields(fields);
-        
-        // Execute
-        String applicationId = processingService.updateExistingApplication(validBankStatementMessage);
-        
-        // Verify
-        assertNotNull("Application ID should not be null", applicationId);
-        
-        // Verify application was saved with low confidence fields in metadata
-        ArgumentCaptor<Application> applicationCaptor = ArgumentCaptor.forClass(Application.class);
+        // Assert
+        assertNotNull(result, "Result should not be null");
+        verify(applicationRepository).findById(applicationId);
+        verify(validationService).validateBusinessRules(eq(application), eq(merchantDetails), anyList());
+        verify(validationService).evaluateApplicationCompleteness(application);
+        verify(validationService).validateApprovalRequirements(eq(application), eq(merchantDetails), anyList());
         verify(applicationRepository).save(applicationCaptor.capture());
-        Application savedApplication = applicationCaptor.getValue();
-        Map<String, Object> metadata = savedApplication.getMetadata();
-        assertTrue("Metadata should contain low_confidence_fields", metadata.containsKey("low_confidence_fields"));
         
-        @SuppressWarnings("unchecked")
-        Map<String, Object> lowConfidenceFields = (Map<String, Object>) metadata.get("low_confidence_fields");
-        assertTrue("Low confidence fields should include opening_balance", lowConfidenceFields.containsKey("opening_balance"));
-        assertTrue("Low confidence fields should include closing_balance", lowConfidenceFields.containsKey("closing_balance"));
+        Application capturedApplication = applicationCaptor.getValue();
+        assertEquals(ApplicationStatus.APPROVED, capturedApplication.getStatus(), "Application status should be APPROVED");
+        verify(notificationService).sendApplicationApprovedNotification(application);
     }
     
     @Test
-    public void testUpdateExistingApplication_StatusChangeToProcessing() {
-        // Setup
-        setupMocksForExistingApplication();
-        when(validationService.validateApplication(anyString())).thenReturn(true);
+    @DisplayName("Should apply business rules and reject application")
+    void applyBusinessRules_Reject() throws ProcessingException {
+        // Arrange
+        when(applicationRepository.findById(applicationId)).thenReturn(Optional.of(application));
+        when(validationService.validateBusinessRules(any(Application.class), any(MerchantDetails.class), anyList()))
+                .thenReturn(validValidationResult);
+        when(validationService.evaluateApplicationCompleteness(any(Application.class))).thenReturn(validValidationResult);
+        when(validationService.validateApprovalRequirements(any(Application.class), any(MerchantDetails.class), anyList()))
+                .thenReturn(invalidValidationResult);
+        when(applicationRepository.save(any(Application.class))).thenReturn(application);
+        doNothing().when(notificationService).sendApplicationStatusNotification(any(Application.class), anyString(), anyString());
+        doNothing().when(notificationService).sendApplicationRejectedNotification(any(Application.class), anyString());
         
-        // Set up for completeness check to return true
-        setupMocksForCompleteness(true);
+        // Act
+        ApplicationResponseDTO result = processingService.applyBusinessRules(applicationId);
         
-        // Execute
-        String applicationId = processingService.updateExistingApplication(validBankStatementMessage);
-        
-        // Verify
-        assertNotNull("Application ID should not be null", applicationId);
-        
-        // Verify application status was updated to PROCESSING
-        ArgumentCaptor<Application> applicationCaptor = ArgumentCaptor.forClass(Application.class);
+        // Assert
+        assertNotNull(result, "Result should not be null");
+        verify(applicationRepository).findById(applicationId);
+        verify(validationService).validateBusinessRules(eq(application), eq(merchantDetails), anyList());
+        verify(validationService).evaluateApplicationCompleteness(application);
+        verify(validationService).validateApprovalRequirements(eq(application), eq(merchantDetails), anyList());
         verify(applicationRepository).save(applicationCaptor.capture());
-        Application savedApplication = applicationCaptor.getValue();
-        assertEquals("Application status should be PROCESSING", ApplicationStatus.PROCESSING, savedApplication.getStatus());
-    }
-    
-    /*
-     * Tests for processing supporting documents
-     */
-    
-    @Test
-    public void testProcessSupportingDocument_Success() {
-        // Setup
-        setupMocksForExistingApplication();
         
-        // Execute
-        String applicationId = processingService.processSupportingDocument(validIdDocumentMessage);
-        
-        // Verify
-        assertNotNull("Application ID should not be null", applicationId);
-        assertEquals("Application ID should match test ID", testApplicationId, applicationId);
-        
-        // Verify application was retrieved and saved
-        verify(applicationRepository).findById(UUID.fromString(testApplicationId));
-        verify(applicationRepository).save(any(Application.class));
-        
-        // Verify document was created and saved
-        verify(documentRepository).save(any(Document.class));
-    }
-    
-    @Test(expected = ValidationException.class)
-    public void testProcessSupportingDocument_MissingApplicationId() {
-        // Create message without application ID
-        DocumentProcessingMessage message = createTestMessage(
-                UUID.randomUUID().toString(),
-                DocumentProcessingMessage.DocumentType.IDENTITY_DOCUMENT,
-                "Driver's License",
-                92.0,
-                DocumentProcessingMessage.ProcessingAction.UPDATE_EXISTING_APPLICATION,
-                null, // Missing application ID
-                createIdDocumentExtractedFields());
-        
-        // Execute
-        processingService.processSupportingDocument(message);
-        
-        // Should throw ValidationException
-    }
-    
-    @Test(expected = ResourceNotFoundException.class)
-    public void testProcessSupportingDocument_ApplicationNotFound() {
-        // Setup
-        when(applicationRepository.findById(any(UUID.class))).thenReturn(Optional.empty());
-        
-        // Execute
-        processingService.processSupportingDocument(validIdDocumentMessage);
-        
-        // Should throw ResourceNotFoundException
+        Application capturedApplication = applicationCaptor.getValue();
+        assertEquals(ApplicationStatus.REJECTED, capturedApplication.getStatus(), "Application status should be REJECTED");
+        verify(notificationService).sendApplicationRejectedNotification(eq(application), anyString());
     }
     
     @Test
-    public void testProcessSupportingDocument_CompletesApplication() {
-        // Setup
-        setupMocksForExistingApplication();
+    @DisplayName("Should apply business rules and set application to pending when incomplete")
+    void applyBusinessRules_Pending() throws ProcessingException {
+        // Arrange
+        when(applicationRepository.findById(applicationId)).thenReturn(Optional.of(application));
+        when(validationService.validateBusinessRules(any(Application.class), any(MerchantDetails.class), anyList()))
+                .thenReturn(validValidationResult);
+        when(validationService.evaluateApplicationCompleteness(any(Application.class))).thenReturn(invalidValidationResult);
+        when(applicationRepository.save(any(Application.class))).thenReturn(application);
+        doNothing().when(notificationService).sendApplicationStatusNotification(any(Application.class), anyString(), anyString());
         
-        // Set application status to PENDING
-        testApplication.setStatus(ApplicationStatus.PENDING);
+        // Act
+        ApplicationResponseDTO result = processingService.applyBusinessRules(applicationId);
         
-        // Set up for completeness check to return true
-        setupMocksForCompleteness(true);
-        
-        // Execute
-        String applicationId = processingService.processSupportingDocument(validIdDocumentMessage);
-        
-        // Verify
-        assertNotNull("Application ID should not be null", applicationId);
-        
-        // Verify application status was updated to PROCESSING
-        ArgumentCaptor<Application> applicationCaptor = ArgumentCaptor.forClass(Application.class);
+        // Assert
+        assertNotNull(result, "Result should not be null");
+        verify(applicationRepository).findById(applicationId);
+        verify(validationService).validateBusinessRules(eq(application), eq(merchantDetails), anyList());
+        verify(validationService).evaluateApplicationCompleteness(application);
+        verify(validationService, never()).validateApprovalRequirements(any(Application.class), any(MerchantDetails.class), anyList());
         verify(applicationRepository).save(applicationCaptor.capture());
-        Application savedApplication = applicationCaptor.getValue();
-        assertEquals("Application status should be PROCESSING", ApplicationStatus.PROCESSING, savedApplication.getStatus());
         
-        // Verify notification was sent
-        verify(notificationService).sendApplicationStatusNotification(applicationId, ApplicationStatus.PROCESSING.name());
+        Application capturedApplication = applicationCaptor.getValue();
+        assertEquals(ApplicationStatus.PENDING, capturedApplication.getStatus(), "Application status should be PENDING");
+        assertTrue(capturedApplication.getMetadata().containsKey("pendingReason"), "Metadata should contain pendingReason");
     }
     
-    /*
-     * Tests for evaluating application completeness
-     */
-    
     @Test
-    public void testEvaluateApplicationCompleteness_Complete() {
-        // Setup
-        setupMocksForCompleteness(true);
+    @DisplayName("Should apply business rules and set application to exception with warnings")
+    void applyBusinessRules_Exception_Warning() throws ProcessingException {
+        // Arrange
+        when(applicationRepository.findById(applicationId)).thenReturn(Optional.of(application));
+        when(validationService.validateBusinessRules(any(Application.class), any(MerchantDetails.class), anyList()))
+                .thenReturn(warningValidationResult);
+        when(applicationRepository.save(any(Application.class))).thenReturn(application);
+        doNothing().when(notificationService).sendApplicationStatusNotification(any(Application.class), anyString(), anyString());
         
-        // Execute
-        boolean isComplete = processingService.evaluateApplicationCompleteness(testApplicationId);
+        // Act
+        ApplicationResponseDTO result = processingService.applyBusinessRules(applicationId);
         
-        // Verify
-        assertTrue("Application should be complete", isComplete);
-        
-        // Verify application metadata was updated
-        ArgumentCaptor<Application> applicationCaptor = ArgumentCaptor.forClass(Application.class);
+        // Assert
+        assertNotNull(result, "Result should not be null");
+        verify(applicationRepository).findById(applicationId);
+        verify(validationService).validateBusinessRules(eq(application), eq(merchantDetails), anyList());
+        verify(validationService, never()).evaluateApplicationCompleteness(any(Application.class));
         verify(applicationRepository).save(applicationCaptor.capture());
-        Application savedApplication = applicationCaptor.getValue();
-        Map<String, Object> metadata = savedApplication.getMetadata();
-        assertEquals("Completeness status should be 'complete'", "complete", metadata.get("completeness_status"));
         
-        @SuppressWarnings("unchecked")
-        Map<String, Boolean> missingDocuments = (Map<String, Boolean>) metadata.get("missing_documents");
-        assertFalse("Should not be missing identity document", missingDocuments.get("identity_document"));
-        assertFalse("Should not be missing bank statement", missingDocuments.get("bank_statement"));
-        assertFalse("Should not be missing tax return", missingDocuments.get("tax_return"));
-    }
-    
-    @Test
-    public void testEvaluateApplicationCompleteness_Incomplete() {
-        // Setup
-        setupMocksForCompleteness(false);
-        
-        // Execute
-        boolean isComplete = processingService.evaluateApplicationCompleteness(testApplicationId);
-        
-        // Verify
-        assertFalse("Application should be incomplete", isComplete);
-        
-        // Verify application metadata was updated
-        ArgumentCaptor<Application> applicationCaptor = ArgumentCaptor.forClass(Application.class);
-        verify(applicationRepository).save(applicationCaptor.capture());
-        Application savedApplication = applicationCaptor.getValue();
-        Map<String, Object> metadata = savedApplication.getMetadata();
-        assertEquals("Completeness status should be 'incomplete'", "incomplete", metadata.get("completeness_status"));
-        
-        @SuppressWarnings("unchecked")
-        Map<String, Boolean> missingDocuments = (Map<String, Boolean>) metadata.get("missing_documents");
-        assertTrue("Should be missing identity document", missingDocuments.get("identity_document"));
-        assertTrue("Should be missing bank statement", missingDocuments.get("bank_statement"));
-        assertTrue("Should be missing tax return", missingDocuments.get("tax_return"));
-    }
-    
-    @Test(expected = ResourceNotFoundException.class)
-    public void testEvaluateApplicationCompleteness_ApplicationNotFound() {
-        // Setup
-        when(applicationRepository.findById(any(UUID.class))).thenReturn(Optional.empty());
-        
-        // Execute
-        processingService.evaluateApplicationCompleteness(testApplicationId);
-        
-        // Should throw ResourceNotFoundException
-    }
-    
-    @Test
-    public void testEvaluateApplicationCompleteness_NoMerchantDetails() {
-        // Setup
-        setupMocksForCompleteness(true);
-        when(merchantDetailsRepository.findByApplicationId(any(UUID.class))).thenReturn(Optional.empty());
-        
-        // Execute
-        boolean isComplete = processingService.evaluateApplicationCompleteness(testApplicationId);
-        
-        // Verify
-        assertFalse("Application should be incomplete without merchant details", isComplete);
-    }
-    
-    /*
-     * Tests for updating application status
-     */
-    
-    @Test
-    public void testUpdateApplicationStatus_ValidTransition() {
-        // Setup
-        when(applicationRepository.findById(any(UUID.class))).thenReturn(Optional.of(testApplication));
-        when(applicationRepository.save(any(Application.class))).thenReturn(testApplication);
-        when(notificationService.sendApplicationStatusNotification(anyString(), anyString())).thenReturn(true);
-        
-        // Execute
-        boolean result = processingService.updateApplicationStatus(testApplicationId, ApplicationStatus.PENDING.name(), "Initial review complete");
-        
-        // Verify
-        assertTrue("Update should be successful", result);
-        
-        // Verify application was retrieved and saved
-        verify(applicationRepository).findById(UUID.fromString(testApplicationId));
-        verify(applicationRepository).save(any(Application.class));
-        
-        // Verify notification was sent
-        verify(notificationService).sendApplicationStatusNotification(testApplicationId, ApplicationStatus.PENDING.name());
-    }
-    
-    @Test(expected = ValidationException.class)
-    public void testUpdateApplicationStatus_InvalidStatus() {
-        // Execute with invalid status
-        processingService.updateApplicationStatus(testApplicationId, "INVALID_STATUS", "Test reason");
-        
-        // Should throw ValidationException
-    }
-    
-    @Test(expected = BusinessRuleException.class)
-    public void testUpdateApplicationStatus_InvalidTransition() {
-        // Setup
-        when(applicationRepository.findById(any(UUID.class))).thenReturn(Optional.of(testApplication));
-        
-        // Try to transition from NEW to COMPLETED (invalid)
-        processingService.updateApplicationStatus(testApplicationId, ApplicationStatus.COMPLETED.name(), "Invalid transition");
-        
-        // Should throw BusinessRuleException
-    }
-    
-    @Test(expected = ResourceNotFoundException.class)
-    public void testUpdateApplicationStatus_ApplicationNotFound() {
-        // Setup
-        when(applicationRepository.findById(any(UUID.class))).thenReturn(Optional.empty());
-        
-        // Execute
-        processingService.updateApplicationStatus(testApplicationId, ApplicationStatus.PENDING.name(), "Test reason");
-        
-        // Should throw ResourceNotFoundException
-    }
-    
-    @Test
-    public void testUpdateApplicationStatus_StatusHistoryTracked() {
-        // Setup
-        when(applicationRepository.findById(any(UUID.class))).thenReturn(Optional.of(testApplication));
-        when(applicationRepository.save(any(Application.class))).thenReturn(testApplication);
-        when(notificationService.sendApplicationStatusNotification(anyString(), anyString())).thenReturn(true);
-        
-        // Execute
-        processingService.updateApplicationStatus(testApplicationId, ApplicationStatus.PENDING.name(), "Initial review complete");
-        
-        // Verify status history was updated in metadata
-        ArgumentCaptor<Application> applicationCaptor = ArgumentCaptor.forClass(Application.class);
-        verify(applicationRepository).save(applicationCaptor.capture());
-        Application savedApplication = applicationCaptor.getValue();
-        Map<String, Object> metadata = savedApplication.getMetadata();
-        assertTrue("Metadata should contain status_history", metadata.containsKey("status_history"));
-        
-        @SuppressWarnings("unchecked")
-        List<Map<String, String>> statusHistory = (List<Map<String, String>>) metadata.get("status_history");
-        assertFalse("Status history should not be empty", statusHistory.isEmpty());
-        
-        Map<String, String> lastStatusChange = statusHistory.get(statusHistory.size() - 1);
-        assertEquals("From status should be NEW", ApplicationStatus.NEW.name(), lastStatusChange.get("from"));
-        assertEquals("To status should be PENDING", ApplicationStatus.PENDING.name(), lastStatusChange.get("to"));
-        assertEquals("Reason should match", "Initial review complete", lastStatusChange.get("reason"));
-    }
-    
-    /*
-     * Tests for validation and error handling
-     */
-    
-    @Test(expected = ValidationException.class)
-    public void testValidateProcessingMessage_NullMessage() {
-        // Use reflection to access private method
-        try {
-            java.lang.reflect.Method method = ProcessingServiceImpl.class.getDeclaredMethod(
-                    "validateProcessingMessage", DocumentProcessingMessage.class);
-            method.setAccessible(true);
-            method.invoke(processingService, (DocumentProcessingMessage) null);
-        } catch (Exception e) {
-            if (e.getCause() instanceof ValidationException) {
-                throw (ValidationException) e.getCause();
-            }
-            fail("Unexpected exception: " + e);
-        }
-    }
-    
-    @Test(expected = ValidationException.class)
-    public void testValidateProcessingMessage_MissingDocumentId() {
-        // Create message without document ID
-        DocumentProcessingMessage message = new DocumentProcessingMessage();
-        message.setDocumentType(DocumentProcessingMessage.DocumentType.APPLICATION_FORM);
-        message.setClassification("Application Form");
-        message.setProcessingAction(DocumentProcessingMessage.ProcessingAction.CREATE_NEW_APPLICATION);
-        message.setExtractedFields(createTestExtractedFields());
-        
-        // Use reflection to access private method
-        try {
-            java.lang.reflect.Method method = ProcessingServiceImpl.class.getDeclaredMethod(
-                    "validateProcessingMessage", DocumentProcessingMessage.class);
-            method.setAccessible(true);
-            method.invoke(processingService, message);
-        } catch (Exception e) {
-            if (e.getCause() instanceof ValidationException) {
-                throw (ValidationException) e.getCause();
-            }
-            fail("Unexpected exception: " + e);
-        }
-    }
-    
-    @Test(expected = ValidationException.class)
-    public void testValidateProcessingMessage_MissingDocumentType() {
-        // Create message without document type
-        DocumentProcessingMessage message = new DocumentProcessingMessage();
-        message.setDocumentId(testDocumentId);
-        message.setClassification("Application Form");
-        message.setProcessingAction(DocumentProcessingMessage.ProcessingAction.CREATE_NEW_APPLICATION);
-        message.setExtractedFields(createTestExtractedFields());
-        
-        // Use reflection to access private method
-        try {
-            java.lang.reflect.Method method = ProcessingServiceImpl.class.getDeclaredMethod(
-                    "validateProcessingMessage", DocumentProcessingMessage.class);
-            method.setAccessible(true);
-            method.invoke(processingService, message);
-        } catch (Exception e) {
-            if (e.getCause() instanceof ValidationException) {
-                throw (ValidationException) e.getCause();
-            }
-            fail("Unexpected exception: " + e);
-        }
-    }
-    
-    @Test(expected = ValidationException.class)
-    public void testValidateProcessingMessage_MissingClassification() {
-        // Create message without classification
-        DocumentProcessingMessage message = new DocumentProcessingMessage();
-        message.setDocumentId(testDocumentId);
-        message.setDocumentType(DocumentProcessingMessage.DocumentType.APPLICATION_FORM);
-        message.setProcessingAction(DocumentProcessingMessage.ProcessingAction.CREATE_NEW_APPLICATION);
-        message.setExtractedFields(createTestExtractedFields());
-        
-        // Use reflection to access private method
-        try {
-            java.lang.reflect.Method method = ProcessingServiceImpl.class.getDeclaredMethod(
-                    "validateProcessingMessage", DocumentProcessingMessage.class);
-            method.setAccessible(true);
-            method.invoke(processingService, message);
-        } catch (Exception e) {
-            if (e.getCause() instanceof ValidationException) {
-                throw (ValidationException) e.getCause();
-            }
-            fail("Unexpected exception: " + e);
-        }
-    }
-    
-    @Test(expected = ValidationException.class)
-    public void testValidateProcessingMessage_MissingProcessingAction() {
-        // Create message without processing action
-        DocumentProcessingMessage message = new DocumentProcessingMessage();
-        message.setDocumentId(testDocumentId);
-        message.setDocumentType(DocumentProcessingMessage.DocumentType.APPLICATION_FORM);
-        message.setClassification("Application Form");
-        message.setExtractedFields(createTestExtractedFields());
-        
-        // Use reflection to access private method
-        try {
-            java.lang.reflect.Method method = ProcessingServiceImpl.class.getDeclaredMethod(
-                    "validateProcessingMessage", DocumentProcessingMessage.class);
-            method.setAccessible(true);
-            method.invoke(processingService, message);
-        } catch (Exception e) {
-            if (e.getCause() instanceof ValidationException) {
-                throw (ValidationException) e.getCause();
-            }
-            fail("Unexpected exception: " + e);
-        }
-    }
-    
-    @Test(expected = ValidationException.class)
-    public void testValidateProcessingMessage_MissingExtractedFields() {
-        // Create message without extracted fields
-        DocumentProcessingMessage message = new DocumentProcessingMessage();
-        message.setDocumentId(testDocumentId);
-        message.setDocumentType(DocumentProcessingMessage.DocumentType.APPLICATION_FORM);
-        message.setClassification("Application Form");
-        message.setProcessingAction(DocumentProcessingMessage.ProcessingAction.CREATE_NEW_APPLICATION);
-        
-        // Use reflection to access private method
-        try {
-            java.lang.reflect.Method method = ProcessingServiceImpl.class.getDeclaredMethod(
-                    "validateProcessingMessage", DocumentProcessingMessage.class);
-            method.setAccessible(true);
-            method.invoke(processingService, message);
-        } catch (Exception e) {
-            if (e.getCause() instanceof ValidationException) {
-                throw (ValidationException) e.getCause();
-            }
-            fail("Unexpected exception: " + e);
-        }
-    }
-    
-    @Test
-    public void testCreateDocumentFromMessage_Success() {
-        // Setup
-        when(documentRepository.save(any(Document.class))).thenAnswer(invocation -> {
-            Document doc = invocation.getArgument(0);
-            if (doc.getId() == null) {
-                doc.setId(UUID.randomUUID());
-            }
-            return doc;
-        });
-        
-        // Use reflection to access private method
-        try {
-            java.lang.reflect.Method method = ProcessingServiceImpl.class.getDeclaredMethod(
-                    "createDocumentFromMessage", DocumentProcessingMessage.class, Application.class);
-            method.setAccessible(true);
-            Document result = (Document) method.invoke(processingService, validApplicationMessage, testApplication);
-            
-            // Verify
-            assertNotNull("Document should not be null", result);
-            assertEquals("Document type should match", DocumentType.APPLICATION_FORM, result.getType());
-            assertEquals("Document classification should match", "Application Form", result.getClassification());
-            assertEquals("Document storage path should match", validApplicationMessage.getStoragePath(), result.getStoragePath());
-            assertNotNull("Document metadata should not be null", result.getMetadata());
-        } catch (Exception e) {
-            fail("Unexpected exception: " + e);
-        }
-    }
-    
-    @Test(expected = DocumentProcessingException.class)
-    public void testCreateDocumentFromMessage_Exception() {
-        // Setup to throw exception
-        when(documentRepository.save(any(Document.class))).thenThrow(new RuntimeException("Database error"));
-        
-        // Use reflection to access private method
-        try {
-            java.lang.reflect.Method method = ProcessingServiceImpl.class.getDeclaredMethod(
-                    "createDocumentFromMessage", DocumentProcessingMessage.class, Application.class);
-            method.setAccessible(true);
-            method.invoke(processingService, validApplicationMessage, testApplication);
-        } catch (Exception e) {
-            if (e.getCause() instanceof DocumentProcessingException) {
-                throw (DocumentProcessingException) e.getCause();
-            }
-            fail("Unexpected exception: " + e);
-        }
-    }
-    
-    @Test
-    public void testMapDocumentType_AllTypes() {
-        // Use reflection to access private method
-        try {
-            java.lang.reflect.Method method = ProcessingServiceImpl.class.getDeclaredMethod(
-                    "mapDocumentType", DocumentProcessingMessage.DocumentType.class);
-            method.setAccessible(true);
-            
-            // Test mapping for all document types
-            assertEquals(DocumentType.APPLICATION_FORM, 
-                    method.invoke(processingService, DocumentProcessingMessage.DocumentType.APPLICATION_FORM));
-            assertEquals(DocumentType.BANK_STATEMENT, 
-                    method.invoke(processingService, DocumentProcessingMessage.DocumentType.BANK_STATEMENT));
-            assertEquals(DocumentType.TAX_RETURN, 
-                    method.invoke(processingService, DocumentProcessingMessage.DocumentType.TAX_RETURN));
-            assertEquals(DocumentType.ID_VERIFICATION, 
-                    method.invoke(processingService, DocumentProcessingMessage.DocumentType.IDENTITY_DOCUMENT));
-            assertEquals(DocumentType.BUSINESS_LICENSE, 
-                    method.invoke(processingService, DocumentProcessingMessage.DocumentType.BUSINESS_LICENSE));
-            assertEquals(DocumentType.MISCELLANEOUS, 
-                    method.invoke(processingService, DocumentProcessingMessage.DocumentType.CREDIT_CARD_STATEMENT));
-            assertEquals(DocumentType.MISCELLANEOUS, 
-                    method.invoke(processingService, DocumentProcessingMessage.DocumentType.INVOICE));
-            assertEquals(DocumentType.MISCELLANEOUS, 
-                    method.invoke(processingService, DocumentProcessingMessage.DocumentType.UTILITY_BILL));
-            assertEquals(DocumentType.MISCELLANEOUS, 
-                    method.invoke(processingService, DocumentProcessingMessage.DocumentType.LEASE_AGREEMENT));
-            assertEquals(DocumentType.MISCELLANEOUS, 
-                    method.invoke(processingService, DocumentProcessingMessage.DocumentType.OTHER));
-        } catch (Exception e) {
-            fail("Unexpected exception: " + e);
-        }
-    }
-    
-    @Test
-    public void testValidateStatusTransition_ValidTransitions() {
-        // Use reflection to access private method
-        try {
-            java.lang.reflect.Method method = ProcessingServiceImpl.class.getDeclaredMethod(
-                    "validateStatusTransition", ApplicationStatus.class, ApplicationStatus.class);
-            method.setAccessible(true);
-            
-            // Test valid transitions
-            method.invoke(processingService, ApplicationStatus.NEW, ApplicationStatus.PENDING); // Should not throw
-            method.invoke(processingService, ApplicationStatus.NEW, ApplicationStatus.REJECTED); // Should not throw
-            method.invoke(processingService, ApplicationStatus.PENDING, ApplicationStatus.PROCESSING); // Should not throw
-            method.invoke(processingService, ApplicationStatus.PROCESSING, ApplicationStatus.APPROVED); // Should not throw
-            method.invoke(processingService, ApplicationStatus.APPROVED, ApplicationStatus.COMPLETED); // Should not throw
-        } catch (Exception e) {
-            fail("Unexpected exception for valid transition: " + e);
-        }
-    }
-    
-    @Test(expected = BusinessRuleException.class)
-    public void testValidateStatusTransition_InvalidTransition() {
-        // Use reflection to access private method
-        try {
-            java.lang.reflect.Method method = ProcessingServiceImpl.class.getDeclaredMethod(
-                    "validateStatusTransition", ApplicationStatus.class, ApplicationStatus.class);
-            method.setAccessible(true);
-            
-            // Test invalid transition (NEW to COMPLETED)
-            method.invoke(processingService, ApplicationStatus.NEW, ApplicationStatus.COMPLETED);
-        } catch (Exception e) {
-            if (e.getCause() instanceof BusinessRuleException) {
-                throw (BusinessRuleException) e.getCause();
-            }
-            fail("Unexpected exception: " + e);
-        }
-    }
-    
-    @Test
-    public void testCreateMerchantDetailsIfAvailable_Success() {
-        // Setup
-        when(merchantDetailsRepository.save(any(MerchantDetails.class))).thenAnswer(invocation -> {
-            MerchantDetails merchant = invocation.getArgument(0);
-            if (merchant.getId() == null) {
-                merchant.setId(UUID.randomUUID().toString());
-            }
-            return merchant;
-        });
-        
-        // Use reflection to access private method
-        try {
-            java.lang.reflect.Method method = ProcessingServiceImpl.class.getDeclaredMethod(
-                    "createMerchantDetailsIfAvailable", DocumentProcessingMessage.class, Application.class);
-            method.setAccessible(true);
-            method.invoke(processingService, validApplicationMessage, testApplication);
-            
-            // Verify merchant details were saved
-            verify(merchantDetailsRepository).save(any(MerchantDetails.class));
-        } catch (Exception e) {
-            fail("Unexpected exception: " + e);
-        }
-    }
-    
-    @Test
-    public void testCreateMerchantDetailsIfAvailable_NoMerchantData() {
-        // Create message without merchant data
-        DocumentProcessingMessage message = createTestMessage(
-                testDocumentId,
-                DocumentProcessingMessage.DocumentType.APPLICATION_FORM,
-                "Application Form",
-                95.0,
-                DocumentProcessingMessage.ProcessingAction.CREATE_NEW_APPLICATION,
-                null,
-                new HashMap<>()); // Empty extracted fields
-        
-        // Use reflection to access private method
-        try {
-            java.lang.reflect.Method method = ProcessingServiceImpl.class.getDeclaredMethod(
-                    "createMerchantDetailsIfAvailable", DocumentProcessingMessage.class, Application.class);
-            method.setAccessible(true);
-            method.invoke(processingService, message, testApplication);
-            
-            // Verify merchant details were not saved
-            verify(merchantDetailsRepository, never()).save(any(MerchantDetails.class));
-        } catch (Exception e) {
-            fail("Unexpected exception: " + e);
-        }
-    }
-    
-    @Test
-    public void testUpdateMerchantDetailsIfAvailable_ExistingMerchant() {
-        // Setup
-        when(merchantDetailsRepository.findByApplicationId(any(UUID.class))).thenReturn(Optional.of(testMerchantDetails));
-        when(merchantDetailsRepository.save(any(MerchantDetails.class))).thenReturn(testMerchantDetails);
-        
-        // Use reflection to access private method
-        try {
-            java.lang.reflect.Method method = ProcessingServiceImpl.class.getDeclaredMethod(
-                    "updateMerchantDetailsIfAvailable", DocumentProcessingMessage.class, Application.class);
-            method.setAccessible(true);
-            method.invoke(processingService, validApplicationMessage, testApplication);
-            
-            // Verify merchant details were updated
-            verify(merchantDetailsRepository).save(any(MerchantDetails.class));
-        } catch (Exception e) {
-            fail("Unexpected exception: " + e);
-        }
-    }
-    
-    @Test
-    public void testUpdateMerchantDetailsIfAvailable_NewMerchant() {
-        // Setup
-        when(merchantDetailsRepository.findByApplicationId(any(UUID.class))).thenReturn(Optional.empty());
-        when(merchantDetailsRepository.save(any(MerchantDetails.class))).thenAnswer(invocation -> {
-            MerchantDetails merchant = invocation.getArgument(0);
-            if (merchant.getId() == null) {
-                merchant.setId(UUID.randomUUID().toString());
-            }
-            return merchant;
-        });
-        
-        // Use reflection to access private method
-        try {
-            java.lang.reflect.Method method = ProcessingServiceImpl.class.getDeclaredMethod(
-                    "updateMerchantDetailsIfAvailable", DocumentProcessingMessage.class, Application.class);
-            method.setAccessible(true);
-            method.invoke(processingService, validApplicationMessage, testApplication);
-            
-            // Verify new merchant details were created and saved
-            verify(merchantDetailsRepository).save(any(MerchantDetails.class));
-        } catch (Exception e) {
-            fail("Unexpected exception: " + e);
-        }
-    }
-    
-    @Test
-    public void testUpdateMerchantDetailsIfAvailable_LowConfidenceFields() {
-        // Setup
-        when(merchantDetailsRepository.findByApplicationId(any(UUID.class))).thenReturn(Optional.of(testMerchantDetails));
-        when(merchantDetailsRepository.save(any(MerchantDetails.class))).thenReturn(testMerchantDetails);
-        
-        // Modify message to have low confidence fields
-        Map<String, DocumentProcessingMessage.ExtractedField> fields = new HashMap<>(validApplicationMessage.getExtractedFields());
-        fields.put("industry", new DocumentProcessingMessage.ExtractedField("Retail", 65.0)); // Below threshold
-        validApplicationMessage.setExtractedFields(fields);
-        
-        // Use reflection to access private method
-        try {
-            java.lang.reflect.Method method = ProcessingServiceImpl.class.getDeclaredMethod(
-                    "updateMerchantDetailsIfAvailable", DocumentProcessingMessage.class, Application.class);
-            method.setAccessible(true);
-            method.invoke(processingService, validApplicationMessage, testApplication);
-            
-            // Verify merchant details were not updated with low confidence field
-            ArgumentCaptor<MerchantDetails> merchantCaptor = ArgumentCaptor.forClass(MerchantDetails.class);
-            verify(merchantDetailsRepository).save(merchantCaptor.capture());
-            MerchantDetails savedMerchant = merchantCaptor.getValue();
-            assertNotEquals("Industry should not be updated with low confidence value", "Retail", savedMerchant.getIndustry());
-        } catch (Exception e) {
-            fail("Unexpected exception: " + e);
-        }
+        Application capturedApplication = applicationCaptor.getValue();
+        assertEquals(ApplicationStatus.EXCEPTION, capturedApplication.getStatus(), "Application status should be EXCEPTION");
+        assertTrue(capturedApplication.getMetadata().containsKey("exceptionReason"), "Metadata should contain exceptionReason");
+        assertEquals("WARNING", capturedApplication.getMetadata().get("exceptionSeverity"), "Exception severity should be WARNING");
     }
 }
