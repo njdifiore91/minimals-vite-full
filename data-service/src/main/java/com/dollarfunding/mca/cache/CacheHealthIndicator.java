@@ -1,480 +1,195 @@
 package com.dollarfunding.mca.cache;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.actuate.health.Health;
 import org.springframework.boot.actuate.health.HealthIndicator;
 import org.springframework.data.redis.connection.RedisConnection;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
-import org.springframework.data.redis.connection.RedisNode;
-import org.springframework.data.redis.connection.RedisSentinelConfiguration;
-import org.springframework.data.redis.connection.RedisServerCommands;
-import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Component;
 
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.Properties;
-import java.util.stream.Collectors;
 
 /**
- * Implementation of Spring Boot's HealthIndicator for monitoring Redis cache health in the MCA application.
+ * Health indicator for Redis cache monitoring in the MCA application.
  * <p>
- * This class provides health checks for the Redis connection, reports cache statistics, and integrates
- * with Spring Boot Actuator for health monitoring. It helps ensure the cache system is functioning properly
- * and provides visibility into its status.
+ * This class implements Spring Boot's HealthIndicator interface to provide health checks
+ * for the Redis connection, report cache statistics, and integrate with Spring Boot Actuator
+ * for health monitoring. It helps ensure the cache system is functioning properly and provides
+ * visibility into its status.
+ * </p>
  * <p>
- * The health checks include:
- * <ul>
- *   <li>Redis connection status</li>
- *   <li>Redis cluster health (if cluster mode is enabled)</li>
- *   <li>Redis sentinel status (for automatic failover)</li>
- *   <li>Memory usage and eviction policies</li>
- *   <li>Key expiration and TTL settings</li>
- * </ul>
+ * The health check includes:
+ * - Redis connection status verification
+ * - Cache statistics reporting (memory usage, connected clients, etc.)
+ * - Detailed health status reporting with metrics
+ * </p>
  * <p>
- * This health indicator is critical for maintaining the 99.9% system uptime requirement
- * and ensuring that the Redis cache is functioning properly for the MCA application.
+ * This health indicator is automatically registered with Spring Boot Actuator and exposed
+ * through the /actuator/health endpoint.
+ * </p>
  */
 @Component
 public class CacheHealthIndicator implements HealthIndicator {
 
-    private static final Logger logger = LoggerFactory.getLogger(CacheHealthIndicator.class);
-    
+    private final RedisConnectionFactory redisConnectionFactory;
     private final RedisTemplate<String, Object> redisTemplate;
-    private final RedisConnectionFactory connectionFactory;
-    
-    @Value("${spring.redis.cluster.enabled:false}")
-    private boolean clusterEnabled;
-    
-    @Value("${spring.redis.sentinel.master:}")
-    private String sentinelMaster;
-    
-    @Value("${metrics.cache.memory.threshold:0.8}")
-    private double memoryThreshold; // Alert if memory usage exceeds 80% of max memory
-    
-    @Value("${metrics.cache.connection.timeout:2000}")
-    private long connectionTimeout; // Connection timeout in milliseconds
 
     /**
-     * Constructs a new CacheHealthIndicator with the specified dependencies.
+     * Constructs a new CacheHealthIndicator with the specified Redis connection factory and template.
      *
-     * @param redisTemplate     The Redis template for interacting with the Redis cache
-     * @param connectionFactory The Redis connection factory for low-level Redis operations
+     * @param redisConnectionFactory the Redis connection factory used to check connection status
+     * @param redisTemplate the Redis template used to collect cache statistics
      */
-    @Autowired
-    public CacheHealthIndicator(RedisTemplate<String, Object> redisTemplate,
-                               RedisConnectionFactory connectionFactory) {
+    public CacheHealthIndicator(RedisConnectionFactory redisConnectionFactory, 
+                               RedisTemplate<String, Object> redisTemplate) {
+        this.redisConnectionFactory = redisConnectionFactory;
         this.redisTemplate = redisTemplate;
-        this.connectionFactory = connectionFactory;
     }
 
     /**
-     * Provides a health check for the Redis cache.
-     * This method is part of the Spring Boot Actuator health endpoint.
+     * Performs a health check for the Redis cache and returns the status.
+     * <p>
+     * This method checks if the Redis connection is available and collects cache statistics.
+     * It returns UP if the connection is available, and DOWN otherwise. The health response
+     * includes detailed metrics about the Redis cache.
+     * </p>
      *
-     * @return The health status of the Redis cache
+     * @return a Health object representing the status of the Redis cache
      */
     @Override
     public Health health() {
         Health.Builder builder = new Health.Builder();
-        Map<String, Object> details = new HashMap<>();
-        
         try {
-            // Check basic connectivity
-            boolean connected = checkConnection();
-            if (!connected) {
-                return builder.down()
-                        .withDetail("error", "Cannot connect to Redis")
-                        .build();
+            if (checkConnection()) {
+                Map<String, Object> details = getCacheStatistics();
+                return builder.up().withDetails(details).build();
+            } else {
+                return builder.down().withDetail("error", "Redis connection failed").build();
             }
-            
-            // Get Redis info
-            Properties info = getRedisInfo();
-            if (info == null) {
-                return builder.down()
-                        .withDetail("error", "Cannot retrieve Redis INFO")
-                        .build();
-            }
-            
-            // Add basic Redis info to details
-            details.put("version", info.getProperty("redis_version", "unknown"));
-            details.put("mode", info.getProperty("redis_mode", "standalone"));
-            details.put("uptime_seconds", info.getProperty("uptime_in_seconds", "0"));
-            
-            // Check memory usage
-            long usedMemory = Long.parseLong(info.getProperty("used_memory", "0"));
-            long maxMemory = Long.parseLong(info.getProperty("maxmemory", "0"));
-            double memoryUsageRatio = maxMemory > 0 ? (double) usedMemory / maxMemory : 0;
-            
-            details.put("memory_usage_bytes", usedMemory);
-            details.put("max_memory_bytes", maxMemory);
-            details.put("memory_usage_ratio", String.format("%.2f", memoryUsageRatio));
-            
-            // Check cluster status if enabled
-            if (clusterEnabled) {
-                Map<String, Object> clusterInfo = getClusterInfo();
-                details.put("cluster", clusterInfo);
-                
-                // Check if cluster is in a failed state
-                if (clusterInfo.containsKey("cluster_state") && 
-                    !"ok".equals(clusterInfo.get("cluster_state"))) {
-                    return builder.down()
-                            .withDetails(details)
-                            .build();
-                }
-            }
-            
-            // Check sentinel status if configured
-            if (sentinelMaster != null && !sentinelMaster.isEmpty()) {
-                Map<String, Object> sentinelInfo = getSentinelInfo();
-                details.put("sentinel", sentinelInfo);
-                
-                // Check if sentinel has enough quorum
-                if (sentinelInfo.containsKey("sentinels") && 
-                    (Integer) sentinelInfo.get("sentinels") < 2) {
-                    return builder.down()
-                            .withDetails(details)
-                            .build();
-                }
-            }
-            
-            // Check key statistics
-            long totalKeys = getTotalKeys();
-            long expiringKeys = getExpiringKeys();
-            
-            details.put("total_keys", totalKeys);
-            details.put("expiring_keys", expiringKeys);
-            details.put("expiring_keys_ratio", totalKeys > 0 ? 
-                    String.format("%.2f", (double) expiringKeys / totalKeys) : "0.00");
-            
-            // Check eviction policy
-            String evictionPolicy = info.getProperty("maxmemory_policy", "unknown");
-            details.put("eviction_policy", evictionPolicy);
-            
-            // Check if memory usage exceeds threshold
-            if (memoryUsageRatio > memoryThreshold) {
-                logger.warn("Redis memory usage ({}) exceeds threshold ({})", 
-                        String.format("%.2f%%", memoryUsageRatio * 100), 
-                        String.format("%.2f%%", memoryThreshold * 100));
-                
-                return builder.down()
-                        .withDetail("error", "Memory usage exceeds threshold")
-                        .withDetails(details)
-                        .build();
-            }
-            
-            // Check if eviction policy is not set when it should be
-            if (maxMemory > 0 && "noeviction".equals(evictionPolicy)) {
-                logger.warn("Redis has maxmemory set but eviction policy is 'noeviction'");
-                
-                return builder.down()
-                        .withDetail("error", "Inappropriate eviction policy")
-                        .withDetails(details)
-                        .build();
-            }
-            
-            // All checks passed, Redis is healthy
-            return builder.up()
-                    .withDetails(details)
-                    .build();
-            
         } catch (Exception e) {
-            logger.error("Redis health check failed", e);
-            return builder.down(e)
-                    .withDetail("error", e.getMessage())
-                    .build();
+            return builder.down(e).build();
         }
     }
 
     /**
-     * Checks if a connection to Redis can be established.
+     * Checks if the Redis connection is available.
      *
-     * @return true if the connection is successful, false otherwise
+     * @return true if the connection is available, false otherwise
      */
     private boolean checkConnection() {
-        try {
-            return redisTemplate.execute((RedisCallback<Boolean>) connection -> {
-                try {
-                    return connection.ping() != null;
-                } catch (Exception e) {
-                    logger.error("Redis ping failed", e);
-                    return false;
-                }
-            });
+        try (RedisConnection connection = redisConnectionFactory.getConnection()) {
+            return connection.ping() != null;
         } catch (Exception e) {
-            logger.error("Redis connection check failed", e);
             return false;
         }
     }
 
     /**
-     * Retrieves Redis INFO command output as Properties.
+     * Collects statistics about the Redis cache.
+     * <p>
+     * This method retrieves information about the Redis server, including memory usage,
+     * connected clients, and other metrics. It returns a map of statistics that can be
+     * included in the health response.
+     * </p>
      *
-     * @return Properties containing Redis INFO output, or null if the operation fails
+     * @return a map of cache statistics
      */
-    private Properties getRedisInfo() {
-        try {
-            return redisTemplate.execute((RedisCallback<Properties>) connection -> {
-                try {
-                    return connection.info();
-                } catch (Exception e) {
-                    logger.error("Failed to retrieve Redis INFO", e);
-                    return null;
-                }
-            });
-        } catch (Exception e) {
-            logger.error("Redis INFO retrieval failed", e);
-            return null;
-        }
-    }
-
-    /**
-     * Retrieves Redis cluster information.
-     *
-     * @return Map containing cluster information, or an empty map if the operation fails
-     */
-    private Map<String, Object> getClusterInfo() {
-        try {
-            return redisTemplate.execute((RedisCallback<Map<String, Object>>) connection -> {
-                try {
-                    Properties clusterInfo = connection.info("cluster");
-                    Map<String, Object> result = new HashMap<>();
-                    
-                    if (clusterInfo != null) {
-                        clusterInfo.forEach((k, v) -> result.put(k.toString(), v));
-                    }
-                    
-                    // Get cluster nodes if available
-                    if (connection instanceof RedisServerCommands) {
-                        String nodesInfo = ((RedisServerCommands) connection).clusterNodes();
-                        if (nodesInfo != null) {
-                            int nodeCount = nodesInfo.split("\n").length;
-                            result.put("node_count", nodeCount);
-                        }
-                    }
-                    
-                    return result;
-                } catch (Exception e) {
-                    logger.error("Failed to retrieve Redis cluster info", e);
-                    return new HashMap<>();
-                }
-            });
-        } catch (Exception e) {
-            logger.error("Redis cluster info retrieval failed", e);
-            return new HashMap<>();
-        }
-    }
-
-    /**
-     * Retrieves Redis sentinel information.
-     *
-     * @return Map containing sentinel information, or an empty map if the operation fails
-     */
-    private Map<String, Object> getSentinelInfo() {
-        try {
-            Map<String, Object> result = new HashMap<>();
+    private Map<String, Object> getCacheStatistics() {
+        Map<String, Object> stats = new HashMap<>();
+        try (RedisConnection connection = redisConnectionFactory.getConnection()) {
+            // Get Redis server info
+            Properties info = connection.info();
             
-            // Check if sentinel configuration is available
-            if (connectionFactory.getSentinelConnection() != null) {
-                RedisSentinelConfiguration sentinelConfig = 
-                        (RedisSentinelConfiguration) connectionFactory.getSentinelConfiguration();
-                
-                if (sentinelConfig != null) {
-                    result.put("master", sentinelConfig.getMaster().getName());
-                    
-                    List<String> sentinels = sentinelConfig.getSentinels().stream()
-                            .map(RedisNode::asString)
-                            .collect(Collectors.toList());
-                    
-                    result.put("sentinels", sentinels.size());
-                    result.put("sentinel_nodes", sentinels);
-                }
+            // Extract key metrics
+            stats.put("version", info.getProperty("redis_version", "unknown"));
+            stats.put("mode", info.getProperty("redis_mode", "unknown"));
+            stats.put("uptime_seconds", parseLongSafely(info.getProperty("uptime_in_seconds")));
+            stats.put("connected_clients", parseLongSafely(info.getProperty("connected_clients")));
+            stats.put("used_memory_human", info.getProperty("used_memory_human", "unknown"));
+            stats.put("total_commands_processed", parseLongSafely(info.getProperty("total_commands_processed")));
+            
+            // Add cluster-specific information if available
+            if ("cluster".equals(info.getProperty("redis_mode"))) {
+                stats.put("cluster_enabled", true);
+                stats.put("cluster_size", parseLongSafely(info.getProperty("cluster_known_nodes")));
             }
             
-            return result;
+            // Add database statistics
+            stats.put("keyspace_hits", parseLongSafely(info.getProperty("keyspace_hits")));
+            stats.put("keyspace_misses", parseLongSafely(info.getProperty("keyspace_misses")));
+            
+            // Calculate hit ratio if possible
+            long hits = parseLongSafely(info.getProperty("keyspace_hits"));
+            long misses = parseLongSafely(info.getProperty("keyspace_misses"));
+            if (hits + misses > 0) {
+                double hitRatio = (double) hits / (hits + misses);
+                stats.put("hit_ratio", String.format("%.2f", hitRatio));
+            }
+            
+            // Add cache names and sizes
+            addCacheMetrics(stats);
+            
         } catch (Exception e) {
-            logger.error("Redis sentinel info retrieval failed", e);
-            return new HashMap<>();
+            stats.put("error", "Failed to collect cache statistics: " + e.getMessage());
         }
+        return stats;
     }
 
     /**
-     * Retrieves the total number of keys in Redis.
+     * Adds metrics for each cache defined in CacheConstants.
      *
-     * @return The total number of keys, or 0 if the operation fails
+     * @param stats the map to add cache metrics to
      */
-    private long getTotalKeys() {
-        try {
-            Long size = redisTemplate.execute(RedisConnection::dbSize);
-            return size != null ? size : 0;
-        } catch (Exception e) {
-            logger.error("Failed to retrieve Redis key count", e);
-            return 0;
-        }
-    }
-
-    /**
-     * Retrieves the number of keys with an expiration set.
-     *
-     * @return The number of expiring keys, or 0 if the operation fails
-     */
-    private long getExpiringKeys() {
-        try {
-            return redisTemplate.execute((RedisCallback<Long>) connection -> {
-                try {
-                    // This is a rough approximation using the keyspace info
-                    Properties keyspaceInfo = connection.info("keyspace");
-                    if (keyspaceInfo == null || keyspaceInfo.isEmpty()) {
-                        return 0L;
-                    }
-                    
-                    long expiringKeys = 0;
-                    for (Object key : keyspaceInfo.keySet()) {
-                        String keyStr = key.toString();
-                        if (keyStr.startsWith("db")) {
-                            String value = keyspaceInfo.getProperty(keyStr);
-                            if (value != null && value.contains("expires=")) {
-                                String expiresStr = value.substring(
-                                        value.indexOf("expires=") + 8, 
-                                        value.indexOf(",", value.indexOf("expires=")));
-                                expiringKeys += Long.parseLong(expiresStr);
-                            }
-                        }
-                    }
-                    return expiringKeys;
-                } catch (Exception e) {
-                    logger.error("Failed to retrieve Redis expiring keys count", e);
-                    return 0L;
-                }
-            });
-        } catch (Exception e) {
-            logger.error("Redis expiring keys retrieval failed", e);
-            return 0;
-        }
-    }
-
-    /**
-     * Retrieves detailed Redis health information as a map.
-     * This method is useful for custom reporting or API endpoints.
-     *
-     * @return A map containing detailed Redis health information
-     */
-    public Map<String, Object> getDetailedHealthInfo() {
-        Map<String, Object> healthInfo = new HashMap<>();
+    private void addCacheMetrics(Map<String, Object> stats) {
+        Map<String, Object> cacheMetrics = new HashMap<>();
         
+        // Add size metrics for each cache
         try {
-            // Basic connectivity check
-            boolean connected = checkConnection();
-            healthInfo.put("connected", connected);
+            // Applications cache
+            String appCacheKeyPattern = CacheConstants.KeyPrefix.APPLICATION + "*";
+            Long appCacheSize = redisTemplate.keys(appCacheKeyPattern).size();
+            cacheMetrics.put(CacheConstants.CacheName.APPLICATIONS, appCacheSize);
             
-            if (!connected) {
-                healthInfo.put("status", "DOWN");
-                healthInfo.put("error", "Cannot connect to Redis");
-                return healthInfo;
-            }
+            // Documents cache
+            String docCacheKeyPattern = CacheConstants.KeyPrefix.DOCUMENT + "*";
+            Long docCacheSize = redisTemplate.keys(docCacheKeyPattern).size();
+            cacheMetrics.put(CacheConstants.CacheName.DOCUMENTS, docCacheSize);
             
-            // Get Redis info
-            Properties info = getRedisInfo();
-            if (info == null) {
-                healthInfo.put("status", "DOWN");
-                healthInfo.put("error", "Cannot retrieve Redis INFO");
-                return healthInfo;
-            }
+            // Merchants cache
+            String merchantCacheKeyPattern = CacheConstants.KeyPrefix.MERCHANT + "*";
+            Long merchantCacheSize = redisTemplate.keys(merchantCacheKeyPattern).size();
+            cacheMetrics.put(CacheConstants.CacheName.MERCHANTS, merchantCacheSize);
             
-            // Add basic Redis info
-            healthInfo.put("version", info.getProperty("redis_version", "unknown"));
-            healthInfo.put("mode", info.getProperty("redis_mode", "standalone"));
-            healthInfo.put("uptime_seconds", info.getProperty("uptime_in_seconds", "0"));
-            healthInfo.put("connected_clients", info.getProperty("connected_clients", "0"));
-            healthInfo.put("used_memory", info.getProperty("used_memory", "0"));
-            healthInfo.put("used_memory_human", info.getProperty("used_memory_human", "0"));
-            healthInfo.put("maxmemory", info.getProperty("maxmemory", "0"));
-            healthInfo.put("maxmemory_human", info.getProperty("maxmemory_human", "0"));
-            healthInfo.put("maxmemory_policy", info.getProperty("maxmemory_policy", "unknown"));
+            // Sessions cache
+            String sessionCacheKeyPattern = CacheConstants.KeyPrefix.SESSION + "*";
+            Long sessionCacheSize = redisTemplate.keys(sessionCacheKeyPattern).size();
+            cacheMetrics.put(CacheConstants.CacheName.SESSIONS, sessionCacheSize);
             
-            // Calculate memory usage ratio
-            long usedMemory = Long.parseLong(info.getProperty("used_memory", "0"));
-            long maxMemory = Long.parseLong(info.getProperty("maxmemory", "0"));
-            double memoryUsageRatio = maxMemory > 0 ? (double) usedMemory / maxMemory : 0;
-            healthInfo.put("memory_usage_ratio", String.format("%.2f", memoryUsageRatio));
-            
-            // Add key statistics
-            long totalKeys = getTotalKeys();
-            long expiringKeys = getExpiringKeys();
-            healthInfo.put("total_keys", totalKeys);
-            healthInfo.put("expiring_keys", expiringKeys);
-            healthInfo.put("expiring_keys_ratio", totalKeys > 0 ? 
-                    String.format("%.2f", (double) expiringKeys / totalKeys) : "0.00");
-            
-            // Add cluster info if enabled
-            if (clusterEnabled) {
-                healthInfo.put("cluster", getClusterInfo());
-            }
-            
-            // Add sentinel info if configured
-            if (sentinelMaster != null && !sentinelMaster.isEmpty()) {
-                healthInfo.put("sentinel", getSentinelInfo());
-            }
-            
-            // Add performance metrics
-            healthInfo.put("instantaneous_ops_per_sec", info.getProperty("instantaneous_ops_per_sec", "0"));
-            healthInfo.put("hit_rate", info.getProperty("keyspace_hits", "0") + "/" + 
-                    (Long.parseLong(info.getProperty("keyspace_hits", "0")) + 
-                     Long.parseLong(info.getProperty("keyspace_misses", "0"))));
-            
-            // Determine overall status
-            boolean healthy = true;
-            String statusReason = "";
-            
-            // Check memory usage
-            if (memoryUsageRatio > memoryThreshold) {
-                healthy = false;
-                statusReason = "Memory usage exceeds threshold";
-            }
-            
-            // Check eviction policy
-            if (maxMemory > 0 && "noeviction".equals(info.getProperty("maxmemory_policy"))) {
-                healthy = false;
-                statusReason = "Inappropriate eviction policy";
-            }
-            
-            // Check cluster status if enabled
-            if (clusterEnabled) {
-                Map<String, Object> clusterInfo = (Map<String, Object>) healthInfo.get("cluster");
-                if (clusterInfo.containsKey("cluster_state") && 
-                    !"ok".equals(clusterInfo.get("cluster_state"))) {
-                    healthy = false;
-                    statusReason = "Cluster is in failed state";
-                }
-            }
-            
-            // Check sentinel status if configured
-            if (sentinelMaster != null && !sentinelMaster.isEmpty()) {
-                Map<String, Object> sentinelInfo = (Map<String, Object>) healthInfo.get("sentinel");
-                if (sentinelInfo.containsKey("sentinels") && 
-                    (Integer) sentinelInfo.get("sentinels") < 2) {
-                    healthy = false;
-                    statusReason = "Insufficient sentinel quorum";
-                }
-            }
-            
-            healthInfo.put("status", healthy ? "UP" : "DOWN");
-            if (!healthy) {
-                healthInfo.put("status_reason", statusReason);
-            }
-            
-            return healthInfo;
+            // Lookups cache
+            String lookupCacheKeyPattern = CacheConstants.KeyPrefix.LOOKUP + "*";
+            Long lookupCacheSize = redisTemplate.keys(lookupCacheKeyPattern).size();
+            cacheMetrics.put(CacheConstants.CacheName.LOOKUPS, lookupCacheSize);
             
         } catch (Exception e) {
-            logger.error("Detailed Redis health check failed", e);
-            healthInfo.put("status", "DOWN");
-            healthInfo.put("error", e.getMessage());
-            return healthInfo;
+            cacheMetrics.put("error", "Failed to collect cache size metrics: " + e.getMessage());
+        }
+        
+        stats.put("caches", cacheMetrics);
+    }
+
+    /**
+     * Safely parses a string to a long value, returning 0 if parsing fails.
+     *
+     * @param value the string value to parse
+     * @return the parsed long value, or 0 if parsing fails
+     */
+    private long parseLongSafely(String value) {
+        try {
+            return value != null ? Long.parseLong(value) : 0;
+        } catch (NumberFormatException e) {
+            return 0;
         }
     }
 }
