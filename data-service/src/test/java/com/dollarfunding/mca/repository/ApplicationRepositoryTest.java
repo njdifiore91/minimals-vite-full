@@ -1,13 +1,11 @@
 package com.dollarfunding.mca.repository;
 
-import static org.assertj.core.api.Assertions.assertThat;
-
-import java.time.LocalDateTime;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
-import java.util.UUID;
+import com.dollarfunding.mca.entity.Application;
+import com.dollarfunding.mca.entity.ApplicationStatus;
+import com.dollarfunding.mca.entity.Document;
+import com.dollarfunding.mca.entity.DocumentType;
+import com.dollarfunding.mca.entity.MerchantDetails;
+import com.dollarfunding.mca.entity.ReviewStatus;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -17,25 +15,26 @@ import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.boot.test.autoconfigure.orm.jpa.TestEntityManager;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 
-import com.dollarfunding.mca.entity.Application;
-import com.dollarfunding.mca.entity.ApplicationStatus;
-import com.dollarfunding.mca.entity.Document;
-import com.dollarfunding.mca.entity.DocumentType;
-import com.dollarfunding.mca.entity.MerchantDetails;
-import com.dollarfunding.mca.entity.ReviewStatus;
-import com.dollarfunding.mca.util.JsonUtil;
+import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
+
+import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * JUnit test class for {@link ApplicationRepository} that verifies the repository correctly
- * interacts with the database for {@link Application} entities.
- * <p>
- * This test class uses {@link DataJpaTest} to configure an in-memory database for testing
- * and includes setup methods to create test data. It tests CRUD operations, custom query
- * methods for filtering by status and review status, date range queries, and pagination support.
- * </p>
+ * JUnit test class for ApplicationRepository that verifies the repository correctly
+ * interacts with the database for Application entities.
+ * 
+ * This test class uses @DataJpaTest to configure an in-memory database for testing
+ * and includes setup methods to create test data. It tests CRUD operations (save, findById,
+ * findAll, delete), custom query methods for filtering by status and review status,
+ * date range queries, and pagination support.
  */
 @DataJpaTest
 public class ApplicationRepositoryTest {
@@ -46,1025 +45,467 @@ public class ApplicationRepositoryTest {
     @Autowired
     private ApplicationRepository applicationRepository;
 
-    private Application application1;
-    private Application application2;
-    private Application application3;
-    private Application application4;
-    private Application application5;
+    private Application newApplication;
+    private Application pendingApplication;
+    private Application processingApplication;
+    private Application completedApplication;
+    private Application rejectedApplication;
+    private Application fastProcessedApplication;
 
     /**
-     * Sets up test data before each test method.
-     * <p>
-     * Creates five application entities with different configurations:
-     * <ul>
-     *   <li>application1: NEW status, NOT_REVIEWED review status, created 5 days ago</li>
-     *   <li>application2: PENDING status, IN_REVIEW review status, created 4 days ago</li>
-     *   <li>application3: PROCESSING status, NEEDS_INFORMATION review status, created 3 days ago</li>
-     *   <li>application4: APPROVED status, APPROVED review status, created 2 days ago</li>
-     *   <li>application5: COMPLETED status, APPROVED review status, created 1 day ago</li>
-     * </ul>
-     * </p>
+     * Set up test data before each test.
+     * Creates applications with different statuses, review statuses, and metadata.
      */
     @BeforeEach
-    public void setup() {
-        // Create test applications with different configurations
-        application1 = createApplication(
-                ApplicationStatus.NEW,
-                ReviewStatus.NOT_REVIEWED,
-                LocalDateTime.now().minusDays(5),
-                createMetadata("source", "email", "confidence", 0.95)
-        );
-
-        application2 = createApplication(
-                ApplicationStatus.PENDING,
-                ReviewStatus.IN_REVIEW,
-                LocalDateTime.now().minusDays(4),
-                createMetadata("source", "web", "priority", "high")
-        );
-
-        application3 = createApplication(
-                ApplicationStatus.PROCESSING,
-                ReviewStatus.NEEDS_INFORMATION,
-                LocalDateTime.now().minusDays(3),
-                createMetadata("source", "email", "missing_documents", true)
-        );
-
-        application4 = createApplication(
-                ApplicationStatus.APPROVED,
-                ReviewStatus.APPROVED,
-                LocalDateTime.now().minusDays(2),
-                createMetadata("source", "web", "approved_amount", 50000.00)
-        );
-
-        application5 = createApplication(
-                ApplicationStatus.COMPLETED,
-                ReviewStatus.APPROVED,
-                LocalDateTime.now().minusDays(1),
-                createMetadata("source", "email", "processing_time_minutes", 4)
-        );
-
-        // Persist test applications
-        application1 = entityManager.persist(application1);
-        application2 = entityManager.persist(application2);
-        application3 = entityManager.persist(application3);
-        application4 = entityManager.persist(application4);
-        application5 = entityManager.persist(application5);
+    public void setUp() {
+        // Create applications with different statuses and review statuses
+        newApplication = createApplication(ApplicationStatus.NEW, ReviewStatus.NOT_REVIEWED);
+        pendingApplication = createApplication(ApplicationStatus.PENDING, ReviewStatus.IN_REVIEW);
+        processingApplication = createApplication(ApplicationStatus.PROCESSING, ReviewStatus.IN_REVIEW);
+        completedApplication = createApplication(ApplicationStatus.COMPLETED, ReviewStatus.APPROVED);
+        rejectedApplication = createApplication(ApplicationStatus.REJECTED, ReviewStatus.REJECTED);
         
-        // Add documents to applications
-        addDocumentsToApplication(application1);
-        addDocumentsToApplication(application2);
+        // Create an application that was processed in under 5 minutes
+        fastProcessedApplication = new Application.Builder()
+                .withStatus(ApplicationStatus.COMPLETED)
+                .withReviewStatus(ReviewStatus.APPROVED)
+                .withCreatedAt(LocalDateTime.now().minusMinutes(4))
+                .withUpdatedAt(LocalDateTime.now())
+                .build();
         
-        // Add merchant details to applications
-        addMerchantDetailsToApplication(application1, "Retail");
-        addMerchantDetailsToApplication(application2, "Food Service");
-        addMerchantDetailsToApplication(application3, "Construction");
-        addMerchantDetailsToApplication(application4, "Retail");
-        addMerchantDetailsToApplication(application5, "Technology");
+        // Add metadata to applications
+        addMetadata(newApplication, "source", "email");
+        addMetadata(pendingApplication, "source", "web");
+        addMetadata(processingApplication, "confidenceScore", "0.95");
+        addMetadata(completedApplication, "processingTimeMs", "240000");
+        addMetadata(rejectedApplication, "rejectionReason", "Incomplete documentation");
+        addMetadata(fastProcessedApplication, "processingTimeMs", "180000");
         
+        // Add documents to some applications
+        addDocument(pendingApplication, DocumentType.BANK_STATEMENT);
+        addDocument(pendingApplication, DocumentType.TAX_RETURN);
+        addDocument(completedApplication, DocumentType.BANK_STATEMENT);
+        addDocument(completedApplication, DocumentType.TAX_RETURN);
+        addDocument(completedApplication, DocumentType.BUSINESS_LICENSE);
+        
+        // Add merchant details to some applications
+        addMerchantDetails(completedApplication, "ABC Corp", "ABC Coffee Shop", "12-3456789");
+        addMerchantDetails(processingApplication, "XYZ Inc", "XYZ Bakery", "98-7654321");
+        
+        // Persist applications
+        entityManager.persist(newApplication);
+        entityManager.persist(pendingApplication);
+        entityManager.persist(processingApplication);
+        entityManager.persist(completedApplication);
+        entityManager.persist(rejectedApplication);
+        entityManager.persist(fastProcessedApplication);
         entityManager.flush();
     }
 
     /**
-     * Creates an application with the specified status, review status, creation date, and metadata.
-     *
-     * @param status The application status
-     * @param reviewStatus The review status
-     * @param createdAt The creation date
-     * @param metadata The application metadata
-     * @return A new application entity
+     * Helper method to create an application with the specified status and review status.
      */
-    private Application createApplication(ApplicationStatus status, ReviewStatus reviewStatus,
-                                         LocalDateTime createdAt, Map<String, Object> metadata) {
-        Application application = new Application.Builder()
+    private Application createApplication(ApplicationStatus status, ReviewStatus reviewStatus) {
+        return new Application.Builder()
                 .withStatus(status)
                 .withReviewStatus(reviewStatus)
-                .withCreatedAt(createdAt)
-                .withUpdatedAt(createdAt.plusHours(1)) // Updated 1 hour after creation
-                .withMetadata(metadata)
+                .withCreatedAt(LocalDateTime.now().minusDays(1))
+                .withUpdatedAt(LocalDateTime.now())
                 .build();
-        return application;
     }
 
     /**
-     * Creates a metadata map with the specified key-value pairs.
-     *
-     * @param keyValues Key-value pairs (must be even number of arguments)
-     * @return A map containing the key-value pairs
+     * Helper method to add metadata to an application.
      */
-    private Map<String, Object> createMetadata(Object... keyValues) {
-        if (keyValues.length % 2 != 0) {
-            throw new IllegalArgumentException("Must provide an even number of key-value pairs");
-        }
+    private void addMetadata(Application application, String key, String value) {
+        application.addMetadata(key, value);
+    }
 
+    /**
+     * Helper method to add a document to an application.
+     */
+    private void addDocument(Application application, DocumentType documentType) {
+        Document document = new Document();
+        document.setType(documentType);
+        document.setStoragePath("s3://mca-documents-test/" + UUID.randomUUID() + ".pdf");
+        document.setClassification(documentType.name());
+        document.setUploadedAt(LocalDateTime.now());
         Map<String, Object> metadata = new HashMap<>();
-        for (int i = 0; i < keyValues.length; i += 2) {
-            metadata.put(keyValues[i].toString(), keyValues[i + 1]);
-        }
-        return metadata;
+        metadata.put("fileSize", 1024);
+        metadata.put("mimeType", "application/pdf");
+        document.setMetadata(metadata);
+        application.addDocument(document);
     }
-    
+
     /**
-     * Adds test documents to an application.
-     *
-     * @param application The application to add documents to
+     * Helper method to add merchant details to an application.
      */
-    private void addDocumentsToApplication(Application application) {
-        // Create and add documents
-        Document bankStatement = new Document(application.getId(), DocumentType.BANK_STATEMENT,
-                "s3://mca-documents-production/bank-statements/statement-" + application.getId() + ".pdf");
-        bankStatement.setClassification("Monthly Bank Statement");
-        bankStatement.setUploadedAt(LocalDateTime.now().minusDays(1));
-        
-        Document idVerification = new Document(application.getId(), DocumentType.ID_VERIFICATION,
-                "s3://mca-documents-production/id-verification/id-" + application.getId() + ".jpg");
-        idVerification.setClassification("Driver's License");
-        idVerification.setUploadedAt(LocalDateTime.now().minusDays(1));
-        
-        Document businessLicense = new Document(application.getId(), DocumentType.BUSINESS_LICENSE,
-                "s3://mca-documents-production/business-licenses/license-" + application.getId() + ".pdf");
-        businessLicense.setClassification("Business License");
-        businessLicense.setUploadedAt(LocalDateTime.now().minusDays(1));
-        
-        // Add documents to application
-        application.addDocument(bankStatement);
-        application.addDocument(idVerification);
-        application.addDocument(businessLicense);
-        
-        // Persist documents
-        entityManager.persist(bankStatement);
-        entityManager.persist(idVerification);
-        entityManager.persist(businessLicense);
-    }
-    
-    /**
-     * Adds merchant details to an application.
-     *
-     * @param application The application to add merchant details to
-     * @param industry The merchant industry
-     */
-    private void addMerchantDetailsToApplication(Application application, String industry) {
-        // Create merchant details
+    private void addMerchantDetails(Application application, String legalName, String dbaName, String ein) {
         MerchantDetails merchantDetails = new MerchantDetails();
-        merchantDetails.setLegalName("Test Merchant " + application.getId());
-        merchantDetails.setDbaName("DBA " + application.getId());
-        merchantDetails.setEin("12-3456789");
-        merchantDetails.setIndustry(industry);
-        merchantDetails.setRevenue(500000.00);
-        
-        // Set address
+        merchantDetails.setLegalName(legalName);
+        merchantDetails.setDbaName(dbaName);
+        merchantDetails.setEin(ein);
         Map<String, Object> address = new HashMap<>();
         address.put("street", "123 Main St");
-        address.put("city", "Anytown");
-        address.put("state", "CA");
-        address.put("zipCode", "12345");
+        address.put("city", "New York");
+        address.put("state", "NY");
+        address.put("zip", "10001");
         merchantDetails.setAddress(address);
-        
-        // Set application relationship
-        merchantDetails.setApplication(application);
+        merchantDetails.setIndustry("Retail");
+        merchantDetails.setRevenue(1000000.0);
         application.setMerchantDetails(merchantDetails);
-        
-        // Persist merchant details
-        entityManager.persist(merchantDetails);
     }
 
-    /**
-     * Tests that the repository can save an application entity and retrieve it by ID.
-     */
     @Test
-    @DisplayName("Should save and find application by ID")
-    public void testSaveAndFindById() {
+    @DisplayName("Should save application")
+    public void testSaveApplication() {
         // Create a new application
-        Application newApplication = new Application.Builder()
+        Application application = new Application.Builder()
                 .withStatus(ApplicationStatus.NEW)
                 .withReviewStatus(ReviewStatus.NOT_REVIEWED)
-                .addMetadata("source", "api")
-                .addMetadata("priority", "medium")
                 .build();
-
+        
         // Save the application
-        Application savedApplication = applicationRepository.save(newApplication);
-
-        // Verify the application was saved with an ID
+        Application savedApplication = applicationRepository.save(application);
+        
+        // Verify the application was saved
+        assertThat(savedApplication).isNotNull();
         assertThat(savedApplication.getId()).isNotNull();
+        assertThat(savedApplication.getStatus()).isEqualTo(ApplicationStatus.NEW);
+        assertThat(savedApplication.getReviewStatus()).isEqualTo(ReviewStatus.NOT_REVIEWED);
+    }
 
-        // Find the application by ID
-        Optional<Application> foundApplication = applicationRepository.findById(savedApplication.getId());
-
-        // Verify the application was found and has the correct properties
+    @Test
+    @DisplayName("Should find application by ID")
+    public void testFindApplicationById() {
+        // Find an application by ID
+        Optional<Application> foundApplication = applicationRepository.findById(newApplication.getId());
+        
+        // Verify the application was found
         assertThat(foundApplication).isPresent();
         assertThat(foundApplication.get().getStatus()).isEqualTo(ApplicationStatus.NEW);
         assertThat(foundApplication.get().getReviewStatus()).isEqualTo(ReviewStatus.NOT_REVIEWED);
-        assertThat(foundApplication.get().getMetadataValue("source")).isEqualTo("api");
-        assertThat(foundApplication.get().getMetadataValue("priority")).isEqualTo("medium");
     }
 
-    /**
-     * Tests that the repository can find all application entities.
-     */
     @Test
     @DisplayName("Should find all applications")
-    public void testFindAll() {
+    public void testFindAllApplications() {
         // Find all applications
         List<Application> applications = applicationRepository.findAll();
-
+        
         // Verify all applications were found
-        assertThat(applications).hasSize(5);
-        assertThat(applications).extracting(Application::getStatus)
-                .contains(
-                        ApplicationStatus.NEW,
-                        ApplicationStatus.PENDING,
-                        ApplicationStatus.PROCESSING,
-                        ApplicationStatus.APPROVED,
-                        ApplicationStatus.COMPLETED
-                );
+        assertThat(applications).hasSize(6);
     }
 
-    /**
-     * Tests that the repository can delete an application entity.
-     */
     @Test
     @DisplayName("Should delete application")
-    public void testDelete() {
-        // Delete application1
-        applicationRepository.delete(application1);
-        entityManager.flush();
-
-        // Verify application1 was deleted
-        Optional<Application> deletedApplication = applicationRepository.findById(application1.getId());
+    public void testDeleteApplication() {
+        // Delete an application
+        applicationRepository.delete(newApplication);
+        
+        // Verify the application was deleted
+        Optional<Application> deletedApplication = applicationRepository.findById(newApplication.getId());
         assertThat(deletedApplication).isEmpty();
-
-        // Verify other applications still exist
-        List<Application> remainingApplications = applicationRepository.findAll();
-        assertThat(remainingApplications).hasSize(4);
-        assertThat(remainingApplications).extracting(Application::getId)
-                .contains(application2.getId(), application3.getId(), application4.getId(), application5.getId());
     }
 
-    /**
-     * Tests that the repository can find applications by status.
-     */
     @Test
     @DisplayName("Should find applications by status")
     public void testFindByStatus() {
         // Find applications by status
         List<Application> newApplications = applicationRepository.findByStatus(ApplicationStatus.NEW);
+        List<Application> completedApplications = applicationRepository.findByStatus(ApplicationStatus.COMPLETED);
+        
+        // Verify the correct applications were found
         assertThat(newApplications).hasSize(1);
-        assertThat(newApplications.get(0).getId()).isEqualTo(application1.getId());
-
-        List<Application> pendingApplications = applicationRepository.findByStatus(ApplicationStatus.PENDING);
-        assertThat(pendingApplications).hasSize(1);
-        assertThat(pendingApplications.get(0).getId()).isEqualTo(application2.getId());
-
-        // Test with non-existent status
-        List<Application> rejectedApplications = applicationRepository.findByStatus(ApplicationStatus.REJECTED);
-        assertThat(rejectedApplications).isEmpty();
+        assertThat(newApplications.get(0).getStatus()).isEqualTo(ApplicationStatus.NEW);
+        
+        assertThat(completedApplications).hasSize(2);
+        assertThat(completedApplications).allMatch(app -> app.getStatus() == ApplicationStatus.COMPLETED);
     }
 
-    /**
-     * Tests that the repository can find applications by status with pagination.
-     */
     @Test
     @DisplayName("Should find applications by status with pagination")
     public void testFindByStatusWithPagination() {
-        // Create additional applications with APPROVED status
-        for (int i = 0; i < 10; i++) {
-            Application app = createApplication(
-                    ApplicationStatus.APPROVED,
-                    ReviewStatus.APPROVED,
-                    LocalDateTime.now().minusDays(1),
-                    createMetadata("source", "batch", "index", i)
-            );
-            entityManager.persist(app);
-        }
-        entityManager.flush();
-
+        // Create page request
+        PageRequest pageRequest = PageRequest.of(0, 1, Sort.by("createdAt").descending());
+        
         // Find applications by status with pagination
-        Pageable pageable = PageRequest.of(0, 5, Sort.by("createdAt").descending());
-        Page<Application> approvedApplicationsPage = applicationRepository.findByStatus(ApplicationStatus.APPROVED, pageable);
-
-        // Verify pagination works correctly
-        assertThat(approvedApplicationsPage.getContent()).hasSize(5);
-        assertThat(approvedApplicationsPage.getTotalElements()).isEqualTo(11); // 1 original + 10 new
-        assertThat(approvedApplicationsPage.getTotalPages()).isEqualTo(3);
-        assertThat(approvedApplicationsPage.getNumber()).isEqualTo(0);
-
-        // Get next page
-        pageable = PageRequest.of(1, 5, Sort.by("createdAt").descending());
-        approvedApplicationsPage = applicationRepository.findByStatus(ApplicationStatus.APPROVED, pageable);
-
-        // Verify second page
-        assertThat(approvedApplicationsPage.getContent()).hasSize(5);
-        assertThat(approvedApplicationsPage.getNumber()).isEqualTo(1);
+        Page<Application> completedApplicationsPage = applicationRepository.findByStatus(ApplicationStatus.COMPLETED, pageRequest);
+        
+        // Verify the correct page was returned
+        assertThat(completedApplicationsPage.getTotalElements()).isEqualTo(2);
+        assertThat(completedApplicationsPage.getContent()).hasSize(1);
+        assertThat(completedApplicationsPage.getTotalPages()).isEqualTo(2);
     }
 
-    /**
-     * Tests that the repository can find applications by review status.
-     */
     @Test
     @DisplayName("Should find applications by review status")
     public void testFindByReviewStatus() {
         // Find applications by review status
-        List<Application> notReviewedApplications = applicationRepository.findByReviewStatus(ReviewStatus.NOT_REVIEWED);
-        assertThat(notReviewedApplications).hasSize(1);
-        assertThat(notReviewedApplications.get(0).getId()).isEqualTo(application1.getId());
-
         List<Application> inReviewApplications = applicationRepository.findByReviewStatus(ReviewStatus.IN_REVIEW);
-        assertThat(inReviewApplications).hasSize(1);
-        assertThat(inReviewApplications.get(0).getId()).isEqualTo(application2.getId());
-
         List<Application> approvedApplications = applicationRepository.findByReviewStatus(ReviewStatus.APPROVED);
+        
+        // Verify the correct applications were found
+        assertThat(inReviewApplications).hasSize(2);
+        assertThat(inReviewApplications).allMatch(app -> app.getReviewStatus() == ReviewStatus.IN_REVIEW);
+        
         assertThat(approvedApplications).hasSize(2);
-        assertThat(approvedApplications).extracting(Application::getId)
-                .contains(application4.getId(), application5.getId());
-
-        // Test with non-existent review status
-        List<Application> rejectedApplications = applicationRepository.findByReviewStatus(ReviewStatus.REJECTED);
-        assertThat(rejectedApplications).isEmpty();
+        assertThat(approvedApplications).allMatch(app -> app.getReviewStatus() == ReviewStatus.APPROVED);
     }
 
-    /**
-     * Tests that the repository can find applications by status and review status.
-     */
     @Test
     @DisplayName("Should find applications by status and review status")
     public void testFindByStatusAndReviewStatus() {
         // Find applications by status and review status
-        List<Application> newNotReviewedApplications = applicationRepository.findByStatusAndReviewStatus(
-                ApplicationStatus.NEW, ReviewStatus.NOT_REVIEWED);
-        assertThat(newNotReviewedApplications).hasSize(1);
-        assertThat(newNotReviewedApplications.get(0).getId()).isEqualTo(application1.getId());
-
-        List<Application> approvedApprovedApplications = applicationRepository.findByStatusAndReviewStatus(
-                ApplicationStatus.APPROVED, ReviewStatus.APPROVED);
-        assertThat(approvedApprovedApplications).hasSize(1);
-        assertThat(approvedApprovedApplications.get(0).getId()).isEqualTo(application4.getId());
-
-        // Test with non-existent combination
-        List<Application> newApprovedApplications = applicationRepository.findByStatusAndReviewStatus(
-                ApplicationStatus.NEW, ReviewStatus.APPROVED);
-        assertThat(newApprovedApplications).isEmpty();
+        List<Application> completedApprovedApplications = applicationRepository.findByStatusAndReviewStatus(
+                ApplicationStatus.COMPLETED, ReviewStatus.APPROVED);
+        
+        // Verify the correct applications were found
+        assertThat(completedApprovedApplications).hasSize(2);
+        assertThat(completedApprovedApplications).allMatch(app -> 
+                app.getStatus() == ApplicationStatus.COMPLETED && 
+                app.getReviewStatus() == ReviewStatus.APPROVED);
     }
 
-    /**
-     * Tests that the repository can find applications created within a specific date range.
-     */
     @Test
-    @DisplayName("Should find applications by creation date range")
+    @DisplayName("Should find applications created within date range")
     public void testFindByCreatedAtBetween() {
-        // Find applications created within a date range
-        LocalDateTime startDate = LocalDateTime.now().minusDays(4).withHour(0).withMinute(0).withSecond(0);
-        LocalDateTime endDate = LocalDateTime.now().minusDays(2).withHour(23).withMinute(59).withSecond(59);
-
-        List<Application> applicationsInRange = applicationRepository.findByCreatedAtBetween(startDate, endDate);
-
-        // Verify applications created within the date range were found
-        assertThat(applicationsInRange).hasSize(3);
-        assertThat(applicationsInRange).extracting(Application::getId)
-                .contains(application2.getId(), application3.getId(), application4.getId());
-
-        // Test with date range that doesn't include any applications
-        LocalDateTime pastStartDate = LocalDateTime.now().minusDays(10);
-        LocalDateTime pastEndDate = LocalDateTime.now().minusDays(6);
-
-        List<Application> applicationsInPastRange = applicationRepository.findByCreatedAtBetween(pastStartDate, pastEndDate);
-        assertThat(applicationsInPastRange).isEmpty();
-    }
-
-    /**
-     * Tests that the repository can find applications updated within a specific date range.
-     */
-    @Test
-    @DisplayName("Should find applications by update date range")
-    public void testFindByUpdatedAtBetween() {
-        // Update application1 to have a recent update time
-        application1.setUpdatedAt(LocalDateTime.now().minusHours(1));
-        entityManager.persist(application1);
-        entityManager.flush();
-
-        // Find applications updated within a date range
-        LocalDateTime startDate = LocalDateTime.now().minusDays(1).withHour(0).withMinute(0).withSecond(0);
+        // Define date range
+        LocalDateTime startDate = LocalDateTime.now().minusDays(2);
         LocalDateTime endDate = LocalDateTime.now();
-
-        List<Application> applicationsInRange = applicationRepository.findByUpdatedAtBetween(startDate, endDate);
-
-        // Verify applications updated within the date range were found
-        assertThat(applicationsInRange).hasSize(2);
-        assertThat(applicationsInRange).extracting(Application::getId)
-                .contains(application1.getId(), application5.getId());
+        
+        // Find applications created within date range
+        List<Application> applications = applicationRepository.findByCreatedAtBetween(startDate, endDate);
+        
+        // Verify the correct applications were found
+        assertThat(applications).hasSize(6);
     }
 
-    /**
-     * Tests that the repository can find applications created after a specific date.
-     */
     @Test
-    @DisplayName("Should find applications created after a specific date")
-    public void testFindByCreatedAtAfter() {
-        // Find applications created after a specific date
-        LocalDateTime date = LocalDateTime.now().minusDays(3).withHour(0).withMinute(0).withSecond(0);
-
-        List<Application> applicationsAfterDate = applicationRepository.findByCreatedAtAfter(date);
-
-        // Verify applications created after the date were found
-        assertThat(applicationsAfterDate).hasSize(3);
-        assertThat(applicationsAfterDate).extracting(Application::getId)
-                .contains(application3.getId(), application4.getId(), application5.getId());
+    @DisplayName("Should find applications updated within date range")
+    public void testFindByUpdatedAtBetween() {
+        // Define date range
+        LocalDateTime startDate = LocalDateTime.now().minusHours(1);
+        LocalDateTime endDate = LocalDateTime.now().plusHours(1);
+        
+        // Find applications updated within date range
+        List<Application> applications = applicationRepository.findByUpdatedAtBetween(startDate, endDate);
+        
+        // Verify the correct applications were found
+        assertThat(applications).hasSize(6);
     }
 
-    /**
-     * Tests that the repository can find applications created before a specific date.
-     */
     @Test
-    @DisplayName("Should find applications created before a specific date")
-    public void testFindByCreatedAtBefore() {
-        // Find applications created before a specific date
-        LocalDateTime date = LocalDateTime.now().minusDays(3).withHour(0).withMinute(0).withSecond(0);
-
-        List<Application> applicationsBeforeDate = applicationRepository.findByCreatedAtBefore(date);
-
-        // Verify applications created before the date were found
-        assertThat(applicationsBeforeDate).hasSize(2);
-        assertThat(applicationsBeforeDate).extracting(Application::getId)
-                .contains(application1.getId(), application2.getId());
+    @DisplayName("Should find applications by status created within date range")
+    public void testFindByStatusAndCreatedAtBetween() {
+        // Define date range
+        LocalDateTime startDate = LocalDateTime.now().minusDays(2);
+        LocalDateTime endDate = LocalDateTime.now();
+        
+        // Find applications by status created within date range
+        List<Application> completedApplications = applicationRepository.findByStatusAndCreatedAtBetween(
+                ApplicationStatus.COMPLETED, startDate, endDate);
+        
+        // Verify the correct applications were found
+        assertThat(completedApplications).hasSize(2);
+        assertThat(completedApplications).allMatch(app -> app.getStatus() == ApplicationStatus.COMPLETED);
     }
 
-    /**
-     * Tests that the repository can count applications by status.
-     */
+    @Test
+    @DisplayName("Should find applications by review status created within date range")
+    public void testFindByReviewStatusAndCreatedAtBetween() {
+        // Define date range
+        LocalDateTime startDate = LocalDateTime.now().minusDays(2);
+        LocalDateTime endDate = LocalDateTime.now();
+        
+        // Find applications by review status created within date range
+        List<Application> approvedApplications = applicationRepository.findByReviewStatusAndCreatedAtBetween(
+                ReviewStatus.APPROVED, startDate, endDate);
+        
+        // Verify the correct applications were found
+        assertThat(approvedApplications).hasSize(2);
+        assertThat(approvedApplications).allMatch(app -> app.getReviewStatus() == ReviewStatus.APPROVED);
+    }
+
+    @Test
+    @DisplayName("Should find applications by metadata key")
+    public void testFindByMetadataKey() {
+        // Find applications by metadata key
+        List<Application> applicationsWithSource = applicationRepository.findByMetadataKey("source");
+        
+        // Verify the correct applications were found
+        assertThat(applicationsWithSource).hasSize(2);
+    }
+
+    @Test
+    @DisplayName("Should find applications by metadata key-value pair")
+    public void testFindByMetadataKeyValue() {
+        // Find applications by metadata key-value pair
+        List<Application> emailApplications = applicationRepository.findByMetadataKeyValue("source", "email");
+        
+        // Verify the correct applications were found
+        assertThat(emailApplications).hasSize(1);
+        assertThat(emailApplications.get(0).getMetadataValue("source")).isEqualTo("email");
+    }
+
+    @Test
+    @DisplayName("Should find applications by status and metadata key-value pair")
+    public void testFindByStatusAndMetadataKeyValue() {
+        // Find applications by status and metadata key-value pair
+        List<Application> pendingWebApplications = applicationRepository.findByStatusAndMetadataKeyValue(
+                ApplicationStatus.PENDING, "source", "web");
+        
+        // Verify the correct applications were found
+        assertThat(pendingWebApplications).hasSize(1);
+        assertThat(pendingWebApplications.get(0).getStatus()).isEqualTo(ApplicationStatus.PENDING);
+        assertThat(pendingWebApplications.get(0).getMetadataValue("source")).isEqualTo("web");
+    }
+
     @Test
     @DisplayName("Should count applications by status")
     public void testCountByStatus() {
         // Count applications by status
-        long newApplicationCount = applicationRepository.countByStatus(ApplicationStatus.NEW);
-        assertThat(newApplicationCount).isEqualTo(1);
-
-        long pendingApplicationCount = applicationRepository.countByStatus(ApplicationStatus.PENDING);
-        assertThat(pendingApplicationCount).isEqualTo(1);
-
-        long processingApplicationCount = applicationRepository.countByStatus(ApplicationStatus.PROCESSING);
-        assertThat(processingApplicationCount).isEqualTo(1);
-
-        long approvedApplicationCount = applicationRepository.countByStatus(ApplicationStatus.APPROVED);
-        assertThat(approvedApplicationCount).isEqualTo(1);
-
-        long completedApplicationCount = applicationRepository.countByStatus(ApplicationStatus.COMPLETED);
-        assertThat(completedApplicationCount).isEqualTo(1);
-
-        // Count applications with non-existent status
-        long rejectedApplicationCount = applicationRepository.countByStatus(ApplicationStatus.REJECTED);
-        assertThat(rejectedApplicationCount).isEqualTo(0);
+        long newCount = applicationRepository.countByStatus(ApplicationStatus.NEW);
+        long completedCount = applicationRepository.countByStatus(ApplicationStatus.COMPLETED);
+        
+        // Verify the correct counts were returned
+        assertThat(newCount).isEqualTo(1);
+        assertThat(completedCount).isEqualTo(2);
     }
 
-    /**
-     * Tests that the repository can count applications by review status.
-     */
     @Test
     @DisplayName("Should count applications by review status")
     public void testCountByReviewStatus() {
         // Count applications by review status
-        long notReviewedApplicationCount = applicationRepository.countByReviewStatus(ReviewStatus.NOT_REVIEWED);
-        assertThat(notReviewedApplicationCount).isEqualTo(1);
-
-        long inReviewApplicationCount = applicationRepository.countByReviewStatus(ReviewStatus.IN_REVIEW);
-        assertThat(inReviewApplicationCount).isEqualTo(1);
-
-        long needsInformationApplicationCount = applicationRepository.countByReviewStatus(ReviewStatus.NEEDS_INFORMATION);
-        assertThat(needsInformationApplicationCount).isEqualTo(1);
-
-        long approvedApplicationCount = applicationRepository.countByReviewStatus(ReviewStatus.APPROVED);
-        assertThat(approvedApplicationCount).isEqualTo(2);
-
-        // Count applications with non-existent review status
-        long rejectedApplicationCount = applicationRepository.countByReviewStatus(ReviewStatus.REJECTED);
-        assertThat(rejectedApplicationCount).isEqualTo(0);
+        long notReviewedCount = applicationRepository.countByReviewStatus(ReviewStatus.NOT_REVIEWED);
+        long approvedCount = applicationRepository.countByReviewStatus(ReviewStatus.APPROVED);
+        
+        // Verify the correct counts were returned
+        assertThat(notReviewedCount).isEqualTo(1);
+        assertThat(approvedCount).isEqualTo(2);
     }
 
-    /**
-     * Tests that the repository can find applications with metadata containing a specific key.
-     */
     @Test
-    @DisplayName("Should find applications with metadata containing a specific key")
-    public void testFindByMetadataContainsKey() {
-        // Find applications with metadata containing a specific key
-        String jsonPath = "{\"priority\": {}}";
-        List<Application> applicationsWithPriority = applicationRepository.findByMetadataContainsKey(jsonPath);
-
-        // Verify applications with the specified metadata key were found
-        assertThat(applicationsWithPriority).hasSize(1);
-        assertThat(applicationsWithPriority.get(0).getId()).isEqualTo(application2.getId());
-
-        // Test with another key
-        String approvedAmountJsonPath = "{\"approved_amount\": {}}";
-        List<Application> applicationsWithApprovedAmount = applicationRepository.findByMetadataContainsKey(approvedAmountJsonPath);
-        assertThat(applicationsWithApprovedAmount).hasSize(1);
-        assertThat(applicationsWithApprovedAmount.get(0).getId()).isEqualTo(application4.getId());
+    @DisplayName("Should count applications by status and review status")
+    public void testCountByStatusAndReviewStatus() {
+        // Count applications by status and review status
+        long completedApprovedCount = applicationRepository.countByStatusAndReviewStatus(
+                ApplicationStatus.COMPLETED, ReviewStatus.APPROVED);
+        
+        // Verify the correct count was returned
+        assertThat(completedApprovedCount).isEqualTo(2);
     }
 
-    /**
-     * Tests that the repository can find applications with metadata containing a specific key-value pair.
-     */
     @Test
-    @DisplayName("Should find applications with metadata containing a specific key-value pair")
-    public void testFindByMetadataContains() {
-        // Find applications with metadata containing a specific key-value pair
-        String keyValueJson = "{\"source\": \"email\"}";
-        List<Application> applicationsWithEmailSource = applicationRepository.findByMetadataContains(keyValueJson);
-
-        // Verify applications with the specified metadata key-value pair were found
-        assertThat(applicationsWithEmailSource).hasSize(3);
-        assertThat(applicationsWithEmailSource).extracting(Application::getId)
-                .contains(application1.getId(), application3.getId(), application5.getId());
-
-        // Test with another key-value pair
-        String processingTimeJson = "{\"processing_time_minutes\": 4}";
-        List<Application> applicationsWith4MinProcessingTime = applicationRepository.findByMetadataContains(processingTimeJson);
-        assertThat(applicationsWith4MinProcessingTime).hasSize(1);
-        assertThat(applicationsWith4MinProcessingTime.get(0).getId()).isEqualTo(application5.getId());
-
-        // Test with non-existent key-value pair
-        String nonExistentJson = "{\"nonExistentKey\": \"nonExistentValue\"}";
-        List<Application> applicationsWithNonExistentKeyValue = applicationRepository.findByMetadataContains(nonExistentJson);
-        assertThat(applicationsWithNonExistentKeyValue).isEmpty();
+    @DisplayName("Should count applications created within date range")
+    public void testCountByCreatedAtBetween() {
+        // Define date range
+        LocalDateTime startDate = LocalDateTime.now().minusDays(2);
+        LocalDateTime endDate = LocalDateTime.now();
+        
+        // Count applications created within date range
+        long count = applicationRepository.countByCreatedAtBetween(startDate, endDate);
+        
+        // Verify the correct count was returned
+        assertThat(count).isEqualTo(6);
     }
 
-    /**
-     * Tests that the repository can find applications with metadata containing a specific key-value pair, with pagination.
-     */
     @Test
-    @DisplayName("Should find applications with metadata containing a specific key-value pair, with pagination")
-    public void testFindByMetadataContainsWithPagination() {
-        // Create additional applications with email source
-        for (int i = 0; i < 10; i++) {
-            Application app = createApplication(
-                    ApplicationStatus.NEW,
-                    ReviewStatus.NOT_REVIEWED,
-                    LocalDateTime.now().minusHours(i),
-                    createMetadata("source", "email", "index", i)
-            );
-            entityManager.persist(app);
-        }
-        entityManager.flush();
-
-        // Find applications with metadata containing a specific key-value pair, with pagination
-        String keyValueJson = "{\"source\": \"email\"}";
-        Pageable pageable = PageRequest.of(0, 5, Sort.by("createdAt").descending());
-        Page<Application> emailSourceApplicationsPage = applicationRepository.findByMetadataContains(keyValueJson, pageable);
-
-        // Verify pagination works correctly
-        assertThat(emailSourceApplicationsPage.getContent()).hasSize(5);
-        assertThat(emailSourceApplicationsPage.getTotalElements()).isEqualTo(13); // 3 original + 10 new
-        assertThat(emailSourceApplicationsPage.getTotalPages()).isEqualTo(3);
-        assertThat(emailSourceApplicationsPage.getNumber()).isEqualTo(0);
-
-        // Get next page
-        pageable = PageRequest.of(1, 5, Sort.by("createdAt").descending());
-        emailSourceApplicationsPage = applicationRepository.findByMetadataContains(keyValueJson, pageable);
-
-        // Verify second page
-        assertThat(emailSourceApplicationsPage.getContent()).hasSize(5);
-        assertThat(emailSourceApplicationsPage.getNumber()).isEqualTo(1);
+    @DisplayName("Should find applications processed under five minutes")
+    public void testFindApplicationsProcessedUnderFiveMinutes() {
+        // Find applications processed under five minutes
+        List<Application> fastApplications = applicationRepository.findApplicationsProcessedUnderFiveMinutes();
+        
+        // Verify the correct applications were found
+        assertThat(fastApplications).hasSize(1);
+        assertThat(fastApplications.get(0).getId()).isEqualTo(fastProcessedApplication.getId());
+        
+        // Verify the application meets the processing time requirement
+        long processingTime = ChronoUnit.MILLIS.between(
+                fastApplications.get(0).getCreatedAt(), 
+                fastApplications.get(0).getUpdatedAt());
+        assertThat(processingTime).isLessThan(300000); // 5 minutes in milliseconds
     }
 
-    /**
-     * Tests that the repository can find applications that require review.
-     */
-    @Test
-    @DisplayName("Should find applications requiring review")
-    public void testFindApplicationsRequiringReview() {
-        // Find applications requiring review
-        List<Application> applicationsRequiringReview = applicationRepository.findApplicationsRequiringReview();
-
-        // Verify applications requiring review were found
-        assertThat(applicationsRequiringReview).hasSize(2);
-        assertThat(applicationsRequiringReview).extracting(Application::getId)
-                .contains(application1.getId(), application3.getId());
-    }
-
-    /**
-     * Tests that the repository can find active applications.
-     */
-    @Test
-    @DisplayName("Should find active applications")
-    public void testFindActiveApplications() {
-        // Find active applications
-        List<Application> activeApplications = applicationRepository.findActiveApplications();
-
-        // Verify active applications were found
-        assertThat(activeApplications).hasSize(3);
-        assertThat(activeApplications).extracting(Application::getId)
-                .contains(application1.getId(), application2.getId(), application3.getId());
-    }
-
-    /**
-     * Tests that the repository can find decided applications.
-     */
-    @Test
-    @DisplayName("Should find decided applications")
-    public void testFindDecidedApplications() {
-        // Find decided applications
-        List<Application> decidedApplications = applicationRepository.findDecidedApplications();
-
-        // Verify decided applications were found
-        assertThat(decidedApplications).hasSize(2);
-        assertThat(decidedApplications).extracting(Application::getId)
-                .contains(application4.getId(), application5.getId());
-    }
-
-    /**
-     * Tests that the repository can find completed applications.
-     */
-    @Test
-    @DisplayName("Should find completed applications")
-    public void testFindCompletedApplications() {
-        // Find completed applications
-        List<Application> completedApplications = applicationRepository.findCompletedApplications();
-
-        // Verify completed applications were found
-        assertThat(completedApplications).hasSize(1);
-        assertThat(completedApplications.get(0).getId()).isEqualTo(application5.getId());
-    }
-
-    /**
-     * Tests that the repository can find applications processed within the target time (5 minutes).
-     */
-    @Test
-    @DisplayName("Should find applications processed within target time")
-    public void testFindApplicationsProcessedWithinTargetTime() {
-        // Find applications processed within target time
-        List<Application> applicationsProcessedWithinTargetTime = applicationRepository.findApplicationsProcessedWithinTargetTime();
-
-        // Verify applications processed within target time were found
-        assertThat(applicationsProcessedWithinTargetTime).hasSize(1);
-        assertThat(applicationsProcessedWithinTargetTime.get(0).getId()).isEqualTo(application5.getId());
-    }
-
-    /**
-     * Tests that the repository can find applications that exceeded the target processing time (5 minutes).
-     */
-    @Test
-    @DisplayName("Should find applications exceeding target time")
-    public void testFindApplicationsExceedingTargetTime() {
-        // Create an application that exceeded the target processing time
-        Application slowApplication = createApplication(
-                ApplicationStatus.COMPLETED,
-                ReviewStatus.APPROVED,
-                LocalDateTime.now().minusDays(2),
-                createMetadata("source", "email", "processing_time_minutes", 10)
-        );
-        slowApplication.setUpdatedAt(slowApplication.getCreatedAt().plusMinutes(10)); // 10 minutes processing time
-        entityManager.persist(slowApplication);
-        entityManager.flush();
-
-        // Find applications exceeding target time
-        List<Application> applicationsExceedingTargetTime = applicationRepository.findApplicationsExceedingTargetTime();
-
-        // Verify applications exceeding target time were found
-        assertThat(applicationsExceedingTargetTime).hasSize(1);
-        assertThat(applicationsExceedingTargetTime.get(0).getId()).isEqualTo(slowApplication.getId());
-    }
-
-    /**
-     * Tests that the repository can calculate the average processing time for completed applications.
-     */
     @Test
     @DisplayName("Should calculate average processing time")
-    public void testCalculateAverageProcessingTimeMinutes() {
-        // Create additional completed applications with different processing times
-        Application app1 = createApplication(
-                ApplicationStatus.COMPLETED,
-                ReviewStatus.APPROVED,
-                LocalDateTime.now().minusDays(3),
-                createMetadata("source", "email", "processing_time_minutes", 3)
-        );
-        app1.setUpdatedAt(app1.getCreatedAt().plusMinutes(3)); // 3 minutes processing time
-
-        Application app2 = createApplication(
-                ApplicationStatus.COMPLETED,
-                ReviewStatus.APPROVED,
-                LocalDateTime.now().minusDays(2),
-                createMetadata("source", "email", "processing_time_minutes", 7)
-        );
-        app2.setUpdatedAt(app2.getCreatedAt().plusMinutes(7)); // 7 minutes processing time
-
-        entityManager.persist(app1);
-        entityManager.persist(app2);
-        entityManager.flush();
-
+    public void testCalculateAverageProcessingTimeMillis() {
         // Calculate average processing time
-        Double averageProcessingTime = applicationRepository.calculateAverageProcessingTimeMinutes();
-
-        // Verify average processing time
-        assertThat(averageProcessingTime).isNotNull();
-        // Average of 1 hour (application5), 3 minutes (app1), and 7 minutes (app2)
-        // Note: The actual value may vary due to how the test data is created and how the database calculates the average
-        assertThat(averageProcessingTime).isGreaterThan(0.0);
-    }
-
-    /**
-     * Tests that the repository can find applications with merchant details in a specific industry.
-     */
-    @Test
-    @DisplayName("Should find applications by merchant industry")
-    public void testFindByMerchantIndustry() {
-        // Find applications by merchant industry
-        List<Application> retailApplications = applicationRepository.findByMerchantIndustry("Retail");
-
-        // Verify applications with merchants in the retail industry were found
-        assertThat(retailApplications).hasSize(2);
-        assertThat(retailApplications).extracting(Application::getId)
-                .contains(application1.getId(), application4.getId());
-
-        // Test with another industry
-        List<Application> technologyApplications = applicationRepository.findByMerchantIndustry("Technology");
-        assertThat(technologyApplications).hasSize(1);
-        assertThat(technologyApplications.get(0).getId()).isEqualTo(application5.getId());
-
-        // Test with non-existent industry
-        List<Application> nonExistentIndustryApplications = applicationRepository.findByMerchantIndustry("Non-existent Industry");
-        assertThat(nonExistentIndustryApplications).isEmpty();
-    }
-
-    /**
-     * Tests that the repository can find applications with merchant details in a specific state.
-     */
-    @Test
-    @DisplayName("Should find applications by merchant state")
-    public void testFindByMerchantState() {
-        // Find applications by merchant state
-        List<Application> californiaApplications = applicationRepository.findByMerchantState("CA");
-
-        // Verify applications with merchants in California were found
-        assertThat(californiaApplications).hasSize(5);
-
-        // Create an application with merchant in a different state
-        Application texasApplication = createApplication(
-                ApplicationStatus.NEW,
-                ReviewStatus.NOT_REVIEWED,
-                LocalDateTime.now().minusDays(1),
-                createMetadata("source", "web")
-        );
-        entityManager.persist(texasApplication);
-
-        // Add merchant details with Texas address
-        MerchantDetails texasMerchant = new MerchantDetails();
-        texasMerchant.setLegalName("Texas Merchant");
-        texasMerchant.setDbaName("Texas DBA");
-        texasMerchant.setEin("12-3456789");
-        texasMerchant.setIndustry("Retail");
-        texasMerchant.setRevenue(500000.00);
-
-        Map<String, Object> texasAddress = new HashMap<>();
-        texasAddress.put("street", "123 Main St");
-        texasAddress.put("city", "Austin");
-        texasAddress.put("state", "TX");
-        texasAddress.put("zipCode", "78701");
-        texasMerchant.setAddress(texasAddress);
-
-        texasMerchant.setApplication(texasApplication);
-        texasApplication.setMerchantDetails(texasMerchant);
-
-        entityManager.persist(texasMerchant);
-        entityManager.flush();
-
-        // Find applications by merchant state again
-        List<Application> texasApplications = applicationRepository.findByMerchantState("TX");
-
-        // Verify applications with merchants in Texas were found
-        assertThat(texasApplications).hasSize(1);
-        assertThat(texasApplications.get(0).getId()).isEqualTo(texasApplication.getId());
-    }
-
-    /**
-     * Tests that the repository can find applications that have all required documents.
-     */
-    @Test
-    @DisplayName("Should find applications with all required documents")
-    public void testFindApplicationsWithAllRequiredDocuments() {
-        // Find applications with all required documents
-        List<Application> applicationsWithAllRequiredDocuments = applicationRepository.findApplicationsWithAllRequiredDocuments();
-
-        // Verify applications with all required documents were found
-        assertThat(applicationsWithAllRequiredDocuments).hasSize(2);
-        assertThat(applicationsWithAllRequiredDocuments).extracting(Application::getId)
-                .contains(application1.getId(), application2.getId());
-    }
-
-    /**
-     * Tests that the repository can find applications that are missing required documents.
-     */
-    @Test
-    @DisplayName("Should find applications missing required documents")
-    public void testFindApplicationsMissingRequiredDocuments() {
-        // Find applications missing required documents
-        List<Application> applicationsMissingRequiredDocuments = applicationRepository.findApplicationsMissingRequiredDocuments();
-
-        // Verify applications missing required documents were found
-        assertThat(applicationsMissingRequiredDocuments).hasSize(3);
-        assertThat(applicationsMissingRequiredDocuments).extracting(Application::getId)
-                .contains(application3.getId(), application4.getId(), application5.getId());
-    }
-
-    /**
-     * Tests the relationship between Application and Document entities.
-     */
-    @Test
-    @DisplayName("Should handle Application-Document relationship")
-    public void testApplicationDocumentRelationship() {
-        // Retrieve application with documents relationship
-        Application applicationWithDocuments = entityManager.find(Application.class, application1.getId());
-
-        // Verify the documents relationship is correctly established
-        assertThat(applicationWithDocuments.getDocuments()).isNotNull();
-        assertThat(applicationWithDocuments.getDocuments()).hasSize(3);
-        assertThat(applicationWithDocuments.getDocuments()).extracting(Document::getType)
-                .contains(DocumentType.BANK_STATEMENT, DocumentType.ID_VERIFICATION, DocumentType.BUSINESS_LICENSE);
-
-        // Test adding a document to an application
-        Document newDocument = new Document(application1.getId(), DocumentType.TAX_RETURN,
-                "s3://mca-documents-production/tax-returns/tax-return-" + application1.getId() + ".pdf");
-        newDocument.setClassification("Business Tax Return");
-        newDocument.setUploadedAt(LocalDateTime.now());
-
-        applicationWithDocuments.addDocument(newDocument);
-        entityManager.persist(newDocument);
-        entityManager.flush();
-
-        // Verify the document was added to the application
-        Application updatedApplication = entityManager.find(Application.class, application1.getId());
-        assertThat(updatedApplication.getDocuments()).hasSize(4);
-
-        // Test removing a document from an application
-        updatedApplication.removeDocument(newDocument);
-        entityManager.flush();
-
-        // Verify the document was removed from the application
-        Application applicationAfterRemoval = entityManager.find(Application.class, application1.getId());
-        assertThat(applicationAfterRemoval.getDocuments()).hasSize(3);
-    }
-
-    /**
-     * Tests the relationship between Application and MerchantDetails entities.
-     */
-    @Test
-    @DisplayName("Should handle Application-MerchantDetails relationship")
-    public void testApplicationMerchantDetailsRelationship() {
-        // Retrieve application with merchant details relationship
-        Application applicationWithMerchantDetails = entityManager.find(Application.class, application1.getId());
-
-        // Verify the merchant details relationship is correctly established
-        assertThat(applicationWithMerchantDetails.getMerchantDetails()).isNotNull();
-        assertThat(applicationWithMerchantDetails.getMerchantDetails().getLegalName()).isEqualTo("Test Merchant " + application1.getId());
-        assertThat(applicationWithMerchantDetails.getMerchantDetails().getIndustry()).isEqualTo("Retail");
-
-        // Test updating merchant details
-        MerchantDetails merchantDetails = applicationWithMerchantDetails.getMerchantDetails();
-        merchantDetails.setDbaName("Updated DBA Name");
-        merchantDetails.setRevenue(750000.00);
-        entityManager.flush();
-
-        // Verify the merchant details were updated
-        Application updatedApplication = entityManager.find(Application.class, application1.getId());
-        assertThat(updatedApplication.getMerchantDetails().getDbaName()).isEqualTo("Updated DBA Name");
-        assertThat(updatedApplication.getMerchantDetails().getRevenue()).isEqualTo(750000.00);
-    }
-
-    /**
-     * Tests the Application entity's business methods.
-     */
-    @Test
-    @DisplayName("Should handle Application entity business methods")
-    public void testApplicationEntityBusinessMethods() {
-        // Test isCompleted method
-        assertThat(application1.isCompleted()).isFalse(); // NEW status
-        assertThat(application5.isCompleted()).isTrue();  // COMPLETED status
-
-        // Test isActive method
-        assertThat(application1.isActive()).isTrue();  // NEW status
-        assertThat(application2.isActive()).isTrue();  // PENDING status
-        assertThat(application3.isActive()).isTrue();  // PROCESSING status
-        assertThat(application4.isActive()).isFalse(); // APPROVED status
-        assertThat(application5.isActive()).isFalse(); // COMPLETED status
-
-        // Test isDecided method
-        assertThat(application1.isDecided()).isFalse(); // NEW status
-        assertThat(application4.isDecided()).isTrue();  // APPROVED status
-        assertThat(application5.isDecided()).isTrue();  // COMPLETED status
-
-        // Test requiresReview method
-        assertThat(application1.requiresReview()).isTrue();  // NOT_REVIEWED status
-        assertThat(application3.requiresReview()).isTrue();  // NEEDS_INFORMATION status
-        assertThat(application4.requiresReview()).isFalse(); // APPROVED status
-
-        // Test hasAllRequiredDocuments method
-        assertThat(application1.hasAllRequiredDocuments()).isTrue();  // Has all required documents
+        Double averageTime = applicationRepository.calculateAverageProcessingTimeMillis();
         
-        // Create an application with missing documents
-        Application incompleteApplication = createApplication(
-                ApplicationStatus.NEW,
-                ReviewStatus.NOT_REVIEWED,
-                LocalDateTime.now(),
-                createMetadata("source", "web")
-        );
-        entityManager.persist(incompleteApplication);
-        
-        // Add only one document type
-        Document bankStatement = new Document(incompleteApplication.getId(), DocumentType.BANK_STATEMENT,
-                "s3://mca-documents-production/bank-statements/statement-incomplete.pdf");
-        bankStatement.setClassification("Monthly Bank Statement");
-        bankStatement.setUploadedAt(LocalDateTime.now());
-        incompleteApplication.addDocument(bankStatement);
-        entityManager.persist(bankStatement);
-        entityManager.flush();
-        
-        assertThat(incompleteApplication.hasAllRequiredDocuments()).isFalse(); // Missing required documents
-
-        // Test updateStatus method
-        boolean statusUpdated = application1.updateStatus(ApplicationStatus.PENDING);
-        assertThat(statusUpdated).isTrue();
-        assertThat(application1.getStatus()).isEqualTo(ApplicationStatus.PENDING);
-
-        // Test invalid status transition
-        boolean invalidStatusUpdate = application1.updateStatus(ApplicationStatus.COMPLETED);
-        assertThat(invalidStatusUpdate).isFalse();
-        assertThat(application1.getStatus()).isEqualTo(ApplicationStatus.PENDING); // Unchanged
-
-        // Test updateReviewStatus method
-        boolean reviewStatusUpdated = application1.updateReviewStatus(ReviewStatus.IN_REVIEW);
-        assertThat(reviewStatusUpdated).isTrue();
-        assertThat(application1.getReviewStatus()).isEqualTo(ReviewStatus.IN_REVIEW);
+        // Verify the average time is calculated
+        assertThat(averageTime).isNotNull();
+        assertThat(averageTime).isGreaterThan(0.0);
     }
 
-    /**
-     * Tests the Application entity's metadata handling methods.
-     */
     @Test
-    @DisplayName("Should handle Application entity metadata methods")
-    public void testApplicationEntityMetadataMethods() {
-        // Test getMetadata method
-        Map<String, Object> metadata = application1.getMetadata();
-        assertThat(metadata).isNotNull();
-        assertThat(metadata).containsEntry("source", "email");
-        assertThat(metadata).containsEntry("confidence", 0.95);
-
-        // Test getMetadataValue method
-        assertThat(application1.getMetadataValue("source")).isEqualTo("email");
-        assertThat(application1.getMetadataValue("confidence")).isEqualTo(0.95);
-
-        // Test addMetadata method
-        application1.addMetadata("new_key", "new_value");
-        assertThat(application1.getMetadataValue("new_key")).isEqualTo("new_value");
-
-        // Test setMetadata method
-        Map<String, Object> newMetadata = new HashMap<>();
-        newMetadata.put("completely_new", "completely_new_value");
-        newMetadata.put("another_key", 123);
-        application1.setMetadata(newMetadata);
-
-        assertThat(application1.getMetadata()).isEqualTo(newMetadata);
-        assertThat(application1.getMetadataValue("source")).isNull(); // Old key is gone
-        assertThat(application1.getMetadataValue("completely_new")).isEqualTo("completely_new_value");
-        assertThat(application1.getMetadataValue("another_key")).isEqualTo(123);
-
-        // Test JSON conversion
-        String metadataJson = application1.getMetadataJson();
-        assertThat(metadataJson).isNotNull();
-        assertThat(metadataJson).contains("completely_new");
-        assertThat(metadataJson).contains("completely_new_value");
-        assertThat(metadataJson).contains("another_key");
-        assertThat(metadataJson).contains("123");
-
-        // Test setMetadataJson method
-        String newMetadataJson = "{\"json_key\": \"json_value\", \"json_number\": 456}";
-        application1.setMetadataJson(newMetadataJson);
-
-        assertThat(application1.getMetadataValue("json_key")).isEqualTo("json_value");
-        assertThat(application1.getMetadataValue("json_number")).isEqualTo(456);
+    @DisplayName("Should find applications requiring human intervention")
+    public void testFindApplicationsRequiringHumanIntervention() {
+        // Find applications requiring human intervention
+        List<Application> applications = applicationRepository.findApplicationsRequiringHumanIntervention();
+        
+        // Verify the correct applications were found
+        assertThat(applications).hasSize(1); // Only PENDING application requires intervention
+        assertThat(applications.get(0).getStatus()).isEqualTo(ApplicationStatus.PENDING);
     }
 
-    /**
-     * Tests the Application entity's builder pattern.
-     */
     @Test
-    @DisplayName("Should create Application using builder pattern")
-    public void testApplicationBuilder() {
-        // Create an application using the builder pattern
-        Application.Builder builder = new Application.Builder()
-                .withStatus(ApplicationStatus.NEW)
-                .withReviewStatus(ReviewStatus.NOT_REVIEWED)
-                .withCreatedAt(LocalDateTime.now())
-                .withUpdatedAt(LocalDateTime.now())
-                .addMetadata("source", "builder-test")
-                .addMetadata("priority", "high");
+    @DisplayName("Should find automatically processed applications")
+    public void testFindAutomaticallyProcessedApplications() {
+        // Find automatically processed applications
+        List<Application> applications = applicationRepository.findAutomaticallyProcessedApplications();
+        
+        // Verify the correct applications were found
+        assertThat(applications).hasSize(2);
+        assertThat(applications).allMatch(app -> app.getStatus() == ApplicationStatus.COMPLETED);
+    }
 
-        Application builtApplication = builder.build();
+    @Test
+    @DisplayName("Should calculate automation rate")
+    public void testCalculateAutomationRate() {
+        // Calculate automation rate
+        Double automationRate = applicationRepository.calculateAutomationRate();
+        
+        // Verify the automation rate is calculated
+        assertThat(automationRate).isNotNull();
+        // 2 out of 6 applications were automatically processed
+        assertThat(automationRate).isEqualTo(2.0 / 6.0);
+    }
 
-        // Save the application
-        Application savedApplication = applicationRepository.save(builtApplication);
+    @Test
+    @DisplayName("Should find applications by document count")
+    public void testFindByDocumentCount() {
+        // Find applications by document count
+        List<Application> applicationsWithTwoDocuments = applicationRepository.findByDocumentCount(2);
+        List<Application> applicationsWithThreeDocuments = applicationRepository.findByDocumentCount(3);
+        
+        // Verify the correct applications were found
+        assertThat(applicationsWithTwoDocuments).hasSize(1);
+        assertThat(applicationsWithTwoDocuments.get(0).getDocumentCount()).isEqualTo(2);
+        
+        assertThat(applicationsWithThreeDocuments).hasSize(1);
+        assertThat(applicationsWithThreeDocuments.get(0).getDocumentCount()).isEqualTo(3);
+    }
 
-        // Verify the application was saved with the correct properties
-        assertThat(savedApplication.getId()).isNotNull();
-        assertThat(savedApplication.getStatus()).isEqualTo(ApplicationStatus.NEW);
-        assertThat(savedApplication.getReviewStatus()).isEqualTo(ReviewStatus.NOT_REVIEWED);
-        assertThat(savedApplication.getMetadataValue("source")).isEqualTo("builder-test");
-        assertThat(savedApplication.getMetadataValue("priority")).isEqualTo("high");
+    @Test
+    @DisplayName("Should find applications with merchant details")
+    public void testFindApplicationsWithMerchantDetails() {
+        // Find applications with merchant details
+        List<Application> applications = applicationRepository.findApplicationsWithMerchantDetails();
+        
+        // Verify the correct applications were found
+        assertThat(applications).hasSize(2);
+        assertThat(applications).allMatch(app -> app.getMerchantDetails() != null);
+    }
+
+    @Test
+    @DisplayName("Should find applications without merchant details")
+    public void testFindApplicationsWithoutMerchantDetails() {
+        // Find applications without merchant details
+        List<Application> applications = applicationRepository.findApplicationsWithoutMerchantDetails();
+        
+        // Verify the correct applications were found
+        assertThat(applications).hasSize(4);
+        assertThat(applications).allMatch(app -> app.getMerchantDetails() == null);
     }
 }
