@@ -1,584 +1,354 @@
 package com.dollarfunding.mca.dto;
 
+import java.time.LocalDateTime;
+
 import com.dollarfunding.mca.entity.EventType;
 import com.dollarfunding.mca.entity.Webhook;
 import com.fasterxml.jackson.annotation.JsonFormat;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
-import java.time.LocalDateTime;
-
 /**
- * DTO class for returning webhook configuration data to clients.
- * This class provides a complete view of webhook configuration while masking
- * sensitive information like secret keys.
+ * Data Transfer Object (DTO) for returning webhook configuration data to clients.
+ * <p>
+ * This class provides a complete view of webhook configuration while masking sensitive
+ * information like secret keys. It includes all webhook fields with appropriate serialization
+ * for API responses and delivery status information.
+ * </p>
+ * <p>
+ * Used by the REST API for webhook configuration at /api/v1/webhooks, which is restricted
+ * to the System Admin role.
+ * </p>
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class WebhookResponseDTO {
 
-    /**
-     * Unique identifier for the webhook.
-     */
     @JsonProperty("id")
     private Long id;
 
-    /**
-     * The URL where webhook notifications will be sent.
-     */
     @JsonProperty("endpoint_url")
     private String endpointUrl;
 
-    /**
-     * The type of event that triggers this webhook.
-     */
     @JsonProperty("event_type")
-    private String eventType;
+    private EventType eventType;
 
-    /**
-     * Whether the webhook is currently active.
-     */
     @JsonProperty("active")
-    private boolean active;
+    private Boolean active;
 
-    /**
-     * Masked version of the secret key used for HMAC signing.
-     */
-    @JsonProperty("secret_key_masked")
-    private String secretKeyMasked;
+    @JsonProperty("max_retry_attempts")
+    private Integer maxRetryAttempts;
 
-    /**
-     * Timestamp when the webhook was created.
-     */
-    @JsonProperty("created_at")
-    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
-    private LocalDateTime createdAt;
+    @JsonProperty("last_delivery_status")
+    private String lastDeliveryStatus;
 
-    /**
-     * Timestamp when the webhook was last updated.
-     */
-    @JsonProperty("updated_at")
-    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
-    private LocalDateTime updatedAt;
+    @JsonProperty("last_delivery_attempt")
+    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd'T'HH:mm:ss.SSS")
+    private LocalDateTime lastDeliveryAttempt;
 
-    /**
-     * Timestamp when the webhook was last delivered.
-     */
-    @JsonProperty("last_delivery_at")
-    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
-    private LocalDateTime lastDeliveryAt;
+    @JsonProperty("failed_attempts")
+    private Integer failedAttempts;
 
-    /**
-     * Whether the last delivery was successful.
-     */
     @JsonProperty("last_delivery_success")
     private Boolean lastDeliverySuccess;
 
-    /**
-     * HTTP status code from the last delivery attempt.
-     */
     @JsonProperty("last_delivery_status_code")
     private Integer lastDeliveryStatusCode;
 
-    /**
-     * Error message from the last delivery attempt, if any.
-     */
     @JsonProperty("last_delivery_error")
     private String lastDeliveryError;
 
-    /**
-     * Total number of successful deliveries.
-     */
     @JsonProperty("successful_deliveries_count")
     private Long successfulDeliveriesCount;
 
-    /**
-     * Total number of failed deliveries.
-     */
     @JsonProperty("failed_deliveries_count")
     private Long failedDeliveriesCount;
 
-    /**
-     * The name of the signature header used (e.g., "X-Webhook-Signature").
-     */
     @JsonProperty("signature_header")
     private String signatureHeader;
 
+    @JsonProperty("created_at")
+    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd'T'HH:mm:ss.SSS")
+    private LocalDateTime createdAt;
+
+    @JsonProperty("updated_at")
+    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd'T'HH:mm:ss.SSS")
+    private LocalDateTime updatedAt;
+
     /**
-     * Default constructor.
+     * Masked secret key for display purposes. Only shows the first and last 4 characters
+     * with asterisks in between for security.
+     */
+    @JsonProperty("masked_secret_key")
+    private String maskedSecretKey;
+
+    /**
+     * Default constructor for Jackson deserialization.
      */
     public WebhookResponseDTO() {
     }
 
     /**
-     * Constructor with all fields.
+     * Creates a WebhookResponseDTO from a Webhook entity.
      *
-     * @param id                     The webhook ID
-     * @param endpointUrl            The endpoint URL
-     * @param eventType              The event type
-     * @param active                 Whether the webhook is active
-     * @param secretKeyMasked        The masked secret key
-     * @param createdAt              The creation timestamp
-     * @param updatedAt              The last update timestamp
-     * @param lastDeliveryAt         The last delivery timestamp
-     * @param lastDeliverySuccess    Whether the last delivery was successful
-     * @param lastDeliveryStatusCode The HTTP status code from the last delivery
-     * @param lastDeliveryError      The error message from the last delivery
-     * @param successfulDeliveriesCount Total successful deliveries
-     * @param failedDeliveriesCount  Total failed deliveries
-     * @param signatureHeader        The signature header name
-     */
-    public WebhookResponseDTO(Long id, String endpointUrl, String eventType, boolean active,
-                             String secretKeyMasked, LocalDateTime createdAt, LocalDateTime updatedAt,
-                             LocalDateTime lastDeliveryAt, Boolean lastDeliverySuccess,
-                             Integer lastDeliveryStatusCode, String lastDeliveryError,
-                             Long successfulDeliveriesCount, Long failedDeliveriesCount,
-                             String signatureHeader) {
-        this.id = id;
-        this.endpointUrl = endpointUrl;
-        this.eventType = eventType;
-        this.active = active;
-        this.secretKeyMasked = secretKeyMasked;
-        this.createdAt = createdAt;
-        this.updatedAt = updatedAt;
-        this.lastDeliveryAt = lastDeliveryAt;
-        this.lastDeliverySuccess = lastDeliverySuccess;
-        this.lastDeliveryStatusCode = lastDeliveryStatusCode;
-        this.lastDeliveryError = lastDeliveryError;
-        this.successfulDeliveriesCount = successfulDeliveriesCount;
-        this.failedDeliveriesCount = failedDeliveriesCount;
-        this.signatureHeader = signatureHeader;
-    }
-
-    /**
-     * Converts a Webhook entity to a WebhookResponseDTO.
-     *
-     * @param webhook The webhook entity
-     * @return A new WebhookResponseDTO instance
+     * @param webhook The Webhook entity to convert
+     * @return A new WebhookResponseDTO with data from the Webhook entity
      */
     public static WebhookResponseDTO fromEntity(Webhook webhook) {
         if (webhook == null) {
             return null;
         }
 
-        // Mask the secret key (show only first 4 characters followed by asterisks)
-        String secretKey = webhook.getSecretKey();
-        String maskedKey = null;
-        if (secretKey != null && !secretKey.isEmpty()) {
-            int visibleChars = Math.min(4, secretKey.length());
-            maskedKey = secretKey.substring(0, visibleChars) + "*".repeat(Math.max(0, 8 - visibleChars));
-        }
-
-        return new Builder()
-                .id(webhook.getId())
-                .endpointUrl(webhook.getEndpointUrl())
-                .eventType(webhook.getEventType() != null ? webhook.getEventType().name() : null)
-                .active(webhook.isActive())
-                .secretKeyMasked(maskedKey)
-                .createdAt(webhook.getCreatedAt())
-                .updatedAt(webhook.getUpdatedAt())
-                .lastDeliveryAt(webhook.getLastDeliveryAt())
-                .lastDeliverySuccess(webhook.getLastDeliverySuccess())
-                .lastDeliveryStatusCode(webhook.getLastDeliveryStatusCode())
-                .lastDeliveryError(webhook.getLastDeliveryError())
-                .successfulDeliveriesCount(webhook.getSuccessfulDeliveriesCount())
-                .failedDeliveriesCount(webhook.getFailedDeliveriesCount())
-                .signatureHeader(webhook.getSignatureHeader())
-                .build();
+        WebhookResponseDTO dto = new WebhookResponseDTO();
+        dto.setId(webhook.getId());
+        dto.setEndpointUrl(webhook.getEndpointUrl());
+        dto.setEventType(webhook.getEventType());
+        dto.setActive(webhook.getActive());
+        dto.setMaxRetryAttempts(webhook.getMaxRetryAttempts());
+        dto.setLastDeliveryStatus(webhook.getLastDeliveryStatus());
+        dto.setLastDeliveryAttempt(webhook.getLastDeliveryAttempt());
+        dto.setFailedAttempts(webhook.getFailedAttempts());
+        dto.setLastDeliverySuccess(webhook.getLastDeliverySuccess());
+        dto.setLastDeliveryStatusCode(webhook.getLastDeliveryStatusCode());
+        dto.setLastDeliveryError(webhook.getLastDeliveryError());
+        dto.setSuccessfulDeliveriesCount(webhook.getSuccessfulDeliveriesCount());
+        dto.setFailedDeliveriesCount(webhook.getFailedDeliveriesCount());
+        dto.setSignatureHeader(webhook.getSignatureHeader());
+        dto.setCreatedAt(webhook.getCreatedAt());
+        dto.setUpdatedAt(webhook.getUpdatedAt());
+        
+        // Mask the secret key for security
+        dto.setMaskedSecretKey(maskSecretKey(webhook.getSecretKey()));
+        
+        return dto;
     }
 
     /**
-     * @return The webhook ID
+     * Masks a secret key for display purposes, showing only the first and last 4 characters
+     * with asterisks in between.
+     *
+     * @param secretKey The secret key to mask
+     * @return The masked secret key, or null if the input is null
      */
+    private static String maskSecretKey(String secretKey) {
+        if (secretKey == null) {
+            return null;
+        }
+        
+        int length = secretKey.length();
+        if (length <= 8) {
+            // If the key is too short, mask all but the first and last character
+            return length > 2 ? 
+                   secretKey.charAt(0) + "*****" + secretKey.charAt(length - 1) : 
+                   "*****";
+        }
+        
+        // Show first 4 and last 4 characters, mask the rest
+        String firstFour = secretKey.substring(0, 4);
+        String lastFour = secretKey.substring(length - 4);
+        return firstFour + "*".repeat(Math.min(length - 8, 10)) + lastFour;
+    }
+
+    /**
+     * Gets the delivery status summary as a human-readable string.
+     *
+     * @return A string summarizing the webhook delivery status
+     */
+    @JsonProperty("delivery_status_summary")
+    public String getDeliveryStatusSummary() {
+        if (lastDeliveryAttempt == null) {
+            return "Never triggered";
+        }
+        
+        if (Boolean.TRUE.equals(lastDeliverySuccess)) {
+            return "Last delivery successful at " + lastDeliveryAttempt;
+        }
+        
+        if (failedAttempts != null && failedAttempts > 0) {
+            return "Failed delivery (" + failedAttempts + " attempts) - Last attempt at " + lastDeliveryAttempt;
+        }
+        
+        return lastDeliveryStatus != null ? lastDeliveryStatus : "Unknown status";
+    }
+
+    /**
+     * Gets the webhook health status based on delivery history.
+     *
+     * @return A string representing the webhook health: "healthy", "warning", or "error"
+     */
+    @JsonProperty("health_status")
+    public String getHealthStatus() {
+        if (lastDeliveryAttempt == null) {
+            return "unknown";
+        }
+        
+        if (Boolean.TRUE.equals(lastDeliverySuccess)) {
+            return "healthy";
+        }
+        
+        if (failedAttempts != null && failedAttempts > 0 && maxRetryAttempts != null) {
+            return failedAttempts >= maxRetryAttempts ? "error" : "warning";
+        }
+        
+        return "unknown";
+    }
+
+    // Getters and Setters
+
     public Long getId() {
         return id;
     }
 
-    /**
-     * @param id The webhook ID
-     */
     public void setId(Long id) {
         this.id = id;
     }
 
-    /**
-     * @return The endpoint URL
-     */
     public String getEndpointUrl() {
         return endpointUrl;
     }
 
-    /**
-     * @param endpointUrl The endpoint URL
-     */
     public void setEndpointUrl(String endpointUrl) {
         this.endpointUrl = endpointUrl;
     }
 
-    /**
-     * @return The event type
-     */
-    public String getEventType() {
+    public EventType getEventType() {
         return eventType;
     }
 
-    /**
-     * @param eventType The event type
-     */
-    public void setEventType(String eventType) {
+    public void setEventType(EventType eventType) {
         this.eventType = eventType;
     }
 
-    /**
-     * @return Whether the webhook is active
-     */
-    public boolean isActive() {
+    public Boolean getActive() {
         return active;
     }
 
-    /**
-     * @param active Whether the webhook is active
-     */
-    public void setActive(boolean active) {
+    public void setActive(Boolean active) {
         this.active = active;
     }
 
-    /**
-     * @return The masked secret key
-     */
-    public String getSecretKeyMasked() {
-        return secretKeyMasked;
+    public Integer getMaxRetryAttempts() {
+        return maxRetryAttempts;
     }
 
-    /**
-     * @param secretKeyMasked The masked secret key
-     */
-    public void setSecretKeyMasked(String secretKeyMasked) {
-        this.secretKeyMasked = secretKeyMasked;
+    public void setMaxRetryAttempts(Integer maxRetryAttempts) {
+        this.maxRetryAttempts = maxRetryAttempts;
     }
 
-    /**
-     * @return The creation timestamp
-     */
-    public LocalDateTime getCreatedAt() {
-        return createdAt;
+    public String getLastDeliveryStatus() {
+        return lastDeliveryStatus;
     }
 
-    /**
-     * @param createdAt The creation timestamp
-     */
-    public void setCreatedAt(LocalDateTime createdAt) {
-        this.createdAt = createdAt;
+    public void setLastDeliveryStatus(String lastDeliveryStatus) {
+        this.lastDeliveryStatus = lastDeliveryStatus;
     }
 
-    /**
-     * @return The last update timestamp
-     */
-    public LocalDateTime getUpdatedAt() {
-        return updatedAt;
+    public LocalDateTime getLastDeliveryAttempt() {
+        return lastDeliveryAttempt;
     }
 
-    /**
-     * @param updatedAt The last update timestamp
-     */
-    public void setUpdatedAt(LocalDateTime updatedAt) {
-        this.updatedAt = updatedAt;
+    public void setLastDeliveryAttempt(LocalDateTime lastDeliveryAttempt) {
+        this.lastDeliveryAttempt = lastDeliveryAttempt;
     }
 
-    /**
-     * @return The last delivery timestamp
-     */
-    public LocalDateTime getLastDeliveryAt() {
-        return lastDeliveryAt;
+    public Integer getFailedAttempts() {
+        return failedAttempts;
     }
 
-    /**
-     * @param lastDeliveryAt The last delivery timestamp
-     */
-    public void setLastDeliveryAt(LocalDateTime lastDeliveryAt) {
-        this.lastDeliveryAt = lastDeliveryAt;
+    public void setFailedAttempts(Integer failedAttempts) {
+        this.failedAttempts = failedAttempts;
     }
 
-    /**
-     * @return Whether the last delivery was successful
-     */
     public Boolean getLastDeliverySuccess() {
         return lastDeliverySuccess;
     }
 
-    /**
-     * @param lastDeliverySuccess Whether the last delivery was successful
-     */
     public void setLastDeliverySuccess(Boolean lastDeliverySuccess) {
         this.lastDeliverySuccess = lastDeliverySuccess;
     }
 
-    /**
-     * @return The HTTP status code from the last delivery
-     */
     public Integer getLastDeliveryStatusCode() {
         return lastDeliveryStatusCode;
     }
 
-    /**
-     * @param lastDeliveryStatusCode The HTTP status code from the last delivery
-     */
     public void setLastDeliveryStatusCode(Integer lastDeliveryStatusCode) {
         this.lastDeliveryStatusCode = lastDeliveryStatusCode;
     }
 
-    /**
-     * @return The error message from the last delivery
-     */
     public String getLastDeliveryError() {
         return lastDeliveryError;
     }
 
-    /**
-     * @param lastDeliveryError The error message from the last delivery
-     */
     public void setLastDeliveryError(String lastDeliveryError) {
         this.lastDeliveryError = lastDeliveryError;
     }
 
-    /**
-     * @return Total successful deliveries
-     */
     public Long getSuccessfulDeliveriesCount() {
         return successfulDeliveriesCount;
     }
 
-    /**
-     * @param successfulDeliveriesCount Total successful deliveries
-     */
     public void setSuccessfulDeliveriesCount(Long successfulDeliveriesCount) {
         this.successfulDeliveriesCount = successfulDeliveriesCount;
     }
 
-    /**
-     * @return Total failed deliveries
-     */
     public Long getFailedDeliveriesCount() {
         return failedDeliveriesCount;
     }
 
-    /**
-     * @param failedDeliveriesCount Total failed deliveries
-     */
     public void setFailedDeliveriesCount(Long failedDeliveriesCount) {
         this.failedDeliveriesCount = failedDeliveriesCount;
     }
 
-    /**
-     * @return The signature header name
-     */
     public String getSignatureHeader() {
         return signatureHeader;
     }
 
-    /**
-     * @param signatureHeader The signature header name
-     */
     public void setSignatureHeader(String signatureHeader) {
         this.signatureHeader = signatureHeader;
     }
 
-    /**
-     * Builder class for creating WebhookResponseDTO instances.
-     */
-    public static class Builder {
-        private Long id;
-        private String endpointUrl;
-        private String eventType;
-        private boolean active;
-        private String secretKeyMasked;
-        private LocalDateTime createdAt;
-        private LocalDateTime updatedAt;
-        private LocalDateTime lastDeliveryAt;
-        private Boolean lastDeliverySuccess;
-        private Integer lastDeliveryStatusCode;
-        private String lastDeliveryError;
-        private Long successfulDeliveriesCount;
-        private Long failedDeliveriesCount;
-        private String signatureHeader;
-
-        /**
-         * Default constructor.
-         */
-        public Builder() {
-        }
-
-        /**
-         * @param id The webhook ID
-         * @return The builder instance
-         */
-        public Builder id(Long id) {
-            this.id = id;
-            return this;
-        }
-
-        /**
-         * @param endpointUrl The endpoint URL
-         * @return The builder instance
-         */
-        public Builder endpointUrl(String endpointUrl) {
-            this.endpointUrl = endpointUrl;
-            return this;
-        }
-
-        /**
-         * @param eventType The event type
-         * @return The builder instance
-         */
-        public Builder eventType(String eventType) {
-            this.eventType = eventType;
-            return this;
-        }
-
-        /**
-         * @param active Whether the webhook is active
-         * @return The builder instance
-         */
-        public Builder active(boolean active) {
-            this.active = active;
-            return this;
-        }
-
-        /**
-         * @param secretKeyMasked The masked secret key
-         * @return The builder instance
-         */
-        public Builder secretKeyMasked(String secretKeyMasked) {
-            this.secretKeyMasked = secretKeyMasked;
-            return this;
-        }
-
-        /**
-         * @param createdAt The creation timestamp
-         * @return The builder instance
-         */
-        public Builder createdAt(LocalDateTime createdAt) {
-            this.createdAt = createdAt;
-            return this;
-        }
-
-        /**
-         * @param updatedAt The last update timestamp
-         * @return The builder instance
-         */
-        public Builder updatedAt(LocalDateTime updatedAt) {
-            this.updatedAt = updatedAt;
-            return this;
-        }
-
-        /**
-         * @param lastDeliveryAt The last delivery timestamp
-         * @return The builder instance
-         */
-        public Builder lastDeliveryAt(LocalDateTime lastDeliveryAt) {
-            this.lastDeliveryAt = lastDeliveryAt;
-            return this;
-        }
-
-        /**
-         * @param lastDeliverySuccess Whether the last delivery was successful
-         * @return The builder instance
-         */
-        public Builder lastDeliverySuccess(Boolean lastDeliverySuccess) {
-            this.lastDeliverySuccess = lastDeliverySuccess;
-            return this;
-        }
-
-        /**
-         * @param lastDeliveryStatusCode The HTTP status code from the last delivery
-         * @return The builder instance
-         */
-        public Builder lastDeliveryStatusCode(Integer lastDeliveryStatusCode) {
-            this.lastDeliveryStatusCode = lastDeliveryStatusCode;
-            return this;
-        }
-
-        /**
-         * @param lastDeliveryError The error message from the last delivery
-         * @return The builder instance
-         */
-        public Builder lastDeliveryError(String lastDeliveryError) {
-            this.lastDeliveryError = lastDeliveryError;
-            return this;
-        }
-
-        /**
-         * @param successfulDeliveriesCount Total successful deliveries
-         * @return The builder instance
-         */
-        public Builder successfulDeliveriesCount(Long successfulDeliveriesCount) {
-            this.successfulDeliveriesCount = successfulDeliveriesCount;
-            return this;
-        }
-
-        /**
-         * @param failedDeliveriesCount Total failed deliveries
-         * @return The builder instance
-         */
-        public Builder failedDeliveriesCount(Long failedDeliveriesCount) {
-            this.failedDeliveriesCount = failedDeliveriesCount;
-            return this;
-        }
-
-        /**
-         * @param signatureHeader The signature header name
-         * @return The builder instance
-         */
-        public Builder signatureHeader(String signatureHeader) {
-            this.signatureHeader = signatureHeader;
-            return this;
-        }
-
-        /**
-         * Builds a new WebhookResponseDTO instance.
-         *
-         * @return A new WebhookResponseDTO instance
-         */
-        public WebhookResponseDTO build() {
-            WebhookResponseDTO dto = new WebhookResponseDTO();
-            dto.id = this.id;
-            dto.endpointUrl = this.endpointUrl;
-            dto.eventType = this.eventType;
-            dto.active = this.active;
-            dto.secretKeyMasked = this.secretKeyMasked;
-            dto.createdAt = this.createdAt;
-            dto.updatedAt = this.updatedAt;
-            dto.lastDeliveryAt = this.lastDeliveryAt;
-            dto.lastDeliverySuccess = this.lastDeliverySuccess;
-            dto.lastDeliveryStatusCode = this.lastDeliveryStatusCode;
-            dto.lastDeliveryError = this.lastDeliveryError;
-            dto.successfulDeliveriesCount = this.successfulDeliveriesCount;
-            dto.failedDeliveriesCount = this.failedDeliveriesCount;
-            dto.signatureHeader = this.signatureHeader;
-            return dto;
-        }
+    public LocalDateTime getCreatedAt() {
+        return createdAt;
     }
 
-    /**
-     * Creates a new builder instance.
-     *
-     * @return A new builder instance
-     */
-    public static Builder builder() {
-        return new Builder();
+    public void setCreatedAt(LocalDateTime createdAt) {
+        this.createdAt = createdAt;
     }
 
-    /**
-     * Creates a list response from a list of webhook entities.
-     *
-     * @param webhooks The list of webhook entities
-     * @return A list of WebhookResponseDTO instances
-     */
-    public static java.util.List<WebhookResponseDTO> fromEntities(java.util.List<Webhook> webhooks) {
-        if (webhooks == null) {
-            return java.util.Collections.emptyList();
-        }
-        return webhooks.stream()
-                .map(WebhookResponseDTO::fromEntity)
-                .collect(java.util.stream.Collectors.toList());
+    public LocalDateTime getUpdatedAt() {
+        return updatedAt;
+    }
+
+    public void setUpdatedAt(LocalDateTime updatedAt) {
+        this.updatedAt = updatedAt;
+    }
+
+    public String getMaskedSecretKey() {
+        return maskedSecretKey;
+    }
+
+    public void setMaskedSecretKey(String maskedSecretKey) {
+        this.maskedSecretKey = maskedSecretKey;
+    }
+
+    @Override
+    public String toString() {
+        return "WebhookResponseDTO{" +
+                "id=" + id +
+                ", endpointUrl='" + endpointUrl + '\'' +
+                ", eventType=" + eventType +
+                ", active=" + active +
+                ", maxRetryAttempts=" + maxRetryAttempts +
+                ", lastDeliveryStatus='" + lastDeliveryStatus + '\'' +
+                ", lastDeliveryAttempt=" + lastDeliveryAttempt +
+                ", failedAttempts=" + failedAttempts +
+                ", lastDeliverySuccess=" + lastDeliverySuccess +
+                ", lastDeliveryStatusCode=" + lastDeliveryStatusCode +
+                ", successfulDeliveriesCount=" + successfulDeliveriesCount +
+                ", failedDeliveriesCount=" + failedDeliveriesCount +
+                ", signatureHeader='" + signatureHeader + '\'' +
+                ", createdAt=" + createdAt +
+                ", updatedAt=" + updatedAt +
+                ", maskedSecretKey='" + maskedSecretKey + '\'' +
+                '}';
     }
 }
