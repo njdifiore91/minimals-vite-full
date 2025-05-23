@@ -2,510 +2,775 @@
 # -*- coding: utf-8 -*-
 
 """
-Unit tests for the Document Routing Service.
+Unit tests for the document routing service.
 
 This module contains tests that verify the document routing service correctly determines
 the optimal OCR processing strategy based on document type, classification confidence,
-and document characteristics. It validates that documents are routed to appropriate OCR
-processors with correct metadata and processing hints.
+and document characteristics. It ensures that documents are properly routed to the
+appropriate OCR processors with the correct metadata and instructions.
 """
 
 import pytest
-import unittest.mock as mock
-from datetime import datetime
-from typing import Dict, Any, List, Optional
+import time
+from unittest.mock import MagicMock, patch
+from typing import Dict, Any
 
-# Import the service to test
-from document_service.src.services.document_routing_service import DocumentRoutingService
-
-# Import types
-from document_service.src.types.documents import Document, DocumentType, ProcessingStatus, DocumentMetadata
-from document_service.src.types.classification import ClassificationResult, ConfidenceScore
-from document_service.src.types.messages import MessagePayload, MessageHeaders
-from document_service.src.types.errors import Result, ServiceError
+from document_service.services.document_routing_service import DocumentRoutingService
+from document_service.types.classification import ClassificationResult, ConfidenceScore, DocumentType
 
 
-@pytest.fixture
-def mock_queue_service():
-    """Create a mock queue service for testing."""
-    queue_service = mock.MagicMock()
-    queue_service.publish_message = mock.MagicMock(return_value=None)
-    return queue_service
+# ===== Test DocumentRoutingService Initialization =====
+
+def test_init_with_default_config():
+    """Test initialization of DocumentRoutingService with default configuration."""
+    # Initialize service with default configuration
+    routing_service = DocumentRoutingService()
+    
+    # Verify default thresholds are set correctly
+    assert routing_service.high_confidence_threshold == 0.85
+    assert routing_service.medium_confidence_threshold == 0.75
+    assert routing_service.low_confidence_threshold == 0.60
+    
+    # Verify routing metrics are initialized
+    assert routing_service.routing_metrics['total_routed'] == 0
+    assert routing_service.routing_metrics['high_confidence_routes'] == 0
+    assert routing_service.routing_metrics['medium_confidence_routes'] == 0
+    assert routing_service.routing_metrics['low_confidence_routes'] == 0
+    assert routing_service.routing_metrics['fallback_routes'] == 0
+    assert routing_service.routing_metrics['routing_errors'] == 0
+    assert routing_service.routing_metrics['avg_routing_time_ms'] == 0
+    assert routing_service.routing_metrics['total_routing_time_ms'] == 0
 
 
-@pytest.fixture
-def mock_storage_service():
-    """Create a mock storage service for testing."""
-    storage_service = mock.MagicMock()
-    storage_service.update_document_metadata = mock.MagicMock(return_value=None)
-    return storage_service
-
-
-@pytest.fixture
-def sample_document():
-    """Create a sample document for testing."""
-    metadata = {
-        'id': 'doc-123',
-        'filename': 'test_document.pdf',
-        'size': 1024,
-        'mime_type': 'application/pdf',
-        'created_at': datetime.utcnow(),
-        'updated_at': datetime.utcnow(),
-        'storage_path': 's3://mca-documents-test/doc-123.pdf',
-        'page_count': 3
+def test_init_with_custom_config():
+    """Test initialization of DocumentRoutingService with custom configuration."""
+    # Create custom configuration
+    custom_config = {
+        'high_confidence_threshold': 0.90,
+        'medium_confidence_threshold': 0.80,
+        'low_confidence_threshold': 0.70
     }
     
-    return Document(
-        metadata=metadata,
-        document_type=None,
-        status=ProcessingStatus.RECEIVED
-    )
+    # Initialize service with custom configuration
+    routing_service = DocumentRoutingService(config=custom_config)
+    
+    # Verify custom thresholds are set correctly
+    assert routing_service.high_confidence_threshold == 0.90
+    assert routing_service.medium_confidence_threshold == 0.80
+    assert routing_service.low_confidence_threshold == 0.70
 
 
-@pytest.fixture
-def sample_classification_result():
-    """Create a sample classification result for testing."""
-    return ClassificationResult(
-        document_id='doc-123',
+# ===== Test Document Routing Logic =====
+
+def test_route_document_high_confidence():
+    """Test routing a document with high confidence classification."""
+    # Initialize service
+    routing_service = DocumentRoutingService()
+    
+    # Create test document and classification result
+    document_id = "test-doc-123"
+    classification_result = ClassificationResult(
+        document_id=document_id,
         document_type=DocumentType.APPLICATION,
-        confidence=0.85,
+        confidence=ConfidenceScore(0.95),
         requires_review=False,
-        prediction_time=datetime.utcnow(),
-        feature_importance={'feature1': 0.5, 'feature2': 0.3}
+        prediction_time=time.time(),
+        feature_importance={}
     )
-
-
-@pytest.fixture
-def low_confidence_classification_result():
-    """Create a low confidence classification result for testing."""
-    return ClassificationResult(
-        document_id='doc-123',
-        document_type=DocumentType.APPLICATION,
-        confidence=0.65,  # Below default threshold of 0.75
-        requires_review=True,
-        prediction_time=datetime.utcnow(),
-        feature_importance={'feature1': 0.5, 'feature2': 0.3}
-    )
-
-
-@pytest.fixture
-def classification_result_with_alternatives():
-    """Create a classification result with alternative types for testing."""
-    result = ClassificationResult(
-        document_id='doc-123',
-        document_type=DocumentType.APPLICATION,
-        confidence=0.70,
-        requires_review=True,
-        prediction_time=datetime.utcnow(),
-        feature_importance={'feature1': 0.5, 'feature2': 0.3}
-    )
-    
-    # Add alternative types
-    result.alternative_types = {
-        DocumentType.TAX_RETURN: 0.20,
-        DocumentType.BANK_STATEMENT: 0.10
+    document_metadata = {
+        'file_type': 'pdf',
+        'file_size': 1024,
+        'page_count': 3,
+        'source': 'email'
     }
     
-    return result
+    # Route document
+    with patch('time.time', return_value=1609459200.0):  # 2021-01-01 00:00:00 UTC
+        routing_result = routing_service.route_document(
+            document_id, classification_result, document_metadata
+        )
+    
+    # Verify routing result
+    assert routing_result['document_id'] == document_id
+    assert routing_result['document_type'] == DocumentType.APPLICATION
+    assert routing_result['ocr_processor'] == 'form_ocr'
+    assert routing_result['classification_confidence'] == 0.95
+    assert routing_result['review_required'] is False
+    assert routing_result['processing_priority'] == 'high'
+    assert routing_result['content_type'] == 'mixed'
+    assert routing_result['routing_timestamp'] == 1609459200
+    
+    # Verify metrics were updated
+    assert routing_service.routing_metrics['total_routed'] == 1
+    assert routing_service.routing_metrics['high_confidence_routes'] == 1
 
 
-class TestDocumentRoutingService:
-    """Test suite for the DocumentRoutingService class."""
+def test_route_document_medium_confidence():
+    """Test routing a document with medium confidence classification."""
+    # Initialize service
+    routing_service = DocumentRoutingService()
     
-    def test_initialization(self, mock_queue_service, mock_storage_service):
-        """Test that the service initializes correctly with dependencies."""
-        service = DocumentRoutingService(queue_service=mock_queue_service, storage_service=mock_storage_service)
-        
-        assert service.queue_service == mock_queue_service
-        assert service.storage_service == mock_storage_service
-        assert service.confidence_threshold == 0.75  # Default threshold
-        assert len(service.ocr_processor_map) == len(DocumentType)
-        assert len(service.document_characteristics_map) == 4  # typed, handwritten, mixed, default
+    # Create test document and classification result
+    document_id = "test-doc-456"
+    classification_result = ClassificationResult(
+        document_id=document_id,
+        document_type=DocumentType.TAX_RETURN,
+        confidence=ConfidenceScore(0.80),
+        requires_review=False,
+        prediction_time=time.time(),
+        feature_importance={}
+    )
+    document_metadata = {
+        'file_type': 'pdf',
+        'file_size': 2048,
+        'page_count': 5,
+        'source': 'email'
+    }
     
-    def test_load_confidence_thresholds(self, mock_queue_service, mock_storage_service):
-        """Test loading confidence thresholds from configuration."""
-        with mock.patch('document_service.src.services.document_routing_service.CONFIDENCE_THRESHOLDS') as mock_config:
-            # Set up mock configuration
-            mock_config.DEFAULT = 0.80
-            mock_config.APPLICATION_THRESHOLD = 0.85
-            mock_config.TAX_RETURN_THRESHOLD = 0.90
-            
-            service = DocumentRoutingService(mock_queue_service, mock_storage_service)
-            service._load_confidence_thresholds()
-            
-            assert service.confidence_threshold == 0.80
-            assert service.type_confidence_thresholds[DocumentType.APPLICATION] == 0.85
-            assert service.type_confidence_thresholds[DocumentType.TAX_RETURN] == 0.90
-            # Other types should default to the default threshold
-            assert service.type_confidence_thresholds[DocumentType.BANK_STATEMENT] == 0.80
-    
-    def test_route_document_success(self, mock_queue_service, mock_storage_service, sample_document, sample_classification_result):
-        """Test successful document routing with high confidence."""
-        service = DocumentRoutingService(mock_queue_service, mock_storage_service)
-        
-        # Execute the method under test
-        result = service.route_document(sample_document, sample_classification_result)
-        
-        # Verify the result
-        assert result.is_success
-        routing_metadata = result.value
-        
-        # Check routing metadata
-        assert routing_metadata['document_id'] == sample_document.metadata['id']
-        assert 'routing_timestamp' in routing_metadata
-        assert routing_metadata['routing_decisions']['ocr_processor'] == 'application_processor'
-        assert routing_metadata['routing_decisions']['ocr_strategy'] == 'mixed_ocr'
-        assert routing_metadata['routing_decisions']['needs_human_review'] is False
-        assert routing_metadata['document_metadata']['document_type'] == 'APPLICATION'
-        
-        # Verify storage service was called
-        mock_storage_service.update_document_metadata.assert_called_once()
-        
-        # Verify queue service was called
-        mock_queue_service.publish_message.assert_called_once()
-        call_args = mock_queue_service.publish_message.call_args[1]
-        assert call_args['exchange'] == 'mca.documents'
-        assert call_args['routing_key'] == 'ocr.application_processor'
-    
-    def test_route_document_low_confidence(self, mock_queue_service, mock_storage_service, sample_document, low_confidence_classification_result):
-        """Test document routing with low confidence requiring human review."""
-        service = DocumentRoutingService(mock_queue_service, mock_storage_service)
-        
-        # Execute the method under test
-        result = service.route_document(sample_document, low_confidence_classification_result)
-        
-        # Verify the result
-        assert result.is_success
-        routing_metadata = result.value
-        
-        # Check routing metadata for human review flag
-        assert routing_metadata['routing_decisions']['needs_human_review'] is True
-        assert routing_metadata['routing_decisions']['priority'] == 'high'  # High priority for human review
-        
-        # Verify queue service was called with appropriate headers
-        mock_queue_service.publish_message.assert_called_once()
-        call_args = mock_queue_service.publish_message.call_args[1]
-        assert call_args['headers']['priority'] == 'high'
-    
-    def test_determine_document_characteristics(self, mock_queue_service, mock_storage_service, sample_document, sample_classification_result):
-        """Test determination of document characteristics for OCR strategy selection."""
-        service = DocumentRoutingService(mock_queue_service, mock_storage_service)
-        
-        # Test with classification result that has document_characteristics attribute
-        sample_classification_result.document_characteristics = 'typed'
-        characteristics = service._determine_document_characteristics(sample_document, sample_classification_result)
-        assert characteristics == 'typed'
-        
-        # Test without document_characteristics attribute (should use default mapping)
-        delattr(sample_classification_result, 'document_characteristics')
-        characteristics = service._determine_document_characteristics(sample_document, sample_classification_result)
-        assert characteristics == 'mixed'  # Default for APPLICATION type
-        
-        # Test with different document type
-        sample_classification_result.document_type = DocumentType.TAX_RETURN
-        characteristics = service._determine_document_characteristics(sample_document, sample_classification_result)
-        assert characteristics == 'typed'  # Default for TAX_RETURN type
-    
-    def test_create_routing_metadata(self, mock_queue_service, mock_storage_service, sample_document, sample_classification_result):
-        """Test creation of routing metadata for downstream OCR processors."""
-        service = DocumentRoutingService(mock_queue_service, mock_storage_service)
-        
-        # Execute the method under test
-        metadata = service._create_routing_metadata(
-            document=sample_document,
-            classification_result=sample_classification_result,
-            ocr_processor='application_processor',
-            ocr_strategy='mixed_ocr',
-            needs_human_review=False,
-            doc_characteristics='mixed'
-        )
-        
-        # Verify metadata structure and content
-        assert metadata['document_id'] == sample_document.metadata['id']
-        assert 'routing_timestamp' in metadata
-        assert metadata['routing_decisions']['ocr_processor'] == 'application_processor'
-        assert metadata['routing_decisions']['ocr_strategy'] == 'mixed_ocr'
-        assert metadata['routing_decisions']['needs_human_review'] is False
-        assert metadata['routing_decisions']['priority'] == 'normal'
-        assert metadata['document_metadata']['document_type'] == 'APPLICATION'
-        assert metadata['document_metadata']['document_characteristics'] == 'mixed'
-        assert metadata['document_metadata']['page_count'] == 3
-        assert metadata['classification_metadata']['confidence'] == 0.85
-        assert 'processing_hints' in metadata
-        
-        # Verify processing hints for APPLICATION type
-        assert metadata['processing_hints']['form_detection'] is True
-        assert metadata['processing_hints']['signature_detection'] is True
-        assert 'expected_fields' in metadata['processing_hints']
-        assert 'applicant_name' in metadata['processing_hints']['expected_fields']
-    
-    def test_get_alternative_types(self, mock_queue_service, mock_storage_service, classification_result_with_alternatives):
-        """Test extraction of alternative document types for borderline classifications."""
-        service = DocumentRoutingService(mock_queue_service, mock_storage_service)
-        
-        # Execute the method under test
-        alternatives = service._get_alternative_types(classification_result_with_alternatives)
-        
-        # Verify alternatives
-        assert len(alternatives) == 2
-        assert alternatives[0]['type'] == 'TAX_RETURN'
-        assert alternatives[0]['confidence'] == 0.20
-        assert alternatives[1]['type'] == 'BANK_STATEMENT'
-        assert alternatives[1]['confidence'] == 0.10
-        
-        # Test with classification result without alternatives
-        result_without_alternatives = ClassificationResult(
-            document_id='doc-123',
-            document_type=DocumentType.APPLICATION,
-            confidence=0.85,
-            requires_review=False
-        )
-        
-        alternatives = service._get_alternative_types(result_without_alternatives)
-        assert len(alternatives) == 0
-    
-    def test_generate_processing_hints(self, mock_queue_service, mock_storage_service):
-        """Test generation of processing hints for OCR processors."""
-        service = DocumentRoutingService(mock_queue_service, mock_storage_service)
-        
-        # Test hints for APPLICATION type with high confidence
-        hints = service._generate_processing_hints(
-            document_type=DocumentType.APPLICATION,
-            doc_characteristics='mixed',
-            confidence=0.95
-        )
-        
-        assert hints['expected_content_type'] == 'mixed'
-        assert hints['confidence_level'] == 'high'
-        assert hints['form_detection'] is True
-        assert hints['signature_detection'] is True
-        assert 'expected_fields' in hints
-        assert 'applicant_name' in hints['expected_fields']
-        
-        # Test hints for TAX_RETURN type with medium confidence
-        hints = service._generate_processing_hints(
-            document_type=DocumentType.TAX_RETURN,
-            doc_characteristics='typed',
-            confidence=0.80
-        )
-        
-        assert hints['expected_content_type'] == 'typed'
-        assert hints['confidence_level'] == 'medium'
-        assert hints['form_detection'] is True
-        assert hints['table_detection'] is True
-        assert 'expected_fields' in hints
-        assert 'taxpayer_name' in hints['expected_fields']
-        
-        # Test hints for OTHER type with low confidence
-        hints = service._generate_processing_hints(
-            document_type=DocumentType.OTHER,
-            doc_characteristics='mixed',
-            confidence=0.60
-        )
-        
-        assert hints['expected_content_type'] == 'mixed'
-        assert hints['confidence_level'] == 'low'
-        assert hints['form_detection'] is True
-        assert hints['table_detection'] is True
-        assert hints['general_text_extraction'] is True
-    
-    def test_update_document_metadata(self, mock_queue_service, mock_storage_service, sample_document):
-        """Test updating document metadata in storage with routing information."""
-        service = DocumentRoutingService(mock_queue_service, mock_storage_service)
-        
-        # Create sample routing metadata
-        routing_metadata = {
-            'routing_timestamp': '2023-01-01T12:00:00Z',
-            'routing_decisions': {
-                'ocr_processor': 'application_processor',
-                'ocr_strategy': 'mixed_ocr',
-                'needs_human_review': False
-            }
-        }
-        
-        # Execute the method under test
-        service._update_document_metadata(sample_document, routing_metadata)
-        
-        # Verify storage service was called with correct parameters
-        mock_storage_service.update_document_metadata.assert_called_once_with(
-            sample_document.id,
-            {
-                'routing_info': {
-                    'timestamp': routing_metadata['routing_timestamp'],
-                    'ocr_processor': 'application_processor',
-                    'ocr_strategy': 'mixed_ocr',
-                    'needs_human_review': False
-                },
-                'processing_status': 'ROUTING_COMPLETE'
-            }
+    # Route document
+    with patch('time.time', return_value=1609459200.0):  # 2021-01-01 00:00:00 UTC
+        routing_result = routing_service.route_document(
+            document_id, classification_result, document_metadata
         )
     
-    def test_publish_routing_message(self, mock_queue_service, mock_storage_service, sample_document):
-        """Test publishing routing message to OCR service via RabbitMQ."""
-        service = DocumentRoutingService(mock_queue_service, mock_storage_service)
-        
-        # Create sample routing metadata
-        routing_metadata = {
-            'document_id': 'doc-123',
-            'routing_timestamp': '2023-01-01T12:00:00Z',
-            'routing_decisions': {
-                'ocr_processor': 'application_processor',
-                'ocr_strategy': 'mixed_ocr',
-                'needs_human_review': False,
-                'priority': 'normal'
-            },
-            'document_metadata': {
-                'document_type': 'APPLICATION',
-                'document_characteristics': 'mixed'
-            }
-        }
-        
-        # Execute the method under test
-        service._publish_routing_message(sample_document, routing_metadata)
-        
-        # Verify queue service was called with correct parameters
-        mock_queue_service.publish_message.assert_called_once()
-        call_args = mock_queue_service.publish_message.call_args[1]
-        
-        assert call_args['exchange'] == 'mca.documents'
-        assert call_args['routing_key'] == 'ocr.application_processor'
-        
-        # Check payload
-        payload = call_args['payload']
-        assert payload['document_id'] == 'doc-123'
-        assert payload['storage_path'] == 's3://mca-documents-test/doc-123.pdf'
-        assert 'routing_metadata' in payload
-        assert 'timestamp' in payload
-        
-        # Check headers
-        headers = call_args['headers']
-        assert headers['document_type'] == 'APPLICATION'
-        assert headers['ocr_processor'] == 'application_processor'
-        assert headers['ocr_strategy'] == 'mixed_ocr'
-        assert headers['priority'] == 'normal'
+    # Verify routing result
+    assert routing_result['document_id'] == document_id
+    assert routing_result['document_type'] == DocumentType.TAX_RETURN
+    assert routing_result['ocr_processor'] == 'financial_ocr'
+    assert routing_result['classification_confidence'] == 0.80
+    assert routing_result['review_required'] is True  # Medium confidence requires review
+    assert routing_result['processing_priority'] == 'medium'
+    assert routing_result['content_type'] == 'typed'
     
-    def test_route_document_error_handling(self, mock_queue_service, mock_storage_service, sample_document, sample_classification_result):
-        """Test error handling in route_document method."""
-        service = DocumentRoutingService(mock_queue_service, mock_storage_service)
-        
-        # Make storage service raise an exception
-        mock_storage_service.update_document_metadata.side_effect = Exception("Storage error")
-        
-        # Execute the method under test
-        result = service.route_document(sample_document, sample_classification_result)
-        
-        # Verify the result is a failure
-        assert result.is_failure
-        assert "Failed to route document" in str(result.error)
-        assert "Storage error" in str(result.error)
+    # Verify metrics were updated
+    assert routing_service.routing_metrics['total_routed'] == 1
+    assert routing_service.routing_metrics['medium_confidence_routes'] == 1
+
+
+def test_route_document_low_confidence():
+    """Test routing a document with low confidence classification."""
+    # Initialize service
+    routing_service = DocumentRoutingService()
     
-    def test_fallback_strategy_for_uncertain_classification(self, mock_queue_service, mock_storage_service, sample_document):
-        """Test fallback strategy for uncertain classifications."""
-        service = DocumentRoutingService(mock_queue_service, mock_storage_service)
-        
-        # Create a very low confidence classification result
-        very_low_confidence_result = ClassificationResult(
-            document_id='doc-123',
-            document_type=DocumentType.OTHER,  # Fallback to OTHER type
-            confidence=0.35,  # Very low confidence
-            requires_review=True,
-            prediction_time=datetime.utcnow()
-        )
-        
-        # Execute the method under test
-        result = service.route_document(sample_document, very_low_confidence_result)
-        
-        # Verify the result
-        assert result.is_success
-        routing_metadata = result.value
-        
-        # Check routing decisions for fallback strategy
-        assert routing_metadata['routing_decisions']['needs_human_review'] is True
-        assert routing_metadata['routing_decisions']['priority'] == 'high'
-        assert routing_metadata['routing_decisions']['ocr_processor'] == 'general_document_processor'
-        
-        # Verify processing hints for uncertain classification
-        assert routing_metadata['processing_hints']['confidence_level'] == 'low'
-        assert routing_metadata['processing_hints']['general_text_extraction'] is True
-        
-        # Verify queue service was called with appropriate routing key
-        mock_queue_service.publish_message.assert_called_once()
-        call_args = mock_queue_service.publish_message.call_args[1]
-        assert call_args['routing_key'] == 'ocr.general_document_processor'
+    # Create test document and classification result
+    document_id = "test-doc-789"
+    classification_result = ClassificationResult(
+        document_id=document_id,
+        document_type=DocumentType.BANK_STATEMENT,
+        confidence=ConfidenceScore(0.65),
+        requires_review=True,
+        prediction_time=time.time(),
+        feature_importance={}
+    )
+    document_metadata = {
+        'file_type': 'pdf',
+        'file_size': 1536,
+        'page_count': 2,
+        'source': 'email'
+    }
     
-    def test_document_type_specific_confidence_thresholds(self, mock_queue_service, mock_storage_service, sample_document):
-        """Test document type-specific confidence thresholds."""
-        # Create a service with custom thresholds
-        service = DocumentRoutingService(mock_queue_service, mock_storage_service)
-        
-        # Override type confidence thresholds
-        service.type_confidence_thresholds = {
-            DocumentType.APPLICATION: 0.80,
-            DocumentType.TAX_RETURN: 0.90,
-            DocumentType.BANK_STATEMENT: 0.85,
-            DocumentType.PAY_STUB: 0.85,
-            DocumentType.ID_DOCUMENT: 0.95,  # Higher threshold for sensitive documents
-            DocumentType.OTHER: 0.70
-        }
-        
-        # Test with APPLICATION type at 0.85 confidence (above threshold)
-        high_confidence_result = ClassificationResult(
-            document_id='doc-123',
-            document_type=DocumentType.APPLICATION,
-            confidence=0.85,
-            requires_review=False
+    # Route document
+    with patch('time.time', return_value=1609459200.0):  # 2021-01-01 00:00:00 UTC
+        routing_result = routing_service.route_document(
+            document_id, classification_result, document_metadata
         )
-        
-        result = service.route_document(sample_document, high_confidence_result)
-        assert result.is_success
-        assert result.value['routing_decisions']['needs_human_review'] is False
-        
-        # Test with APPLICATION type at 0.75 confidence (below threshold)
-        low_confidence_result = ClassificationResult(
-            document_id='doc-123',
-            document_type=DocumentType.APPLICATION,
-            confidence=0.75,
-            requires_review=False  # This should be overridden by the threshold check
-        )
-        
-        result = service.route_document(sample_document, low_confidence_result)
-        assert result.is_success
-        assert result.value['routing_decisions']['needs_human_review'] is True
-        
-        # Test with ID_DOCUMENT type at 0.90 confidence (below threshold)
-        id_document_result = ClassificationResult(
-            document_id='doc-123',
-            document_type=DocumentType.ID_DOCUMENT,
-            confidence=0.90,
-            requires_review=False
-        )
-        
-        result = service.route_document(sample_document, id_document_result)
-        assert result.is_success
-        assert result.value['routing_decisions']['needs_human_review'] is True
     
-    def test_routing_decision_tracking(self, mock_queue_service, mock_storage_service, sample_document, sample_classification_result):
-        """Test tracking of routing decisions for monitoring."""
-        service = DocumentRoutingService(mock_queue_service, mock_storage_service)
-        
-        # Execute the method under test
-        result = service.route_document(sample_document, sample_classification_result)
-        
-        # Verify the result
-        assert result.is_success
-        
-        # Verify storage service was called to update metadata with routing information
-        mock_storage_service.update_document_metadata.assert_called_once()
-        call_args = mock_storage_service.update_document_metadata.call_args[0]
-        
-        # First argument should be document ID
-        assert call_args[0] == sample_document.id
-        
-        # Second argument should be metadata update with routing info
-        metadata_update = call_args[1]
-        assert 'routing_info' in metadata_update
-        assert 'timestamp' in metadata_update['routing_info']
-        assert metadata_update['routing_info']['ocr_processor'] == 'application_processor'
-        assert metadata_update['routing_info']['ocr_strategy'] == 'mixed_ocr'
-        assert metadata_update['routing_info']['needs_human_review'] is False
-        assert metadata_update['processing_status'] == 'ROUTING_COMPLETE'
+    # Verify routing result
+    assert routing_result['document_id'] == document_id
+    assert routing_result['document_type'] == DocumentType.BANK_STATEMENT
+    assert routing_result['ocr_processor'] == 'financial_ocr'
+    assert routing_result['classification_confidence'] == 0.65
+    assert routing_result['review_required'] is True  # Low confidence requires review
+    assert routing_result['processing_priority'] == 'low'
+    assert routing_result['content_type'] == 'typed'
+    
+    # Verify metrics were updated
+    assert routing_service.routing_metrics['total_routed'] == 1
+    assert routing_service.routing_metrics['low_confidence_routes'] == 1
+
+
+def test_route_document_very_low_confidence():
+    """Test routing a document with very low confidence classification."""
+    # Initialize service
+    routing_service = DocumentRoutingService()
+    
+    # Create test document and classification result
+    document_id = "test-doc-101112"
+    classification_result = ClassificationResult(
+        document_id=document_id,
+        document_type=DocumentType.IDENTITY_DOCUMENT,
+        confidence=ConfidenceScore(0.55),
+        requires_review=True,
+        prediction_time=time.time(),
+        feature_importance={}
+    )
+    document_metadata = {
+        'file_type': 'jpg',
+        'file_size': 512,
+        'page_count': 1,
+        'source': 'email'
+    }
+    
+    # Route document
+    with patch('time.time', return_value=1609459200.0):  # 2021-01-01 00:00:00 UTC
+        routing_result = routing_service.route_document(
+            document_id, classification_result, document_metadata
+        )
+    
+    # Verify routing result
+    assert routing_result['document_id'] == document_id
+    assert routing_result['document_type'] == DocumentType.IDENTITY_DOCUMENT
+    assert routing_result['ocr_processor'] == 'general_ocr'  # Very low confidence uses general OCR
+    assert routing_result['classification_confidence'] == 0.55
+    assert routing_result['review_required'] is True
+    assert routing_result['processing_priority'] == 'low'
+    assert routing_result['content_type'] == 'mixed'
+    
+    # Verify metrics were updated
+    assert routing_service.routing_metrics['total_routed'] == 1
+    assert routing_service.routing_metrics['fallback_routes'] == 1
+
+
+def test_route_document_with_error():
+    """Test routing a document with an error during processing."""
+    # Initialize service
+    routing_service = DocumentRoutingService()
+    
+    # Create test document and classification result (None to trigger error)
+    document_id = "test-doc-error"
+    classification_result = None  # This will cause an error
+    document_metadata = {
+        'file_type': 'pdf',
+        'file_size': 1024,
+        'page_count': 3,
+        'source': 'email'
+    }
+    
+    # Route document
+    with patch('time.time', return_value=1609459200.0):  # 2021-01-01 00:00:00 UTC
+        routing_result = routing_service.route_document(
+            document_id, classification_result, document_metadata
+        )
+    
+    # Verify fallback routing result
+    assert routing_result['document_id'] == document_id
+    assert routing_result['document_type'] == 'unknown'
+    assert routing_result['ocr_processor'] == 'general_ocr'
+    assert routing_result['classification_confidence'] == 0.0
+    assert routing_result['review_required'] is True
+    assert routing_result['processing_priority'] == 'low'
+    assert routing_result['content_type'] == 'mixed'
+    assert 'FALLBACK_ROUTING' in routing_result['special_instructions']
+    
+    # Verify error metrics were updated
+    assert routing_service.routing_metrics['routing_errors'] == 1
+
+
+# ===== Test OCR Processor Determination =====
+
+def test_determine_ocr_processor_high_confidence():
+    """Test determining OCR processor for high confidence classification."""
+    # Initialize service
+    routing_service = DocumentRoutingService()
+    
+    # Test with high confidence
+    document_type = DocumentType.APPLICATION
+    confidence_score = ConfidenceScore(0.95)
+    document_metadata = {}
+    
+    # Determine OCR processor
+    ocr_processor, review_required, processing_priority = routing_service._determine_ocr_processor(
+        document_type, confidence_score, document_metadata
+    )
+    
+    # Verify result
+    assert ocr_processor == 'form_ocr'
+    assert review_required is False
+    assert processing_priority == 'high'
+
+
+def test_determine_ocr_processor_medium_confidence():
+    """Test determining OCR processor for medium confidence classification."""
+    # Initialize service
+    routing_service = DocumentRoutingService()
+    
+    # Test with medium confidence
+    document_type = DocumentType.TAX_RETURN
+    confidence_score = ConfidenceScore(0.80)
+    document_metadata = {}
+    
+    # Determine OCR processor
+    ocr_processor, review_required, processing_priority = routing_service._determine_ocr_processor(
+        document_type, confidence_score, document_metadata
+    )
+    
+    # Verify result
+    assert ocr_processor == 'financial_ocr'
+    assert review_required is True
+    assert processing_priority == 'medium'
+
+
+def test_determine_ocr_processor_low_confidence():
+    """Test determining OCR processor for low confidence classification."""
+    # Initialize service
+    routing_service = DocumentRoutingService()
+    
+    # Test with low confidence
+    document_type = DocumentType.BANK_STATEMENT
+    confidence_score = ConfidenceScore(0.65)
+    document_metadata = {}
+    
+    # Determine OCR processor
+    ocr_processor, review_required, processing_priority = routing_service._determine_ocr_processor(
+        document_type, confidence_score, document_metadata
+    )
+    
+    # Verify result
+    assert ocr_processor == 'financial_ocr'
+    assert review_required is True
+    assert processing_priority == 'low'
+
+
+def test_determine_ocr_processor_very_low_confidence():
+    """Test determining OCR processor for very low confidence classification."""
+    # Initialize service
+    routing_service = DocumentRoutingService()
+    
+    # Test with very low confidence
+    document_type = DocumentType.IDENTITY_DOCUMENT
+    confidence_score = ConfidenceScore(0.55)
+    document_metadata = {}
+    
+    # Determine OCR processor
+    ocr_processor, review_required, processing_priority = routing_service._determine_ocr_processor(
+        document_type, confidence_score, document_metadata
+    )
+    
+    # Verify result
+    assert ocr_processor == 'general_ocr'  # Very low confidence uses general OCR
+    assert review_required is True
+    assert processing_priority == 'low'
+
+
+# ===== Test Content Type Determination =====
+
+def test_determine_content_type_from_metadata():
+    """Test determining content type from document metadata."""
+    # Initialize service
+    routing_service = DocumentRoutingService()
+    
+    # Test with content type in metadata
+    document_type = DocumentType.APPLICATION
+    document_metadata = {'content_type': 'handwritten'}
+    
+    # Determine content type
+    content_type = routing_service._determine_content_type(document_type, document_metadata)
+    
+    # Verify result
+    assert content_type == 'handwritten'
+
+
+def test_determine_content_type_from_document_type():
+    """Test determining content type from document type."""
+    # Initialize service
+    routing_service = DocumentRoutingService()
+    
+    # Test with no content type in metadata
+    document_type = DocumentType.TAX_RETURN
+    document_metadata = {}
+    
+    # Determine content type
+    content_type = routing_service._determine_content_type(document_type, document_metadata)
+    
+    # Verify result
+    assert content_type == 'typed'  # Tax returns are typically typed
+
+
+def test_determine_content_type_unknown_document_type():
+    """Test determining content type for unknown document type."""
+    # Initialize service
+    routing_service = DocumentRoutingService()
+    
+    # Test with unknown document type
+    document_type = 'unknown_type'
+    document_metadata = {}
+    
+    # Determine content type
+    content_type = routing_service._determine_content_type(document_type, document_metadata)
+    
+    # Verify result
+    assert content_type == 'mixed'  # Default for unknown types
+
+
+# ===== Test Routing Metadata Creation =====
+
+def test_create_routing_metadata():
+    """Test creating routing metadata for a document."""
+    # Initialize service
+    routing_service = DocumentRoutingService()
+    
+    # Test parameters
+    document_id = "test-doc-metadata"
+    document_type = DocumentType.APPLICATION
+    ocr_processor = 'form_ocr'
+    confidence_score = ConfidenceScore(0.95)
+    review_required = False
+    processing_priority = 'high'
+    content_type = 'mixed'
+    document_metadata = {
+        'file_type': 'pdf',
+        'file_size': 1024,
+        'page_count': 3,
+        'source': 'email'
+    }
+    
+    # Create routing metadata
+    with patch('time.time', return_value=1609459200.0):  # 2021-01-01 00:00:00 UTC
+        routing_metadata = routing_service._create_routing_metadata(
+            document_id, document_type, ocr_processor, confidence_score,
+            review_required, processing_priority, content_type, document_metadata
+        )
+    
+    # Verify routing metadata
+    assert routing_metadata['document_id'] == document_id
+    assert routing_metadata['document_type'] == document_type
+    assert routing_metadata['ocr_processor'] == ocr_processor
+    assert routing_metadata['classification_confidence'] == 0.95
+    assert routing_metadata['review_required'] is False
+    assert routing_metadata['processing_priority'] == 'high'
+    assert routing_metadata['content_type'] == 'mixed'
+    assert routing_metadata['file_type'] == 'pdf'
+    assert routing_metadata['file_size'] == 1024
+    assert routing_metadata['page_count'] == 3
+    assert routing_metadata['source'] == 'email'
+    assert routing_metadata['routing_timestamp'] == 1609459200
+    assert routing_metadata['routing_version'] == '1.0'
+    assert 'routing_id' in routing_metadata
+    assert 'special_instructions' in routing_metadata
+
+
+def test_create_fallback_routing_metadata():
+    """Test creating fallback routing metadata for error cases."""
+    # Initialize service
+    routing_service = DocumentRoutingService()
+    
+    # Test parameters
+    document_id = "test-doc-fallback"
+    document_metadata = {
+        'file_type': 'pdf',
+        'file_size': 1024,
+        'page_count': 3,
+        'source': 'email'
+    }
+    
+    # Create fallback routing metadata
+    with patch('time.time', return_value=1609459200.0):  # 2021-01-01 00:00:00 UTC
+        fallback_metadata = routing_service._create_fallback_routing_metadata(
+            document_id, document_metadata
+        )
+    
+    # Verify fallback routing metadata
+    assert fallback_metadata['document_id'] == document_id
+    assert fallback_metadata['document_type'] == 'unknown'
+    assert fallback_metadata['ocr_processor'] == 'general_ocr'
+    assert fallback_metadata['classification_confidence'] == 0.0
+    assert fallback_metadata['review_required'] is True
+    assert fallback_metadata['processing_priority'] == 'low'
+    assert fallback_metadata['content_type'] == 'mixed'
+    assert fallback_metadata['file_type'] == 'pdf'
+    assert fallback_metadata['file_size'] == 1024
+    assert fallback_metadata['page_count'] == 3
+    assert fallback_metadata['source'] == 'email'
+    assert fallback_metadata['routing_timestamp'] == 1609459200
+    assert fallback_metadata['routing_version'] == '1.0'
+    assert 'routing_id' in fallback_metadata
+    assert 'FALLBACK_ROUTING' in fallback_metadata['special_instructions']
+    assert 'Manual review required' in fallback_metadata['special_instructions']
+
+
+# ===== Test Special Instructions Generation =====
+
+def test_generate_special_instructions_low_confidence():
+    """Test generating special instructions for low confidence classification."""
+    # Initialize service
+    routing_service = DocumentRoutingService()
+    
+    # Test with low confidence
+    document_type = DocumentType.APPLICATION
+    confidence_score = ConfidenceScore(0.55)
+    content_type = 'mixed'
+    
+    # Generate special instructions
+    instructions = routing_service._generate_special_instructions(
+        document_type, confidence_score, content_type
+    )
+    
+    # Verify instructions
+    assert 'LOW_CONFIDENCE' in instructions
+    assert 'MIXED_CONTENT' in instructions
+    assert 'FORM_EXTRACTION' in instructions
+
+
+def test_generate_special_instructions_handwritten():
+    """Test generating special instructions for handwritten documents."""
+    # Initialize service
+    routing_service = DocumentRoutingService()
+    
+    # Test with handwritten content
+    document_type = DocumentType.APPLICATION
+    confidence_score = ConfidenceScore(0.85)
+    content_type = 'handwritten'
+    
+    # Generate special instructions
+    instructions = routing_service._generate_special_instructions(
+        document_type, confidence_score, content_type
+    )
+    
+    # Verify instructions
+    assert 'HANDWRITTEN' in instructions
+    assert 'FORM_EXTRACTION' in instructions
+
+
+def test_generate_special_instructions_tax_return():
+    """Test generating special instructions for tax return documents."""
+    # Initialize service
+    routing_service = DocumentRoutingService()
+    
+    # Test with tax return document
+    document_type = DocumentType.TAX_RETURN
+    confidence_score = ConfidenceScore(0.90)
+    content_type = 'typed'
+    
+    # Generate special instructions
+    instructions = routing_service._generate_special_instructions(
+        document_type, confidence_score, content_type
+    )
+    
+    # Verify instructions
+    assert 'TABLE_EXTRACTION' in instructions
+
+
+def test_generate_special_instructions_identity_document():
+    """Test generating special instructions for identity documents."""
+    # Initialize service
+    routing_service = DocumentRoutingService()
+    
+    # Test with identity document
+    document_type = DocumentType.IDENTITY_DOCUMENT
+    confidence_score = ConfidenceScore(0.95)
+    content_type = 'mixed'
+    
+    # Generate special instructions
+    instructions = routing_service._generate_special_instructions(
+        document_type, confidence_score, content_type
+    )
+    
+    # Verify instructions
+    assert 'ID_VERIFICATION' in instructions
+    assert 'MIXED_CONTENT' in instructions
+
+
+# ===== Test Routing Metrics =====
+
+def test_update_routing_metrics_high_confidence():
+    """Test updating routing metrics for high confidence classification."""
+    # Initialize service
+    routing_service = DocumentRoutingService()
+    
+    # Test with high confidence
+    confidence_score = ConfidenceScore(0.95)
+    start_time = time.time() - 0.1  # 100ms ago
+    
+    # Update metrics
+    routing_service._update_routing_metrics(confidence_score, start_time)
+    
+    # Verify metrics
+    assert routing_service.routing_metrics['total_routed'] == 1
+    assert routing_service.routing_metrics['high_confidence_routes'] == 1
+    assert routing_service.routing_metrics['medium_confidence_routes'] == 0
+    assert routing_service.routing_metrics['low_confidence_routes'] == 0
+    assert routing_service.routing_metrics['fallback_routes'] == 0
+    assert routing_service.routing_metrics['total_routing_time_ms'] > 0
+    assert routing_service.routing_metrics['avg_routing_time_ms'] > 0
+
+
+def test_update_routing_metrics_medium_confidence():
+    """Test updating routing metrics for medium confidence classification."""
+    # Initialize service
+    routing_service = DocumentRoutingService()
+    
+    # Test with medium confidence
+    confidence_score = ConfidenceScore(0.80)
+    start_time = time.time() - 0.1  # 100ms ago
+    
+    # Update metrics
+    routing_service._update_routing_metrics(confidence_score, start_time)
+    
+    # Verify metrics
+    assert routing_service.routing_metrics['total_routed'] == 1
+    assert routing_service.routing_metrics['high_confidence_routes'] == 0
+    assert routing_service.routing_metrics['medium_confidence_routes'] == 1
+    assert routing_service.routing_metrics['low_confidence_routes'] == 0
+    assert routing_service.routing_metrics['fallback_routes'] == 0
+
+
+def test_update_routing_metrics_low_confidence():
+    """Test updating routing metrics for low confidence classification."""
+    # Initialize service
+    routing_service = DocumentRoutingService()
+    
+    # Test with low confidence
+    confidence_score = ConfidenceScore(0.65)
+    start_time = time.time() - 0.1  # 100ms ago
+    
+    # Update metrics
+    routing_service._update_routing_metrics(confidence_score, start_time)
+    
+    # Verify metrics
+    assert routing_service.routing_metrics['total_routed'] == 1
+    assert routing_service.routing_metrics['high_confidence_routes'] == 0
+    assert routing_service.routing_metrics['medium_confidence_routes'] == 0
+    assert routing_service.routing_metrics['low_confidence_routes'] == 1
+    assert routing_service.routing_metrics['fallback_routes'] == 0
+
+
+def test_update_routing_metrics_very_low_confidence():
+    """Test updating routing metrics for very low confidence classification."""
+    # Initialize service
+    routing_service = DocumentRoutingService()
+    
+    # Test with very low confidence
+    confidence_score = ConfidenceScore(0.55)
+    start_time = time.time() - 0.1  # 100ms ago
+    
+    # Update metrics
+    routing_service._update_routing_metrics(confidence_score, start_time)
+    
+    # Verify metrics
+    assert routing_service.routing_metrics['total_routed'] == 1
+    assert routing_service.routing_metrics['high_confidence_routes'] == 0
+    assert routing_service.routing_metrics['medium_confidence_routes'] == 0
+    assert routing_service.routing_metrics['low_confidence_routes'] == 0
+    assert routing_service.routing_metrics['fallback_routes'] == 1
+
+
+def test_get_routing_metrics():
+    """Test getting routing metrics."""
+    # Initialize service
+    routing_service = DocumentRoutingService()
+    
+    # Update metrics with some test data
+    routing_service._update_routing_metrics(ConfidenceScore(0.95), time.time() - 0.1)
+    routing_service._update_routing_metrics(ConfidenceScore(0.80), time.time() - 0.1)
+    routing_service._update_routing_metrics(ConfidenceScore(0.65), time.time() - 0.1)
+    routing_service._update_routing_metrics(ConfidenceScore(0.55), time.time() - 0.1)
+    
+    # Get metrics
+    metrics = routing_service.get_routing_metrics()
+    
+    # Verify metrics
+    assert metrics['total_routed'] == 4
+    assert metrics['high_confidence_routes'] == 1
+    assert metrics['medium_confidence_routes'] == 1
+    assert metrics['low_confidence_routes'] == 1
+    assert metrics['fallback_routes'] == 1
+    assert metrics['routing_errors'] == 0
+    assert metrics['total_routing_time_ms'] > 0
+    assert metrics['avg_routing_time_ms'] > 0
+
+
+# ===== Test Utility Methods =====
+
+def test_get_ocr_processor_for_document_type():
+    """Test getting OCR processor for a document type."""
+    # Initialize service
+    routing_service = DocumentRoutingService()
+    
+    # Test with various document types
+    assert routing_service.get_ocr_processor_for_document_type(DocumentType.APPLICATION) == 'form_ocr'
+    assert routing_service.get_ocr_processor_for_document_type(DocumentType.TAX_RETURN) == 'financial_ocr'
+    assert routing_service.get_ocr_processor_for_document_type(DocumentType.BANK_STATEMENT) == 'financial_ocr'
+    assert routing_service.get_ocr_processor_for_document_type(DocumentType.IDENTITY_DOCUMENT) == 'id_ocr'
+    assert routing_service.get_ocr_processor_for_document_type('unknown_type') == 'general_ocr'
+
+
+def test_get_content_type_for_document_type():
+    """Test getting content type for a document type."""
+    # Initialize service
+    routing_service = DocumentRoutingService()
+    
+    # Test with various document types
+    assert routing_service.get_content_type_for_document_type(DocumentType.APPLICATION) == 'mixed'
+    assert routing_service.get_content_type_for_document_type(DocumentType.TAX_RETURN) == 'typed'
+    assert routing_service.get_content_type_for_document_type(DocumentType.BANK_STATEMENT) == 'typed'
+    assert routing_service.get_content_type_for_document_type(DocumentType.IDENTITY_DOCUMENT) == 'mixed'
+    assert routing_service.get_content_type_for_document_type('unknown_type') == 'mixed'
+
+
+# ===== Test Invalid Input Handling =====
+
+def test_route_document_missing_parameters():
+    """Test routing a document with missing parameters."""
+    # Initialize service
+    routing_service = DocumentRoutingService()
+    
+    # Test with missing parameters
+    document_id = "test-doc-missing"
+    classification_result = None
+    document_metadata = None
+    
+    # Route document
+    routing_result = routing_service.route_document(
+        document_id, classification_result, document_metadata
+    )
+    
+    # Verify fallback routing result
+    assert routing_result['document_id'] == document_id
+    assert routing_result['document_type'] == 'unknown'
+    assert routing_result['ocr_processor'] == 'general_ocr'
+    assert routing_result['classification_confidence'] == 0.0
+    assert routing_result['review_required'] is True
+    assert routing_result['processing_priority'] == 'low'
+    assert routing_result['content_type'] == 'mixed'
+    assert 'FALLBACK_ROUTING' in routing_result['special_instructions']
+    
+    # Verify error metrics were updated
+    assert routing_service.routing_metrics['routing_errors'] == 1
+
+
+def test_route_document_invalid_document_type():
+    """Test routing a document with an invalid document type."""
+    # Initialize service
+    routing_service = DocumentRoutingService()
+    
+    # Create test document and classification result with invalid document type
+    document_id = "test-doc-invalid"
+    classification_result = ClassificationResult(
+        document_id=document_id,
+        document_type="invalid_type",  # Invalid document type
+        confidence=ConfidenceScore(0.95),
+        requires_review=False,
+        prediction_time=time.time(),
+        feature_importance={}
+    )
+    document_metadata = {
+        'file_type': 'pdf',
+        'file_size': 1024,
+        'page_count': 3,
+        'source': 'email'
+    }
+    
+    # Mock validation_utils.is_valid_document_type to return False
+    with patch('document_service.utils.validation_utils.is_valid_document_type', return_value=False):
+        # Route document
+        routing_result = routing_service.route_document(
+            document_id, classification_result, document_metadata
+        )
+    
+    # Verify routing result uses fallback for invalid document type
+    assert routing_result['document_id'] == document_id
+    assert routing_result['document_type'] == 'other'
+    assert routing_result['ocr_processor'] == 'general_ocr'
+    assert routing_result['classification_confidence'] == 0.0  # Reset to 0 for fallback
+    assert routing_result['review_required'] is True
+    assert routing_result['processing_priority'] == 'low'
