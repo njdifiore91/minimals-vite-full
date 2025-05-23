@@ -1,1532 +1,486 @@
 {
-  "version": "1.0",
-  "last_updated": "2025-05-22",
-  "document_count": 30,
+  "version": "1.0.0",
+  "description": "Metadata for sample business documents used in MCA application processing tests",
+  "classification_confidence_threshold": 0.75,
   "documents": [
     {
-      "document_id": "bus_license_state_high_001",
-      "file_path": "bus_license_state_high_001.pdf",
-      "document_type": "business_license",
-      "document_subtype": "state",
-      "quality": "high",
+      "id": "BL-001",
+      "filename": "business_license_ny_acme_corp.pdf",
+      "document_type": "BUSINESS_LICENSE",
+      "format": "PDF",
+      "quality": "HIGH",
+      "pages": 1,
       "expected_classification": {
-        "type": "business_license",
-        "subtype": "state",
+        "type": "BUSINESS_LICENSE",
         "confidence": 0.98
       },
-      "expected_fields": {
-        "license_number": {
-          "value": "BL-12345-2023",
-          "confidence": 0.99,
-          "bounding_box": [120, 450, 250, 475]
+      "expected_extraction": {
+        "legal_name": "ACME CORPORATION",
+        "dba_name": "ACME CORP",
+        "ein": "12-3456789",
+        "address": {
+          "street": "123 Main Street",
+          "city": "New York",
+          "state": "NY",
+          "zip": "10001"
         },
-        "business_name": {
-          "value": "Acme Business Solutions LLC",
-          "confidence": 0.97,
-          "bounding_box": [120, 300, 450, 325]
-        },
-        "business_type": {
-          "value": "Limited Liability Company",
-          "confidence": 0.96,
-          "bounding_box": [120, 350, 400, 375]
-        },
-        "issue_date": {
-          "value": "2023-01-15",
-          "confidence": 0.95,
-          "bounding_box": [120, 500, 220, 525]
-        },
-        "expiration_date": {
-          "value": "2024-01-14",
-          "confidence": 0.94,
-          "bounding_box": [350, 500, 450, 525]
-        },
-        "business_address": {
-          "value": "123 Commerce St, Suite 400, New York, NY 10001",
-          "confidence": 0.93,
-          "bounding_box": [120, 400, 550, 425]
-        },
-        "jurisdiction": {
-          "value": "New York",
-          "confidence": 0.99,
-          "bounding_box": [120, 550, 220, 575]
-        }
+        "license_number": "BL-NY-789456",
+        "issue_date": "2023-01-15",
+        "expiration_date": "2025-01-14",
+        "business_type": "Corporation",
+        "industry": "Retail"
       }
     },
     {
-      "document_id": "bus_license_local_medium_002",
-      "file_path": "bus_license_local_medium_002.jpg",
-      "document_type": "business_license",
-      "document_subtype": "local",
-      "quality": "medium",
+      "id": "BL-002",
+      "filename": "business_license_ca_sunset_bakery.pdf",
+      "document_type": "BUSINESS_LICENSE",
+      "format": "PDF",
+      "quality": "MEDIUM",
+      "pages": 1,
       "expected_classification": {
-        "type": "business_license",
-        "subtype": "local",
-        "confidence": 0.92
+        "type": "BUSINESS_LICENSE",
+        "confidence": 0.95
       },
-      "expected_fields": {
-        "license_number": {
-          "value": "LIC-78901-2023",
-          "confidence": 0.91,
-          "bounding_box": [150, 200, 250, 225]
+      "expected_extraction": {
+        "legal_name": "SUNSET BAKERY LLC",
+        "dba_name": "SUNSET BAKERY",
+        "ein": "98-7654321",
+        "address": {
+          "street": "456 Ocean Avenue",
+          "city": "San Francisco",
+          "state": "CA",
+          "zip": "94122"
         },
-        "business_name": {
-          "value": "Metro Retail Partners Inc",
-          "confidence": 0.93,
-          "bounding_box": [150, 150, 450, 175]
-        },
-        "business_type": {
-          "value": "Corporation",
-          "confidence": 0.90,
-          "bounding_box": [150, 250, 300, 275]
-        },
-        "issue_date": {
-          "value": "2023-03-10",
-          "confidence": 0.89,
-          "bounding_box": [150, 300, 250, 325]
-        },
-        "expiration_date": {
-          "value": "2024-03-09",
-          "confidence": 0.88,
-          "bounding_box": [350, 300, 450, 325]
-        },
-        "business_address": {
-          "value": "456 Main St, Chicago, IL 60601",
-          "confidence": 0.87,
-          "bounding_box": [150, 350, 500, 375]
-        },
-        "jurisdiction": {
-          "value": "City of Chicago",
-          "confidence": 0.94,
-          "bounding_box": [150, 400, 300, 425]
-        }
+        "license_number": "BL-CA-123789",
+        "issue_date": "2022-06-10",
+        "expiration_date": "2024-06-09",
+        "business_type": "LLC",
+        "industry": "Food Service"
       }
     },
     {
-      "document_id": "incorp_cert_corp_high_003",
-      "file_path": "incorp_cert_corp_high_003.pdf",
-      "document_type": "incorporation_certificate",
-      "document_subtype": "corporation",
-      "quality": "high",
+      "id": "TR-001",
+      "filename": "tax_return_2023_acme_corp.pdf",
+      "document_type": "TAX_RETURN",
+      "format": "PDF",
+      "quality": "HIGH",
+      "pages": 5,
       "expected_classification": {
-        "type": "incorporation_certificate",
-        "subtype": "corporation",
+        "type": "TAX_RETURN",
+        "confidence": 0.99
+      },
+      "expected_extraction": {
+        "legal_name": "ACME CORPORATION",
+        "ein": "12-3456789",
+        "tax_year": "2023",
+        "filing_type": "1120",
+        "total_revenue": 1250000.00,
+        "total_expenses": 950000.00,
+        "net_income": 300000.00,
+        "tax_paid": 63000.00,
+        "filing_date": "2024-03-15"
+      }
+    },
+    {
+      "id": "TR-002",
+      "filename": "tax_return_2023_sunset_bakery.pdf",
+      "document_type": "TAX_RETURN",
+      "format": "PDF",
+      "quality": "MEDIUM",
+      "pages": 3,
+      "expected_classification": {
+        "type": "TAX_RETURN",
         "confidence": 0.97
       },
-      "expected_fields": {
-        "company_name": {
-          "value": "Global Innovations Corporation",
-          "confidence": 0.99,
-          "bounding_box": [200, 150, 600, 175]
-        },
-        "incorporation_date": {
-          "value": "2022-05-18",
-          "confidence": 0.98,
-          "bounding_box": [200, 250, 350, 275]
-        },
-        "entity_type": {
-          "value": "C Corporation",
-          "confidence": 0.97,
-          "bounding_box": [200, 300, 350, 325]
-        },
-        "state_jurisdiction": {
-          "value": "Delaware",
-          "confidence": 0.99,
-          "bounding_box": [200, 350, 300, 375]
-        },
-        "registered_agent": {
-          "value": "Corporate Services Inc",
-          "confidence": 0.96,
-          "bounding_box": [200, 400, 450, 425]
-        },
-        "filing_number": {
-          "value": "COR-987654",
-          "confidence": 0.98,
-          "bounding_box": [200, 450, 350, 475]
-        },
-        "authorized_shares": {
-          "value": "10,000,000",
-          "confidence": 0.95,
-          "bounding_box": [200, 500, 350, 525]
-        }
+      "expected_extraction": {
+        "legal_name": "SUNSET BAKERY LLC",
+        "ein": "98-7654321",
+        "tax_year": "2023",
+        "filing_type": "1065",
+        "total_revenue": 425000.00,
+        "total_expenses": 375000.00,
+        "net_income": 50000.00,
+        "filing_date": "2024-03-10"
       }
     },
     {
-      "document_id": "incorp_cert_llc_low_004",
-      "file_path": "incorp_cert_llc_low_004.jpg",
-      "document_type": "incorporation_certificate",
-      "document_subtype": "llc",
-      "quality": "low",
+      "id": "BS-001",
+      "filename": "bank_statement_acme_corp_jan2024.pdf",
+      "document_type": "BANK_STATEMENT",
+      "format": "PDF",
+      "quality": "HIGH",
+      "pages": 2,
       "expected_classification": {
-        "type": "incorporation_certificate",
-        "subtype": "llc",
+        "type": "BANK_STATEMENT",
+        "confidence": 0.98
+      },
+      "expected_extraction": {
+        "legal_name": "ACME CORPORATION",
+        "account_number": "XXXX7890",
+        "bank_name": "First National Bank",
+        "statement_period": "01/01/2024 - 01/31/2024",
+        "opening_balance": 125678.45,
+        "closing_balance": 142356.78,
+        "total_deposits": 95000.00,
+        "total_withdrawals": 78321.67,
+        "average_daily_balance": 133456.23
+      }
+    },
+    {
+      "id": "BS-002",
+      "filename": "bank_statement_sunset_bakery_jan2024.pdf",
+      "document_type": "BANK_STATEMENT",
+      "format": "PDF",
+      "quality": "MEDIUM",
+      "pages": 2,
+      "expected_classification": {
+        "type": "BANK_STATEMENT",
+        "confidence": 0.96
+      },
+      "expected_extraction": {
+        "legal_name": "SUNSET BAKERY LLC",
+        "account_number": "XXXX4567",
+        "bank_name": "Pacific Credit Union",
+        "statement_period": "01/01/2024 - 01/31/2024",
+        "opening_balance": 45678.90,
+        "closing_balance": 52345.67,
+        "total_deposits": 35000.00,
+        "total_withdrawals": 28333.23,
+        "average_daily_balance": 48765.45
+      }
+    },
+    {
+      "id": "INV-001",
+      "filename": "invoice_acme_corp_12345.pdf",
+      "document_type": "INVOICE",
+      "format": "PDF",
+      "quality": "HIGH",
+      "pages": 1,
+      "expected_classification": {
+        "type": "INVOICE",
+        "confidence": 0.97
+      },
+      "expected_extraction": {
+        "legal_name": "ACME CORPORATION",
+        "invoice_number": "INV-12345",
+        "invoice_date": "2024-02-15",
+        "due_date": "2024-03-15",
+        "total_amount": 12500.00,
+        "tax_amount": 1000.00,
+        "customer_name": "XYZ Industries",
+        "payment_terms": "Net 30"
+      }
+    },
+    {
+      "id": "INV-002",
+      "filename": "invoice_sunset_bakery_5678.pdf",
+      "document_type": "INVOICE",
+      "format": "PDF",
+      "quality": "LOW",
+      "pages": 1,
+      "expected_classification": {
+        "type": "INVOICE",
         "confidence": 0.85
       },
-      "expected_fields": {
-        "company_name": {
-          "value": "Coastal Properties LLC",
-          "confidence": 0.87,
-          "bounding_box": [150, 100, 450, 125]
-        },
-        "incorporation_date": {
-          "value": "2021-11-05",
-          "confidence": 0.82,
-          "bounding_box": [150, 200, 300, 225]
-        },
-        "entity_type": {
-          "value": "Limited Liability Company",
-          "confidence": 0.84,
-          "bounding_box": [150, 250, 450, 275]
-        },
-        "state_jurisdiction": {
-          "value": "Florida",
-          "confidence": 0.89,
-          "bounding_box": [150, 300, 250, 325]
-        },
-        "registered_agent": {
-          "value": "Legal Registrations LLC",
-          "confidence": 0.81,
-          "bounding_box": [150, 350, 400, 375]
-        },
-        "filing_number": {
-          "value": "LLC-123456",
-          "confidence": 0.83,
-          "bounding_box": [150, 400, 300, 425]
-        }
+      "expected_extraction": {
+        "legal_name": "SUNSET BAKERY LLC",
+        "invoice_number": "INV-5678",
+        "invoice_date": "2024-02-20",
+        "due_date": "2024-03-20",
+        "total_amount": 2500.00,
+        "tax_amount": 200.00,
+        "customer_name": "Local Cafe Chain",
+        "payment_terms": "Net 30"
       }
     },
     {
-      "document_id": "tax_return_federal_high_005",
-      "file_path": "tax_return_federal_high_005.pdf",
-      "document_type": "tax_return",
-      "document_subtype": "federal",
-      "quality": "high",
+      "id": "COI-001",
+      "filename": "certificate_of_incorporation_acme_corp.pdf",
+      "document_type": "BUSINESS_LICENSE",
+      "format": "PDF",
+      "quality": "MEDIUM",
+      "pages": 1,
       "expected_classification": {
-        "type": "tax_return",
-        "subtype": "federal",
-        "confidence": 0.98
-      },
-      "expected_fields": {
-        "ein": {
-          "value": "12-3456789",
-          "confidence": 0.99,
-          "bounding_box": [300, 150, 400, 175]
-        },
-        "tax_year": {
-          "value": "2023",
-          "confidence": 0.99,
-          "bounding_box": [500, 150, 550, 175]
-        },
-        "business_name": {
-          "value": "Tech Solutions Inc",
-          "confidence": 0.98,
-          "bounding_box": [300, 200, 550, 225]
-        },
-        "business_address": {
-          "value": "789 Technology Pkwy, San Jose, CA 95110",
-          "confidence": 0.97,
-          "bounding_box": [300, 250, 650, 275]
-        },
-        "business_income": {
-          "value": "2,450,000.00",
-          "confidence": 0.96,
-          "bounding_box": [500, 350, 650, 375]
-        },
-        "total_deductions": {
-          "value": "1,875,000.00",
-          "confidence": 0.95,
-          "bounding_box": [500, 400, 650, 425]
-        },
-        "taxable_income": {
-          "value": "575,000.00",
-          "confidence": 0.97,
-          "bounding_box": [500, 450, 650, 475]
-        },
-        "tax_liability": {
-          "value": "120,750.00",
-          "confidence": 0.96,
-          "bounding_box": [500, 500, 650, 525]
-        },
-        "form_type": {
-          "value": "1120",
-          "confidence": 0.99,
-          "bounding_box": [100, 100, 150, 125]
-        }
-      }
-    },
-    {
-      "document_id": "tax_return_state_medium_006",
-      "file_path": "tax_return_state_medium_006.pdf",
-      "document_type": "tax_return",
-      "document_subtype": "state",
-      "quality": "medium",
-      "expected_classification": {
-        "type": "tax_return",
-        "subtype": "state",
-        "confidence": 0.91
-      },
-      "expected_fields": {
-        "ein": {
-          "value": "98-7654321",
-          "confidence": 0.92,
-          "bounding_box": [250, 150, 350, 175]
-        },
-        "tax_year": {
-          "value": "2023",
-          "confidence": 0.94,
-          "bounding_box": [450, 150, 500, 175]
-        },
-        "business_name": {
-          "value": "Midwest Manufacturing LLC",
-          "confidence": 0.93,
-          "bounding_box": [250, 200, 500, 225]
-        },
-        "business_address": {
-          "value": "567 Industrial Blvd, Detroit, MI 48201",
-          "confidence": 0.90,
-          "bounding_box": [250, 250, 600, 275]
-        },
-        "state_taxable_income": {
-          "value": "1,250,000.00",
-          "confidence": 0.89,
-          "bounding_box": [450, 350, 600, 375]
-        },
-        "state_tax_liability": {
-          "value": "61,250.00",
-          "confidence": 0.88,
-          "bounding_box": [450, 400, 600, 425]
-        },
-        "state_jurisdiction": {
-          "value": "Michigan",
-          "confidence": 0.95,
-          "bounding_box": [100, 100, 200, 125]
-        },
-        "form_type": {
-          "value": "MI-1120",
-          "confidence": 0.94,
-          "bounding_box": [100, 150, 200, 175]
-        }
-      }
-    },
-    {
-      "document_id": "financial_stmt_balance_high_007",
-      "file_path": "financial_stmt_balance_high_007.pdf",
-      "document_type": "financial_statement",
-      "document_subtype": "balance_sheet",
-      "quality": "high",
-      "expected_classification": {
-        "type": "financial_statement",
-        "subtype": "balance_sheet",
-        "confidence": 0.97
-      },
-      "expected_fields": {
-        "business_name": {
-          "value": "Precision Engineering Co",
-          "confidence": 0.98,
-          "bounding_box": [200, 100, 500, 125]
-        },
-        "statement_date": {
-          "value": "2023-12-31",
-          "confidence": 0.99,
-          "bounding_box": [200, 150, 350, 175]
-        },
-        "total_assets": {
-          "value": "3,750,000.00",
-          "confidence": 0.97,
-          "bounding_box": [500, 400, 650, 425]
-        },
-        "total_liabilities": {
-          "value": "1,850,000.00",
-          "confidence": 0.96,
-          "bounding_box": [500, 600, 650, 625]
-        },
-        "total_equity": {
-          "value": "1,900,000.00",
-          "confidence": 0.97,
-          "bounding_box": [500, 700, 650, 725]
-        },
-        "current_assets": {
-          "value": "1,250,000.00",
-          "confidence": 0.95,
-          "bounding_box": [500, 200, 650, 225]
-        },
-        "current_liabilities": {
-          "value": "750,000.00",
-          "confidence": 0.94,
-          "bounding_box": [500, 500, 650, 525]
-        }
-      }
-    },
-    {
-      "document_id": "financial_stmt_income_medium_008",
-      "file_path": "financial_stmt_income_medium_008.pdf",
-      "document_type": "financial_statement",
-      "document_subtype": "income_statement",
-      "quality": "medium",
-      "expected_classification": {
-        "type": "financial_statement",
-        "subtype": "income_statement",
+        "type": "BUSINESS_LICENSE",
         "confidence": 0.92
       },
-      "expected_fields": {
-        "business_name": {
-          "value": "Urban Hospitality Group",
-          "confidence": 0.93,
-          "bounding_box": [150, 100, 450, 125]
-        },
-        "statement_period": {
-          "value": "Jan 1, 2023 - Dec 31, 2023",
-          "confidence": 0.94,
-          "bounding_box": [150, 150, 450, 175]
-        },
-        "total_revenue": {
-          "value": "4,250,000.00",
-          "confidence": 0.91,
-          "bounding_box": [450, 200, 600, 225]
-        },
-        "cost_of_goods_sold": {
-          "value": "1,750,000.00",
-          "confidence": 0.90,
-          "bounding_box": [450, 250, 600, 275]
-        },
-        "gross_profit": {
-          "value": "2,500,000.00",
-          "confidence": 0.92,
-          "bounding_box": [450, 300, 600, 325]
-        },
-        "operating_expenses": {
-          "value": "1,850,000.00",
-          "confidence": 0.89,
-          "bounding_box": [450, 350, 600, 375]
-        },
-        "net_income": {
-          "value": "650,000.00",
-          "confidence": 0.91,
-          "bounding_box": [450, 450, 600, 475]
+      "expected_extraction": {
+        "legal_name": "ACME CORPORATION",
+        "ein": "12-3456789",
+        "incorporation_date": "2010-05-12",
+        "state_of_incorporation": "NY",
+        "business_type": "Corporation",
+        "registered_agent": "John Smith",
+        "address": {
+          "street": "123 Main Street",
+          "city": "New York",
+          "state": "NY",
+          "zip": "10001"
         }
       }
     },
     {
-      "document_id": "financial_stmt_cashflow_damaged_009",
-      "file_path": "financial_stmt_cashflow_damaged_009.pdf",
-      "document_type": "financial_statement",
-      "document_subtype": "cash_flow",
-      "quality": "damaged",
+      "id": "COI-002",
+      "filename": "certificate_of_incorporation_sunset_bakery.pdf",
+      "document_type": "BUSINESS_LICENSE",
+      "format": "PDF",
+      "quality": "LOW",
+      "pages": 1,
       "expected_classification": {
-        "type": "financial_statement",
-        "subtype": "cash_flow",
+        "type": "BUSINESS_LICENSE",
+        "confidence": 0.78
+      },
+      "expected_extraction": {
+        "legal_name": "SUNSET BAKERY LLC",
+        "ein": "98-7654321",
+        "incorporation_date": "2018-09-23",
+        "state_of_incorporation": "CA",
+        "business_type": "LLC",
+        "registered_agent": "Maria Rodriguez",
+        "address": {
+          "street": "456 Ocean Avenue",
+          "city": "San Francisco",
+          "state": "CA",
+          "zip": "94122"
+        }
+      }
+    },
+    {
+      "id": "POS-001",
+      "filename": "proof_of_sales_acme_corp_q1_2024.pdf",
+      "document_type": "MISCELLANEOUS",
+      "format": "PDF",
+      "quality": "HIGH",
+      "pages": 3,
+      "expected_classification": {
+        "type": "MISCELLANEOUS",
+        "confidence": 0.85
+      },
+      "expected_extraction": {
+        "legal_name": "ACME CORPORATION",
+        "period": "Q1 2024",
+        "total_sales": 325000.00,
+        "credit_card_sales": 275000.00,
+        "cash_sales": 50000.00,
+        "average_monthly_sales": 108333.33,
+        "highest_sales_day": "2024-03-15",
+        "highest_sales_amount": 12500.00
+      }
+    },
+    {
+      "id": "POS-002",
+      "filename": "proof_of_sales_sunset_bakery_q1_2024.pdf",
+      "document_type": "MISCELLANEOUS",
+      "format": "PDF",
+      "quality": "MEDIUM",
+      "pages": 2,
+      "expected_classification": {
+        "type": "MISCELLANEOUS",
         "confidence": 0.82
       },
-      "expected_fields": {
-        "business_name": {
-          "value": "Coastal Imports LLC",
-          "confidence": 0.84,
-          "bounding_box": [200, 100, 450, 125]
-        },
-        "statement_period": {
-          "value": "Jan 1, 2023 - Dec 31, 2023",
-          "confidence": 0.83,
-          "bounding_box": [200, 150, 500, 175]
-        },
-        "operating_cash_flow": {
-          "value": "850,000.00",
-          "confidence": 0.80,
-          "bounding_box": [450, 250, 600, 275]
-        },
-        "investing_cash_flow": {
-          "value": "-350,000.00",
-          "confidence": 0.78,
-          "bounding_box": [450, 350, 600, 375]
-        },
-        "financing_cash_flow": {
-          "value": "-150,000.00",
-          "confidence": 0.79,
-          "bounding_box": [450, 450, 600, 475]
-        },
-        "net_cash_change": {
-          "value": "350,000.00",
-          "confidence": 0.81,
-          "bounding_box": [450, 550, 600, 575]
-        },
-        "beginning_cash_balance": {
-          "value": "275,000.00",
-          "confidence": 0.77,
-          "bounding_box": [450, 600, 600, 625]
-        },
-        "ending_cash_balance": {
-          "value": "625,000.00",
-          "confidence": 0.79,
-          "bounding_box": [450, 650, 600, 675]
-        }
+      "expected_extraction": {
+        "legal_name": "SUNSET BAKERY LLC",
+        "period": "Q1 2024",
+        "total_sales": 112500.00,
+        "credit_card_sales": 95000.00,
+        "cash_sales": 17500.00,
+        "average_monthly_sales": 37500.00,
+        "highest_sales_day": "2024-02-14",
+        "highest_sales_amount": 3500.00
       }
     },
     {
-      "document_id": "bank_stmt_checking_high_010",
-      "file_path": "bank_stmt_checking_high_010.pdf",
-      "document_type": "bank_statement",
-      "document_subtype": "checking",
-      "quality": "high",
+      "id": "BL-003",
+      "filename": "business_license_tx_tech_solutions.pdf",
+      "document_type": "BUSINESS_LICENSE",
+      "format": "PDF",
+      "quality": "LOW",
+      "pages": 1,
       "expected_classification": {
-        "type": "bank_statement",
-        "subtype": "checking",
-        "confidence": 0.98
+        "type": "BUSINESS_LICENSE",
+        "confidence": 0.73
       },
-      "expected_fields": {
-        "business_name": {
-          "value": "Summit Construction Inc",
-          "confidence": 0.99,
-          "bounding_box": [100, 150, 400, 175]
+      "expected_extraction": {
+        "legal_name": "TECH SOLUTIONS INC",
+        "dba_name": "TECH SOLUTIONS",
+        "ein": "45-6789012",
+        "address": {
+          "street": "789 Technology Parkway",
+          "city": "Austin",
+          "state": "TX",
+          "zip": "78701"
         },
-        "account_number": {
-          "value": "XXXX-XX-1234",
-          "confidence": 0.98,
-          "bounding_box": [500, 150, 650, 175]
-        },
-        "statement_period": {
-          "value": "Apr 1, 2023 - Apr 30, 2023",
-          "confidence": 0.97,
-          "bounding_box": [100, 200, 400, 225]
-        },
-        "beginning_balance": {
-          "value": "125,750.45",
-          "confidence": 0.98,
-          "bounding_box": [500, 250, 650, 275]
-        },
-        "ending_balance": {
-          "value": "143,250.78",
-          "confidence": 0.98,
-          "bounding_box": [500, 600, 650, 625]
-        },
-        "total_deposits": {
-          "value": "87,500.00",
-          "confidence": 0.97,
-          "bounding_box": [500, 300, 650, 325]
-        },
-        "total_withdrawals": {
-          "value": "69,999.67",
-          "confidence": 0.96,
-          "bounding_box": [500, 350, 650, 375]
-        },
-        "bank_name": {
-          "value": "First National Bank",
-          "confidence": 0.99,
-          "bounding_box": [100, 100, 350, 125]
-        }
+        "license_number": "BL-TX-456123",
+        "issue_date": "2023-05-20",
+        "expiration_date": "2025-05-19",
+        "business_type": "Corporation",
+        "industry": "Technology"
+      },
+      "review_flags": {
+        "requires_human_review": true,
+        "reason": "Low classification confidence (below 0.75 threshold)",
+        "flagged_fields": ["license_number", "issue_date"]
       }
     },
     {
-      "document_id": "bank_stmt_savings_medium_011",
-      "file_path": "bank_stmt_savings_medium_011.pdf",
-      "document_type": "bank_statement",
-      "document_subtype": "savings",
-      "quality": "medium",
+      "id": "TR-003",
+      "filename": "tax_return_2023_tech_solutions_handwritten.pdf",
+      "document_type": "TAX_RETURN",
+      "format": "PDF",
+      "quality": "LOW",
+      "pages": 4,
+      "handwritten": true,
       "expected_classification": {
-        "type": "bank_statement",
-        "subtype": "savings",
-        "confidence": 0.93
+        "type": "TAX_RETURN",
+        "confidence": 0.72
       },
-      "expected_fields": {
-        "business_name": {
-          "value": "Evergreen Landscaping LLC",
-          "confidence": 0.94,
-          "bounding_box": [150, 150, 450, 175]
-        },
-        "account_number": {
-          "value": "XXXX-XX-5678",
-          "confidence": 0.92,
-          "bounding_box": [500, 150, 650, 175]
-        },
-        "statement_period": {
-          "value": "May 1, 2023 - May 31, 2023",
-          "confidence": 0.91,
-          "bounding_box": [150, 200, 450, 225]
-        },
-        "beginning_balance": {
-          "value": "75,250.33",
-          "confidence": 0.93,
-          "bounding_box": [500, 250, 650, 275]
-        },
-        "ending_balance": {
-          "value": "82,750.45",
-          "confidence": 0.92,
-          "bounding_box": [500, 500, 650, 525]
-        },
-        "total_deposits": {
-          "value": "15,000.00",
-          "confidence": 0.90,
-          "bounding_box": [500, 300, 650, 325]
-        },
-        "total_withdrawals": {
-          "value": "7,499.88",
-          "confidence": 0.89,
-          "bounding_box": [500, 350, 650, 375]
-        },
-        "interest_earned": {
-          "value": "125.12",
-          "confidence": 0.91,
-          "bounding_box": [500, 400, 650, 425]
-        },
-        "bank_name": {
-          "value": "Community Trust Bank",
-          "confidence": 0.95,
-          "bounding_box": [150, 100, 400, 125]
-        }
+      "expected_extraction": {
+        "legal_name": "TECH SOLUTIONS INC",
+        "ein": "45-6789012",
+        "tax_year": "2023",
+        "filing_type": "1120",
+        "total_revenue": 875000.00,
+        "total_expenses": 725000.00,
+        "net_income": 150000.00,
+        "tax_paid": 31500.00,
+        "filing_date": "2024-03-12"
+      },
+      "review_flags": {
+        "requires_human_review": true,
+        "reason": "Low classification confidence (below 0.75 threshold) and handwritten content",
+        "flagged_fields": ["total_revenue", "total_expenses", "net_income", "tax_paid"]
       }
     },
     {
-      "document_id": "utility_bill_electric_high_012",
-      "file_path": "utility_bill_electric_high_012.pdf",
-      "document_type": "utility_bill",
-      "document_subtype": "electric",
-      "quality": "high",
+      "id": "BS-003",
+      "filename": "bank_statement_tech_solutions_jan2024_poor_quality.pdf",
+      "document_type": "BANK_STATEMENT",
+      "format": "PDF",
+      "quality": "LOW",
+      "pages": 2,
       "expected_classification": {
-        "type": "utility_bill",
-        "subtype": "electric",
-        "confidence": 0.96
+        "type": "BANK_STATEMENT",
+        "confidence": 0.71
       },
-      "expected_fields": {
-        "business_name": {
-          "value": "Downtown Bakery & Cafe",
-          "confidence": 0.97,
-          "bounding_box": [200, 200, 500, 225]
-        },
-        "service_address": {
-          "value": "345 Main St, Portland, OR 97201",
-          "confidence": 0.96,
-          "bounding_box": [200, 250, 550, 275]
-        },
-        "account_number": {
-          "value": "E-987654321",
-          "confidence": 0.98,
-          "bounding_box": [500, 200, 650, 225]
-        },
-        "billing_period": {
-          "value": "Jun 1, 2023 - Jun 30, 2023",
-          "confidence": 0.97,
-          "bounding_box": [200, 300, 500, 325]
-        },
-        "amount_due": {
-          "value": "875.45",
-          "confidence": 0.98,
-          "bounding_box": [500, 400, 600, 425]
-        },
-        "due_date": {
-          "value": "2023-07-15",
-          "confidence": 0.97,
-          "bounding_box": [500, 450, 600, 475]
-        },
-        "utility_provider": {
-          "value": "Pacific Power & Light",
-          "confidence": 0.99,
-          "bounding_box": [200, 100, 500, 125]
-        }
-      }
-    },
-    {
-      "document_id": "utility_bill_water_low_013",
-      "file_path": "utility_bill_water_low_013.jpg",
-      "document_type": "utility_bill",
-      "document_subtype": "water",
-      "quality": "low",
-      "expected_classification": {
-        "type": "utility_bill",
-        "subtype": "water",
-        "confidence": 0.84
+      "expected_extraction": {
+        "legal_name": "TECH SOLUTIONS INC",
+        "account_number": "XXXX1234",
+        "bank_name": "Texas Capital Bank",
+        "statement_period": "01/01/2024 - 01/31/2024",
+        "opening_balance": 87654.32,
+        "closing_balance": 95432.10,
+        "total_deposits": 65000.00,
+        "total_withdrawals": 57222.22,
+        "average_daily_balance": 91543.21
       },
-      "expected_fields": {
-        "business_name": {
-          "value": "Sunshine Car Wash LLC",
-          "confidence": 0.85,
-          "bounding_box": [150, 150, 450, 175]
-        },
-        "service_address": {
-          "value": "789 Industrial Way, Phoenix, AZ 85001",
-          "confidence": 0.83,
-          "bounding_box": [150, 200, 550, 225]
-        },
-        "account_number": {
-          "value": "W-123456",
-          "confidence": 0.86,
-          "bounding_box": [450, 150, 550, 175]
-        },
-        "billing_period": {
-          "value": "Jul 1, 2023 - Jul 31, 2023",
-          "confidence": 0.82,
-          "bounding_box": [150, 250, 450, 275]
-        },
-        "amount_due": {
-          "value": "1,250.75",
-          "confidence": 0.84,
-          "bounding_box": [450, 350, 550, 375]
-        },
-        "due_date": {
-          "value": "2023-08-15",
-          "confidence": 0.81,
-          "bounding_box": [450, 400, 550, 425]
-        },
-        "utility_provider": {
-          "value": "Phoenix Water Services",
-          "confidence": 0.87,
-          "bounding_box": [150, 100, 450, 125]
-        }
-      }
-    },
-    {
-      "document_id": "insurance_cert_liability_high_014",
-      "file_path": "insurance_cert_liability_high_014.pdf",
-      "document_type": "insurance_certificate",
-      "document_subtype": "liability",
-      "quality": "high",
-      "expected_classification": {
-        "type": "insurance_certificate",
-        "subtype": "liability",
-        "confidence": 0.97
-      },
-      "expected_fields": {
-        "business_name": {
-          "value": "Elite Contractors Inc",
-          "confidence": 0.98,
-          "bounding_box": [200, 200, 500, 225]
-        },
-        "policy_number": {
-          "value": "LIA-987654321",
-          "confidence": 0.99,
-          "bounding_box": [500, 200, 650, 225]
-        },
-        "effective_date": {
-          "value": "2023-01-01",
-          "confidence": 0.98,
-          "bounding_box": [200, 300, 300, 325]
-        },
-        "expiration_date": {
-          "value": "2024-01-01",
-          "confidence": 0.98,
-          "bounding_box": [400, 300, 500, 325]
-        },
-        "coverage_amount": {
-          "value": "2,000,000.00",
-          "confidence": 0.97,
-          "bounding_box": [500, 350, 650, 375]
-        },
-        "insurance_provider": {
-          "value": "National Business Insurance",
-          "confidence": 0.99,
-          "bounding_box": [200, 100, 500, 125]
-        },
-        "business_address": {
-          "value": "567 Construction Ave, Denver, CO 80202",
-          "confidence": 0.96,
-          "bounding_box": [200, 250, 600, 275]
-        }
-      }
-    },
-    {
-      "document_id": "insurance_cert_workers_medium_015",
-      "file_path": "insurance_cert_workers_medium_015.pdf",
-      "document_type": "insurance_certificate",
-      "document_subtype": "workers_comp",
-      "quality": "medium",
-      "expected_classification": {
-        "type": "insurance_certificate",
-        "subtype": "workers_comp",
-        "confidence": 0.92
-      },
-      "expected_fields": {
-        "business_name": {
-          "value": "Harvest Farms Cooperative",
-          "confidence": 0.93,
-          "bounding_box": [150, 150, 450, 175]
-        },
-        "policy_number": {
-          "value": "WC-456789",
-          "confidence": 0.94,
-          "bounding_box": [450, 150, 550, 175]
-        },
-        "effective_date": {
-          "value": "2023-03-15",
-          "confidence": 0.91,
-          "bounding_box": [150, 250, 250, 275]
-        },
-        "expiration_date": {
-          "value": "2024-03-15",
-          "confidence": 0.90,
-          "bounding_box": [350, 250, 450, 275]
-        },
-        "coverage_amount": {
-          "value": "1,000,000.00",
-          "confidence": 0.89,
-          "bounding_box": [450, 300, 600, 325]
-        },
-        "insurance_provider": {
-          "value": "Farmers Insurance Group",
-          "confidence": 0.95,
-          "bounding_box": [150, 100, 450, 125]
-        },
-        "business_address": {
-          "value": "1234 Rural Route, Madison, WI 53703",
-          "confidence": 0.88,
-          "bounding_box": [150, 200, 550, 225]
-        }
-      }
-    },
-    {
-      "document_id": "merchant_stmt_visa_high_016",
-      "file_path": "merchant_stmt_visa_high_016.pdf",
-      "document_type": "merchant_statement",
-      "document_subtype": "visa_mc",
-      "quality": "high",
-      "expected_classification": {
-        "type": "merchant_statement",
-        "subtype": "visa_mc",
-        "confidence": 0.98
-      },
-      "expected_fields": {
-        "business_name": {
-          "value": "Urban Boutique Clothing",
-          "confidence": 0.99,
-          "bounding_box": [200, 150, 500, 175]
-        },
-        "merchant_id": {
-          "value": "MID-987654321",
-          "confidence": 0.98,
-          "bounding_box": [500, 150, 650, 175]
-        },
-        "statement_period": {
-          "value": "Aug 1, 2023 - Aug 31, 2023",
-          "confidence": 0.97,
-          "bounding_box": [200, 200, 500, 225]
-        },
-        "processing_volume": {
-          "value": "125,750.45",
-          "confidence": 0.98,
-          "bounding_box": [500, 250, 650, 275]
-        },
-        "transaction_count": {
-          "value": "1,245",
-          "confidence": 0.99,
-          "bounding_box": [500, 300, 600, 325]
-        },
-        "processing_fees": {
-          "value": "3,772.51",
-          "confidence": 0.97,
-          "bounding_box": [500, 350, 600, 375]
-        },
-        "net_deposit": {
-          "value": "121,977.94",
-          "confidence": 0.98,
-          "bounding_box": [500, 400, 600, 425]
-        },
-        "processor_name": {
-          "value": "Global Payments Inc",
-          "confidence": 0.99,
-          "bounding_box": [200, 100, 450, 125]
-        }
-      }
-    },
-    {
-      "document_id": "merchant_stmt_amex_low_017",
-      "file_path": "merchant_stmt_amex_low_017.jpg",
-      "document_type": "merchant_statement",
-      "document_subtype": "amex",
-      "quality": "low",
-      "expected_classification": {
-        "type": "merchant_statement",
-        "subtype": "amex",
-        "confidence": 0.85
-      },
-      "expected_fields": {
-        "business_name": {
-          "value": "Luxury Auto Detailing",
-          "confidence": 0.86,
-          "bounding_box": [150, 150, 450, 175]
-        },
-        "merchant_id": {
-          "value": "AMEX-123456",
-          "confidence": 0.87,
-          "bounding_box": [450, 150, 550, 175]
-        },
-        "statement_period": {
-          "value": "Sep 1, 2023 - Sep 30, 2023",
-          "confidence": 0.84,
-          "bounding_box": [150, 200, 450, 225]
-        },
-        "processing_volume": {
-          "value": "45,250.75",
-          "confidence": 0.83,
-          "bounding_box": [450, 250, 550, 275]
-        },
-        "transaction_count": {
-          "value": "187",
-          "confidence": 0.88,
-          "bounding_box": [450, 300, 500, 325]
-        },
-        "processing_fees": {
-          "value": "1,583.78",
-          "confidence": 0.82,
-          "bounding_box": [450, 350, 550, 375]
-        },
-        "net_deposit": {
-          "value": "43,666.97",
-          "confidence": 0.84,
-          "bounding_box": [450, 400, 550, 425]
-        },
-        "processor_name": {
-          "value": "American Express",
-          "confidence": 0.89,
-          "bounding_box": [150, 100, 350, 125]
-        }
-      }
-    },
-    {
-      "document_id": "articles_org_llc_high_018",
-      "file_path": "articles_org_llc_high_018.pdf",
-      "document_type": "articles_of_organization",
-      "document_subtype": "llc",
-      "quality": "high",
-      "expected_classification": {
-        "type": "articles_of_organization",
-        "subtype": "llc",
-        "confidence": 0.97
-      },
-      "expected_fields": {
-        "company_name": {
-          "value": "Innovative Solutions LLC",
-          "confidence": 0.98,
-          "bounding_box": [200, 150, 500, 175]
-        },
-        "formation_date": {
-          "value": "2023-02-15",
-          "confidence": 0.97,
-          "bounding_box": [200, 250, 350, 275]
-        },
-        "registered_agent": {
-          "value": "Legal Services Corporation",
-          "confidence": 0.96,
-          "bounding_box": [200, 350, 500, 375]
-        },
-        "principal_address": {
-          "value": "789 Technology Drive, Austin, TX 78701",
-          "confidence": 0.95,
-          "bounding_box": [200, 300, 600, 325]
-        },
-        "member_names": {
-          "value": "John Smith, Sarah Johnson",
-          "confidence": 0.94,
-          "bounding_box": [200, 400, 500, 425]
-        },
-        "filing_number": {
-          "value": "LLC-987654",
-          "confidence": 0.98,
-          "bounding_box": [500, 150, 650, 175]
-        },
-        "state_jurisdiction": {
-          "value": "Texas",
-          "confidence": 0.99,
-          "bounding_box": [200, 200, 300, 225]
-        }
-      }
-    },
-    {
-      "document_id": "articles_org_partnership_medium_019",
-      "file_path": "articles_org_partnership_medium_019.pdf",
-      "document_type": "articles_of_organization",
-      "document_subtype": "partnership",
-      "quality": "medium",
-      "expected_classification": {
-        "type": "articles_of_organization",
-        "subtype": "partnership",
-        "confidence": 0.91
-      },
-      "expected_fields": {
-        "partnership_name": {
-          "value": "Mountain View Consulting Partners",
-          "confidence": 0.92,
-          "bounding_box": [150, 150, 550, 175]
-        },
-        "formation_date": {
-          "value": "2023-04-10",
-          "confidence": 0.90,
-          "bounding_box": [150, 250, 300, 275]
-        },
-        "registered_agent": {
-          "value": "Business Filings Inc",
-          "confidence": 0.89,
-          "bounding_box": [150, 350, 400, 375]
-        },
-        "principal_address": {
-          "value": "456 Consulting Row, Boulder, CO 80302",
-          "confidence": 0.88,
-          "bounding_box": [150, 300, 550, 325]
-        },
-        "partner_names": {
-          "value": "Michael Brown, Jennifer Davis, Robert Wilson",
-          "confidence": 0.87,
-          "bounding_box": [150, 400, 600, 425]
-        },
-        "filing_number": {
-          "value": "PART-123456",
-          "confidence": 0.93,
-          "bounding_box": [450, 150, 600, 175]
-        },
-        "state_jurisdiction": {
-          "value": "Colorado",
-          "confidence": 0.94,
-          "bounding_box": [150, 200, 250, 225]
-        }
-      }
-    },
-    {
-      "document_id": "business_plan_startup_high_020",
-      "file_path": "business_plan_startup_high_020.pdf",
-      "document_type": "business_plan",
-      "document_subtype": "startup",
-      "quality": "high",
-      "expected_classification": {
-        "type": "business_plan",
-        "subtype": "startup",
-        "confidence": 0.96
-      },
-      "expected_fields": {
-        "business_name": {
-          "value": "GreenTech Innovations",
-          "confidence": 0.97,
-          "bounding_box": [200, 100, 500, 125]
-        },
-        "business_type": {
-          "value": "Sustainable Technology Solutions",
-          "confidence": 0.96,
-          "bounding_box": [200, 150, 600, 175]
-        },
-        "executive_summary": {
-          "value": "GreenTech Innovations develops sustainable technology solutions for commercial buildings, focusing on energy efficiency and carbon footprint reduction.",
-          "confidence": 0.95,
-          "bounding_box": [200, 200, 700, 250]
-        },
-        "funding_required": {
-          "value": "750,000.00",
-          "confidence": 0.97,
-          "bounding_box": [500, 300, 650, 325]
-        },
-        "projected_revenue_year1": {
-          "value": "1,250,000.00",
-          "confidence": 0.94,
-          "bounding_box": [500, 350, 650, 375]
-        },
-        "projected_revenue_year3": {
-          "value": "4,500,000.00",
-          "confidence": 0.93,
-          "bounding_box": [500, 400, 650, 425]
-        },
-        "founder_names": {
-          "value": "Emily Chen, David Rodriguez",
-          "confidence": 0.96,
-          "bounding_box": [200, 450, 500, 475]
-        }
-      }
-    },
-    {
-      "document_id": "business_plan_expansion_medium_021",
-      "file_path": "business_plan_expansion_medium_021.pdf",
-      "document_type": "business_plan",
-      "document_subtype": "expansion",
-      "quality": "medium",
-      "expected_classification": {
-        "type": "business_plan",
-        "subtype": "expansion",
-        "confidence": 0.92
-      },
-      "expected_fields": {
-        "business_name": {
-          "value": "Coastal Brewing Company",
-          "confidence": 0.93,
-          "bounding_box": [150, 100, 450, 125]
-        },
-        "business_type": {
-          "value": "Craft Brewery and Taproom",
-          "confidence": 0.91,
-          "bounding_box": [150, 150, 500, 175]
-        },
-        "expansion_summary": {
-          "value": "Coastal Brewing Company seeks to expand operations by opening a second location in the downtown district, increasing production capacity by 150%.",
-          "confidence": 0.90,
-          "bounding_box": [150, 200, 650, 250]
-        },
-        "funding_required": {
-          "value": "450,000.00",
-          "confidence": 0.92,
-          "bounding_box": [450, 300, 600, 325]
-        },
-        "current_annual_revenue": {
-          "value": "850,000.00",
-          "confidence": 0.89,
-          "bounding_box": [450, 350, 600, 375]
-        },
-        "projected_revenue_after_expansion": {
-          "value": "2,100,000.00",
-          "confidence": 0.88,
-          "bounding_box": [450, 400, 600, 425]
-        },
-        "owner_names": {
-          "value": "James Wilson, Rebecca Martinez",
-          "confidence": 0.91,
-          "bounding_box": [150, 450, 500, 475]
-        }
-      }
-    },
-    {
-      "document_id": "ein_confirmation_irs_high_022",
-      "file_path": "ein_confirmation_irs_high_022.pdf",
-      "document_type": "ein_confirmation",
-      "document_subtype": "irs",
-      "quality": "high",
-      "expected_classification": {
-        "type": "ein_confirmation",
-        "subtype": "irs",
-        "confidence": 0.98
-      },
-      "expected_fields": {
-        "business_name": {
-          "value": "Quantum Analytics LLC",
-          "confidence": 0.99,
-          "bounding_box": [200, 200, 500, 225]
-        },
-        "ein": {
-          "value": "12-3456789",
-          "confidence": 0.99,
-          "bounding_box": [500, 200, 600, 225]
-        },
-        "issue_date": {
-          "value": "2023-01-05",
-          "confidence": 0.98,
-          "bounding_box": [200, 300, 300, 325]
-        },
-        "business_address": {
-          "value": "789 Data Drive, Seattle, WA 98101",
-          "confidence": 0.97,
-          "bounding_box": [200, 250, 550, 275]
-        },
-        "business_type": {
-          "value": "Limited Liability Company",
-          "confidence": 0.98,
-          "bounding_box": [200, 350, 450, 375]
-        },
-        "issuing_authority": {
-          "value": "Internal Revenue Service",
-          "confidence": 0.99,
-          "bounding_box": [200, 100, 500, 125]
-        }
-      }
-    },
-    {
-      "document_id": "ein_confirmation_state_medium_023",
-      "file_path": "ein_confirmation_state_medium_023.pdf",
-      "document_type": "ein_confirmation",
-      "document_subtype": "state",
-      "quality": "medium",
-      "expected_classification": {
-        "type": "ein_confirmation",
-        "subtype": "state",
-        "confidence": 0.93
-      },
-      "expected_fields": {
-        "business_name": {
-          "value": "Sunrise Healthcare Services Inc",
-          "confidence": 0.94,
-          "bounding_box": [150, 150, 550, 175]
-        },
-        "state_tax_id": {
-          "value": "ST-987654321",
-          "confidence": 0.95,
-          "bounding_box": [450, 150, 600, 175]
-        },
-        "issue_date": {
-          "value": "2023-02-15",
-          "confidence": 0.92,
-          "bounding_box": [150, 250, 250, 275]
-        },
-        "business_address": {
-          "value": "456 Medical Parkway, Minneapolis, MN 55401",
-          "confidence": 0.91,
-          "bounding_box": [150, 200, 600, 225]
-        },
-        "business_type": {
-          "value": "Corporation",
-          "confidence": 0.93,
-          "bounding_box": [150, 300, 300, 325]
-        },
-        "issuing_authority": {
-          "value": "Minnesota Department of Revenue",
-          "confidence": 0.96,
-          "bounding_box": [150, 100, 550, 125]
-        }
-      }
-    },
-    {
-      "document_id": "lease_agreement_commercial_high_024",
-      "file_path": "lease_agreement_commercial_high_024.pdf",
-      "document_type": "lease_agreement",
-      "document_subtype": "commercial",
-      "quality": "high",
-      "expected_classification": {
-        "type": "lease_agreement",
-        "subtype": "commercial",
-        "confidence": 0.97
-      },
-      "expected_fields": {
-        "tenant_name": {
-          "value": "Artisan Furniture Design LLC",
-          "confidence": 0.98,
-          "bounding_box": [200, 200, 500, 225]
-        },
-        "landlord_name": {
-          "value": "Metropolitan Properties Inc",
-          "confidence": 0.97,
-          "bounding_box": [200, 250, 500, 275]
-        },
-        "property_address": {
-          "value": "123 Industrial Blvd, Suite 500, Atlanta, GA 30318",
-          "confidence": 0.96,
-          "bounding_box": [200, 300, 650, 325]
-        },
-        "lease_start_date": {
-          "value": "2023-03-01",
-          "confidence": 0.98,
-          "bounding_box": [200, 350, 300, 375]
-        },
-        "lease_end_date": {
-          "value": "2028-02-28",
-          "confidence": 0.98,
-          "bounding_box": [400, 350, 500, 375]
-        },
-        "monthly_rent": {
-          "value": "5,750.00",
-          "confidence": 0.97,
-          "bounding_box": [200, 400, 300, 425]
-        },
-        "security_deposit": {
-          "value": "11,500.00",
-          "confidence": 0.96,
-          "bounding_box": [400, 400, 500, 425]
-        },
-        "square_footage": {
-          "value": "3,500",
-          "confidence": 0.98,
-          "bounding_box": [200, 450, 300, 475]
-        }
-      }
-    },
-    {
-      "document_id": "lease_agreement_retail_damaged_025",
-      "file_path": "lease_agreement_retail_damaged_025.pdf",
-      "document_type": "lease_agreement",
-      "document_subtype": "retail",
-      "quality": "damaged",
-      "expected_classification": {
-        "type": "lease_agreement",
-        "subtype": "retail",
-        "confidence": 0.81
-      },
-      "expected_fields": {
-        "tenant_name": {
-          "value": "Urban Fashion Boutique Inc",
-          "confidence": 0.83,
-          "bounding_box": [150, 150, 450, 175]
-        },
-        "landlord_name": {
-          "value": "Westfield Mall Properties LLC",
-          "confidence": 0.82,
-          "bounding_box": [150, 200, 450, 225]
-        },
-        "property_address": {
-          "value": "789 Shopping Center Blvd, Unit 45, Miami, FL 33125",
-          "confidence": 0.80,
-          "bounding_box": [150, 250, 600, 275]
-        },
-        "lease_start_date": {
-          "value": "2023-06-01",
-          "confidence": 0.84,
-          "bounding_box": [150, 300, 250, 325]
-        },
-        "lease_end_date": {
-          "value": "2026-05-31",
-          "confidence": 0.83,
-          "bounding_box": [350, 300, 450, 325]
-        },
-        "monthly_rent": {
-          "value": "7,250.00",
-          "confidence": 0.79,
-          "bounding_box": [150, 350, 250, 375]
-        },
-        "security_deposit": {
-          "value": "14,500.00",
-          "confidence": 0.78,
-          "bounding_box": [350, 350, 450, 375]
-        },
-        "square_footage": {
-          "value": "1,800",
-          "confidence": 0.82,
-          "bounding_box": [150, 400, 250, 425]
-        }
-      }
-    },
-    {
-      "document_id": "franchise_agreement_high_026",
-      "file_path": "franchise_agreement_high_026.pdf",
-      "document_type": "franchise_agreement",
-      "document_subtype": "standard",
-      "quality": "high",
-      "expected_classification": {
-        "type": "franchise_agreement",
-        "subtype": "standard",
-        "confidence": 0.96
-      },
-      "expected_fields": {
-        "franchisee_name": {
-          "value": "Citywide Coffee Enterprises LLC",
-          "confidence": 0.97,
-          "bounding_box": [200, 200, 550, 225]
-        },
-        "franchisor_name": {
-          "value": "Global Coffee Brands Inc",
-          "confidence": 0.98,
-          "bounding_box": [200, 250, 500, 275]
-        },
-        "territory_address": {
-          "value": "456 Main Street, Boston, MA 02108",
-          "confidence": 0.96,
-          "bounding_box": [200, 300, 550, 325]
-        },
-        "agreement_date": {
-          "value": "2023-04-15",
-          "confidence": 0.97,
-          "bounding_box": [200, 350, 300, 375]
-        },
-        "term_years": {
-          "value": "10",
-          "confidence": 0.99,
-          "bounding_box": [200, 400, 250, 425]
-        },
-        "initial_franchise_fee": {
-          "value": "35,000.00",
-          "confidence": 0.97,
-          "bounding_box": [200, 450, 300, 475]
-        },
-        "royalty_percentage": {
-          "value": "6.5%",
-          "confidence": 0.98,
-          "bounding_box": [200, 500, 250, 525]
-        },
-        "marketing_fee_percentage": {
-          "value": "2.0%",
-          "confidence": 0.97,
-          "bounding_box": [200, 550, 250, 575]
-        }
-      }
-    },
-    {
-      "document_id": "franchise_agreement_medium_027",
-      "file_path": "franchise_agreement_medium_027.pdf",
-      "document_type": "franchise_agreement",
-      "document_subtype": "area_development",
-      "quality": "medium",
-      "expected_classification": {
-        "type": "franchise_agreement",
-        "subtype": "area_development",
-        "confidence": 0.91
-      },
-      "expected_fields": {
-        "franchisee_name": {
-          "value": "Southwest Restaurant Group LLC",
-          "confidence": 0.92,
-          "bounding_box": [150, 150, 550, 175]
-        },
-        "franchisor_name": {
-          "value": "Taco Express International Inc",
-          "confidence": 0.93,
-          "bounding_box": [150, 200, 550, 225]
-        },
-        "territory_description": {
-          "value": "Greater Phoenix Metropolitan Area",
-          "confidence": 0.90,
-          "bounding_box": [150, 250, 550, 275]
-        },
-        "agreement_date": {
-          "value": "2023-05-20",
-          "confidence": 0.92,
-          "bounding_box": [150, 300, 250, 325]
-        },
-        "development_schedule": {
-          "value": "5 units over 3 years",
-          "confidence": 0.89,
-          "bounding_box": [150, 350, 350, 375]
-        },
-        "initial_development_fee": {
-          "value": "125,000.00",
-          "confidence": 0.91,
-          "bounding_box": [150, 400, 250, 425]
-        },
-        "royalty_percentage": {
-          "value": "5.5%",
-          "confidence": 0.93,
-          "bounding_box": [150, 450, 200, 475]
-        },
-        "marketing_fee_percentage": {
-          "value": "2.5%",
-          "confidence": 0.92,
-          "bounding_box": [150, 500, 200, 525]
-        }
-      }
-    },
-    {
-      "document_id": "trademark_registration_high_028",
-      "file_path": "trademark_registration_high_028.pdf",
-      "document_type": "trademark_registration",
-      "document_subtype": "federal",
-      "quality": "high",
-      "expected_classification": {
-        "type": "trademark_registration",
-        "subtype": "federal",
-        "confidence": 0.97
-      },
-      "expected_fields": {
-        "trademark_name": {
-          "value": "InnovateTech",
-          "confidence": 0.98,
-          "bounding_box": [200, 200, 400, 225]
-        },
-        "registration_number": {
-          "value": "5,987,654",
-          "confidence": 0.99,
-          "bounding_box": [500, 200, 600, 225]
-        },
-        "registration_date": {
-          "value": "2023-01-10",
-          "confidence": 0.98,
-          "bounding_box": [200, 250, 300, 275]
-        },
-        "owner_name": {
-          "value": "Future Technologies Inc",
-          "confidence": 0.97,
-          "bounding_box": [200, 300, 500, 325]
-        },
-        "goods_services_description": {
-          "value": "Computer software for artificial intelligence applications",
-          "confidence": 0.96,
-          "bounding_box": [200, 350, 650, 375]
-        },
-        "filing_date": {
-          "value": "2022-05-15",
-          "confidence": 0.97,
-          "bounding_box": [200, 400, 300, 425]
-        },
-        "issuing_authority": {
-          "value": "United States Patent and Trademark Office",
-          "confidence": 0.99,
-          "bounding_box": [200, 100, 650, 125]
-        }
-      }
-    },
-    {
-      "document_id": "trademark_registration_medium_029",
-      "file_path": "trademark_registration_medium_029.pdf",
-      "document_type": "trademark_registration",
-      "document_subtype": "state",
-      "quality": "medium",
-      "expected_classification": {
-        "type": "trademark_registration",
-        "subtype": "state",
-        "confidence": 0.92
-      },
-      "expected_fields": {
-        "trademark_name": {
-          "value": "Mountain Fresh",
-          "confidence": 0.93,
-          "bounding_box": [150, 150, 350, 175]
-        },
-        "registration_number": {
-          "value": "CO-123456",
-          "confidence": 0.94,
-          "bounding_box": [450, 150, 550, 175]
-        },
-        "registration_date": {
-          "value": "2023-03-05",
-          "confidence": 0.91,
-          "bounding_box": [150, 200, 250, 225]
-        },
-        "owner_name": {
-          "value": "Alpine Beverages LLC",
-          "confidence": 0.92,
-          "bounding_box": [150, 250, 400, 275]
-        },
-        "goods_services_description": {
-          "value": "Bottled spring water and flavored water beverages",
-          "confidence": 0.90,
-          "bounding_box": [150, 300, 550, 325]
-        },
-        "filing_date": {
-          "value": "2022-11-10",
-          "confidence": 0.91,
-          "bounding_box": [150, 350, 250, 375]
-        },
-        "issuing_authority": {
-          "value": "Colorado Secretary of State",
-          "confidence": 0.95,
-          "bounding_box": [150, 100, 450, 125]
-        }
-      }
-    },
-    {
-      "document_id": "operating_agreement_llc_high_030",
-      "file_path": "operating_agreement_llc_high_030.pdf",
-      "document_type": "operating_agreement",
-      "document_subtype": "llc",
-      "quality": "high",
-      "expected_classification": {
-        "type": "operating_agreement",
-        "subtype": "llc",
-        "confidence": 0.97
-      },
-      "expected_fields": {
-        "company_name": {
-          "value": "Horizon Property Management LLC",
-          "confidence": 0.98,
-          "bounding_box": [200, 150, 550, 175]
-        },
-        "formation_date": {
-          "value": "2023-02-01",
-          "confidence": 0.97,
-          "bounding_box": [200, 200, 300, 225]
-        },
-        "state_jurisdiction": {
-          "value": "Nevada",
-          "confidence": 0.99,
-          "bounding_box": [400, 200, 500, 225]
-        },
-        "member_names": {
-          "value": "Thomas Anderson, Lisa Chen, Robert Johnson",
-          "confidence": 0.96,
-          "bounding_box": [200, 250, 650, 275]
-        },
-        "capital_contributions": {
-          "value": "Thomas Anderson: $150,000; Lisa Chen: $125,000; Robert Johnson: $125,000",
-          "confidence": 0.95,
-          "bounding_box": [200, 300, 700, 325]
-        },
-        "profit_distribution": {
-          "value": "Thomas Anderson: 40%; Lisa Chen: 30%; Robert Johnson: 30%",
-          "confidence": 0.96,
-          "bounding_box": [200, 350, 650, 375]
-        },
-        "management_type": {
-          "value": "Member-managed",
-          "confidence": 0.98,
-          "bounding_box": [200, 400, 350, 425]
-        },
-        "agreement_date": {
-          "value": "2023-01-25",
-          "confidence": 0.97,
-          "bounding_box": [200, 450, 300, 475]
-        }
+      "review_flags": {
+        "requires_human_review": true,
+        "reason": "Low classification confidence (below 0.75 threshold) and poor image quality",
+        "flagged_fields": ["total_deposits", "total_withdrawals", "average_daily_balance"]
       }
     }
-  ]
+  ],
+  "test_scenarios": [
+    {
+      "name": "High Quality Document Processing",
+      "description": "Tests the system's ability to process high-quality business documents with high accuracy",
+      "document_ids": ["BL-001", "TR-001", "BS-001", "INV-001"],
+      "expected_accuracy": 0.99
+    },
+    {
+      "name": "Medium Quality Document Processing",
+      "description": "Tests the system's ability to process medium-quality business documents with acceptable accuracy",
+      "document_ids": ["BL-002", "TR-002", "BS-002", "COI-001", "POS-002"],
+      "expected_accuracy": 0.95
+    },
+    {
+      "name": "Low Quality Document Processing",
+      "description": "Tests the system's ability to process low-quality business documents and flag them for review when necessary",
+      "document_ids": ["INV-002", "COI-002", "BL-003", "TR-003", "BS-003"],
+      "expected_accuracy": 0.85,
+      "expected_human_review_rate": 0.60
+    },
+    {
+      "name": "Mixed Document Batch Processing",
+      "description": "Tests the system's ability to process a mixed batch of business documents with varying quality",
+      "document_ids": ["BL-001", "TR-002", "BS-003", "INV-002", "COI-001", "POS-002"],
+      "expected_accuracy": 0.92,
+      "expected_human_review_rate": 0.20
+    }
+  ],
+  "field_validation_rules": {
+    "legal_name": {
+      "required": true,
+      "min_confidence": 0.90,
+      "validation_regex": "^[A-Z\\s\\.,&'\\-]+$"
+    },
+    "dba_name": {
+      "required": false,
+      "min_confidence": 0.85,
+      "validation_regex": "^[A-Z\\s\\.,&'\\-]+$"
+    },
+    "ein": {
+      "required": true,
+      "min_confidence": 0.95,
+      "validation_regex": "^\\d{2}-\\d{7}$"
+    },
+    "address": {
+      "required": true,
+      "min_confidence": 0.85,
+      "nested_fields": {
+        "street": {
+          "required": true,
+          "min_confidence": 0.85
+        },
+        "city": {
+          "required": true,
+          "min_confidence": 0.90
+        },
+        "state": {
+          "required": true,
+          "min_confidence": 0.95,
+          "validation_regex": "^[A-Z]{2}$"
+        },
+        "zip": {
+          "required": true,
+          "min_confidence": 0.90,
+          "validation_regex": "^\\d{5}(-\\d{4})?$"
+        }
+      }
+    },
+    "total_revenue": {
+      "required": true,
+      "min_confidence": 0.90,
+      "validation_type": "decimal"
+    },
+    "total_expenses": {
+      "required": true,
+      "min_confidence": 0.90,
+      "validation_type": "decimal"
+    },
+    "net_income": {
+      "required": true,
+      "min_confidence": 0.90,
+      "validation_type": "decimal"
+    },
+    "incorporation_date": {
+      "required": false,
+      "min_confidence": 0.85,
+      "validation_type": "date",
+      "validation_format": "YYYY-MM-DD"
+    },
+    "issue_date": {
+      "required": false,
+      "min_confidence": 0.85,
+      "validation_type": "date",
+      "validation_format": "YYYY-MM-DD"
+    },
+    "expiration_date": {
+      "required": false,
+      "min_confidence": 0.85,
+      "validation_type": "date",
+      "validation_format": "YYYY-MM-DD"
+    }
+  }
 }
