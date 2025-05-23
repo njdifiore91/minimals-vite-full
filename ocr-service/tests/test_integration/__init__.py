@@ -1,22 +1,27 @@
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+
 """
-OCR Service Integration Tests Package
+OCR Service Integration Test Package
 
-This package contains integration tests for the OCR Service, verifying that
-components work together correctly to extract data from documents with high accuracy.
+This package contains integration tests for the OCR Service of the Merchant Cash Advance (MCA)
+Application Processing System. It validates the interaction between different components of the
+OCR Service and its integration with external systems like RabbitMQ and S3-compatible storage.
 
-The integration tests in this package validate:
-- End-to-end OCR processing pipeline functionality
-- Integration between OCR models and services
-- RabbitMQ message queue integration
-- S3-compatible storage integration
-- Confidence scoring across the pipeline
-- API and service layer integration
+The integration tests verify that:
+- The OCR Service correctly processes documents from RabbitMQ queues
+- Extracted data is properly formatted and published to the appropriate queues
+- Documents are correctly stored and retrieved from S3-compatible storage
+- The service integrates properly with the Document Service for classification
+- The service maintains 99% data extraction accuracy in an integrated environment
+- Processing time meets the under 5 minutes requirement from receipt to completion
 
-These tests ensure that the OCR Service meets the requirements specified in the
-Merchant Cash Advance (MCA) Application Processing System technical specification,
-including 99% data extraction accuracy and processing applications in under 5 minutes.
+This package follows Python testing best practices and is designed to work with pytest.
+It makes the test directory a proper Python package, enabling proper imports between
+test modules and ensuring test discovery by pytest.
 """
 
+# Version information
 __version__ = '1.0.0'
-__author__ = 'Dollar Funding MCA Team'
+__author__ = 'Dollar Funding OCR Team'
+__description__ = 'Integration tests for the OCR Service'
