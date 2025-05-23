@@ -6,239 +6,313 @@
  * It enables the service to implement rate limiting, store temporary data, and manage webhook delivery state.
  */
 
-import Redis from 'ioredis';
-import { IRedisConfig } from '../types/config';
+import { Redis, RedisOptions, ClusterOptions } from 'ioredis';
+import * as fs from 'fs';
+import * as path from 'path';
 import { logger } from './logger';
-import config from './app';
+
+// Environment-specific configuration
+import { config } from './app';
 
 /**
- * Default TTL values in seconds
+ * Redis connection types
  */
-export const DEFAULT_TTL = {
+export enum RedisConnectionType {
+  STANDALONE = 'standalone',
+  CLUSTER = 'cluster',
+}
+
+/**
+ * Redis cache namespaces to organize keys
+ */
+export enum RedisCacheNamespace {
+  WEBHOOK_RATE_LIMIT = 'webhook:rate-limit',
+  WEBHOOK_DELIVERY = 'webhook:delivery',
+  APPLICATION_DATA = 'app:data',
+  USER_SESSION = 'user:session',
+}
+
+/**
+ * TTL settings in seconds
+ */
+export const REDIS_TTL = {
   // 15 minutes for application data
   APPLICATION_DATA: 15 * 60,
-  // 24 hours for sessions
-  SESSION: 24 * 60 * 60,
-  // 1 hour for rate limiting
-  RATE_LIMIT: 60 * 60,
-  // 30 minutes for webhook delivery state
-  WEBHOOK_STATE: 30 * 60,
+  // 24 hours for user sessions
+  USER_SESSION: 24 * 60 * 60,
+  // 1 hour for webhook delivery tracking
+  WEBHOOK_DELIVERY: 60 * 60,
+  // 1 minute for rate limiting
+  RATE_LIMIT: 60,
 };
 
 /**
- * Cache namespace prefixes to avoid key collisions
+ * Base Redis connection options
  */
-export const CACHE_NAMESPACES = {
-  WEBHOOK: 'webhook:',
-  RATE_LIMIT: 'rate-limit:',
-  SESSION: 'session:',
-  APPLICATION: 'app:',
-  NOTIFICATION: 'notification:',
-};
-
-/**
- * Redis configuration object
- */
-export const redisConfig: IRedisConfig = {
-  // Connection options
-  host: config.redis.host,
-  port: config.redis.port,
-  username: config.redis.username,
-  password: config.redis.password,
-  db: config.redis.db || 0,
-  
-  // Enable TLS if configured
+const baseRedisOptions: RedisOptions = {
+  // Enable TLS for all Redis connections
   tls: config.redis.tls ? {
-    // TLS configuration
-    rejectUnauthorized: true,
-    ca: config.redis.tlsCa ? [config.redis.tlsCa] : undefined,
+    // Load CA certificate if provided
+    ca: config.redis.tlsCa ? fs.readFileSync(config.redis.tlsCa) : undefined,
+    // Load client certificate if provided
+    cert: config.redis.tlsCert ? fs.readFileSync(config.redis.tlsCert) : undefined,
+    // Load client key if provided
+    key: config.redis.tlsKey ? fs.readFileSync(config.redis.tlsKey) : undefined,
+    // Reject unauthorized connections (self-signed certs not allowed in production)
+    rejectUnauthorized: config.env === 'production',
   } : undefined,
   
-  // Connection management
-  connectTimeout: 10000,
-  disconnectTimeout: 2000,
-  keepAlive: 10000,
-  noDelay: true,
+  // Authentication
+  username: config.redis.username,
+  password: config.redis.password,
   
-  // Retry strategy
-  retryStrategy: (times: number) => {
-    const delay = Math.min(times * 50, 2000);
-    logger.warn(`Redis connection attempt ${times} failed. Retrying in ${delay}ms`);
+  // Connection settings
+  connectTimeout: 15000, // 15 seconds
+  maxRetriesPerRequest: 5,
+  enableAutoPipelining: true,
+  autoResubscribe: true,
+  
+  // Reconnection strategy
+  retryStrategy(times) {
+    const delay = Math.min(100 + times * 200, 5000);
+    logger.info(`Redis connection retry attempt ${times} with delay ${delay}ms`);
     return delay;
   },
   
-  // Reconnect on error only for specific errors
-  reconnectOnError: (err: Error) => {
-    const targetErrors = ['READONLY', 'ETIMEDOUT', 'ECONNRESET', 'ECONNREFUSED'];
-    const shouldReconnect = targetErrors.some(errorType => 
-      err.message.includes(errorType)
-    );
-    
-    if (shouldReconnect) {
-      logger.warn(`Redis reconnecting due to error: ${err.message}`);
-    } else {
-      logger.error(`Redis error without reconnection: ${err.message}`);
+  // Error handling
+  reconnectOnError(err) {
+    const targetError = err.toString();
+    // Reconnect on connection errors but not on command errors
+    if (targetError.includes('READONLY') || 
+        targetError.includes('ETIMEDOUT') || 
+        targetError.includes('ECONNRESET') ||
+        targetError.includes('ECONNREFUSED')) {
+      logger.warn(`Redis reconnecting due to error: ${targetError}`);
+      return true; // Reconnect
     }
-    
-    return shouldReconnect;
+    return false; // Don't reconnect
   },
-  
-  // Enable offline queue for commands when disconnected
+};
+
+/**
+ * Cluster-specific options
+ */
+const clusterOptions: ClusterOptions = {
+  // Cluster connection settings
+  clusterRetryStrategy(times) {
+    const delay = Math.min(100 + times * 200, 5000);
+    logger.info(`Redis cluster connection retry attempt ${times} with delay ${delay}ms`);
+    return delay;
+  },
+  redisOptions: baseRedisOptions,
+  // Retry settings for various cluster scenarios
+  maxRedirections: 16,
+  retryDelayOnFailover: 200,
+  retryDelayOnClusterDown: 1000,
+  retryDelayOnTryAgain: 100,
+  slotsRefreshTimeout: 15000,
+  slotsRefreshInterval: 20000,
   enableOfflineQueue: true,
-  
-  // Enable ready check to ensure Redis is ready to accept commands
   enableReadyCheck: true,
-  
-  // Auto-pipelining for performance optimization
-  enableAutoPipelining: true,
-  
-  // Maximum number of retries per request
-  maxRetriesPerRequest: 3,
-  
-  // Cluster mode configuration (if enabled)
-  ...(config.redis.cluster ? {
-    redisOptions: {
-      // Inherit base options
-      password: config.redis.password,
-      tls: config.redis.tls ? {
-        rejectUnauthorized: true,
-        ca: config.redis.tlsCa ? [config.redis.tlsCa] : undefined,
-      } : undefined,
-    },
-    // Cluster-specific options
-    clusterRetryStrategy: (times: number) => {
-      const delay = Math.min(times * 100, 3000);
-      logger.warn(`Redis cluster connection attempt ${times} failed. Retrying in ${delay}ms`);
-      return delay;
-    },
-    // Read from all replicas for load balancing
-    scaleReads: 'all',
-    // Maximum number of redirections to follow for cluster operations
-    maxRedirections: 16,
-  } : {}),
+  scaleReads: 'slave', // Read from replicas when possible
 };
 
 /**
- * Creates and returns a Redis client instance
+ * Create Redis client based on configuration
  */
-export const createRedisClient = (): Redis => {
-  let client: Redis;
-
-  // Create cluster client if cluster mode is enabled
-  if (config.redis.cluster && Array.isArray(config.redis.nodes) && config.redis.nodes.length > 0) {
-    logger.info(`Initializing Redis cluster connection with ${config.redis.nodes.length} nodes`);
-    client = new Redis.Cluster(config.redis.nodes, redisConfig);
-  } else {
-    // Create standalone client
-    logger.info(`Initializing Redis standalone connection to ${config.redis.host}:${config.redis.port}`);
-    client = new Redis(redisConfig);
+export function createRedisClient(): Redis {
+  try {
+    // Determine if we're using cluster mode
+    if (config.redis.connectionType === RedisConnectionType.CLUSTER && config.redis.nodes) {
+      logger.info(`Creating Redis cluster connection to ${config.redis.nodes.length} nodes`);
+      return new Redis.Cluster(config.redis.nodes, clusterOptions);
+    } else {
+      // Standalone mode
+      logger.info(`Creating Redis standalone connection to ${config.redis.host}:${config.redis.port}`);
+      return new Redis({
+        ...baseRedisOptions,
+        host: config.redis.host,
+        port: config.redis.port,
+        db: config.redis.db || 0,
+      });
+    }
+  } catch (error) {
+    logger.error('Failed to create Redis client', { error });
+    throw error;
   }
+}
 
-  // Set up event handlers
-  client.on('connect', () => {
-    logger.info('Redis client connected');
-  });
-
-  client.on('ready', () => {
-    logger.info('Redis client ready');
-  });
-
-  client.on('error', (err) => {
-    logger.error(`Redis client error: ${err.message}`);
-  });
-
-  client.on('close', () => {
-    logger.warn('Redis client connection closed');
-  });
-
-  client.on('reconnecting', () => {
-    logger.info('Redis client reconnecting...');
-  });
-
-  client.on('end', () => {
-    logger.warn('Redis client connection ended');
-  });
-
-  return client;
-};
+// Create and export the Redis client instance
+let redisClient: Redis;
 
 /**
- * Redis client singleton instance
+ * Get the Redis client instance (creates it if it doesn't exist)
  */
-export const redisClient = createRedisClient();
+export function getRedisClient(): Redis {
+  if (!redisClient) {
+    redisClient = createRedisClient();
+    
+    // Set up event handlers
+    redisClient.on('error', (err) => {
+      logger.error('Redis client error', { error: err.message });
+    });
+    
+    redisClient.on('connect', () => {
+      logger.info('Redis client connected');
+    });
+    
+    redisClient.on('ready', () => {
+      logger.info('Redis client ready');
+    });
+    
+    redisClient.on('close', () => {
+      logger.info('Redis client connection closed');
+    });
+  }
+  
+  return redisClient;
+}
 
 /**
- * Helper function to build cache key with namespace
+ * Helper function to generate cache key with namespace
  */
-export const buildCacheKey = (namespace: string, key: string): string => {
-  return `${namespace}${key}`;
-};
+export function generateCacheKey(namespace: RedisCacheNamespace, key: string): string {
+  return `${namespace}:${key}`;
+}
 
 /**
- * Helper function to set a value in Redis with TTL
+ * Helper function to set a value with TTL
  */
-export const setWithTTL = async (
-  key: string, 
-  value: string | number | Buffer | object, 
-  ttlSeconds: number = DEFAULT_TTL.APPLICATION_DATA
-): Promise<'OK'> => {
-  const serializedValue = typeof value === 'object' ? JSON.stringify(value) : String(value);
-  return redisClient.set(key, serializedValue, 'EX', ttlSeconds);
-};
-
-/**
- * Helper function to get a value from Redis with automatic deserialization
- */
-export const getAndParse = async <T = any>(key: string): Promise<T | null> => {
-  const value = await redisClient.get(key);
-  if (!value) return null;
+export async function setCacheValue(
+  namespace: RedisCacheNamespace,
+  key: string,
+  value: string | object,
+  ttlSeconds?: number
+): Promise<void> {
+  const client = getRedisClient();
+  const cacheKey = generateCacheKey(namespace, key);
+  const stringValue = typeof value === 'string' ? value : JSON.stringify(value);
   
   try {
-    return JSON.parse(value) as T;
-  } catch (e) {
-    // If not JSON, return as is
-    return value as unknown as T;
+    if (ttlSeconds) {
+      await client.set(cacheKey, stringValue, 'EX', ttlSeconds);
+    } else {
+      // Use default TTL based on namespace
+      const defaultTtl = namespace === RedisCacheNamespace.USER_SESSION
+        ? REDIS_TTL.USER_SESSION
+        : REDIS_TTL.APPLICATION_DATA;
+      
+      await client.set(cacheKey, stringValue, 'EX', defaultTtl);
+    }
+  } catch (error) {
+    logger.error('Error setting cache value', { namespace, key, error });
+    throw error;
   }
-};
+}
 
 /**
- * Helper function for implementing rate limiting
+ * Helper function to get a cached value
  */
-export const incrementRateLimit = async (
-  key: string,
-  ttlSeconds: number = DEFAULT_TTL.RATE_LIMIT
-): Promise<number> => {
-  const rateLimitKey = buildCacheKey(CACHE_NAMESPACES.RATE_LIMIT, key);
+export async function getCacheValue<T = any>(
+  namespace: RedisCacheNamespace,
+  key: string
+): Promise<T | null> {
+  const client = getRedisClient();
+  const cacheKey = generateCacheKey(namespace, key);
   
-  // Use multi to ensure atomic operations
-  const multi = redisClient.multi();
-  multi.incr(rateLimitKey);
-  multi.expire(rateLimitKey, ttlSeconds);
-  
-  const results = await multi.exec();
-  // Return the incremented value (first command result)
-  return results?.[0]?.[1] as number || 1;
-};
+  try {
+    const value = await client.get(cacheKey);
+    
+    if (!value) {
+      return null;
+    }
+    
+    try {
+      return JSON.parse(value) as T;
+    } catch {
+      // If not JSON, return as is
+      return value as unknown as T;
+    }
+  } catch (error) {
+    logger.error('Error getting cache value', { namespace, key, error });
+    return null;
+  }
+}
 
 /**
- * Helper function to check if a rate limit has been exceeded
+ * Helper function to delete a cached value
  */
-export const checkRateLimit = async (
+export async function deleteCacheValue(
+  namespace: RedisCacheNamespace,
+  key: string
+): Promise<boolean> {
+  const client = getRedisClient();
+  const cacheKey = generateCacheKey(namespace, key);
+  
+  try {
+    const result = await client.del(cacheKey);
+    return result > 0;
+  } catch (error) {
+    logger.error('Error deleting cache value', { namespace, key, error });
+    return false;
+  }
+}
+
+/**
+ * Helper function to implement rate limiting
+ * Returns true if the rate limit is exceeded
+ */
+export async function checkRateLimit(
   key: string,
-  limit: number
-): Promise<boolean> => {
-  const rateLimitKey = buildCacheKey(CACHE_NAMESPACES.RATE_LIMIT, key);
-  const count = await redisClient.get(rateLimitKey);
-  return count !== null && parseInt(count, 10) >= limit;
-};
+  limit: number,
+  windowSeconds: number
+): Promise<boolean> {
+  const client = getRedisClient();
+  const cacheKey = generateCacheKey(RedisCacheNamespace.WEBHOOK_RATE_LIMIT, key);
+  
+  try {
+    // Increment the counter
+    const count = await client.incr(cacheKey);
+    
+    // Set expiry on first request
+    if (count === 1) {
+      await client.expire(cacheKey, windowSeconds);
+    }
+    
+    // Check if rate limit exceeded
+    return count > limit;
+  } catch (error) {
+    logger.error('Error checking rate limit', { key, error });
+    // In case of error, allow the request to proceed
+    return false;
+  }
+}
+
+/**
+ * Close Redis connection
+ */
+export async function closeRedisConnection(): Promise<void> {
+  if (redisClient) {
+    try {
+      await redisClient.quit();
+      logger.info('Redis connection closed gracefully');
+    } catch (error) {
+      logger.error('Error closing Redis connection', { error });
+      // Force disconnect if quit fails
+      redisClient.disconnect();
+    } finally {
+      redisClient = undefined as unknown as Redis;
+    }
+  }
+}
 
 export default {
-  redisClient,
-  buildCacheKey,
-  setWithTTL,
-  getAndParse,
-  incrementRateLimit,
+  getRedisClient,
+  setCacheValue,
+  getCacheValue,
+  deleteCacheValue,
   checkRateLimit,
-  CACHE_NAMESPACES,
-  DEFAULT_TTL,
+  closeRedisConnection,
+  REDIS_TTL,
+  RedisCacheNamespace,
 };
