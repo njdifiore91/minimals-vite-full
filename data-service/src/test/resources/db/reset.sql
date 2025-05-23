@@ -1,44 +1,50 @@
 -- reset.sql
--- Database reset script for test execution
--- This script truncates all tables while maintaining the schema structure
--- Used between test executions to ensure a clean state
+-- SQL script that resets the test database by truncating all tables while maintaining the schema structure.
+-- This script is used between test executions to ensure a clean state without having to recreate the entire schema.
+-- It truncates tables in the correct order to respect foreign key constraints (child tables first, then parent tables).
 
--- Start a transaction for atomic execution
+-- Start a transaction to ensure atomic execution
 BEGIN;
 
--- Truncate tables in the correct order to respect foreign key constraints
--- Child tables first, then parent tables
+-- =============================================
+-- Truncate child tables first to respect foreign key constraints
+-- =============================================
 
--- 1. Truncate webhook_delivery_log (depends on webhook, application, and document)
-TRUNCATE TABLE webhook_delivery_log CASCADE;
-
--- 2. Truncate processing_event (depends on application and document)
-TRUNCATE TABLE processing_event CASCADE;
-
--- 3. Truncate document (depends on application)
+-- Truncate document table (child of application)
 TRUNCATE TABLE document CASCADE;
 
--- 4. Truncate merchant_details (depends on application)
+-- Truncate merchant_details table (child of application)
 TRUNCATE TABLE merchant_details CASCADE;
 
--- 5. Truncate webhook (independent)
+-- Truncate webhook table (independent table)
 TRUNCATE TABLE webhook CASCADE;
 
--- 6. Truncate application (parent table)
+-- =============================================
+-- Truncate parent tables after their children
+-- =============================================
+
+-- Truncate application table (parent table)
 TRUNCATE TABLE application CASCADE;
 
--- Note: We don't need to reset sequence generators for primary keys
--- because the tables use UUID with gen_random_uuid() as default values
+-- =============================================
+-- Reset sequence generators for primary keys
+-- =============================================
+
+-- Reset application id sequence
+ALTER SEQUENCE application_id_seq RESTART WITH 1;
+
+-- Reset document id sequence
+ALTER SEQUENCE document_id_seq RESTART WITH 1;
+
+-- Reset merchant_details id sequence
+ALTER SEQUENCE merchant_details_id_seq RESTART WITH 1;
+
+-- Reset webhook id sequence
+ALTER SEQUENCE webhook_id_seq RESTART WITH 1;
 
 -- Commit the transaction
 COMMIT;
 
--- Usage: This script should be executed between test cases to ensure
--- test isolation without having to recreate the entire schema.
--- Example usage in a Spring Boot test:
---
--- @Sql("/db/reset.sql")
--- @Test
--- public void testSomething() {
---     // Test with a clean database state
--- }
+-- Note: This script ensures test isolation by completely clearing all data between test executions
+-- while maintaining the database schema structure. This approach is more efficient than
+-- recreating the entire schema for each test and ensures consistent test execution.
