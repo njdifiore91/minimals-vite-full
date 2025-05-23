@@ -4,82 +4,130 @@ import com.dollarfunding.mca.entity.Document;
 import com.dollarfunding.mca.entity.DocumentType;
 import com.fasterxml.jackson.annotation.JsonFormat;
 import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.time.LocalDateTime;
-import java.time.temporal.ChronoUnit;
-import java.util.List;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
-import java.util.stream.Collectors;
 
 /**
- * Data Transfer Object for returning document metadata to clients.
- * Includes all document fields along with a pre-signed URL for secure document access.
- * This class provides a complete view of a document with appropriate serialization for API responses.
+ * DTO class for returning document metadata to clients.
+ * 
+ * This class includes all document fields (id, application_id, type, storage_path, 
+ * classification, uploaded_at, metadata) along with a pre-signed URL for secure 
+ * document access. It provides a complete view of a document with appropriate 
+ * serialization for API responses.
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class DocumentResponseDTO {
 
+    /**
+     * Unique identifier for the document
+     */
+    @JsonProperty("id")
     private UUID id;
-    private UUID applicationId;
-    private DocumentType type;
-    private String storagePath;
-    private String classification;
-    
-    @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
-    private LocalDateTime uploadedAt;
-    
-    private Map<String, Object> metadata;
-    private String presignedUrl;
-    private Map<String, Double> confidenceScores;
 
     /**
-     * Default constructor for serialization frameworks
+     * ID of the application this document belongs to
+     */
+    @JsonProperty("application_id")
+    private UUID applicationId;
+
+    /**
+     * Type of document (e.g., BANK_STATEMENT, TAX_RETURN, etc.)
+     */
+    @JsonProperty("type")
+    private String type;
+
+    /**
+     * Path to the document in S3-compatible storage
+     * This is not exposed directly to clients for security reasons
+     */
+    @JsonProperty("storage_path")
+    private String storagePath;
+
+    /**
+     * Document classification determined by the Document Service
+     */
+    @JsonProperty("classification")
+    private String classification;
+
+    /**
+     * Timestamp when the document was uploaded
+     */
+    @JsonProperty("uploaded_at")
+    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
+    private LocalDateTime uploadedAt;
+
+    /**
+     * Document metadata including OCR extraction results, confidence scores, etc.
+     */
+    @JsonProperty("metadata")
+    private Map<String, Object> metadata;
+
+    /**
+     * Pre-signed URL for secure document access
+     * This URL is time-limited and provides temporary access to the document
+     */
+    @JsonProperty("download_url")
+    private String downloadUrl;
+
+    /**
+     * Expiration time for the pre-signed URL
+     */
+    @JsonProperty("url_expires_at")
+    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
+    private LocalDateTime urlExpiresAt;
+
+    /**
+     * Classification confidence score (0.0-1.0)
+     */
+    @JsonProperty("classification_confidence")
+    private Double classificationConfidence;
+
+    /**
+     * Default constructor
      */
     public DocumentResponseDTO() {
+        this.metadata = new HashMap<>();
     }
 
     /**
-     * Constructs a DocumentResponseDTO from a Document entity
+     * Constructor from Document entity
      * 
      * @param document The Document entity to convert
+     * @param downloadUrl The pre-signed URL for document access
+     * @param urlExpiresAt The expiration time for the pre-signed URL
      */
-    public DocumentResponseDTO(Document document) {
+    public DocumentResponseDTO(Document document, String downloadUrl, LocalDateTime urlExpiresAt) {
         this.id = document.getId();
         this.applicationId = document.getApplicationId();
-        this.type = document.getType();
+        this.type = document.getType() != null ? document.getType().name() : null;
         this.storagePath = document.getStoragePath();
         this.classification = document.getClassification();
         this.uploadedAt = document.getUploadedAt();
         this.metadata = document.getMetadata();
+        this.downloadUrl = downloadUrl;
+        this.urlExpiresAt = urlExpiresAt;
         
-        // Extract confidence scores from metadata if available
-        if (metadata != null && metadata.containsKey("confidenceScores")) {
-            this.confidenceScores = (Map<String, Double>) metadata.get("confidenceScores");
+        // Extract classification confidence from metadata if available
+        this.classificationConfidence = document.getConfidenceScore("classification");
+    }
+
+    /**
+     * Static factory method to create a DTO from a Document entity
+     * 
+     * @param document The Document entity to convert
+     * @param downloadUrl The pre-signed URL for document access
+     * @param urlExpiresAt The expiration time for the pre-signed URL
+     * @return A new DocumentResponseDTO instance
+     */
+    public static DocumentResponseDTO fromEntity(Document document, String downloadUrl, LocalDateTime urlExpiresAt) {
+        if (document == null) {
+            return null;
         }
-    }
-
-    /**
-     * Constructs a DocumentResponseDTO from a Document entity with a pre-signed URL
-     * 
-     * @param document The Document entity to convert
-     * @param presignedUrl The pre-signed URL for secure document access
-     */
-    public DocumentResponseDTO(Document document, String presignedUrl) {
-        this(document);
-        this.presignedUrl = presignedUrl;
-    }
-
-    /**
-     * Constructs a DocumentResponseDTO from a Document entity with a pre-signed URL and confidence scores
-     * 
-     * @param document The Document entity to convert
-     * @param presignedUrl The pre-signed URL for secure document access
-     * @param confidenceScores Map of field names to confidence scores
-     */
-    public DocumentResponseDTO(Document document, String presignedUrl, Map<String, Double> confidenceScores) {
-        this(document, presignedUrl);
-        this.confidenceScores = confidenceScores;
+        return new DocumentResponseDTO(document, downloadUrl, urlExpiresAt);
     }
 
     /**
@@ -111,17 +159,24 @@ public class DocumentResponseDTO {
     }
 
     /**
-     * @return the document type
+     * @return the document type as a string
      */
-    public DocumentType getType() {
+    public String getType() {
         return type;
     }
 
     /**
      * @param type the document type to set
      */
-    public void setType(DocumentType type) {
+    public void setType(String type) {
         this.type = type;
+    }
+
+    /**
+     * @param type the document type to set as enum
+     */
+    public void setType(DocumentType type) {
+        this.type = type != null ? type.name() : null;
     }
 
     /**
@@ -177,9 +232,51 @@ public class DocumentResponseDTO {
      * @param metadata the document metadata to set
      */
     public void setMetadata(Map<String, Object> metadata) {
-        this.metadata = metadata;
+        this.metadata = metadata != null ? metadata : new HashMap<>();
     }
-    
+
+    /**
+     * @return the pre-signed URL for document access
+     */
+    public String getDownloadUrl() {
+        return downloadUrl;
+    }
+
+    /**
+     * @param downloadUrl the pre-signed URL to set
+     */
+    public void setDownloadUrl(String downloadUrl) {
+        this.downloadUrl = downloadUrl;
+    }
+
+    /**
+     * @return the expiration time for the pre-signed URL
+     */
+    public LocalDateTime getUrlExpiresAt() {
+        return urlExpiresAt;
+    }
+
+    /**
+     * @param urlExpiresAt the URL expiration time to set
+     */
+    public void setUrlExpiresAt(LocalDateTime urlExpiresAt) {
+        this.urlExpiresAt = urlExpiresAt;
+    }
+
+    /**
+     * @return the classification confidence score
+     */
+    public Double getClassificationConfidence() {
+        return classificationConfidence;
+    }
+
+    /**
+     * @param classificationConfidence the classification confidence score to set
+     */
+    public void setClassificationConfidence(Double classificationConfidence) {
+        this.classificationConfidence = classificationConfidence;
+    }
+
     /**
      * Gets a specific metadata value
      * 
@@ -196,43 +293,18 @@ public class DocumentResponseDTO {
     }
 
     /**
-     * @return the pre-signed URL for secure document access
-     */
-    public String getPresignedUrl() {
-        return presignedUrl;
-    }
-
-    /**
-     * @param presignedUrl the pre-signed URL to set
-     */
-    public void setPresignedUrl(String presignedUrl) {
-        this.presignedUrl = presignedUrl;
-    }
-
-    /**
-     * @return the confidence scores for document classification and field extraction
-     */
-    public Map<String, Double> getConfidenceScores() {
-        return confidenceScores;
-    }
-
-    /**
-     * @param confidenceScores the confidence scores to set
-     */
-    public void setConfidenceScores(Map<String, Double> confidenceScores) {
-        this.confidenceScores = confidenceScores;
-    }
-    
-    /**
-     * Checks if this document has a specific confidence score
+     * Gets the confidence scores from the metadata
      * 
-     * @param fieldName the field name to check
-     * @return true if the document has a confidence score for the specified field
+     * @return the confidence scores, or an empty map if not available
      */
-    public boolean hasConfidenceScore(String fieldName) {
-        return confidenceScores != null && confidenceScores.containsKey(fieldName);
+    @SuppressWarnings("unchecked")
+    public Map<String, Double> getConfidenceScores() {
+        if (metadata == null || !metadata.containsKey("confidenceScores")) {
+            return new HashMap<>();
+        }
+        return (Map<String, Double>) metadata.get("confidenceScores");
     }
-    
+
     /**
      * Gets the confidence score for a specific field
      * 
@@ -240,185 +312,150 @@ public class DocumentResponseDTO {
      * @return the confidence score, or null if not available
      */
     public Double getConfidenceScore(String fieldName) {
-        if (confidenceScores == null) {
+        Map<String, Double> scores = getConfidenceScores();
+        if (scores.isEmpty()) {
             return null;
         }
-        return confidenceScores.get(fieldName);
-    }
-    
-    /**
-     * Checks if this document is of a specific type
-     * 
-     * @param documentType the document type to check
-     * @return true if the document is of the specified type
-     */
-    public boolean isOfType(DocumentType documentType) {
-        return this.type == documentType;
-    }
-    
-    /**
-     * Checks if this document has a valid pre-signed URL
-     * 
-     * @return true if the document has a valid pre-signed URL
-     */
-    public boolean hasValidPresignedUrl() {
-        return presignedUrl != null && !presignedUrl.isEmpty();
-    }
-    
-    /**
-     * Checks if this document has metadata
-     * 
-     * @return true if the document has metadata
-     */
-    public boolean hasMetadata() {
-        return metadata != null && !metadata.isEmpty();
-    }
-    
-    /**
-     * Checks if this document is valid for processing
-     * 
-     * @return true if the document is valid for processing
-     */
-    public boolean isValidForProcessing() {
-        return id != null && 
-               applicationId != null && 
-               type != null && 
-               storagePath != null && !storagePath.isEmpty() &&
-               uploadedAt != null;
-    }
-    
-    /**
-     * Checks if this document is classified with high confidence
-     * 
-     * @param confidenceThreshold the minimum confidence threshold (0.0 to 1.0)
-     * @return true if the document is classified with confidence above the threshold
-     */
-    public boolean isClassifiedWithHighConfidence(double confidenceThreshold) {
-        if (confidenceScores == null || !confidenceScores.containsKey("classification")) {
-            return false;
-        }
-        Double classificationConfidence = confidenceScores.get("classification");
-        return classificationConfidence != null && classificationConfidence >= confidenceThreshold;
-    }
-    
-    /**
-     * Gets the age of this document in days
-     * 
-     * @return the age in days, or -1 if the upload date is not available
-     */
-    public long getAgeInDays() {
-        if (uploadedAt == null) {
-            return -1;
-        }
-        return ChronoUnit.DAYS.between(uploadedAt, LocalDateTime.now());
+        return scores.get(fieldName);
     }
 
     /**
-     * Converts a list of Document entities to a list of DocumentResponseDTOs
+     * Checks if the document has a valid download URL
      * 
-     * @param documents the list of Document entities to convert
-     * @return a list of DocumentResponseDTOs
+     * @return true if the document has a valid download URL
      */
-    public static List<DocumentResponseDTO> fromDocuments(List<Document> documents) {
-        if (documents == null) {
-            return List.of();
-        }
-        return documents.stream()
-                .map(DocumentResponseDTO::new)
-                .collect(Collectors.toList());
-    }
-    
-    /**
-     * Converts a list of Document entities to a list of DocumentResponseDTOs with pre-signed URLs
-     * 
-     * @param documents the list of Document entities to convert
-     * @param presignedUrls a map of document IDs to pre-signed URLs
-     * @return a list of DocumentResponseDTOs with pre-signed URLs
-     */
-    public static List<DocumentResponseDTO> fromDocumentsWithUrls(List<Document> documents, Map<UUID, String> presignedUrls) {
-        if (documents == null) {
-            return List.of();
-        }
-        return documents.stream()
-                .map(doc -> new DocumentResponseDTO(doc, presignedUrls.get(doc.getId())))
-                .collect(Collectors.toList());
-    }
-    
-    /**
-     * Returns a string representation of this DTO for debugging and logging
-     * 
-     * @return a string representation of this DTO
-     */
-    @Override
-    public String toString() {
-        return "DocumentResponseDTO{" +
-                "id=" + id +
-                ", applicationId=" + applicationId +
-                ", type=" + type +
-                ", classification='" + classification + '\'' +
-                ", uploadedAt=" + uploadedAt +
-                ", hasMetadata=" + hasMetadata() +
-                ", hasPresignedUrl=" + hasValidPresignedUrl() +
-                ", hasConfidenceScores=" + (confidenceScores != null && !confidenceScores.isEmpty()) +
-                '}'; 
-    }
-    
-    /**
-     * Compares this DTO with another object for equality
-     * 
-     * @param o the object to compare with
-     * @return true if the objects are equal
-     */
-    @Override
-    public boolean equals(Object o) {
-        if (this == o) return true;
-        if (o == null || getClass() != o.getClass()) return false;
-
-        DocumentResponseDTO that = (DocumentResponseDTO) o;
-
-        return id != null ? id.equals(that.id) : that.id == null;
+    public boolean hasValidDownloadUrl() {
+        return downloadUrl != null && !downloadUrl.isEmpty() && urlExpiresAt != null && 
+               urlExpiresAt.isAfter(LocalDateTime.now());
     }
 
     /**
-     * Returns a hash code for this DTO
+     * Checks if the document has high classification confidence
      * 
-     * @return a hash code value for this object
+     * @return true if the document has high classification confidence
      */
-    @Override
-    public int hashCode() {
-        return id != null ? id.hashCode() : 0;
+    public boolean hasHighClassificationConfidence() {
+        return classificationConfidence != null && classificationConfidence >= 0.9;
     }
-    
+
+    /**
+     * Checks if the document has medium classification confidence
+     * 
+     * @return true if the document has medium classification confidence
+     */
+    public boolean hasMediumClassificationConfidence() {
+        return classificationConfidence != null && 
+               classificationConfidence >= 0.7 && 
+               classificationConfidence < 0.9;
+    }
+
+    /**
+     * Checks if the document has low classification confidence
+     * 
+     * @return true if the document has low classification confidence
+     */
+    public boolean hasLowClassificationConfidence() {
+        return classificationConfidence != null && classificationConfidence < 0.7;
+    }
+
     /**
      * Builder class for creating DocumentResponseDTO instances
      */
     public static class Builder {
-        private Document document;
-        private String presignedUrl;
-        private Map<String, Double> confidenceScores;
+        private UUID id;
+        private UUID applicationId;
+        private String type;
+        private String storagePath;
+        private String classification;
+        private LocalDateTime uploadedAt;
+        private Map<String, Object> metadata;
+        private String downloadUrl;
+        private LocalDateTime urlExpiresAt;
+        private Double classificationConfidence;
 
-        public Builder(Document document) {
-            this.document = document;
+        public Builder() {
+            this.metadata = new HashMap<>();
         }
 
-        public Builder withPresignedUrl(String presignedUrl) {
-            this.presignedUrl = presignedUrl;
+        public Builder(Document document) {
+            this.id = document.getId();
+            this.applicationId = document.getApplicationId();
+            this.type = document.getType() != null ? document.getType().name() : null;
+            this.storagePath = document.getStoragePath();
+            this.classification = document.getClassification();
+            this.uploadedAt = document.getUploadedAt();
+            this.metadata = document.getMetadata();
+            this.classificationConfidence = document.getConfidenceScore("classification");
+        }
+
+        public Builder withId(UUID id) {
+            this.id = id;
             return this;
         }
 
-        public Builder withConfidenceScores(Map<String, Double> confidenceScores) {
-            this.confidenceScores = confidenceScores;
+        public Builder withApplicationId(UUID applicationId) {
+            this.applicationId = applicationId;
+            return this;
+        }
+
+        public Builder withType(String type) {
+            this.type = type;
+            return this;
+        }
+
+        public Builder withType(DocumentType type) {
+            this.type = type != null ? type.name() : null;
+            return this;
+        }
+
+        public Builder withStoragePath(String storagePath) {
+            this.storagePath = storagePath;
+            return this;
+        }
+
+        public Builder withClassification(String classification) {
+            this.classification = classification;
+            return this;
+        }
+
+        public Builder withUploadedAt(LocalDateTime uploadedAt) {
+            this.uploadedAt = uploadedAt;
+            return this;
+        }
+
+        public Builder withMetadata(Map<String, Object> metadata) {
+            this.metadata = metadata;
+            return this;
+        }
+
+        public Builder withDownloadUrl(String downloadUrl) {
+            this.downloadUrl = downloadUrl;
+            return this;
+        }
+
+        public Builder withUrlExpiresAt(LocalDateTime urlExpiresAt) {
+            this.urlExpiresAt = urlExpiresAt;
+            return this;
+        }
+
+        public Builder withClassificationConfidence(Double classificationConfidence) {
+            this.classificationConfidence = classificationConfidence;
             return this;
         }
 
         public DocumentResponseDTO build() {
-            if (confidenceScores != null) {
-                return new DocumentResponseDTO(document, presignedUrl, confidenceScores);
-            } else if (presignedUrl != null) {
-                return new DocumentResponseDTO(document, presignedUrl);
-            } else {
-                return new DocumentResponseDTO(document);
-            }
+            DocumentResponseDTO dto = new DocumentResponseDTO();
+            dto.setId(id);
+            dto.setApplicationId(applicationId);
+            dto.setType(type);
+            dto.setStoragePath(storagePath);
+            dto.setClassification(classification);
+            dto.setUploadedAt(uploadedAt);
+            dto.setMetadata(metadata);
+            dto.setDownloadUrl(downloadUrl);
+            dto.setUrlExpiresAt(urlExpiresAt);
+            dto.setClassificationConfidence(classificationConfidence);
+            return dto;
         }
     }
 }
