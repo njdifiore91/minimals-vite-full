@@ -1,31 +1,17 @@
-# OCR Service Test Utilities Package
-# Version: 1.0.0
-# Python 3.9+ Required
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
 """
-OCR Service Test Utilities
+OCR Service Test Utilities Package
 
-This package contains test utilities and fixtures for testing the OCR Service utility functions.
-It makes the test_utils directory a proper Python package, enabling proper imports between
-test modules and ensuring test discovery by pytest.
+This package contains test utilities and fixtures for testing the OCR Service utils module.
+It enables proper test discovery by pytest and allows imports between test modules.
 
-The test modules in this package validate the functionality of utility modules including:
-
-- time_utils: Date and time utilities
-- file_utils: File handling utilities
-- security_utils: Security utilities for encryption
-- retry_utils: Retry logic with exponential backoff
-- validation_utils: Validation utilities for documents
-- error_utils: Standardized error handling
-- logging_utils: Structured logging utilities
-- rabbitmq_utils: RabbitMQ integration utilities
-- s3_utils: S3-compatible storage utilities
-- text_utils: Post-OCR text processing utilities
-- image_utils: Image preprocessing utilities
-- tensorflow_utils: TensorFlow model utilities
-
-This package follows Python testing best practices and is designed to work with pytest.
+The package follows Python best practices for test organization and supports:
+- Unit tests for all utility functions
+- Mocking of external dependencies
+- Test fixtures for common test data
+- Proper test isolation
 """
 
-# Version information
 __version__ = '1.0.0'
-__test_package__ = True
