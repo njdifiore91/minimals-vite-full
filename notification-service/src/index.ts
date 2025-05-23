@@ -1,220 +1,286 @@
 /**
  * Notification Service - Main Entry Point
- * 
- * This is the main entry point for the Notification Service microservice.
- * It initializes the application, sets up error handling, connects to RabbitMQ,
- * and starts the notification processing.
+ *
+ * This is the main entry point for the Notification Service microservice. It initializes the application,
+ * sets up error handling, connects to RabbitMQ, and starts the notification processing. It also handles
+ * graceful shutdown when the process is terminated.
+ *
+ * The Notification Service is responsible for handling alerts and webhooks, consuming messages from RabbitMQ,
+ * and delivering notifications to configured endpoints with retry capability.
  */
 
-import { createServer } from 'http';
-import amqplib from 'amqplib';
+import { Connection, Channel, connect } from 'amqplib';
+import { v4 as uuidv4 } from 'uuid';
 
-// Import configuration
-import { appConfig, rabbitmqConfig, loggerConfig } from './config';
+// Import configuration and utilities
+import { config } from './config';
+import { logger } from './config/logger';
+import { getRabbitMQConnectionOptions, getQueueOptions, getConsumerOptions } from './config/rabbitmq';
+import { ILogContext } from './types';
 
 // Import services
-import { 
-  NotificationService, 
-  WebhookService, 
-  RetryService, 
-  AuditService 
-} from './services';
+import { WebhookService } from './services/webhook-service';
+import { MessageService } from './services/message-service';
+import { RetryService } from './services/retry-service';
+import { AuditService } from './services/audit-service';
+import { NotificationService } from './services/notification-service';
 
-// Import types
-import { IRabbitMQConnection } from './types';
+// Create a unique service instance ID for logging and tracking
+const serviceInstanceId = uuidv4();
 
-// Setup logger
-import pino from 'pino';
-const logger = pino(loggerConfig);
+// Create a base logging context
+const baseLogContext: ILogContext = {
+  serviceId: serviceInstanceId,
+  serviceName: config.app.name,
+  serviceVersion: config.app.version,
+  environment: config.app.environment
+};
 
-// Global error handlers
-process.on('uncaughtException', (error) => {
-  logger.error({ err: error }, 'Uncaught exception');
-  // Give logger time to flush before exiting
-  setTimeout(() => process.exit(1), 500);
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-  logger.error({ reason, promise }, 'Unhandled rejection');
-});
-
-// Create HTTP server for health checks
-const server = createServer((req, res) => {
-  if (req.url === '/health') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ status: 'ok' }));
-  } else {
-    res.writeHead(404);
-    res.end();
-  }
-});
+// Initialize logger with base context
+const serviceLogger = logger.child(baseLogContext);
 
 // Track connections for graceful shutdown
-let rabbitMQConnection: amqplib.Connection | null = null;
-let rabbitMQChannel: amqplib.Channel | null = null;
+let rabbitMQConnection: Connection | null = null;
+let rabbitMQChannel: Channel | null = null;
 let notificationService: NotificationService | null = null;
 
 /**
- * Initialize RabbitMQ connection with TLS
+ * Initialize RabbitMQ connection and channel
+ * @returns Promise that resolves to a RabbitMQ channel
  */
-async function initializeRabbitMQ(): Promise<{ connection: amqplib.Connection, channel: amqplib.Channel }> {
+async function initializeRabbitMQ(): Promise<Channel> {
+  serviceLogger.info('Initializing RabbitMQ connection', { 
+    host: config.rabbitmq.host,
+    port: config.rabbitmq.port,
+    vhost: config.rabbitmq.vhost,
+    tls: config.rabbitmq.tls
+  });
+
   try {
-    logger.info('Connecting to RabbitMQ...');
+    // Connect to RabbitMQ with TLS if enabled
+    const connectionOptions = getRabbitMQConnectionOptions();
+    rabbitMQConnection = await connect(connectionOptions);
     
-    // Create connection options with TLS settings
-    const connectionOptions: IRabbitMQConnection = {
-      protocol: rabbitmqConfig.protocol,
-      hostname: rabbitmqConfig.hostname,
-      port: rabbitmqConfig.port,
-      username: rabbitmqConfig.username,
-      password: rabbitmqConfig.password,
-      vhost: rabbitmqConfig.vhost,
-      tls: {
-        enabled: rabbitmqConfig.tls.enabled,
-        ca: rabbitmqConfig.tls.ca ? [rabbitmqConfig.tls.ca] : undefined,
-        cert: rabbitmqConfig.tls.cert,
-        key: rabbitmqConfig.tls.key,
-        rejectUnauthorized: rabbitmqConfig.tls.rejectUnauthorized
+    // Log successful connection
+    serviceLogger.info('Successfully connected to RabbitMQ');
+    
+    // Handle connection errors and closed events
+    rabbitMQConnection.on('error', (err) => {
+      serviceLogger.error('RabbitMQ connection error', { error: err.message });
+      // Don't attempt reconnection here - let the process exit and be restarted by the container orchestrator
+    });
+    
+    rabbitMQConnection.on('close', () => {
+      serviceLogger.warn('RabbitMQ connection closed');
+      // Don't attempt reconnection here - let the process exit and be restarted by the container orchestrator
+    });
+    
+    // Create a channel
+    rabbitMQChannel = await rabbitMQConnection.createChannel();
+    
+    // Set prefetch count to control concurrency
+    await rabbitMQChannel.prefetch(config.rabbitmq.prefetchCount);
+    
+    // Log successful channel creation
+    serviceLogger.info('Successfully created RabbitMQ channel', { 
+      prefetchCount: config.rabbitmq.prefetchCount 
+    });
+    
+    // Handle channel errors and closed events
+    rabbitMQChannel.on('error', (err) => {
+      serviceLogger.error('RabbitMQ channel error', { error: err.message });
+    });
+    
+    rabbitMQChannel.on('close', () => {
+      serviceLogger.warn('RabbitMQ channel closed');
+    });
+    
+    // Assert the exchange
+    await rabbitMQChannel.assertExchange(
+      config.rabbitmq.exchange,
+      config.rabbitmq.exchangeType,
+      { durable: config.rabbitmq.exchangeDurable }
+    );
+    
+    // Assert the notification queue
+    await rabbitMQChannel.assertQueue(
+      config.rabbitmq.queue,
+      getQueueOptions()
+    );
+    
+    // Bind the queue to the exchange
+    await rabbitMQChannel.bindQueue(
+      config.rabbitmq.queue,
+      config.rabbitmq.exchange,
+      config.rabbitmq.routingKey || ''
+    );
+    
+    // Assert the dead letter exchange and queue
+    await rabbitMQChannel.assertExchange(
+      config.rabbitmq.deadLetterExchange,
+      'direct',
+      { durable: true }
+    );
+    
+    await rabbitMQChannel.assertQueue(
+      config.rabbitmq.deadLetterRoutingKey,
+      { 
+        durable: true,
+        arguments: {
+          'x-message-ttl': config.rabbitmq.messageTTL
+        }
       }
-    };
+    );
     
-    // Connect to RabbitMQ
-    const connection = await amqplib.connect(connectionOptions);
+    await rabbitMQChannel.bindQueue(
+      config.rabbitmq.deadLetterRoutingKey,
+      config.rabbitmq.deadLetterExchange,
+      config.rabbitmq.deadLetterRoutingKey
+    );
     
-    // Handle connection errors
-    connection.on('error', (err) => {
-      logger.error({ err }, 'RabbitMQ connection error');
-      setTimeout(() => {
-        logger.info('Attempting to reconnect to RabbitMQ...');
-        initializeRabbitMQ().catch(err => {
-          logger.error({ err }, 'Failed to reconnect to RabbitMQ');
-        });
-      }, 5000);
-    });
+    serviceLogger.info('Successfully set up RabbitMQ exchanges and queues');
     
-    // Create channel
-    const channel = await connection.createChannel();
-    
-    // Ensure queue exists
-    await channel.assertQueue(rabbitmqConfig.queue, {
-      durable: true,
-      arguments: rabbitmqConfig.queueArguments
-    });
-    
-    logger.info('Successfully connected to RabbitMQ');
-    
-    return { connection, channel };
+    return rabbitMQChannel;
   } catch (error) {
-    logger.error({ err: error }, 'Failed to connect to RabbitMQ');
+    serviceLogger.error('Failed to initialize RabbitMQ', { error });
     throw error;
   }
 }
 
 /**
- * Initialize services
+ * Initialize all services required by the Notification Service
+ * @param channel RabbitMQ channel
+ * @returns Object containing initialized services
  */
-async function initializeServices(channel: amqplib.Channel): Promise<NotificationService> {
-  // Initialize supporting services
-  const auditService = new AuditService();
-  const retryService = new RetryService();
-  const webhookService = new WebhookService(retryService, auditService);
+function initializeServices(channel: Channel) {
+  serviceLogger.info('Initializing services');
   
-  // Initialize main notification service
-  const notificationService = new NotificationService(channel, webhookService, auditService);
+  // Initialize the webhook service
+  const webhookService = new WebhookService(baseLogContext);
   
-  return notificationService;
+  // Initialize the message service for email, SMS, and push notifications
+  const messageService = new MessageService(baseLogContext);
+  
+  // Initialize the retry service for failed deliveries
+  const retryService = new RetryService(channel, baseLogContext);
+  
+  // Initialize the audit service for logging
+  const auditService = new AuditService(baseLogContext);
+  
+  // Initialize the notification service
+  const notificationService = new NotificationService(
+    channel,
+    webhookService,
+    messageService,
+    retryService,
+    auditService,
+    baseLogContext
+  );
+  
+  serviceLogger.info('Services initialized successfully');
+  
+  return {
+    webhookService,
+    messageService,
+    retryService,
+    auditService,
+    notificationService
+  };
 }
 
 /**
- * Start the application
+ * Start the Notification Service
  */
-async function start() {
-  try {
-    logger.info(`Starting ${appConfig.serviceName} v${appConfig.version}...`);
-    
-    // Initialize RabbitMQ
-    const { connection, channel } = await initializeRabbitMQ();
-    rabbitMQConnection = connection;
-    rabbitMQChannel = channel;
-    
-    // Initialize services
-    notificationService = await initializeServices(channel);
-    
-    // Start processing notifications
-    await notificationService.start();
-    
-    // Start HTTP server for health checks
-    server.listen(appConfig.port, () => {
-      logger.info(`Health check server listening on port ${appConfig.port}`);
-    });
-    
-    logger.info(`${appConfig.serviceName} started successfully`);
-  } catch (error) {
-    logger.error({ err: error }, 'Failed to start application');
-    process.exit(1);
-  }
-}
-
-/**
- * Graceful shutdown
- */
-async function shutdown() {
-  logger.info('Shutting down gracefully...');
-  
-  // Stop notification processing
-  if (notificationService) {
-    try {
-      await notificationService.stop();
-      logger.info('Notification service stopped');
-    } catch (error) {
-      logger.error({ err: error }, 'Error stopping notification service');
-    }
-  }
-  
-  // Close RabbitMQ channel
-  if (rabbitMQChannel) {
-    try {
-      await rabbitMQChannel.close();
-      logger.info('RabbitMQ channel closed');
-    } catch (error) {
-      logger.error({ err: error }, 'Error closing RabbitMQ channel');
-    }
-  }
-  
-  // Close RabbitMQ connection
-  if (rabbitMQConnection) {
-    try {
-      await rabbitMQConnection.close();
-      logger.info('RabbitMQ connection closed');
-    } catch (error) {
-      logger.error({ err: error }, 'Error closing RabbitMQ connection');
-    }
-  }
-  
-  // Close HTTP server
-  server.close(() => {
-    logger.info('HTTP server closed');
-    
-    // Give logger time to flush before exiting
-    setTimeout(() => {
-      logger.info('Shutdown complete');
-      process.exit(0);
-    }, 500);
+async function startService() {
+  serviceLogger.info('Starting Notification Service', {
+    version: config.app.version,
+    environment: config.app.environment,
+    nodeEnv: process.env.NODE_ENV
   });
   
-  // Force exit after timeout if graceful shutdown fails
-  setTimeout(() => {
-    logger.error('Forced shutdown after timeout');
+  try {
+    // Initialize RabbitMQ
+    const channel = await initializeRabbitMQ();
+    
+    // Initialize services
+    const services = initializeServices(channel);
+    notificationService = services.notificationService;
+    
+    // Start consuming messages
+    await notificationService.startConsuming();
+    
+    serviceLogger.info('Notification Service started successfully');
+  } catch (error) {
+    serviceLogger.error('Failed to start Notification Service', { error });
+    // Exit with error code to signal failure to the container orchestrator
     process.exit(1);
-  }, 10000);
+  }
 }
 
-// Handle termination signals
-process.on('SIGTERM', shutdown);
-process.on('SIGINT', shutdown);
+/**
+ * Gracefully shut down the Notification Service
+ * @param signal The signal that triggered the shutdown
+ */
+async function shutdownService(signal: string) {
+  serviceLogger.info(`Received ${signal}, shutting down gracefully...`);
+  
+  try {
+    // Stop consuming messages
+    if (notificationService) {
+      serviceLogger.info('Stopping notification service...');
+      await notificationService.stopConsuming();
+    }
+    
+    // Close RabbitMQ channel
+    if (rabbitMQChannel) {
+      serviceLogger.info('Closing RabbitMQ channel...');
+      await rabbitMQChannel.close();
+      rabbitMQChannel = null;
+    }
+    
+    // Close RabbitMQ connection
+    if (rabbitMQConnection) {
+      serviceLogger.info('Closing RabbitMQ connection...');
+      await rabbitMQConnection.close();
+      rabbitMQConnection = null;
+    }
+    
+    serviceLogger.info('Graceful shutdown completed');
+    process.exit(0);
+  } catch (error) {
+    serviceLogger.error('Error during graceful shutdown', { error });
+    process.exit(1);
+  }
+}
 
-// Start the application
-start().catch((error) => {
-  logger.error({ err: error }, 'Fatal error during startup');
+/**
+ * Set up global error handlers
+ */
+function setupErrorHandlers() {
+  // Handle uncaught exceptions
+  process.on('uncaughtException', (error) => {
+    serviceLogger.error('Uncaught exception', { error });
+    // Exit with error code to signal failure to the container orchestrator
+    process.exit(1);
+  });
+  
+  // Handle unhandled promise rejections
+  process.on('unhandledRejection', (reason, promise) => {
+    serviceLogger.error('Unhandled promise rejection', { reason, promise });
+    // Exit with error code to signal failure to the container orchestrator
+    process.exit(1);
+  });
+  
+  // Handle termination signals
+  process.on('SIGTERM', () => shutdownService('SIGTERM'));
+  process.on('SIGINT', () => shutdownService('SIGINT'));
+}
+
+// Set up error handlers
+setupErrorHandlers();
+
+// Start the service
+startService().catch((error) => {
+  serviceLogger.error('Fatal error starting service', { error });
   process.exit(1);
 });
