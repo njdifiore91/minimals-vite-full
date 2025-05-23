@@ -1,7 +1,10 @@
 package com.dollarfunding.mca.repository;
 
 import com.dollarfunding.mca.entity.Document;
+import com.dollarfunding.mca.entity.DocumentClassification;
 import com.dollarfunding.mca.entity.DocumentType;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -19,36 +22,36 @@ import java.util.UUID;
  * It extends JpaRepository to inherit standard CRUD operations and adds custom query methods for
  * finding documents by application ID, type, classification, and upload date.
  * 
- * The actual document content is stored in S3-compatible storage with AES-256 encryption,
- * while this repository manages document metadata in the database.
+ * The repository is used by DocumentService to manage document metadata while the actual document
+ * content is stored in S3-compatible storage with AES-256 encryption.
  */
 @Repository
 public interface DocumentRepository extends JpaRepository<Document, UUID> {
     
     /**
+     * Find a document by its ID.
+     * 
+     * @param id The document ID
+     * @return Optional containing the document if found, empty otherwise
+     */
+    Optional<Document> findById(UUID id);
+    
+    /**
      * Find all documents associated with a specific application.
      * 
-     * @param applicationId The ID of the application
-     * @return List of documents associated with the application
+     * @param applicationId The application ID
+     * @return List of documents associated with the specified application
      */
     List<Document> findByApplicationId(UUID applicationId);
     
     /**
-     * Find all documents associated with a specific application, ordered by upload date.
+     * Find all documents associated with a specific application, with pagination.
      * 
-     * @param applicationId The ID of the application
-     * @return List of documents associated with the application, ordered by upload date
-     */
-    List<Document> findByApplicationIdOrderByUploadedAtDesc(UUID applicationId);
-    
-    /**
-     * Find a document by its ID and application ID.
-     * 
-     * @param id The document ID
      * @param applicationId The application ID
-     * @return Optional containing the document if found, empty otherwise
+     * @param pageable The pagination information
+     * @return Page of documents associated with the specified application
      */
-    Optional<Document> findByIdAndApplicationId(UUID id, UUID applicationId);
+    Page<Document> findByApplicationId(UUID applicationId, Pageable pageable);
     
     /**
      * Find all documents of a specific type.
@@ -59,13 +62,13 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
     List<Document> findByType(DocumentType type);
     
     /**
-     * Find all documents of a specific type associated with an application.
+     * Find all documents of a specific type, with pagination.
      * 
-     * @param applicationId The ID of the application
      * @param type The document type
-     * @return List of documents of the specified type associated with the application
+     * @param pageable The pagination information
+     * @return Page of documents of the specified type
      */
-    List<Document> findByApplicationIdAndType(UUID applicationId, DocumentType type);
+    Page<Document> findByType(DocumentType type, Pageable pageable);
     
     /**
      * Find all documents with a specific classification.
@@ -73,16 +76,54 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
      * @param classification The document classification
      * @return List of documents with the specified classification
      */
-    List<Document> findByClassification(String classification);
+    List<Document> findByClassification(DocumentClassification classification);
     
     /**
-     * Find all documents with a specific classification associated with an application.
+     * Find all documents with a specific classification, with pagination.
      * 
-     * @param applicationId The ID of the application
      * @param classification The document classification
-     * @return List of documents with the specified classification associated with the application
+     * @param pageable The pagination information
+     * @return Page of documents with the specified classification
      */
-    List<Document> findByApplicationIdAndClassification(UUID applicationId, String classification);
+    Page<Document> findByClassification(DocumentClassification classification, Pageable pageable);
+    
+    /**
+     * Find all documents associated with a specific application and of a specific type.
+     * 
+     * @param applicationId The application ID
+     * @param type The document type
+     * @return List of documents associated with the specified application and of the specified type
+     */
+    List<Document> findByApplicationIdAndType(UUID applicationId, DocumentType type);
+    
+    /**
+     * Find all documents associated with a specific application and with a specific classification.
+     * 
+     * @param applicationId The application ID
+     * @param classification The document classification
+     * @return List of documents associated with the specified application and with the specified classification
+     */
+    List<Document> findByApplicationIdAndClassification(UUID applicationId, DocumentClassification classification);
+    
+    /**
+     * Find all documents of a specific type and with a specific classification.
+     * 
+     * @param type The document type
+     * @param classification The document classification
+     * @return List of documents of the specified type and with the specified classification
+     */
+    List<Document> findByTypeAndClassification(DocumentType type, DocumentClassification classification);
+    
+    /**
+     * Find all documents associated with a specific application, of a specific type, and with a specific classification.
+     * 
+     * @param applicationId The application ID
+     * @param type The document type
+     * @param classification The document classification
+     * @return List of documents matching all criteria
+     */
+    List<Document> findByApplicationIdAndTypeAndClassification(
+            UUID applicationId, DocumentType type, DocumentClassification classification);
     
     /**
      * Find all documents uploaded within a specific date range.
@@ -94,15 +135,14 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
     List<Document> findByUploadedAtBetween(LocalDateTime startDate, LocalDateTime endDate);
     
     /**
-     * Find all documents uploaded within a specific date range for an application.
+     * Find all documents uploaded within a specific date range, with pagination.
      * 
-     * @param applicationId The ID of the application
      * @param startDate The start date of the range (inclusive)
      * @param endDate The end date of the range (inclusive)
-     * @return List of documents uploaded within the specified date range for the application
+     * @param pageable The pagination information
+     * @return Page of documents uploaded within the specified date range
      */
-    List<Document> findByApplicationIdAndUploadedAtBetween(
-            UUID applicationId, LocalDateTime startDate, LocalDateTime endDate);
+    Page<Document> findByUploadedAtBetween(LocalDateTime startDate, LocalDateTime endDate, Pageable pageable);
     
     /**
      * Find all documents uploaded after a specific date.
@@ -121,37 +161,95 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
     List<Document> findByUploadedAtBefore(LocalDateTime date);
     
     /**
+     * Find all documents associated with a specific application and uploaded within a specific date range.
+     * 
+     * @param applicationId The application ID
+     * @param startDate The start date of the range (inclusive)
+     * @param endDate The end date of the range (inclusive)
+     * @return List of documents associated with the specified application and uploaded within the specified date range
+     */
+    List<Document> findByApplicationIdAndUploadedAtBetween(
+            UUID applicationId, LocalDateTime startDate, LocalDateTime endDate);
+    
+    /**
+     * Find all documents of a specific type and uploaded within a specific date range.
+     * 
+     * @param type The document type
+     * @param startDate The start date of the range (inclusive)
+     * @param endDate The end date of the range (inclusive)
+     * @return List of documents of the specified type and uploaded within the specified date range
+     */
+    List<Document> findByTypeAndUploadedAtBetween(
+            DocumentType type, LocalDateTime startDate, LocalDateTime endDate);
+    
+    /**
+     * Find all documents with a specific classification and uploaded within a specific date range.
+     * 
+     * @param classification The document classification
+     * @param startDate The start date of the range (inclusive)
+     * @param endDate The end date of the range (inclusive)
+     * @return List of documents with the specified classification and uploaded within the specified date range
+     */
+    List<Document> findByClassificationAndUploadedAtBetween(
+            DocumentClassification classification, LocalDateTime startDate, LocalDateTime endDate);
+    
+    /**
+     * Find all documents with a specific storage path.
+     * 
+     * @param storagePath The storage path
+     * @return List of documents with the specified storage path
+     */
+    List<Document> findByStoragePath(String storagePath);
+    
+    /**
+     * Find all documents with a storage path containing a specific string.
+     * 
+     * @param pathFragment The path fragment to search for
+     * @return List of documents with a storage path containing the specified string
+     */
+    List<Document> findByStoragePathContaining(String pathFragment);
+    
+    /**
      * Count the number of documents associated with a specific application.
      * 
-     * @param applicationId The ID of the application
-     * @return The number of documents associated with the application
+     * @param applicationId The application ID
+     * @return The number of documents associated with the specified application
      */
     long countByApplicationId(UUID applicationId);
     
     /**
-     * Count the number of documents of a specific type associated with an application.
+     * Count the number of documents of a specific type.
      * 
-     * @param applicationId The ID of the application
      * @param type The document type
-     * @return The number of documents of the specified type associated with the application
+     * @return The number of documents of the specified type
+     */
+    long countByType(DocumentType type);
+    
+    /**
+     * Count the number of documents with a specific classification.
+     * 
+     * @param classification The document classification
+     * @return The number of documents with the specified classification
+     */
+    long countByClassification(DocumentClassification classification);
+    
+    /**
+     * Count the number of documents associated with a specific application and of a specific type.
+     * 
+     * @param applicationId The application ID
+     * @param type The document type
+     * @return The number of documents associated with the specified application and of the specified type
      */
     long countByApplicationIdAndType(UUID applicationId, DocumentType type);
     
     /**
-     * Check if a document with the specified ID exists for an application.
+     * Count the number of documents uploaded within a specific date range.
      * 
-     * @param id The document ID
-     * @param applicationId The application ID
-     * @return true if the document exists, false otherwise
+     * @param startDate The start date of the range (inclusive)
+     * @param endDate The end date of the range (inclusive)
+     * @return The number of documents uploaded within the specified date range
      */
-    boolean existsByIdAndApplicationId(UUID id, UUID applicationId);
-    
-    /**
-     * Delete all documents associated with a specific application.
-     * 
-     * @param applicationId The ID of the application
-     */
-    void deleteByApplicationId(UUID applicationId);
+    long countByUploadedAtBetween(LocalDateTime startDate, LocalDateTime endDate);
     
     /**
      * Find all documents with metadata containing a specific key.
@@ -172,105 +270,197 @@ public interface DocumentRepository extends JpaRepository<Document, UUID> {
     List<Document> findByMetadataContains(@Param("keyValueJson") String keyValueJson);
     
     /**
-     * Find all documents with a confidence score above a threshold for a specific field.
+     * Find all documents with metadata containing a specific key-value pair, with pagination.
      * 
-     * @param field The field name to check the confidence score for
-     * @param threshold The minimum confidence score threshold
-     * @return List of documents with a confidence score above the threshold for the specified field
+     * @param keyValueJson The JSON string representing the key-value pair to search for
+     * @param pageable The pagination information
+     * @return Page of documents with metadata containing the specified key-value pair
      */
-    @Query(value = "SELECT d FROM Document d WHERE d.metadataJson -> 'confidenceScores' ->> :field\\:\\:text > :threshold\\:\\:text")
-    List<Document> findByConfidenceScoreGreaterThan(
-            @Param("field") String field, @Param("threshold") double threshold);
+    @Query(value = "SELECT d FROM Document d WHERE d.metadataJson @> CAST(:keyValueJson AS jsonb)")
+    Page<Document> findByMetadataContains(@Param("keyValueJson") String keyValueJson, Pageable pageable);
     
     /**
-     * Find all documents with a confidence score below a threshold for a specific field.
+     * Find all documents with a confidence score above a specific threshold.
      * 
-     * @param field The field name to check the confidence score for
-     * @param threshold The maximum confidence score threshold
-     * @return List of documents with a confidence score below the threshold for the specified field
+     * @param threshold The confidence score threshold
+     * @return List of documents with a confidence score above the specified threshold
      */
-    @Query(value = "SELECT d FROM Document d WHERE d.metadataJson -> 'confidenceScores' ->> :field\\:\\:text < :threshold\\:\\:text")
-    List<Document> findByConfidenceScoreLessThan(
-            @Param("field") String field, @Param("threshold") double threshold);
+    @Query("SELECT d FROM Document d WHERE CAST(d.metadataJson ->> 'confidenceScore' AS double) >= :threshold")
+    List<Document> findByConfidenceScoreGreaterThanEqual(@Param("threshold") double threshold);
     
     /**
-     * Find all documents with a specific storage path pattern.
+     * Find all documents with a confidence score below a specific threshold.
      * 
-     * @param storagePathPattern The storage path pattern to search for (using SQL LIKE syntax)
-     * @return List of documents with a storage path matching the specified pattern
+     * @param threshold The confidence score threshold
+     * @return List of documents with a confidence score below the specified threshold
      */
-    @Query("SELECT d FROM Document d WHERE d.storagePath LIKE :storagePathPattern")
-    List<Document> findByStoragePathPattern(@Param("storagePathPattern") String storagePathPattern);
+    @Query("SELECT d FROM Document d WHERE CAST(d.metadataJson ->> 'confidenceScore' AS double) < :threshold")
+    List<Document> findByConfidenceScoreLessThan(@Param("threshold") double threshold);
     
     /**
-     * Find all documents that need review based on confidence scores.
-     * Documents need review if any confidence score is below the document type's threshold.
+     * Find all documents that require manual review.
+     * Documents require manual review if their classification is NEEDS_REVIEW or FLAGGED.
      * 
-     * @return List of documents that need review
+     * @return List of documents that require manual review
      */
-    @Query("SELECT d FROM Document d WHERE EXISTS " +
-           "(SELECT 1 FROM jsonb_each_text(d.metadataJson -> 'confidenceScores') AS score(field, value) " +
-           "WHERE CAST(value AS double precision) < d.type.ocrConfidenceThreshold)")
-    List<Document> findDocumentsNeedingReview();
+    @Query("SELECT d FROM Document d WHERE d.classification.requiresManualReview = true")
+    List<Document> findDocumentsRequiringManualReview();
     
     /**
-     * Find all documents that need review for a specific application based on confidence scores.
+     * Find all documents that require manual review, with pagination.
      * 
-     * @param applicationId The ID of the application
-     * @return List of documents that need review for the specified application
+     * @param pageable The pagination information
+     * @return Page of documents that require manual review
      */
-    @Query("SELECT d FROM Document d WHERE d.applicationId = :applicationId AND EXISTS " +
-           "(SELECT 1 FROM jsonb_each_text(d.metadataJson -> 'confidenceScores') AS score(field, value) " +
-           "WHERE CAST(value AS double precision) < d.type.ocrConfidenceThreshold)")
-    List<Document> findDocumentsNeedingReviewByApplicationId(@Param("applicationId") UUID applicationId);
+    @Query("SELECT d FROM Document d WHERE d.classification.requiresManualReview = true")
+    Page<Document> findDocumentsRequiringManualReview(Pageable pageable);
     
     /**
-     * Find all documents with high-confidence classification (above the document type's threshold).
+     * Find all documents that are acceptable for processing.
+     * Documents are acceptable if their classification is VERIFIED or NEEDS_REVIEW.
      * 
-     * @return List of documents with high-confidence classification
+     * @return List of documents that are acceptable for processing
      */
-    @Query("SELECT d FROM Document d WHERE " +
-           "CAST(d.metadataJson -> 'confidenceScores' ->> 'classification' AS double precision) >= d.type.ocrConfidenceThreshold")
-    List<Document> findDocumentsWithHighConfidenceClassification();
+    @Query("SELECT d FROM Document d WHERE d.classification.isAcceptable = true")
+    List<Document> findAcceptableDocuments();
     
     /**
-     * Find all documents with low-confidence classification (below the document type's threshold).
+     * Find all documents that are acceptable for processing, with pagination.
      * 
-     * @return List of documents with low-confidence classification
+     * @param pageable The pagination information
+     * @return Page of documents that are acceptable for processing
      */
-    @Query("SELECT d FROM Document d WHERE " +
-           "CAST(d.metadataJson -> 'confidenceScores' ->> 'classification' AS double precision) < d.type.ocrConfidenceThreshold")
-    List<Document> findDocumentsWithLowConfidenceClassification();
+    @Query("SELECT d FROM Document d WHERE d.classification.isAcceptable = true")
+    Page<Document> findAcceptableDocuments(Pageable pageable);
     
     /**
-     * Find all documents containing personally identifiable information (PII).
+     * Find all documents that have been rejected.
+     * Documents are rejected if their classification is REJECTED.
      * 
-     * @return List of documents containing PII
+     * @return List of rejected documents
      */
-    @Query("SELECT d FROM Document d WHERE d.type IN (DocumentType.ID_VERIFICATION, DocumentType.TAX_RETURN)")
-    List<Document> findDocumentsContainingPII();
+    @Query("SELECT d FROM Document d WHERE d.classification = 'REJECTED'")
+    List<Document> findRejectedDocuments();
     
     /**
-     * Find all financial documents.
+     * Find all documents that have been rejected, with pagination.
      * 
-     * @return List of financial documents
+     * @param pageable The pagination information
+     * @return Page of rejected documents
      */
-    @Query("SELECT d FROM Document d WHERE d.type IN (DocumentType.BANK_STATEMENT, DocumentType.TAX_RETURN, DocumentType.INVOICE)")
-    List<Document> findFinancialDocuments();
+    @Query("SELECT d FROM Document d WHERE d.classification = 'REJECTED'")
+    Page<Document> findRejectedDocuments(Pageable pageable);
     
     /**
-     * Find all documents with valid storage information.
+     * Find all documents that have been verified.
+     * Documents are verified if their classification is VERIFIED.
      * 
-     * @return List of documents with valid storage information
+     * @return List of verified documents
      */
-    @Query("SELECT d FROM Document d WHERE d.storagePath IS NOT NULL AND d.storagePath <> '' AND d.storagePath LIKE 's3://%'")
-    List<Document> findDocumentsWithValidStorage();
+    @Query("SELECT d FROM Document d WHERE d.classification = 'VERIFIED'")
+    List<Document> findVerifiedDocuments();
     
     /**
-     * Find all documents with invalid or missing storage information.
+     * Find all documents that have been verified, with pagination.
      * 
-     * @return List of documents with invalid or missing storage information
+     * @param pageable The pagination information
+     * @return Page of verified documents
      */
-    @Query("SELECT d FROM Document d WHERE d.storagePath IS NULL OR d.storagePath = '' OR d.storagePath NOT LIKE 's3://%'")
-    List<Document> findDocumentsWithInvalidStorage();
+    @Query("SELECT d FROM Document d WHERE d.classification = 'VERIFIED'")
+    Page<Document> findVerifiedDocuments(Pageable pageable);
+    
+    /**
+     * Find all documents that have not yet been classified.
+     * Documents are unclassified if their classification is UNCLASSIFIED.
+     * 
+     * @return List of unclassified documents
+     */
+    @Query("SELECT d FROM Document d WHERE d.classification = 'UNCLASSIFIED'")
+    List<Document> findUnclassifiedDocuments();
+    
+    /**
+     * Find all documents that have not yet been classified, with pagination.
+     * 
+     * @param pageable The pagination information
+     * @return Page of unclassified documents
+     */
+    @Query("SELECT d FROM Document d WHERE d.classification = 'UNCLASSIFIED'")
+    Page<Document> findUnclassifiedDocuments(Pageable pageable);
+    
+    /**
+     * Find all documents associated with a specific application that require manual review.
+     * 
+     * @param applicationId The application ID
+     * @return List of documents associated with the specified application that require manual review
+     */
+    @Query("SELECT d FROM Document d WHERE d.applicationId = :applicationId AND d.classification.requiresManualReview = true")
+    List<Document> findDocumentsRequiringManualReviewByApplicationId(@Param("applicationId") UUID applicationId);
+    
+    /**
+     * Find all documents of a specific type that require manual review.
+     * 
+     * @param type The document type
+     * @return List of documents of the specified type that require manual review
+     */
+    @Query("SELECT d FROM Document d WHERE d.type = :type AND d.classification.requiresManualReview = true")
+    List<Document> findDocumentsRequiringManualReviewByType(@Param("type") DocumentType type);
+    
+    /**
+     * Find all documents with a specific file extension.
+     * 
+     * @param extension The file extension (e.g., "pdf", "jpg")
+     * @return List of documents with the specified file extension
+     */
+    @Query("SELECT d FROM Document d WHERE LOWER(SUBSTRING(d.storagePath, LENGTH(d.storagePath) - LOCATE('.', REVERSE(d.storagePath)) + 2)) = LOWER(:extension)")
+    List<Document> findByFileExtension(@Param("extension") String extension);
+    
+    /**
+     * Find all documents with a specific MIME type.
+     * 
+     * @param mimeType The MIME type (e.g., "application/pdf", "image/jpeg")
+     * @return List of documents with the specified MIME type
+     */
+    @Query("SELECT d FROM Document d WHERE d.getMimeType() = :mimeType")
+    List<Document> findByMimeType(@Param("mimeType") String mimeType);
+    
+    /**
+     * Find all documents in a specific S3 bucket.
+     * 
+     * @param bucketName The S3 bucket name
+     * @return List of documents in the specified S3 bucket
+     */
+    @Query("SELECT d FROM Document d WHERE d.getBucketName() = :bucketName")
+    List<Document> findByBucketName(@Param("bucketName") String bucketName);
+    
+    /**
+     * Delete all documents associated with a specific application.
+     * 
+     * @param applicationId The application ID
+     * @return The number of documents deleted
+     */
+    long deleteByApplicationId(UUID applicationId);
+    
+    /**
+     * Delete all documents of a specific type.
+     * 
+     * @param type The document type
+     * @return The number of documents deleted
+     */
+    long deleteByType(DocumentType type);
+    
+    /**
+     * Delete all documents with a specific classification.
+     * 
+     * @param classification The document classification
+     * @return The number of documents deleted
+     */
+    long deleteByClassification(DocumentClassification classification);
+    
+    /**
+     * Delete all documents uploaded before a specific date.
+     * 
+     * @param date The date before which documents were uploaded
+     * @return The number of documents deleted
+     */
+    long deleteByUploadedAtBefore(LocalDateTime date);
 }
