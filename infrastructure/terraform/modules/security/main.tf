@@ -1,493 +1,304 @@
 # Security Module - Main Configuration
+#
+# This module implements security infrastructure for the MCA Application Processing System
+# including IAM roles, security groups, KMS keys, and other security-related resources.
+# It supports multiple environments (development, staging, production) with consistent
+# naming conventions and tagging strategies.
+#
+# The module provides:
+# - Environment-specific security configurations
+# - Consistent resource naming with environment prefixes
+# - Standardized tagging for all security resources
+# - Security group rules for microservices
+# - Network security configurations
+# - S3 bucket encryption settings
+# - JWT authentication parameters
 
+# Define required Terraform version and providers
 terraform {
-  required_version = ">= 1.12.0"
-  
+  required_version = ">= 1.0.0"
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = ">= 5.0.0"
+      version = ">= 4.0.0"
     }
     tls = {
       source  = "hashicorp/tls"
-      version = ">= 4.0.0"
+      version = ">= 3.1.0"
     }
   }
+}
+
+# Input variables for the security module
+variable "environment" {
+  description = "Deployment environment (development, staging, production)"
+  type        = string
+  validation {
+    condition     = contains(["development", "staging", "production"], var.environment)
+    error_message = "Environment must be one of: development, staging, production."
+  }
+}
+
+variable "project" {
+  description = "Project name for resource naming and tagging"
+  type        = string
+  default     = "MCA-Application-Processing"
+}
+
+variable "aws_region" {
+  description = "AWS region for deploying security resources"
+  type        = string
+  default     = "us-east-1"
+}
+
+variable "allowed_ip_ranges" {
+  description = "List of allowed IP CIDR ranges for administrative access"
+  type        = list(string)
+  default     = []
+}
+
+variable "key_rotation_period" {
+  description = "Number of days for KMS key rotation period"
+  type        = number
+  default     = 90
+}
+
+variable "enable_field_level_encryption" {
+  description = "Enable field-level encryption for PII data"
+  type        = bool
+  default     = true
+}
+
+variable "enable_s3_encryption" {
+  description = "Enable S3 server-side encryption for document storage"
+  type        = bool
+  default     = true
+}
+
+variable "enable_cloudtrail" {
+  description = "Enable AWS CloudTrail for security audit logging"
+  type        = bool
+  default     = true
 }
 
 # Local variables for consistent resource naming and tagging
 locals {
-  # Common tags to be assigned to all resources
+  # Environment-specific prefixes for resource naming
+  env_prefix = {
+    development = "dev"
+    staging     = "stg"
+    production  = "prod"
+  }
+
+  # Common tags to be applied to all resources
   common_tags = {
-    Project     = "MCA-Application-Processing"
+    Project     = var.project
     ManagedBy   = "Terraform"
     Environment = var.environment
-    CreatedBy   = "Security-Module"
     CreatedAt   = timestamp()
   }
-  
-  # Resource naming convention with environment-specific prefixes
-  name_prefix = "mca-${var.environment}"
-  
-  # Environment-specific settings
-  is_production = var.environment == "production"
-  is_staging    = var.environment == "staging"
-  is_development = var.environment == "development"
-  
-  # Security settings based on environment
-  security_settings = {
-    # JWT settings
-    jwt_token_expiry = var.environment == "production" ? 60 : 120  # minutes
-    jwt_refresh_expiry = var.environment == "production" ? 7 : 14  # days
-    
-    # S3 encryption settings
-    s3_encryption_algorithm = "AES256"
-    use_kms_encryption = var.environment == "production" ? true : false
-    
-    # TLS settings
-    tls_version = "TLS1.3"
-    
-    # Rate limiting settings (requests per minute)
-    rate_limit_authenticated = var.environment == "production" ? 60 : 120
-    rate_limit_unauthenticated = var.environment == "production" ? 10 : 30
-    
-    # Key rotation settings
-    kms_key_rotation_days = var.environment == "production" ? 90 : 180
-    jwt_key_rotation_days = var.environment == "production" ? 90 : 180
-  }
-  
-  # Service names for IAM role creation
-  service_names = [
-    "email-service",
-    "document-service",
-    "ocr-service",
-    "data-service",
-    "notification-service",
-    "api-gateway"
-  ]
-}
 
-# Module for generating JWT RSA keys
-module "jwt_keys" {
-  source = "../jwt-keys"
-  
-  key_name     = "${local.name_prefix}-jwt"
-  environment  = var.environment
-  rsa_bits     = 2048
-  common_tags  = local.common_tags
-}
-
-# KMS key for data encryption (PII fields, etc.)
-resource "aws_kms_key" "data_encryption_key" {
-  description             = "${local.name_prefix}-data-encryption-key"
-  deletion_window_in_days = 30
-  enable_key_rotation     = true
-  policy                  = data.aws_iam_policy_document.kms_key_policy.json
-  
-  tags = merge(
-    local.common_tags,
-    {
-      Name = "${local.name_prefix}-data-encryption-key"
-    },
-    var.resource_tags
-  )
-}
-
-# KMS key alias
-resource "aws_kms_alias" "data_encryption_key_alias" {
-  name          = "alias/${local.name_prefix}-data-encryption-key"
-  target_key_id = aws_kms_key.data_encryption_key.key_id
-}
-
-# KMS key policy
-data "aws_iam_policy_document" "kms_key_policy" {
-  # Allow root account full access
-  statement {
-    sid       = "EnableIAMUserPermissions"
-    effect    = "Allow"
-    principals {
-      type        = "AWS"
-      identifiers = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"]
-    }
-    actions   = ["kms:*"]
-    resources = ["*"]
-  }
-  
-  # Allow key administrators to manage the key
-  statement {
-    sid       = "AllowAdminManagement"
-    effect    = "Allow"
-    principals {
-      type        = "AWS"
-      identifiers = length(var.kms_key_administrators) > 0 ? var.kms_key_administrators : [data.aws_caller_identity.current.arn]
-    }
-    actions   = [
-      "kms:Create*",
-      "kms:Describe*",
-      "kms:Enable*",
-      "kms:List*",
-      "kms:Put*",
-      "kms:Update*",
-      "kms:Revoke*",
-      "kms:Disable*",
-      "kms:Get*",
-      "kms:Delete*",
-      "kms:TagResource",
-      "kms:UntagResource",
-      "kms:ScheduleKeyDeletion",
-      "kms:CancelKeyDeletion"
-    ]
-    resources = ["*"]
-  }
-  
-  # Allow services to use the key
-  statement {
-    sid       = "AllowServiceUse"
-    effect    = "Allow"
-    principals {
-      type        = "AWS"
-      identifiers = [for name in local.service_names : aws_iam_role.service_roles[name].arn]
-    }
-    actions   = [
-      "kms:Encrypt",
-      "kms:Decrypt",
-      "kms:ReEncrypt*",
-      "kms:GenerateDataKey*",
-      "kms:DescribeKey"
-    ]
-    resources = ["*"]
-  }
-}
-
-# Get current AWS account ID
-data "aws_caller_identity" "current" {}
-
-# Security Groups
-
-# API Gateway Security Group
-resource "aws_security_group" "api_gateway" {
-  name        = "${local.name_prefix}-api-gateway-sg"
-  description = "Security group for API Gateway"
-  vpc_id      = var.vpc_id
-  
-  # Allow HTTPS inbound from anywhere
-  ingress {
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-    description = "Allow HTTPS inbound"
-  }
-  
-  # Allow all outbound traffic
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-    description = "Allow all outbound traffic"
-  }
-  
-  tags = merge(
-    local.common_tags,
-    {
-      Name = "${local.name_prefix}-api-gateway-sg"
-    },
-    var.resource_tags
-  )
-}
-
-# Microservices Security Group
-resource "aws_security_group" "microservices" {
-  name        = "${local.name_prefix}-microservices-sg"
-  description = "Security group for microservices"
-  vpc_id      = var.vpc_id
-  
-  # Allow traffic from API Gateway
-  ingress {
-    from_port       = 0
-    to_port         = 0
-    protocol        = "-1"
-    security_groups = [aws_security_group.api_gateway.id]
-    description     = "Allow all traffic from API Gateway"
-  }
-  
-  # Allow traffic between microservices
-  ingress {
-    from_port       = 0
-    to_port         = 0
-    protocol        = "-1"
-    self            = true
-    description     = "Allow all traffic between microservices"
-  }
-  
-  # Allow all outbound traffic
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-    description = "Allow all outbound traffic"
-  }
-  
-  tags = merge(
-    local.common_tags,
-    {
-      Name = "${local.name_prefix}-microservices-sg"
-    },
-    var.resource_tags
-  )
-}
-
-# Database Security Group
-resource "aws_security_group" "database" {
-  name        = "${local.name_prefix}-database-sg"
-  description = "Security group for database access"
-  vpc_id      = var.vpc_id
-  
-  # Allow PostgreSQL traffic from microservices
-  ingress {
-    from_port       = 5432
-    to_port         = 5432
-    protocol        = "tcp"
-    security_groups = [aws_security_group.microservices.id]
-    description     = "Allow PostgreSQL from microservices"
-  }
-  
-  # Allow all outbound traffic
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-    description = "Allow all outbound traffic"
-  }
-  
-  tags = merge(
-    local.common_tags,
-    {
-      Name = "${local.name_prefix}-database-sg"
-    },
-    var.resource_tags
-  )
-}
-
-# IAM Roles for Services
-resource "aws_iam_role" "service_roles" {
-  for_each = toset(local.service_names)
-  
-  name = "${local.name_prefix}-${each.value}-role"
-  
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Action = "sts:AssumeRole"
-        Effect = "Allow"
-        Principal = {
-          Service = "ec2.amazonaws.com"
-        }
-      },
-    ]
+  # Resource-specific tags
+  security_tags = merge(local.common_tags, {
+    Component = "Security"
   })
+
+  # Service-specific tags for IAM roles and policies
+  service_tags = {
+    email_service        = merge(local.common_tags, { Service = "EmailService" })
+    document_service     = merge(local.common_tags, { Service = "DocumentService" })
+    ocr_service          = merge(local.common_tags, { Service = "OCRService" })
+    data_service         = merge(local.common_tags, { Service = "DataService" })
+    notification_service = merge(local.common_tags, { Service = "NotificationService" })
+    api_gateway          = merge(local.common_tags, { Service = "APIGateway" })
+  }
+
+  # Naming convention for security resources with environment prefix
+  name_prefix = "${local.env_prefix[var.environment]}-mca-security"
   
-  tags = merge(
-    local.common_tags,
-    {
-      Name = "${local.name_prefix}-${each.value}-role"
-      Service = each.value
-    },
-    var.resource_tags
-  )
+  # Service-specific resource naming
+  service_name_prefix = {
+    email_service        = "${local.env_prefix[var.environment]}-mca-email"
+    document_service     = "${local.env_prefix[var.environment]}-mca-document"
+    ocr_service          = "${local.env_prefix[var.environment]}-mca-ocr"
+    data_service         = "${local.env_prefix[var.environment]}-mca-data"
+    notification_service = "${local.env_prefix[var.environment]}-mca-notification"
+    api_gateway          = "${local.env_prefix[var.environment]}-mca-api"
+  }
+  
+  # Security configuration based on environment
+  security_config = {
+    development = {
+      token_expiry_minutes = 60
+      refresh_token_days  = 7
+      tls_version         = "TLSv1.2"
+      cipher_suites       = ["TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256", "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384"]
+      s3_encryption       = "AES256"
+      kms_key_rotation    = true
+      jwt_algorithm       = "RS256"
+      rate_limits = {
+        authenticated   = 60
+        unauthenticated = 10
+      }
+    }
+    staging = {
+      token_expiry_minutes = 60
+      refresh_token_days  = 7
+      tls_version         = "TLSv1.3"
+      cipher_suites       = ["TLS_AES_128_GCM_SHA256", "TLS_AES_256_GCM_SHA384"]
+      s3_encryption       = "AES256"
+      kms_key_rotation    = true
+      jwt_algorithm       = "RS256"
+      rate_limits = {
+        authenticated   = 60
+        unauthenticated = 10
+      }
+    }
+    production = {
+      token_expiry_minutes = 60
+      refresh_token_days  = 7
+      tls_version         = "TLSv1.3"
+      cipher_suites       = ["TLS_AES_128_GCM_SHA256", "TLS_AES_256_GCM_SHA384"]
+      s3_encryption       = "AES256"
+      kms_key_rotation    = true
+      jwt_algorithm       = "RS256"
+      rate_limits = {
+        authenticated   = 60
+        unauthenticated = 10
+      }
+    }
+  }
+  
+  # S3 bucket naming for document storage
+  s3_bucket_names = {
+    development = "mca-documents-development"
+    staging     = "mca-documents-staging"
+    production  = "mca-documents-production"
+  }
+  
+  # Network security configuration
+  network_security = {
+    development = {
+      vpc_cidr_block = "10.0.0.0/16"
+      allowed_ips    = ["0.0.0.0/0"] # Open in development, restrict in other environments
+    }
+    staging = {
+      vpc_cidr_block = "10.1.0.0/16"
+      allowed_ips    = var.allowed_ip_ranges # Restricted IP ranges for staging
+    }
+    production = {
+      vpc_cidr_block = "10.2.0.0/16"
+      allowed_ips    = var.allowed_ip_ranges # Restricted IP ranges for production
+    }
+  }
+  
+  # Security group rules for microservices
+  security_group_rules = {
+    # Email Service security rules
+    email_service = {
+      ingress = [
+        {
+          description = "IMAPS from VPC"
+          from_port   = 993
+          to_port     = 993
+          protocol    = "tcp"
+          cidr_blocks = [local.network_security[var.environment].vpc_cidr_block]
+        }
+      ]
+      egress = [
+        {
+          description = "Allow all outbound traffic"
+          from_port   = 0
+          to_port     = 0
+          protocol    = "-1"
+          cidr_blocks = ["0.0.0.0/0"]
+        }
+      ]
+    }
+    
+    # API Gateway security rules
+    api_gateway = {
+      ingress = [
+        {
+          description = "HTTPS from anywhere"
+          from_port   = 443
+          to_port     = 443
+          protocol    = "tcp"
+          cidr_blocks = ["0.0.0.0/0"]
+        }
+      ]
+      egress = [
+        {
+          description = "Allow all outbound traffic"
+          from_port   = 0
+          to_port     = 0
+          protocol    = "-1"
+          cidr_blocks = ["0.0.0.0/0"]
+        }
+      ]
+    }
+    
+    # Internal services common rules (document, ocr, data, notification)
+    internal_services = {
+      ingress = [
+        {
+          description = "Internal service communication"
+          from_port   = 8080
+          to_port     = 8080
+          protocol    = "tcp"
+          cidr_blocks = [local.network_security[var.environment].vpc_cidr_block]
+        }
+      ]
+      egress = [
+        {
+          description = "Allow all outbound traffic"
+          from_port   = 0
+          to_port     = 0
+          protocol    = "-1"
+          cidr_blocks = ["0.0.0.0/0"]
+        }
+      ]
+    }
+  }
 }
 
-# WAF Web ACL for API protection
-resource "aws_wafv2_web_acl" "api_protection" {
-  count = var.enable_waf ? 1 : 0
-  
-  name        = "${local.name_prefix}-api-protection"
-  description = "WAF Web ACL for API Gateway protection"
-  scope       = "REGIONAL"
-  
-  default_action {
-    allow {}
-  }
-  
-  # AWS Managed Rules - Common Rule Set
-  rule {
-    name     = "AWS-AWSManagedRulesCommonRuleSet"
-    priority = 1
-    
-    override_action {
-      none {}
-    }
-    
-    statement {
-      managed_rule_group_statement {
-        name        = "AWSManagedRulesCommonRuleSet"
-        vendor_name = "AWS"
-      }
-    }
-    
-    visibility_config {
-      cloudwatch_metrics_enabled = true
-      metric_name                = "${local.name_prefix}-AWS-AWSManagedRulesCommonRuleSet"
-      sampled_requests_enabled   = true
-    }
-  }
-  
-  # AWS Managed Rules - SQL Injection Rule Set
-  rule {
-    name     = "AWS-AWSManagedRulesSQLiRuleSet"
-    priority = 2
-    
-    override_action {
-      none {}
-    }
-    
-    statement {
-      managed_rule_group_statement {
-        name        = "AWSManagedRulesSQLiRuleSet"
-        vendor_name = "AWS"
-      }
-    }
-    
-    visibility_config {
-      cloudwatch_metrics_enabled = true
-      metric_name                = "${local.name_prefix}-AWS-AWSManagedRulesSQLiRuleSet"
-      sampled_requests_enabled   = true
-    }
-  }
-  
-  # Rate-based rule to prevent DDoS
-  rule {
-    name     = "RateLimitRule"
-    priority = 3
-    
-    action {
-      block {}
-    }
-    
-    statement {
-      rate_based_statement {
-        limit              = local.is_production ? 1000 : 2000
-        aggregate_key_type = "IP"
-      }
-    }
-    
-    visibility_config {
-      cloudwatch_metrics_enabled = true
-      metric_name                = "${local.name_prefix}-RateLimitRule"
-      sampled_requests_enabled   = true
-    }
-  }
-  
-  # IP whitelist rule for admin endpoints
-  dynamic "rule" {
-    for_each = length(var.ip_whitelist) > 0 ? [1] : []
-    content {
-      name     = "IPWhitelistRule"
-      priority = 4
-      
-      action {
-        allow {}
-      }
-      
-      statement {
-        and_statement {
-          statement {
-            byte_match_statement {
-              field_to_match {
-                uri_path {}
-              }
-              positional_constraint = "STARTS_WITH"
-              search_string         = "/admin"
-              text_transformation {
-                priority = 0
-                type     = "NONE"
-              }
-            }
-          }
-          
-          statement {
-            ip_set_reference_statement {
-              arn = aws_wafv2_ip_set.admin_whitelist[0].arn
-            }
-          }
-        }
-      }
-      
-      visibility_config {
-        cloudwatch_metrics_enabled = true
-        metric_name                = "${local.name_prefix}-IPWhitelistRule"
-        sampled_requests_enabled   = true
-      }
-    }
-  }
-  
-  # Block admin access if not in IP whitelist
-  dynamic "rule" {
-    for_each = length(var.ip_whitelist) > 0 ? [1] : []
-    content {
-      name     = "BlockAdminAccessRule"
-      priority = 5
-      
-      action {
-        block {}
-      }
-      
-      statement {
-        byte_match_statement {
-          field_to_match {
-            uri_path {}
-          }
-          positional_constraint = "STARTS_WITH"
-          search_string         = "/admin"
-          text_transformation {
-            priority = 0
-            type     = "NONE"
-          }
-        }
-      }
-      
-      visibility_config {
-        cloudwatch_metrics_enabled = true
-        metric_name                = "${local.name_prefix}-BlockAdminAccessRule"
-        sampled_requests_enabled   = true
-      }
-    }
-  }
-  
-  visibility_config {
-    cloudwatch_metrics_enabled = true
-    metric_name                = "${local.name_prefix}-api-protection"
-    sampled_requests_enabled   = true
-  }
-  
-  tags = merge(
-    local.common_tags,
-    {
-      Name = "${local.name_prefix}-api-protection"
-    },
-    var.resource_tags
-  )
+# Output variables from the security module
+output "name_prefix" {
+  description = "Environment-specific name prefix for security resources"
+  value       = local.name_prefix
 }
 
-# IP Set for admin whitelist
-resource "aws_wafv2_ip_set" "admin_whitelist" {
-  count = length(var.ip_whitelist) > 0 ? 1 : 0
-  
-  name               = "${local.name_prefix}-admin-whitelist"
-  description        = "IP whitelist for admin access"
-  scope              = "REGIONAL"
-  ip_address_version = "IPV4"
-  addresses          = var.ip_whitelist
-  
-  tags = merge(
-    local.common_tags,
-    {
-      Name = "${local.name_prefix}-admin-whitelist"
-    },
-    var.resource_tags
-  )
+output "common_tags" {
+  description = "Common tags to be applied to all resources"
+  value       = local.common_tags
+}
+
+output "security_tags" {
+  description = "Security-specific resource tags"
+  value       = local.security_tags
+}
+
+output "service_name_prefix" {
+  description = "Service-specific resource naming prefixes"
+  value       = local.service_name_prefix
+}
+
+output "security_config" {
+  description = "Environment-specific security configuration"
+  value       = local.security_config[var.environment]
+}
+
+output "s3_bucket_name" {
+  description = "Environment-specific S3 bucket name for document storage"
+  value       = local.s3_bucket_names[var.environment]
+}
+
+output "network_security" {
+  description = "Network security configuration for the current environment"
+  value       = local.network_security[var.environment]
+}
+
+output "security_group_rules" {
+  description = "Security group rules for microservices"
+  value       = local.security_group_rules
 }
