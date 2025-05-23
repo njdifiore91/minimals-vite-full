@@ -37,25 +37,20 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 /**
- * Unit tests for the abstract BaseController class that provides common functionality 
- * for all REST controllers in the MCA application.
- * <p>
- * Tests verify global exception handling, standardized response formatting, and utility 
- * methods for consistent API behavior. Includes tests for different exception types, 
- * error response structures, and logging behavior.
- * </p>
- * <p>
- * Uses a concrete implementation of the abstract class to enable testing of its functionality.
- * </p>
+ * Unit tests for the abstract BaseController class.
+ * 
+ * These tests verify the functionality of the BaseController by using a concrete
+ * implementation of the abstract class. The tests cover global exception handling,
+ * standardized response formatting, and utility methods for consistent API behavior.
  */
 @ExtendWith(MockitoExtension.class)
 public class BaseControllerTest {
 
     /**
-     * Concrete implementation of the abstract BaseController for testing purposes.
+     * Concrete implementation of BaseController for testing purposes.
      */
     private static class TestController extends BaseController {
-        // No additional implementation needed for testing the base functionality
+        // No additional implementation needed for testing
     }
 
     private TestController controller;
@@ -64,320 +59,341 @@ public class BaseControllerTest {
     private WebRequest webRequest;
 
     @Mock
+    private BindingResult bindingResult;
+
+    @Mock
     private Logger mockLogger;
 
     @BeforeEach
     void setUp() {
         controller = new TestController();
-        
-        // Mock the WebRequest to return a consistent path
-        when(webRequest.getDescription(false)).thenReturn("uri=/api/test");
-        
-        // Use reflection to replace the logger with a mock
+        // Mock the logger to test logging behavior
         try {
+            // Use reflection to set the logger field in BaseController
             java.lang.reflect.Field loggerField = BaseController.class.getDeclaredField("logger");
             loggerField.setAccessible(true);
             loggerField.set(controller, mockLogger);
         } catch (Exception e) {
             fail("Failed to set mock logger: " + e.getMessage());
         }
+
+        // Mock the WebRequest to return a consistent path
+        when(webRequest.getDescription(false)).thenReturn("uri=/api/v1/test");
     }
 
     @Test
-    @DisplayName("Should create a standard response with data and status")
-    void shouldCreateResponseWithDataAndStatus() {
-        // Given
-        String testData = "Test Data";
-        HttpStatus status = HttpStatus.OK;
-
-        // When
-        ResponseEntity<String> response = controller.createResponse(testData, status);
-
-        // Then
-        assertEquals(status, response.getStatusCode());
-        assertEquals(testData, response.getBody());
-    }
-
-    @Test
-    @DisplayName("Should create a success response with status 200")
-    void shouldCreateSuccessResponse() {
-        // Given
+    @DisplayName("Should create a success response with HTTP status 200")
+    void testCreateSuccessResponse() {
+        // Arrange
         String testData = "Test Data";
 
-        // When
+        // Act
         ResponseEntity<String> response = controller.createSuccessResponse(testData);
 
-        // Then
+        // Assert
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertEquals(testData, response.getBody());
     }
 
     @Test
-    @DisplayName("Should create a created response with status 201")
-    void shouldCreateCreatedResponse() {
-        // Given
-        String testData = "Test Data";
+    @DisplayName("Should create a created response with HTTP status 201")
+    void testCreateCreatedResponse() {
+        // Arrange
+        String testData = "Created Resource";
 
-        // When
+        // Act
         ResponseEntity<String> response = controller.createCreatedResponse(testData);
 
-        // Then
+        // Assert
         assertEquals(HttpStatus.CREATED, response.getStatusCode());
         assertEquals(testData, response.getBody());
     }
 
     @Test
-    @DisplayName("Should create a page response with pagination metadata")
-    void shouldCreatePageResponse() {
-        // Given
+    @DisplayName("Should create a custom response with specified HTTP status")
+    void testCreateResponse() {
+        // Arrange
+        String testData = "Custom Response";
+        HttpStatus customStatus = HttpStatus.ACCEPTED;
+
+        // Act
+        ResponseEntity<String> response = controller.createResponse(testData, customStatus);
+
+        // Assert
+        assertEquals(customStatus, response.getStatusCode());
+        assertEquals(testData, response.getBody());
+    }
+
+    @Test
+    @DisplayName("Should create a paginated response with metadata and links")
+    void testCreatePageResponse() {
+        // Arrange
         List<String> items = Arrays.asList("Item 1", "Item 2", "Item 3");
         Page<String> page = new PageImpl<>(items, PageRequest.of(0, 10), 3);
 
-        // When
+        // Act
         ResponseEntity<PageResponseDTO<String>> response = controller.createPageResponse(page);
 
-        // Then
+        // Assert
         assertEquals(HttpStatus.OK, response.getStatusCode());
         assertNotNull(response.getBody());
         assertEquals(items, response.getBody().getContent());
         assertEquals(3, response.getBody().getMetadata().getTotalElements());
         assertEquals(0, response.getBody().getMetadata().getCurrentPage());
-        assertEquals(10, response.getBody().getMetadata().getPageSize());
         assertEquals(1, response.getBody().getMetadata().getTotalPages());
+        assertEquals(10, response.getBody().getMetadata().getPageSize());
     }
 
     @Test
-    @DisplayName("Should create an error response with message and status")
-    void shouldCreateErrorResponse() {
-        // Given
+    @DisplayName("Should create an error response with specified message and status")
+    void testCreateErrorResponse() {
+        // Arrange
         String errorMessage = "Test error message";
-        HttpStatus status = HttpStatus.BAD_REQUEST;
+        HttpStatus errorStatus = HttpStatus.BAD_REQUEST;
 
-        // When
-        ResponseEntity<ErrorResponseDTO> response = controller.createErrorResponse(errorMessage, status, webRequest);
+        // Act
+        ResponseEntity<ErrorResponseDTO> response = controller.createErrorResponse(
+                errorMessage, errorStatus, webRequest);
 
-        // Then
-        assertEquals(status, response.getStatusCode());
+        // Assert
+        assertEquals(errorStatus, response.getStatusCode());
         assertNotNull(response.getBody());
         assertEquals(errorMessage, response.getBody().getMessage());
-        assertEquals(status.value(), response.getBody().getStatus());
-        assertEquals(status.getReasonPhrase(), response.getBody().getError());
-        assertEquals("/api/test", response.getBody().getPath());
+        assertEquals(errorStatus.value(), response.getBody().getStatus());
+        assertEquals(errorStatus.getReasonPhrase(), response.getBody().getError());
+        assertEquals("/api/v1/test", response.getBody().getPath());
         assertNotNull(response.getBody().getTimestamp());
     }
 
     @Test
-    @DisplayName("Should validate binding result and throw exception when errors exist")
-    void shouldValidateBindingResultAndThrowException() {
-        // Given
-        BindingResult bindingResult = mock(BindingResult.class);
-        FieldError fieldError = new FieldError("testObject", "testField", "Test error message");
+    @DisplayName("Should handle ResourceNotFoundException with 404 status")
+    void testHandleResourceNotFoundException() {
+        // Arrange
+        String errorMessage = "Resource not found";
+        ResourceNotFoundException ex = new ResourceNotFoundException(errorMessage);
+
+        // Act
+        ResponseEntity<ErrorResponseDTO> response = controller.handleResourceNotFoundException(ex, webRequest);
+
+        // Assert
+        assertEquals(HttpStatus.NOT_FOUND, response.getStatusCode());
+        assertEquals(errorMessage, response.getBody().getMessage());
+        assertEquals(HttpStatus.NOT_FOUND.value(), response.getBody().getStatus());
         
+        // Verify logging
+        verify(mockLogger).warn(contains("Resource not found"), eq(errorMessage));
+    }
+
+    @Test
+    @DisplayName("Should handle AuthorizationException with 403 status")
+    void testHandleAuthorizationException() {
+        // Arrange
+        String errorMessage = "Access denied";
+        AuthorizationException ex = new AuthorizationException(errorMessage);
+
+        // Act
+        ResponseEntity<ErrorResponseDTO> response = controller.handleAuthorizationException(ex, webRequest);
+
+        // Assert
+        assertEquals(HttpStatus.FORBIDDEN, response.getStatusCode());
+        assertEquals(errorMessage, response.getBody().getMessage());
+        assertEquals(HttpStatus.FORBIDDEN.value(), response.getBody().getStatus());
+        
+        // Verify logging
+        verify(mockLogger).warn(contains("Authorization failure"), eq(errorMessage));
+    }
+
+    @Test
+    @DisplayName("Should handle ValidationException with 400 status and validation errors")
+    void testHandleValidationException() {
+        // Arrange
+        String errorMessage = "Validation failed";
+        Map<String, String> errors = new HashMap<>();
+        errors.put("field1", "Field 1 is required");
+        errors.put("field2", "Field 2 must be a valid email");
+        ValidationException ex = new ValidationException(errorMessage, errors);
+
+        // Act
+        ResponseEntity<ErrorResponseDTO> response = controller.handleValidationException(ex, webRequest);
+
+        // Assert
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+        assertEquals(errorMessage, response.getBody().getMessage());
+        assertEquals(HttpStatus.BAD_REQUEST.value(), response.getBody().getStatus());
+        assertEquals(errors, response.getBody().getValidationErrors());
+        
+        // Verify logging
+        verify(mockLogger).warn(contains("Validation error"), eq(errorMessage));
+    }
+
+    @Test
+    @DisplayName("Should handle MethodArgumentNotValidException with 400 status and field errors")
+    void testHandleMethodArgumentNotValidException() {
+        // Arrange
+        MethodArgumentNotValidException ex = mock(MethodArgumentNotValidException.class);
+        BindingResult bindingResult = mock(BindingResult.class);
+        when(ex.getBindingResult()).thenReturn(bindingResult);
+        
+        List<FieldError> fieldErrors = Arrays.asList(
+            new FieldError("testObject", "field1", "Field 1 is required"),
+            new FieldError("testObject", "field2", "Field 2 must be a valid email")
+        );
+        when(bindingResult.getFieldErrors()).thenReturn(fieldErrors);
+
+        // Act
+        ResponseEntity<ErrorResponseDTO> response = controller.handleMethodArgumentNotValidException(ex, webRequest);
+
+        // Assert
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+        assertEquals("Validation failed", response.getBody().getMessage());
+        assertEquals(HttpStatus.BAD_REQUEST.value(), response.getBody().getStatus());
+        
+        Map<String, String> expectedErrors = new HashMap<>();
+        expectedErrors.put("field1", "Field 1 is required");
+        expectedErrors.put("field2", "Field 2 must be a valid email");
+        assertEquals(expectedErrors, response.getBody().getValidationErrors());
+        
+        // Verify logging
+        verify(mockLogger).warn(contains("Method argument validation error"), anyString());
+    }
+
+    @Test
+    @DisplayName("Should handle BaseException with custom status code")
+    void testHandleBaseException() {
+        // Arrange
+        String errorMessage = "Custom error";
+        int statusCode = HttpStatus.CONFLICT.value();
+        BaseException ex = new BaseException(errorMessage, statusCode);
+
+        // Act
+        ResponseEntity<ErrorResponseDTO> response = controller.handleBaseException(ex, webRequest);
+
+        // Assert
+        assertEquals(HttpStatus.CONFLICT, response.getStatusCode());
+        assertEquals(errorMessage, response.getBody().getMessage());
+        assertEquals(statusCode, response.getBody().getStatus());
+        
+        // Verify logging
+        verify(mockLogger).error(contains("Application error"), eq(errorMessage));
+    }
+
+    @Test
+    @DisplayName("Should handle generic Exception with 500 status")
+    void testHandleGenericException() {
+        // Arrange
+        String errorMessage = "Unexpected error";
+        Exception ex = new RuntimeException(errorMessage);
+
+        // Act
+        ResponseEntity<ErrorResponseDTO> response = controller.handleGenericException(ex, webRequest);
+
+        // Assert
+        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, response.getStatusCode());
+        assertEquals("An unexpected error occurred. Please try again later.", response.getBody().getMessage());
+        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR.value(), response.getBody().getStatus());
+        
+        // Verify logging
+        verify(mockLogger).error(contains("Unexpected error"), eq(errorMessage), eq(ex));
+    }
+
+    @Test
+    @DisplayName("Should validate binding result without errors")
+    void testValidateBindingResultWithoutErrors() {
+        // Arrange
+        when(bindingResult.hasErrors()).thenReturn(false);
+
+        // Act & Assert - should not throw exception
+        assertDoesNotThrow(() -> controller.validateBindingResult(bindingResult));
+    }
+
+    @Test
+    @DisplayName("Should throw ValidationException when binding result has errors")
+    void testValidateBindingResultWithErrors() {
+        // Arrange
         when(bindingResult.hasErrors()).thenReturn(true);
-        when(bindingResult.getFieldErrors()).thenReturn(Arrays.asList(fieldError));
+        
+        List<FieldError> fieldErrors = Arrays.asList(
+            new FieldError("testObject", "field1", "Field 1 is required"),
+            new FieldError("testObject", "field2", "Field 2 must be a valid email")
+        );
+        when(bindingResult.getFieldErrors()).thenReturn(fieldErrors);
 
-        // When/Then
-        ValidationException exception = assertThrows(ValidationException.class, () -> {
-            controller.validateBindingResult(bindingResult);
-        });
-
-        // Then
+        // Act & Assert
+        ValidationException exception = assertThrows(ValidationException.class, 
+                () -> controller.validateBindingResult(bindingResult));
+        
         assertEquals("Validation failed", exception.getMessage());
         Map<String, String> expectedErrors = new HashMap<>();
-        expectedErrors.put("testField", "Test error message");
+        expectedErrors.put("field1", "Field 1 is required");
+        expectedErrors.put("field2", "Field 2 must be a valid email");
         assertEquals(expectedErrors, exception.getErrors());
     }
 
     @Test
-    @DisplayName("Should not throw exception when binding result has no errors")
-    void shouldNotThrowExceptionWhenBindingResultHasNoErrors() {
-        // Given
-        BindingResult bindingResult = mock(BindingResult.class);
-        when(bindingResult.hasErrors()).thenReturn(false);
-
-        // When/Then
-        assertDoesNotThrow(() -> {
-            controller.validateBindingResult(bindingResult);
-        });
-    }
-
-    @Test
-    @DisplayName("Should log request with method, endpoint, and request body")
-    void shouldLogRequestWithBody() {
-        // Given
+    @DisplayName("Should log request with payload")
+    void testLogRequestWithPayload() {
+        // Arrange
         String method = "POST";
-        String endpoint = "/api/test";
-        Object requestBody = new Object() {
-            @Override
-            public String toString() {
-                return "TestRequestBody";
-            }
-        };
+        String endpoint = "/api/v1/test";
+        Object payload = new TestPayload("test", 123);
 
-        // When
-        controller.logRequest(method, endpoint, requestBody);
+        // Act
+        controller.logRequest(method, endpoint, payload);
 
-        // Then
-        verify(mockLogger).info("API Request: {} {} with payload: {}", method, endpoint, requestBody);
+        // Assert
+        verify(mockLogger).info(eq("API Request: {} {} with payload: {}"), eq(method), eq(endpoint), eq(payload));
     }
 
     @Test
-    @DisplayName("Should log request with method and endpoint when body is null")
-    void shouldLogRequestWithoutBody() {
-        // Given
+    @DisplayName("Should log request without payload")
+    void testLogRequestWithoutPayload() {
+        // Arrange
         String method = "GET";
-        String endpoint = "/api/test";
+        String endpoint = "/api/v1/test";
 
-        // When
+        // Act
         controller.logRequest(method, endpoint, null);
 
-        // Then
-        verify(mockLogger).info("API Request: {} {}", method, endpoint);
+        // Assert
+        verify(mockLogger).info(eq("API Request: {} {}"), eq(method), eq(endpoint));
     }
 
     @Test
-    @DisplayName("Should log response with method, endpoint, response body, and status")
-    void shouldLogResponse() {
-        // Given
+    @DisplayName("Should log response")
+    void testLogResponse() {
+        // Arrange
         String method = "GET";
-        String endpoint = "/api/test";
-        Object responseBody = "Test response";
+        String endpoint = "/api/v1/test";
+        Object responseBody = new TestPayload("response", 456);
         HttpStatus status = HttpStatus.OK;
 
-        // When
+        // Act
         controller.logResponse(method, endpoint, responseBody, status);
 
-        // Then
-        verify(mockLogger).info("API Response: {} {} returned {} with payload: {}", 
-                method, endpoint, status.value(), responseBody);
+        // Assert
+        verify(mockLogger).info(
+                eq("API Response: {} {} returned {} with payload: {}"), 
+                eq(method), 
+                eq(endpoint), 
+                eq(status.value()), 
+                eq(responseBody));
     }
 
-    @Test
-    @DisplayName("Should handle ResourceNotFoundException and return 404 response")
-    void shouldHandleResourceNotFoundException() {
-        // Given
-        ResourceNotFoundException exception = new ResourceNotFoundException("Test resource", "123");
+    /**
+     * Simple test payload class for logging tests.
+     */
+    private static class TestPayload {
+        private final String name;
+        private final int value;
 
-        // When
-        ResponseEntity<ErrorResponseDTO> response = controller.handleResourceNotFoundException(exception, webRequest);
+        public TestPayload(String name, int value) {
+            this.name = name;
+            this.value = value;
+        }
 
-        // Then
-        assertEquals(HttpStatus.NOT_FOUND, response.getStatusCode());
-        assertNotNull(response.getBody());
-        assertEquals("Test resource with id 123 not found", response.getBody().getMessage());
-        assertEquals(HttpStatus.NOT_FOUND.value(), response.getBody().getStatus());
-        verify(mockLogger).warn("Resource not found: {}", exception.getMessage());
-    }
-
-    @Test
-    @DisplayName("Should handle AuthorizationException and return 403 response")
-    void shouldHandleAuthorizationException() {
-        // Given
-        AuthorizationException exception = new AuthorizationException("webhooks", "configure", "System Admin");
-
-        // When
-        ResponseEntity<ErrorResponseDTO> response = controller.handleAuthorizationException(exception, webRequest);
-
-        // Then
-        assertEquals(HttpStatus.FORBIDDEN, response.getStatusCode());
-        assertNotNull(response.getBody());
-        assertEquals("Access denied to perform 'configure' on resource 'webhooks'. Required role: System Admin", 
-                response.getBody().getMessage());
-        assertEquals(HttpStatus.FORBIDDEN.value(), response.getBody().getStatus());
-        verify(mockLogger).warn("Authorization failure: {}", exception.getMessage());
-    }
-
-    @Test
-    @DisplayName("Should handle ValidationException and return 400 response with validation errors")
-    void shouldHandleValidationException() {
-        // Given
-        Map<String, String> errors = new HashMap<>();
-        errors.put("field1", "Error message 1");
-        errors.put("field2", "Error message 2");
-        ValidationException exception = new ValidationException("Validation failed", errors);
-
-        // When
-        ResponseEntity<ErrorResponseDTO> response = controller.handleValidationException(exception, webRequest);
-
-        // Then
-        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
-        assertNotNull(response.getBody());
-        assertEquals("Validation failed", response.getBody().getMessage());
-        assertEquals(HttpStatus.BAD_REQUEST.value(), response.getBody().getStatus());
-        assertEquals(errors, response.getBody().getValidationErrors());
-        verify(mockLogger).warn("Validation error: {}", exception.getMessage());
-    }
-
-    @Test
-    @DisplayName("Should handle MethodArgumentNotValidException and return 400 response with validation errors")
-    void shouldHandleMethodArgumentNotValidException() {
-        // Given
-        MethodArgumentNotValidException exception = mock(MethodArgumentNotValidException.class);
-        BindingResult bindingResult = mock(BindingResult.class);
-        FieldError fieldError1 = new FieldError("testObject", "field1", "Error message 1");
-        FieldError fieldError2 = new FieldError("testObject", "field2", "Error message 2");
-        List<FieldError> fieldErrors = Arrays.asList(fieldError1, fieldError2);
-        
-        when(exception.getBindingResult()).thenReturn(bindingResult);
-        when(bindingResult.getFieldErrors()).thenReturn(fieldErrors);
-        when(exception.getMessage()).thenReturn("Validation failed");
-
-        // When
-        ResponseEntity<ErrorResponseDTO> response = controller.handleMethodArgumentNotValidException(exception, webRequest);
-
-        // Then
-        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
-        assertNotNull(response.getBody());
-        assertEquals("Validation failed", response.getBody().getMessage());
-        assertEquals(HttpStatus.BAD_REQUEST.value(), response.getBody().getStatus());
-        
-        Map<String, String> expectedErrors = new HashMap<>();
-        expectedErrors.put("field1", "Error message 1");
-        expectedErrors.put("field2", "Error message 2");
-        assertEquals(expectedErrors, response.getBody().getValidationErrors());
-        
-        verify(mockLogger).warn("Method argument validation error: {}", exception.getMessage());
-    }
-
-    @Test
-    @DisplayName("Should handle BaseException and return response with status from exception")
-    void shouldHandleBaseException() {
-        // Given
-        BaseException exception = new BaseException("Test error message", HttpStatus.CONFLICT);
-
-        // When
-        ResponseEntity<ErrorResponseDTO> response = controller.handleBaseException(exception, webRequest);
-
-        // Then
-        assertEquals(HttpStatus.CONFLICT, response.getStatusCode());
-        assertNotNull(response.getBody());
-        assertEquals("Test error message", response.getBody().getMessage());
-        assertEquals(HttpStatus.CONFLICT.value(), response.getBody().getStatus());
-        verify(mockLogger).error("Application error: {}", exception.getMessage());
-    }
-
-    @Test
-    @DisplayName("Should handle generic Exception and return 500 response")
-    void shouldHandleGenericException() {
-        // Given
-        Exception exception = new RuntimeException("Unexpected error");
-
-        // When
-        ResponseEntity<ErrorResponseDTO> response = controller.handleGenericException(exception, webRequest);
-
-        // Then
-        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, response.getStatusCode());
-        assertNotNull(response.getBody());
-        assertEquals("An unexpected error occurred. Please try again later.", response.getBody().getMessage());
-        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR.value(), response.getBody().getStatus());
-        
-        // Verify that the exception is logged with the stack trace
-        ArgumentCaptor<String> messageCaptor = ArgumentCaptor.forClass(String.class);
-        ArgumentCaptor<Object> exceptionCaptor = ArgumentCaptor.forClass(Object.class);
-        
-        verify(mockLogger).error(messageCaptor.capture(), messageCaptor.capture(), exceptionCaptor.capture());
-        assertEquals("Unexpected error: {}", messageCaptor.getAllValues().get(0));
-        assertEquals(exception.getMessage(), messageCaptor.getAllValues().get(1));
-        assertEquals(exception, exceptionCaptor.getValue());
+        @Override
+        public String toString() {
+            return "TestPayload{name='" + name + "', value=" + value + '}';
+        }
     }
 }
