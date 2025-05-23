@@ -1,513 +1,663 @@
 {
-  "version": "1.0.0",
-  "description": "Test manifest for OCR service mixed document samples (containing both typed and handwritten text)",
-  "last_updated": "2025-05-21",
-  "document_samples": [
+  "manifest_version": "1.0.0",
+  "description": "Manifest of sample mixed documents (containing both typed and handwritten content) for OCR testing",
+  "last_updated": "2025-05-23",
+  "document_categories": [
+    "application_forms",
+    "financial_documents",
+    "business_documents",
+    "invoices",
+    "identity_documents"
+  ],
+  "quality_levels": [
+    "high",
+    "medium",
+    "low"
+  ],
+  "documents": [
     {
       "id": "mixed_app_form_001",
-      "file_path": "mixed_documents/application_forms/mca_application_typed_with_handwritten.pdf",
-      "document_type": "APPLICATION_FORM",
-      "text_type": "MIXED",
-      "quality": "HIGH",
-      "description": "MCA application with typed form fields and handwritten responses",
+      "filename": "mca_application_with_annotations.pdf",
+      "category": "application_forms",
+      "document_type": "loan_application",
+      "quality": "high",
+      "orientation": "portrait",
+      "page_count": 3,
       "characteristics": {
-        "typed_content_ratio": 0.3,
-        "handwritten_content_ratio": 0.7,
-        "complexity": "MEDIUM"
+        "resolution": "300dpi",
+        "has_tables": true,
+        "has_checkboxes": true,
+        "has_signatures": true,
+        "has_handwritten_annotations": true,
+        "typed_to_handwritten_ratio": "70:30",
+        "complexity": "high"
       },
-      "expected_fields": {
-        "typed": {
-          "form_title": {
-            "value": "MERCHANT CASH ADVANCE APPLICATION",
-            "position": {"x1": 200, "y1": 50, "x2": 600, "y2": 80},
+      "expected_extraction": {
+        "typed_fields": [
+          {
+            "name": "business_name",
+            "expected_value": "Acme Corporation",
+            "position": {"page": 1, "top": 150, "left": 200, "bottom": 175, "right": 400},
             "expected_confidence": 0.98
           },
-          "form_instructions": {
-            "value": "Please complete all fields below. Print clearly if writing by hand.",
-            "position": {"x1": 200, "y1": 90, "x2": 600, "y2": 110},
+          {
+            "name": "dba_name",
+            "expected_value": "Acme Business Solutions",
+            "position": {"page": 1, "top": 180, "left": 200, "bottom": 205, "right": 450},
             "expected_confidence": 0.97
           },
-          "business_name_label": {
-            "value": "Business Legal Name:",
-            "position": {"x1": 50, "y1": 150, "x2": 200, "y2": 170},
+          {
+            "name": "ein",
+            "expected_value": "12-3456789",
+            "position": {"page": 1, "top": 210, "left": 200, "bottom": 235, "right": 300},
+            "expected_confidence": 0.99
+          },
+          {
+            "name": "business_address",
+            "expected_value": "123 Main Street, Suite 100, Anytown, CA 90210",
+            "position": {"page": 1, "top": 240, "left": 200, "bottom": 265, "right": 550},
+            "expected_confidence": 0.96
+          },
+          {
+            "name": "business_phone",
+            "expected_value": "(555) 123-4567",
+            "position": {"page": 1, "top": 270, "left": 200, "bottom": 295, "right": 350},
             "expected_confidence": 0.98
           },
-          "dba_name_label": {
-            "value": "DBA Name (if different):",
-            "position": {"x1": 50, "y1": 180, "x2": 200, "y2": 200},
-            "expected_confidence": 0.98
-          },
-          "ein_label": {
-            "value": "Federal Tax ID (EIN):",
-            "position": {"x1": 50, "y1": 210, "x2": 200, "y2": 230},
-            "expected_confidence": 0.98
+          {
+            "name": "funding_amount_requested",
+            "expected_value": "$250,000.00",
+            "position": {"page": 1, "top": 350, "left": 200, "bottom": 375, "right": 350},
+            "expected_confidence": 0.99
           }
-        },
-        "handwritten": {
-          "business_name": {
-            "value": "Smith Auto Repair",
-            "position": {"x1": 220, "y1": 150, "x2": 450, "y2": 170},
-            "expected_confidence": 0.88
+        ],
+        "handwritten_fields": [
+          {
+            "name": "margin_note_1",
+            "expected_value": "Verified by phone 5/20/25",
+            "position": {"page": 1, "top": 240, "left": 560, "bottom": 265, "right": 700},
+            "expected_confidence": 0.85,
+            "handwriting_style": "PRINT"
           },
-          "dba_name": {
-            "value": "Smith's",
-            "position": {"x1": 220, "y1": 180, "x2": 450, "y2": 200},
-            "expected_confidence": 0.86
+          {
+            "name": "funding_purpose",
+            "expected_value": "Equipment upgrade and expansion",
+            "position": {"page": 1, "top": 380, "left": 200, "bottom": 405, "right": 450},
+            "expected_confidence": 0.83,
+            "handwriting_style": "PRINT"
           },
-          "ein": {
-            "value": "67-8901234",
-            "position": {"x1": 220, "y1": 210, "x2": 350, "y2": 230},
-            "expected_confidence": 0.90
+          {
+            "name": "signature",
+            "expected_value": "John Smith",
+            "position": {"page": 3, "top": 500, "left": 200, "bottom": 550, "right": 400},
+            "expected_confidence": 0.80,
+            "handwriting_style": "CURSIVE"
           },
-          "business_address": {
-            "value": "456 Maple Avenue, Somewhere, IL 60601",
-            "position": {"x1": 220, "y1": 240, "x2": 550, "y2": 260},
-            "expected_confidence": 0.85
-          },
-          "business_phone": {
-            "value": "(555) 456-7890",
-            "position": {"x1": 220, "y1": 270, "x2": 350, "y2": 290},
-            "expected_confidence": 0.89
-          },
-          "owner_signature": {
-            "value": "Michael Smith",
-            "position": {"x1": 220, "y1": 600, "x2": 400, "y2": 630},
-            "expected_confidence": 0.82
+          {
+            "name": "date_signed",
+            "expected_value": "05/10/2025",
+            "position": {"page": 3, "top": 500, "left": 450, "bottom": 525, "right": 550},
+            "expected_confidence": 0.87,
+            "handwriting_style": "PRINT"
           }
-        }
-      },
-      "expected_classification_confidence": 0.96,
-      "expected_overall_confidence": 0.89
-    },
-    {
-      "id": "mixed_bank_statement_001",
-      "file_path": "mixed_documents/financial_documents/bank_statement_with_annotations.pdf",
-      "document_type": "BANK_STATEMENT",
-      "text_type": "MIXED",
-      "quality": "HIGH",
-      "description": "Bank statement with handwritten annotations and highlights",
-      "characteristics": {
-        "typed_content_ratio": 0.8,
-        "handwritten_content_ratio": 0.2,
-        "complexity": "MEDIUM"
-      },
-      "expected_fields": {
-        "typed": {
-          "account_holder": {
-            "value": "Smith Auto Repair",
-            "position": {"x1": 100, "y1": 120, "x2": 300, "y2": 140},
-            "expected_confidence": 0.98
-          },
-          "account_number": {
-            "value": "XXXX-XXXX-5678",
-            "position": {"x1": 400, "y1": 120, "x2": 550, "y2": 140},
-            "expected_confidence": 0.98
-          },
-          "statement_period": {
-            "value": "03/01/2025 - 03/31/2025",
-            "position": {"x1": 100, "y1": 150, "x2": 300, "y2": 170},
-            "expected_confidence": 0.97
-          },
-          "opening_balance": {
-            "value": "$45,678.90",
-            "position": {"x1": 400, "y1": 200, "x2": 500, "y2": 220},
-            "expected_confidence": 0.98
-          },
-          "closing_balance": {
-            "value": "$52,345.67",
-            "position": {"x1": 400, "y1": 600, "x2": 500, "y2": 620},
-            "expected_confidence": 0.98
+        ],
+        "tables": [
+          {
+            "name": "bank_accounts",
+            "position": {"page": 2, "top": 400, "left": 100, "bottom": 550, "right": 700},
+            "expected_confidence": 0.95,
+            "rows": 3,
+            "columns": 4,
+            "headers": ["Account Type", "Bank Name", "Account Number", "Current Balance"],
+            "data": [
+              ["Checking", "First National Bank", "XXXX1234", "$45,678.90"],
+              ["Savings", "First National Bank", "XXXX5678", "$123,456.78"]
+            ],
+            "handwritten_cells": [
+              {"row": 1, "column": 3, "expected_confidence": 0.85},
+              {"row": 2, "column": 3, "expected_confidence": 0.84}
+            ]
           }
-        },
-        "handwritten": {
-          "annotation_1": {
-            "value": "Business expense",
-            "position": {"x1": 550, "y1": 300, "x2": 650, "y2": 320},
-            "expected_confidence": 0.85
-          },
-          "annotation_2": {
-            "value": "New equipment purchase",
-            "position": {"x1": 550, "y1": 350, "x2": 650, "y2": 370},
-            "expected_confidence": 0.83
-          },
-          "annotation_3": {
-            "value": "Loan payment",
-            "position": {"x1": 550, "y1": 400, "x2": 650, "y2": 420},
-            "expected_confidence": 0.86
-          },
-          "circled_amount": {
-            "value": "$12,500.00",
-            "position": {"x1": 400, "y1": 350, "x2": 500, "y2": 370},
-            "expected_confidence": 0.88
-          }
-        }
+        ]
       },
       "expected_classification_confidence": 0.97,
       "expected_overall_confidence": 0.92
     },
     {
-      "id": "mixed_tax_return_001",
-      "file_path": "mixed_documents/financial_documents/tax_return_with_signatures.pdf",
-      "document_type": "TAX_RETURN",
-      "text_type": "MIXED",
-      "quality": "HIGH",
-      "description": "Business tax return with handwritten signatures and notes",
+      "id": "mixed_fin_doc_001",
+      "filename": "bank_statement_annotated.pdf",
+      "category": "financial_documents",
+      "document_type": "bank_statement",
+      "quality": "high",
+      "orientation": "portrait",
+      "page_count": 2,
       "characteristics": {
-        "typed_content_ratio": 0.9,
-        "handwritten_content_ratio": 0.1,
-        "complexity": "HIGH"
+        "resolution": "300dpi",
+        "has_tables": true,
+        "has_checkboxes": false,
+        "has_signatures": false,
+        "has_handwritten_annotations": true,
+        "typed_to_handwritten_ratio": "85:15",
+        "complexity": "medium"
       },
-      "expected_fields": {
-        "typed": {
-          "business_name": {
-            "value": "Smith Auto Repair LLC",
-            "position": {"x1": 150, "y1": 200, "x2": 400, "y2": 220},
-            "expected_confidence": 0.99
-          },
-          "ein": {
-            "value": "67-8901234",
-            "position": {"x1": 500, "y1": 200, "x2": 600, "y2": 220},
-            "expected_confidence": 0.99
-          },
-          "tax_year": {
-            "value": "2024",
-            "position": {"x1": 300, "y1": 150, "x2": 350, "y2": 170},
-            "expected_confidence": 0.99
-          },
-          "gross_receipts": {
-            "value": "$720,000.00",
-            "position": {"x1": 500, "y1": 300, "x2": 650, "y2": 320},
+      "expected_extraction": {
+        "typed_fields": [
+          {
+            "name": "account_holder",
+            "expected_value": "Acme Corporation",
+            "position": {"page": 1, "top": 150, "left": 100, "bottom": 175, "right": 300},
             "expected_confidence": 0.98
           },
-          "total_income": {
-            "value": "$720,000.00",
-            "position": {"x1": 500, "y1": 350, "x2": 650, "y2": 370},
-            "expected_confidence": 0.98
+          {
+            "name": "account_number",
+            "expected_value": "XXXX1234",
+            "position": {"page": 1, "top": 180, "left": 100, "bottom": 205, "right": 250},
+            "expected_confidence": 0.99
           },
-          "total_deductions": {
-            "value": "$540,000.00",
-            "position": {"x1": 500, "y1": 450, "x2": 650, "y2": 470},
+          {
+            "name": "statement_period",
+            "expected_value": "04/01/2025 - 04/30/2025",
+            "position": {"page": 1, "top": 210, "left": 100, "bottom": 235, "right": 350},
             "expected_confidence": 0.97
           },
-          "taxable_income": {
-            "value": "$180,000.00",
-            "position": {"x1": 500, "y1": 500, "x2": 650, "y2": 520},
+          {
+            "name": "opening_balance",
+            "expected_value": "$42,156.78",
+            "position": {"page": 1, "top": 240, "left": 100, "bottom": 265, "right": 250},
+            "expected_confidence": 0.98
+          },
+          {
+            "name": "closing_balance",
+            "expected_value": "$45,678.90",
+            "position": {"page": 1, "top": 270, "left": 100, "bottom": 295, "right": 250},
             "expected_confidence": 0.98
           }
-        },
-        "handwritten": {
-          "preparer_signature": {
-            "value": "Thomas Wilson, CPA",
-            "position": {"x1": 300, "y1": 700, "x2": 450, "y2": 720},
-            "expected_confidence": 0.84
+        ],
+        "handwritten_fields": [
+          {
+            "name": "annotation_1",
+            "expected_value": "Business expense - office supplies",
+            "position": {"page": 1, "top": 430, "left": 550, "bottom": 450, "right": 750},
+            "expected_confidence": 0.85,
+            "handwriting_style": "PRINT"
           },
-          "owner_signature": {
-            "value": "Michael Smith",
-            "position": {"x1": 300, "y1": 650, "x2": 450, "y2": 670},
-            "expected_confidence": 0.86
+          {
+            "name": "annotation_2",
+            "expected_value": "New client payment",
+            "position": {"page": 1, "top": 480, "left": 550, "bottom": 500, "right": 700},
+            "expected_confidence": 0.86,
+            "handwriting_style": "PRINT"
           },
-          "date_signed": {
-            "value": "04/15/2025",
-            "position": {"x1": 500, "y1": 650, "x2": 600, "y2": 670},
-            "expected_confidence": 0.88
-          },
-          "margin_note": {
-            "value": "Discuss with accountant",
-            "position": {"x1": 50, "y1": 450, "x2": 150, "y2": 470},
-            "expected_confidence": 0.80
+          {
+            "name": "calculation",
+            "expected_value": "$12,500 + $8,750 + $9,250 + $5,000 = $35,500",
+            "position": {"page": 1, "top": 650, "left": 100, "bottom": 675, "right": 450},
+            "expected_confidence": 0.82,
+            "handwriting_style": "MIXED"
           }
-        }
+        ],
+        "tables": [
+          {
+            "name": "transactions",
+            "position": {"page": 1, "top": 400, "left": 50, "bottom": 700, "right": 750},
+            "expected_confidence": 0.96,
+            "rows": 11,
+            "columns": 4,
+            "headers": ["Date", "Description", "Withdrawals", "Deposits"],
+            "data": [
+              ["04/01/2025", "Beginning Balance", "", "$42,156.78"],
+              ["04/03/2025", "Customer Payment - XYZ Corp", "", "$12,500.00"],
+              ["04/05/2025", "Vendor Payment - ABC Supplies", "$4,567.89", ""],
+              ["04/10/2025", "Customer Payment - 123 Industries", "", "$8,750.00"],
+              ["04/12/2025", "Payroll", "$15,678.45", ""],
+              ["04/15/2025", "Customer Payment - Smith Co", "", "$9,250.00"],
+              ["04/18/2025", "Rent Payment", "$3,500.00", ""],
+              ["04/20/2025", "Utility Payment", "$876.54", ""],
+              ["04/25/2025", "Customer Payment - Johnson LLC", "", "$5,000.00"],
+              ["04/28/2025", "Insurance Payment", "$7,355.00", ""],
+              ["04/30/2025", "Ending Balance", "", "$45,678.90"]
+            ]
+          }
+        ]
       },
       "expected_classification_confidence": 0.98,
       "expected_overall_confidence": 0.94
     },
     {
-      "id": "mixed_invoice_001",
-      "file_path": "mixed_documents/business_documents/invoice_with_handwritten_approval.pdf",
-      "document_type": "INVOICE",
-      "text_type": "MIXED",
-      "quality": "MEDIUM",
-      "description": "Business invoice with handwritten approval and payment notes",
+      "id": "mixed_inv_doc_001",
+      "filename": "invoice_with_handwritten_notes.pdf",
+      "category": "invoices",
+      "document_type": "invoice",
+      "quality": "medium",
+      "orientation": "portrait",
+      "page_count": 1,
       "characteristics": {
-        "typed_content_ratio": 0.85,
-        "handwritten_content_ratio": 0.15,
-        "complexity": "MEDIUM"
+        "resolution": "240dpi",
+        "has_tables": true,
+        "has_checkboxes": false,
+        "has_signatures": true,
+        "has_handwritten_annotations": true,
+        "typed_to_handwritten_ratio": "75:25",
+        "complexity": "medium",
+        "issues": ["slight_blur"]
       },
-      "expected_fields": {
-        "typed": {
-          "invoice_number": {
-            "value": "INV-2025-4567",
-            "position": {"x1": 450, "y1": 150, "x2": 550, "y2": 170},
-            "expected_confidence": 0.99
-          },
-          "invoice_date": {
-            "value": "04/10/2025",
-            "position": {"x1": 450, "y1": 180, "x2": 550, "y2": 200},
-            "expected_confidence": 0.98
-          },
-          "due_date": {
-            "value": "05/10/2025",
-            "position": {"x1": 450, "y1": 210, "x2": 550, "y2": 230},
-            "expected_confidence": 0.98
-          },
-          "vendor_name": {
-            "value": "Auto Parts Supplier Inc.",
-            "position": {"x1": 100, "y1": 120, "x2": 350, "y2": 140},
-            "expected_confidence": 0.99
-          },
-          "customer_name": {
-            "value": "Smith Auto Repair",
-            "position": {"x1": 100, "y1": 250, "x2": 300, "y2": 270},
-            "expected_confidence": 0.98
-          },
-          "subtotal": {
-            "value": "$2,500.00",
-            "position": {"x1": 450, "y1": 500, "x2": 550, "y2": 520},
-            "expected_confidence": 0.98
-          },
-          "tax": {
-            "value": "$200.00",
-            "position": {"x1": 450, "y1": 530, "x2": 550, "y2": 550},
-            "expected_confidence": 0.98
-          },
-          "total": {
-            "value": "$2,700.00",
-            "position": {"x1": 450, "y1": 560, "x2": 550, "y2": 580},
-            "expected_confidence": 0.99
-          }
-        },
-        "handwritten": {
-          "approval_signature": {
-            "value": "M. Smith",
-            "position": {"x1": 400, "y1": 650, "x2": 500, "y2": 670},
-            "expected_confidence": 0.85
-          },
-          "approval_date": {
-            "value": "04/12/2025",
-            "position": {"x1": 550, "y1": 650, "x2": 650, "y2": 670},
-            "expected_confidence": 0.87
-          },
-          "payment_method": {
-            "value": "Check #1234",
-            "position": {"x1": 100, "y1": 650, "x2": 200, "y2": 670},
-            "expected_confidence": 0.84
-          },
-          "payment_note": {
-            "value": "Paid in full",
-            "position": {"x1": 100, "y1": 680, "x2": 200, "y2": 700},
-            "expected_confidence": 0.83
-          }
-        }
-      },
-      "expected_classification_confidence": 0.96,
-      "expected_overall_confidence": 0.93
-    },
-    {
-      "id": "mixed_id_document_001",
-      "file_path": "mixed_documents/identity_documents/drivers_license_with_signature.jpg",
-      "document_type": "ID_DOCUMENT",
-      "text_type": "MIXED",
-      "quality": "HIGH",
-      "description": "Driver's license with printed information and handwritten signature",
-      "characteristics": {
-        "typed_content_ratio": 0.9,
-        "handwritten_content_ratio": 0.1,
-        "complexity": "LOW"
-      },
-      "expected_fields": {
-        "typed": {
-          "full_name": {
-            "value": "MICHAEL J SMITH",
-            "position": {"x1": 200, "y1": 150, "x2": 400, "y2": 170},
+      "expected_extraction": {
+        "typed_fields": [
+          {
+            "name": "invoice_number",
+            "expected_value": "INV-5678",
+            "position": {"page": 1, "top": 100, "left": 500, "bottom": 125, "right": 600},
             "expected_confidence": 0.95
           },
-          "address": {
-            "value": "456 MAPLE AVE, SOMEWHERE, IL 60601",
-            "position": {"x1": 200, "y1": 200, "x2": 450, "y2": 220},
-            "expected_confidence": 0.93
-          },
-          "date_of_birth": {
-            "value": "05/20/1975",
-            "position": {"x1": 200, "y1": 250, "x2": 300, "y2": 270},
+          {
+            "name": "invoice_date",
+            "expected_value": "05/01/2025",
+            "position": {"page": 1, "top": 130, "left": 500, "bottom": 155, "right": 600},
             "expected_confidence": 0.94
           },
-          "id_number": {
-            "value": "S12345678",
-            "position": {"x1": 200, "y1": 300, "x2": 300, "y2": 320},
-            "expected_confidence": 0.96
-          },
-          "expiration_date": {
-            "value": "05/20/2029",
-            "position": {"x1": 200, "y1": 350, "x2": 300, "y2": 370},
-            "expected_confidence": 0.95
-          }
-        },
-        "handwritten": {
-          "signature": {
-            "value": "Michael Smith",
-            "position": {"x1": 200, "y1": 400, "x2": 350, "y2": 430},
-            "expected_confidence": 0.85
-          }
-        }
-      },
-      "expected_classification_confidence": 0.98,
-      "expected_overall_confidence": 0.93
-    },
-    {
-      "id": "mixed_application_form_002",
-      "file_path": "mixed_documents/application_forms/mca_application_printed_with_corrections.pdf",
-      "document_type": "APPLICATION_FORM",
-      "text_type": "MIXED",
-      "quality": "MEDIUM",
-      "description": "MCA application with typed information and handwritten corrections",
-      "characteristics": {
-        "typed_content_ratio": 0.8,
-        "handwritten_content_ratio": 0.2,
-        "complexity": "HIGH"
-      },
-      "expected_fields": {
-        "typed": {
-          "form_title": {
-            "value": "MERCHANT CASH ADVANCE APPLICATION",
-            "position": {"x1": 200, "y1": 50, "x2": 600, "y2": 80},
-            "expected_confidence": 0.98
-          },
-          "business_name": {
-            "value": "Johnson Plumbing Services",
-            "position": {"x1": 220, "y1": 150, "x2": 450, "y2": 170},
-            "expected_confidence": 0.95
-          },
-          "dba_name": {
-            "value": "Johnson's",
-            "position": {"x1": 220, "y1": 180, "x2": 450, "y2": 200},
+          {
+            "name": "due_date",
+            "expected_value": "05/31/2025",
+            "position": {"page": 1, "top": 160, "left": 500, "bottom": 185, "right": 600},
             "expected_confidence": 0.94
           },
-          "ein": {
-            "value": "45-6789012",
-            "position": {"x1": 220, "y1": 210, "x2": 350, "y2": 230},
+          {
+            "name": "vendor_name",
+            "expected_value": "ABC Supplies, Inc.",
+            "position": {"page": 1, "top": 100, "left": 100, "bottom": 125, "right": 350},
+            "expected_confidence": 0.95
+          },
+          {
+            "name": "subtotal",
+            "expected_value": "$4,500.00",
+            "position": {"page": 1, "top": 500, "left": 600, "bottom": 525, "right": 700},
             "expected_confidence": 0.96
           },
-          "business_address": {
-            "value": "789 Elm Street, Anytown, TX 75001",
-            "position": {"x1": 220, "y1": 240, "x2": 550, "y2": 260},
-            "expected_confidence": 0.93
+          {
+            "name": "tax",
+            "expected_value": "$360.00",
+            "position": {"page": 1, "top": 530, "left": 600, "bottom": 555, "right": 700},
+            "expected_confidence": 0.96
+          },
+          {
+            "name": "total",
+            "expected_value": "$4,860.00",
+            "position": {"page": 1, "top": 560, "left": 600, "bottom": 585, "right": 700},
+            "expected_confidence": 0.96
           }
-        },
-        "handwritten": {
-          "address_correction": {
-            "value": "Suite 200",
-            "position": {"x1": 560, "y1": 240, "x2": 650, "y2": 260},
-            "expected_confidence": 0.84
+        ],
+        "handwritten_fields": [
+          {
+            "name": "approval_note",
+            "expected_value": "Approved for payment",
+            "position": {"page": 1, "top": 600, "left": 400, "bottom": 625, "right": 550},
+            "expected_confidence": 0.84,
+            "handwriting_style": "PRINT"
           },
-          "phone_correction": {
-            "value": "(555) 234-5678",
-            "position": {"x1": 350, "y1": 270, "x2": 450, "y2": 290},
-            "expected_confidence": 0.86
+          {
+            "name": "approval_date",
+            "expected_value": "5/15/25",
+            "position": {"page": 1, "top": 600, "left": 560, "bottom": 625, "right": 620},
+            "expected_confidence": 0.86,
+            "handwriting_style": "PRINT"
           },
-          "funding_amount_correction": {
-            "value": "$125,000.00",
-            "position": {"x1": 350, "y1": 390, "x2": 450, "y2": 410},
-            "expected_confidence": 0.85
+          {
+            "name": "payment_method",
+            "expected_value": "Wire transfer",
+            "position": {"page": 1, "top": 630, "left": 400, "bottom": 655, "right": 500},
+            "expected_confidence": 0.85,
+            "handwriting_style": "PRINT"
           },
-          "initials": {
-            "value": "RJ",
-            "position": {"x1": 650, "y1": 240, "x2": 670, "y2": 260},
-            "expected_confidence": 0.88
-          },
-          "margin_note": {
-            "value": "Updated 5/15/25",
-            "position": {"x1": 50, "y1": 100, "x2": 150, "y2": 120},
-            "expected_confidence": 0.82
+          {
+            "name": "approver_signature",
+            "expected_value": "J. Wilson",
+            "position": {"page": 1, "top": 650, "left": 500, "bottom": 675, "right": 600},
+            "expected_confidence": 0.78,
+            "handwriting_style": "CURSIVE"
           }
-        }
+        ],
+        "tables": [
+          {
+            "name": "line_items",
+            "position": {"page": 1, "top": 300, "left": 100, "bottom": 480, "right": 700},
+            "expected_confidence": 0.94,
+            "rows": 6,
+            "columns": 5,
+            "headers": ["Item #", "Description", "Quantity", "Unit Price", "Amount"],
+            "data": [
+              ["A-101", "Widget Type A", "10", "$50.00", "$500.00"],
+              ["B-202", "Widget Type B", "5", "$100.00", "$500.00"],
+              ["C-303", "Premium Service Package", "1", "$2,000.00", "$2,000.00"],
+              ["D-404", "Maintenance Contract", "1", "$1,000.00", "$1,000.00"],
+              ["E-505", "Installation Fee", "1", "$500.00", "$500.00"]
+            ],
+            "handwritten_annotations": [
+              {
+                "row": 2,
+                "column": 2,
+                "annotation": "Confirm specs",
+                "position": {"page": 1, "top": 330, "left": 400, "bottom": 345, "right": 480},
+                "expected_confidence": 0.82
+              },
+              {
+                "row": 3,
+                "column": 4,
+                "annotation": "Discounted",
+                "position": {"page": 1, "top": 360, "left": 650, "bottom": 375, "right": 720},
+                "expected_confidence": 0.83
+              }
+            ]
+          }
+        ]
       },
       "expected_classification_confidence": 0.95,
       "expected_overall_confidence": 0.90
     },
     {
-      "id": "mixed_bank_statement_002",
-      "file_path": "mixed_documents/financial_documents/bank_statement_with_calculations.pdf",
-      "document_type": "BANK_STATEMENT",
-      "text_type": "MIXED",
-      "quality": "MEDIUM",
-      "description": "Bank statement with handwritten calculations in margins",
+      "id": "mixed_bus_doc_001",
+      "filename": "business_plan_with_notes.pdf",
+      "category": "business_documents",
+      "document_type": "business_plan",
+      "quality": "high",
+      "orientation": "portrait",
+      "page_count": 5,
       "characteristics": {
-        "typed_content_ratio": 0.75,
-        "handwritten_content_ratio": 0.25,
-        "complexity": "HIGH"
+        "resolution": "300dpi",
+        "has_tables": true,
+        "has_checkboxes": false,
+        "has_signatures": true,
+        "has_handwritten_annotations": true,
+        "typed_to_handwritten_ratio": "80:20",
+        "complexity": "high"
       },
-      "expected_fields": {
-        "typed": {
-          "account_holder": {
-            "value": "Johnson Plumbing Services",
-            "position": {"x1": 100, "y1": 120, "x2": 350, "y2": 140},
+      "expected_extraction": {
+        "typed_fields": [
+          {
+            "name": "document_title",
+            "expected_value": "Business Expansion Plan 2025-2026",
+            "position": {"page": 1, "top": 100, "left": 200, "bottom": 130, "right": 600},
+            "expected_confidence": 0.98
+          },
+          {
+            "name": "business_name",
+            "expected_value": "Acme Corporation",
+            "position": {"page": 1, "top": 150, "left": 200, "bottom": 175, "right": 400},
             "expected_confidence": 0.97
           },
-          "account_number": {
-            "value": "XXXX-XXXX-9012",
-            "position": {"x1": 400, "y1": 120, "x2": 550, "y2": 140},
-            "expected_confidence": 0.98
+          {
+            "name": "prepared_by",
+            "expected_value": "John Smith, CEO",
+            "position": {"page": 1, "top": 180, "left": 200, "bottom": 205, "right": 400},
+            "expected_confidence": 0.96
           },
-          "statement_period": {
-            "value": "04/01/2025 - 04/30/2025",
-            "position": {"x1": 100, "y1": 150, "x2": 300, "y2": 170},
+          {
+            "name": "prepared_date",
+            "expected_value": "May 1, 2025",
+            "position": {"page": 1, "top": 210, "left": 200, "bottom": 235, "right": 350},
             "expected_confidence": 0.97
           },
-          "opening_balance": {
-            "value": "$35,421.56",
-            "position": {"x1": 400, "y1": 200, "x2": 500, "y2": 220},
-            "expected_confidence": 0.98
-          },
-          "closing_balance": {
-            "value": "$42,876.32",
-            "position": {"x1": 400, "y1": 600, "x2": 500, "y2": 620},
-            "expected_confidence": 0.98
+          {
+            "name": "executive_summary_heading",
+            "expected_value": "Executive Summary",
+            "position": {"page": 1, "top": 250, "left": 200, "bottom": 275, "right": 400},
+            "expected_confidence": 0.99
           }
-        },
-        "handwritten": {
-          "calculation_1": {
-            "value": "$35,421.56 + $15,200.00 = $50,621.56",
-            "position": {"x1": 50, "y1": 650, "x2": 300, "y2": 670},
-            "expected_confidence": 0.82
+        ],
+        "handwritten_fields": [
+          {
+            "name": "margin_note_1",
+            "expected_value": "Update projections based on Q1 results",
+            "position": {"page": 2, "top": 150, "left": 600, "bottom": 180, "right": 750},
+            "expected_confidence": 0.84,
+            "handwriting_style": "PRINT"
           },
-          "calculation_2": {
-            "value": "$50,621.56 - $7,745.24 = $42,876.32",
-            "position": {"x1": 50, "y1": 680, "x2": 300, "y2": 700},
-            "expected_confidence": 0.81
+          {
+            "name": "margin_note_2",
+            "expected_value": "Add competitive analysis section",
+            "position": {"page": 3, "top": 200, "left": 600, "bottom": 230, "right": 750},
+            "expected_confidence": 0.85,
+            "handwriting_style": "PRINT"
           },
-          "note_1": {
-            "value": "Major client payment",
-            "position": {"x1": 550, "y1": 320, "x2": 650, "y2": 340},
-            "expected_confidence": 0.84
+          {
+            "name": "calculation_note",
+            "expected_value": "ROI = 250K / 50K = 5x",
+            "position": {"page": 4, "top": 350, "left": 600, "bottom": 375, "right": 750},
+            "expected_confidence": 0.83,
+            "handwriting_style": "MIXED"
           },
-          "note_2": {
-            "value": "Equipment lease",
-            "position": {"x1": 550, "y1": 380, "x2": 650, "y2": 400},
-            "expected_confidence": 0.83
-          },
-          "highlight_mark": {
-            "value": "*",
-            "position": {"x1": 520, "y1": 320, "x2": 530, "y2": 340},
-            "expected_confidence": 0.90
+          {
+            "name": "signature",
+            "expected_value": "John Smith",
+            "position": {"page": 5, "top": 500, "left": 400, "bottom": 550, "right": 550},
+            "expected_confidence": 0.80,
+            "handwriting_style": "CURSIVE"
           }
-        }
+        ],
+        "tables": [
+          {
+            "name": "financial_projections",
+            "position": {"page": 4, "top": 200, "left": 150, "bottom": 400, "right": 650},
+            "expected_confidence": 0.95,
+            "rows": 5,
+            "columns": 4,
+            "headers": ["Year", "Revenue", "Expenses", "Profit"],
+            "data": [
+              ["2025", "$1,500,000", "$1,200,000", "$300,000"],
+              ["2026", "$1,800,000", "$1,350,000", "$450,000"],
+              ["2027", "$2,200,000", "$1,600,000", "$600,000"],
+              ["2028", "$2,750,000", "$1,900,000", "$850,000"]
+            ],
+            "handwritten_annotations": [
+              {
+                "row": 1,
+                "column": 1,
+                "annotation": "Conservative",
+                "position": {"page": 4, "top": 230, "left": 250, "bottom": 245, "right": 330},
+                "expected_confidence": 0.82
+              },
+              {
+                "row": 3,
+                "column": 3,
+                "annotation": "Review",
+                "position": {"page": 4, "top": 290, "left": 600, "bottom": 305, "right": 650},
+                "expected_confidence": 0.83
+              }
+            ]
+          }
+        ]
       },
       "expected_classification_confidence": 0.96,
-      "expected_overall_confidence": 0.90
+      "expected_overall_confidence": 0.92
+    },
+    {
+      "id": "mixed_app_form_002",
+      "filename": "mca_application_low_quality_annotated.pdf",
+      "category": "application_forms",
+      "document_type": "loan_application",
+      "quality": "low",
+      "orientation": "portrait",
+      "page_count": 3,
+      "characteristics": {
+        "resolution": "150dpi",
+        "has_tables": true,
+        "has_checkboxes": true,
+        "has_signatures": true,
+        "has_handwritten_annotations": true,
+        "typed_to_handwritten_ratio": "65:35",
+        "complexity": "high",
+        "issues": ["low_contrast", "noise", "skewed"]
+      },
+      "expected_extraction": {
+        "typed_fields": [
+          {
+            "name": "business_name",
+            "expected_value": "XYZ Enterprises",
+            "position": {"page": 1, "top": 150, "left": 200, "bottom": 175, "right": 400},
+            "expected_confidence": 0.85
+          },
+          {
+            "name": "dba_name",
+            "expected_value": "XYZ Solutions",
+            "position": {"page": 1, "top": 180, "left": 200, "bottom": 205, "right": 450},
+            "expected_confidence": 0.82
+          },
+          {
+            "name": "ein",
+            "expected_value": "98-7654321",
+            "position": {"page": 1, "top": 210, "left": 200, "bottom": 235, "right": 300},
+            "expected_confidence": 0.88
+          },
+          {
+            "name": "business_address",
+            "expected_value": "456 Business Blvd, Suite 200, Enterprise, CA 92345",
+            "position": {"page": 1, "top": 240, "left": 200, "bottom": 265, "right": 550},
+            "expected_confidence": 0.80
+          }
+        ],
+        "handwritten_fields": [
+          {
+            "name": "correction_1",
+            "expected_value": "Suite 300 (moved last month)",
+            "position": {"page": 1, "top": 240, "left": 560, "bottom": 265, "right": 750},
+            "expected_confidence": 0.75,
+            "handwriting_style": "PRINT"
+          },
+          {
+            "name": "additional_contact",
+            "expected_value": "Sarah Johnson, CFO - 555-987-6543",
+            "position": {"page": 1, "top": 300, "left": 200, "bottom": 325, "right": 500},
+            "expected_confidence": 0.72,
+            "handwriting_style": "PRINT"
+          },
+          {
+            "name": "funding_purpose",
+            "expected_value": "Inventory expansion and new location",
+            "position": {"page": 1, "top": 380, "left": 200, "bottom": 405, "right": 450},
+            "expected_confidence": 0.70,
+            "handwriting_style": "MIXED"
+          },
+          {
+            "name": "signature",
+            "expected_value": "Michael Johnson",
+            "position": {"page": 3, "top": 500, "left": 200, "bottom": 550, "right": 400},
+            "expected_confidence": 0.68,
+            "handwriting_style": "CURSIVE"
+          }
+        ],
+        "tables": [
+          {
+            "name": "bank_accounts",
+            "position": {"page": 2, "top": 400, "left": 100, "bottom": 550, "right": 700},
+            "expected_confidence": 0.78,
+            "rows": 3,
+            "columns": 4,
+            "headers": ["Account Type", "Bank Name", "Account Number", "Current Balance"],
+            "data": [
+              ["Checking", "Second National Bank", "XXXX5432", "$32,456.78"],
+              ["Savings", "Second National Bank", "XXXX8765", "$87,654.32"]
+            ],
+            "handwritten_annotations": [
+              {
+                "row": 1,
+                "column": 3,
+                "annotation": "Primary account",
+                "position": {"page": 2, "top": 430, "left": 550, "bottom": 445, "right": 650},
+                "expected_confidence": 0.72
+              }
+            ]
+          }
+        ]
+      },
+      "expected_classification_confidence": 0.90,
+      "expected_overall_confidence": 0.78
     }
   ],
-  "confidence_thresholds": {
-    "high_confidence": 0.90,
-    "medium_confidence": 0.75,
-    "low_confidence": 0.60,
-    "human_review_threshold": 0.75
-  },
   "test_parameters": {
-    "typed_text_accuracy_target": 0.98,
-    "handwritten_text_accuracy_target": 0.85,
-    "mixed_text_accuracy_target": 0.90,
-    "classification_accuracy_target": 0.95,
-    "field_extraction_accuracy_target": 0.95,
-    "overall_accuracy_target": 0.93
-  }
+    "confidence_thresholds": {
+      "typed_text": {
+        "high_quality": 0.95,
+        "medium_quality": 0.85,
+        "low_quality": 0.75
+      },
+      "handwritten_text": {
+        "high_quality": 0.85,
+        "medium_quality": 0.75,
+        "low_quality": 0.65
+      },
+      "mixed_document": {
+        "high_quality": 0.90,
+        "medium_quality": 0.80,
+        "low_quality": 0.70
+      }
+    },
+    "accuracy_metrics": {
+      "field_extraction": {
+        "exact_match": "Value must match exactly, including capitalization and punctuation",
+        "fuzzy_match": "Value must have Levenshtein distance <= 2 for short fields, <= 5 for long fields",
+        "numeric_match": "Numeric values must be within 0.1% of expected value"
+      },
+      "position_tolerance": {
+        "typed_text": {"x": 10, "y": 5},
+        "handwritten_text": {"x": 20, "y": 10}
+      }
+    },
+    "handwriting_style_factors": {
+      "PRINT": {
+        "expected_accuracy": 0.85,
+        "confidence_adjustment": 0.0
+      },
+      "CURSIVE": {
+        "expected_accuracy": 0.75,
+        "confidence_adjustment": -0.10
+      },
+      "MIXED": {
+        "expected_accuracy": 0.80,
+        "confidence_adjustment": -0.05
+      },
+      "BLOCK_LETTERS": {
+        "expected_accuracy": 0.90,
+        "confidence_adjustment": 0.05
+      }
+    },
+    "performance_requirements": {
+      "processing_time": {
+        "per_page": "< 3 seconds",
+        "per_document": "< 15 seconds"
+      },
+      "memory_usage": "< 1.5GB per document",
+      "gpu_acceleration": "Required for production environment"
+    }
+  },
+  "challenging_scenarios": [
+    {
+      "scenario": "Overlapping Content",
+      "description": "Handwritten annotations overlapping typed text",
+      "expected_confidence_impact": "-15% to -20% for affected regions",
+      "mitigation_strategy": "Layer separation and content isolation techniques"
+    },
+    {
+      "scenario": "Mixed Text Styles",
+      "description": "Documents containing both typed and handwritten text in close proximity",
+      "expected_confidence_impact": "-10% to -15% at style boundaries",
+      "mitigation_strategy": "Dual-model approach with style-specific processing"
+    },
+    {
+      "scenario": "Quality Variations",
+      "description": "Documents with varying quality across regions (e.g., faded handwriting on clear typed form)",
+      "expected_confidence_impact": "-5% to -25% depending on severity",
+      "mitigation_strategy": "Adaptive preprocessing and region-specific enhancement"
+    },
+    {
+      "scenario": "Margin Annotations",
+      "description": "Handwritten notes in margins or between form fields",
+      "expected_confidence_impact": "-5% to -10% for layout analysis",
+      "mitigation_strategy": "Spatial context analysis and form structure recognition"
+    }
+  ],
+  "related_manifests": [
+    "../typed_documents/sample_manifest.json",
+    "../handwritten_documents/sample_manifest.json",
+    "../typed_documents/financial_documents/financial_documents_manifest.json",
+    "../typed_documents/invoices/invoices_manifest.json"
+  ]
 }
