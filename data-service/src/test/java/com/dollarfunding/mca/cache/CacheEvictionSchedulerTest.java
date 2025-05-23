@@ -4,18 +4,15 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.redis.connection.RedisConnection;
-import org.springframework.data.redis.connection.RedisServerCommands;
-import org.springframework.data.redis.core.RedisCallback;
+import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.test.util.ReflectionTestUtils;
 
-import java.util.Arrays;
-import java.util.HashSet;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -25,9 +22,9 @@ import static org.mockito.Mockito.*;
 /**
  * Unit tests for the {@link CacheEvictionScheduler} class.
  * 
- * These tests verify the scheduled cache maintenance tasks, including:
+ * These tests verify the scheduled cache maintenance tasks including:
  * - Eviction of stale data based on configurable TTL criteria
- * - Pattern-based cache clearing for specific key patterns
+ * - Pattern-based cache clearing
  * - Logging of cache statistics for monitoring purposes
  * - Eviction policy configuration based on memory usage and access patterns
  */
@@ -36,381 +33,421 @@ public class CacheEvictionSchedulerTest {
 
     @Mock
     private RedisTemplate<String, Object> redisTemplate;
-
+    
+    @Mock
+    private CacheMetricsCollector metricsCollector;
+    
+    @Mock
+    private RedisCacheService cacheService;
+    
+    @Mock
+    private RedisConnectionFactory connectionFactory;
+    
     @Mock
     private RedisConnection redisConnection;
-
-    @Mock
-    private RedisServerCommands redisServerCommands;
-
-    @InjectMocks
+    
     private CacheEvictionScheduler cacheEvictionScheduler;
-
+    
     @BeforeEach
     public void setUp() {
-        // Set default property values using ReflectionTestUtils
-        ReflectionTestUtils.setField(cacheEvictionScheduler, "applicationDataTtl", 900L);
-        ReflectionTestUtils.setField(cacheEvictionScheduler, "sessionTtl", 86400L);
-        ReflectionTestUtils.setField(cacheEvictionScheduler, "memoryThresholdPercent", 80);
+        // Setup mock behavior for Redis connection
+        when(redisTemplate.getConnectionFactory()).thenReturn(connectionFactory);
+        when(connectionFactory.getConnection()).thenReturn(redisConnection);
+        
+        // Create the scheduler with mocked dependencies
+        cacheEvictionScheduler = new CacheEvictionScheduler(redisTemplate, metricsCollector, cacheService);
+        
+        // Set configurable properties using reflection
+        ReflectionTestUtils.setField(cacheEvictionScheduler, "memoryThreshold", 0.8);
+        ReflectionTestUtils.setField(cacheEvictionScheduler, "idleTimeMinutes", 30L);
+        ReflectionTestUtils.setField(cacheEvictionScheduler, "maxKeysPerScan", 1000L);
         ReflectionTestUtils.setField(cacheEvictionScheduler, "evictionEnabled", true);
+        ReflectionTestUtils.setField(cacheEvictionScheduler, "logIntervalMinutes", 60L);
     }
-
+    
     /**
-     * Test that the evictStaleApplicationData method properly applies TTL to application cache entries
-     * that don't have an expiration set.
+     * Test that the eviction of stale application data works correctly.
+     * This verifies that the scheduler correctly identifies and evicts stale data
+     * based on the configured idle time threshold.
      */
     @Test
     public void testEvictStaleApplicationData() {
-        // Arrange
-        Set<String> keys = new HashSet<>(Arrays.asList("application:1", "application:2", "application:3"));
-        when(redisTemplate.keys("application:*")).thenReturn(keys);
+        // Setup test data
+        Set<String> applicationKeys = new HashSet<>(Arrays.asList("app:1", "app:2", "app:3"));
+        Set<String> documentKeys = new HashSet<>(Arrays.asList("doc:1", "doc:2"));
+        Set<String> merchantKeys = new HashSet<>(Arrays.asList("merchant:1"));
         
-        // Mock TTL responses: first key has no TTL, second has negative TTL, third has positive TTL
-        when(redisTemplate.getExpire("application:1", TimeUnit.SECONDS)).thenReturn(null);
-        when(redisTemplate.getExpire("application:2", TimeUnit.SECONDS)).thenReturn(-1L);
-        when(redisTemplate.getExpire("application:3", TimeUnit.SECONDS)).thenReturn(600L);
-
-        // Act
+        // Mock Redis keys method to return our test keys for different patterns
+        when(redisTemplate.keys(CacheConstants.KeyPrefix.APPLICATION + "*")).thenReturn(applicationKeys);
+        when(redisTemplate.keys(CacheConstants.KeyPrefix.DOCUMENT + "*")).thenReturn(documentKeys);
+        when(redisTemplate.keys(CacheConstants.KeyPrefix.MERCHANT + "*")).thenReturn(merchantKeys);
+        
+        // Mock idle time for keys - some above threshold, some below
+        mockIdleTime("app:1", 40 * 60); // 40 minutes (above threshold)
+        mockIdleTime("app:2", 20 * 60); // 20 minutes (below threshold)
+        mockIdleTime("app:3", 35 * 60); // 35 minutes (above threshold)
+        mockIdleTime("doc:1", 15 * 60); // 15 minutes (below threshold)
+        mockIdleTime("doc:2", 45 * 60); // 45 minutes (above threshold)
+        mockIdleTime("merchant:1", 50 * 60); // 50 minutes (above threshold)
+        
+        // Mock successful deletion for some keys
+        when(cacheService.delete("app:1")).thenReturn(true);
+        when(cacheService.delete("app:3")).thenReturn(true);
+        when(cacheService.delete("doc:2")).thenReturn(true);
+        when(cacheService.delete("merchant:1")).thenReturn(true);
+        
+        // Execute the method under test
         cacheEvictionScheduler.evictStaleApplicationData();
-
-        // Assert
-        // Verify TTL was set for keys with null or negative TTL
-        verify(redisTemplate).expire("application:1", 900L, TimeUnit.SECONDS);
-        verify(redisTemplate).expire("application:2", 900L, TimeUnit.SECONDS);
-        // Verify TTL was not set for key with positive TTL
-        verify(redisTemplate, never()).expire("application:3", 900L, TimeUnit.SECONDS);
+        
+        // Verify that keys with idle time above threshold were deleted
+        verify(cacheService, times(1)).delete("app:1");
+        verify(cacheService, times(0)).delete("app:2"); // Should not be deleted (below threshold)
+        verify(cacheService, times(1)).delete("app:3");
+        verify(cacheService, times(0)).delete("doc:1"); // Should not be deleted (below threshold)
+        verify(cacheService, times(1)).delete("doc:2");
+        verify(cacheService, times(1)).delete("merchant:1");
     }
-
+    
     /**
-     * Test that the evictStaleApplicationData method does nothing when eviction is disabled.
+     * Test that the eviction of stale session data works correctly.
+     * This verifies that the scheduler correctly identifies and evicts stale session data
+     * based on the configured idle time threshold.
      */
     @Test
-    public void testEvictStaleApplicationDataWhenDisabled() {
-        // Arrange
-        ReflectionTestUtils.setField(cacheEvictionScheduler, "evictionEnabled", false);
-
-        // Act
-        cacheEvictionScheduler.evictStaleApplicationData();
-
-        // Assert
-        verify(redisTemplate, never()).keys(anyString());
-        verify(redisTemplate, never()).getExpire(anyString(), any(TimeUnit.class));
-        verify(redisTemplate, never()).expire(anyString(), anyLong(), any(TimeUnit.class));
+    public void testEvictStaleSessionData() {
+        // Setup test data
+        Set<String> sessionKeys = new HashSet<>(Arrays.asList("session:1", "session:2", "session:3"));
+        
+        // Mock Redis keys method to return our test keys
+        when(redisTemplate.keys(CacheConstants.KeyPrefix.SESSION + "*")).thenReturn(sessionKeys);
+        
+        // Mock idle time for keys - some above threshold, some below
+        mockIdleTime("session:1", 20 * 60); // 20 minutes (below threshold)
+        mockIdleTime("session:2", 40 * 60); // 40 minutes (above threshold)
+        mockIdleTime("session:3", 15 * 60); // 15 minutes (below threshold)
+        
+        // Mock successful deletion for some keys
+        when(cacheService.delete("session:2")).thenReturn(true);
+        
+        // Execute the method under test
+        cacheEvictionScheduler.evictStaleSessionData();
+        
+        // Verify that only keys with idle time above threshold were deleted
+        verify(cacheService, times(0)).delete("session:1"); // Should not be deleted (below threshold)
+        verify(cacheService, times(1)).delete("session:2");
+        verify(cacheService, times(0)).delete("session:3"); // Should not be deleted (below threshold)
     }
-
+    
     /**
-     * Test that the evictStaleSessions method properly applies TTL to session cache entries
-     * that don't have an expiration set.
+     * Test that the eviction of stale lookup data works correctly.
+     * This verifies that the scheduler correctly identifies and evicts stale lookup data
+     * based on the configured idle time threshold.
      */
     @Test
-    public void testEvictStaleSessions() {
-        // Arrange
-        Set<String> keys = new HashSet<>(Arrays.asList("session:1", "session:2", "session:3"));
-        when(redisTemplate.keys("session:*")).thenReturn(keys);
+    public void testEvictStaleLookupData() {
+        // Setup test data
+        Set<String> lookupKeys = new HashSet<>(Arrays.asList("lookup:1", "lookup:2", "lookup:3"));
         
-        // Mock TTL responses: first key has no TTL, second has negative TTL, third has positive TTL
-        when(redisTemplate.getExpire("session:1", TimeUnit.SECONDS)).thenReturn(null);
-        when(redisTemplate.getExpire("session:2", TimeUnit.SECONDS)).thenReturn(-1L);
-        when(redisTemplate.getExpire("session:3", TimeUnit.SECONDS)).thenReturn(3600L);
-
-        // Act
-        cacheEvictionScheduler.evictStaleSessions();
-
-        // Assert
-        // Verify TTL was set for keys with null or negative TTL
-        verify(redisTemplate).expire("session:1", 86400L, TimeUnit.SECONDS);
-        verify(redisTemplate).expire("session:2", 86400L, TimeUnit.SECONDS);
-        // Verify TTL was not set for key with positive TTL
-        verify(redisTemplate, never()).expire("session:3", 86400L, TimeUnit.SECONDS);
+        // Mock Redis keys method to return our test keys
+        when(redisTemplate.keys(CacheConstants.KeyPrefix.LOOKUP + "*")).thenReturn(lookupKeys);
+        
+        // Mock idle time for keys - some above threshold, some below
+        mockIdleTime("lookup:1", 35 * 60); // 35 minutes (above threshold)
+        mockIdleTime("lookup:2", 25 * 60); // 25 minutes (below threshold)
+        mockIdleTime("lookup:3", 45 * 60); // 45 minutes (above threshold)
+        
+        // Mock successful deletion for some keys
+        when(cacheService.delete("lookup:1")).thenReturn(true);
+        when(cacheService.delete("lookup:3")).thenReturn(true);
+        
+        // Execute the method under test
+        cacheEvictionScheduler.evictStaleLookupData();
+        
+        // Verify that only keys with idle time above threshold were deleted
+        verify(cacheService, times(1)).delete("lookup:1");
+        verify(cacheService, times(0)).delete("lookup:2"); // Should not be deleted (below threshold)
+        verify(cacheService, times(1)).delete("lookup:3");
     }
-
+    
     /**
-     * Test that the evictStaleSessions method does nothing when eviction is disabled.
+     * Test that the memory usage monitoring and adaptive eviction works correctly.
+     * This verifies that the scheduler correctly monitors memory usage and performs
+     * adaptive eviction when memory usage exceeds the configured threshold.
      */
     @Test
-    public void testEvictStaleSessionsWhenDisabled() {
-        // Arrange
-        ReflectionTestUtils.setField(cacheEvictionScheduler, "evictionEnabled", false);
-
-        // Act
-        cacheEvictionScheduler.evictStaleSessions();
-
-        // Assert
-        verify(redisTemplate, never()).keys(anyString());
-        verify(redisTemplate, never()).getExpire(anyString(), any(TimeUnit.class));
-        verify(redisTemplate, never()).expire(anyString(), anyLong(), any(TimeUnit.class));
+    public void testMonitorMemoryUsageWithHighMemoryUsage() {
+        // Setup memory info with high memory usage (above threshold)
+        Map<String, Object> memoryInfo = new HashMap<>();
+        memoryInfo.put("used_memory", "800000"); // 800KB
+        memoryInfo.put("maxmemory", "1000000"); // 1MB
+        when(redisConnection.info("memory")).thenReturn(memoryInfo);
+        
+        // Mock the performAdaptiveEviction method to verify it's called
+        CacheEvictionScheduler spyScheduler = Mockito.spy(cacheEvictionScheduler);
+        doReturn(5L).when(spyScheduler).performAdaptiveEviction(anyDouble());
+        
+        // Execute the method under test
+        spyScheduler.monitorMemoryUsage();
+        
+        // Verify that adaptive eviction was performed due to high memory usage
+        verify(spyScheduler, times(1)).performAdaptiveEviction(0.8); // 800KB/1MB = 0.8
     }
-
+    
     /**
-     * Test that the monitorMemoryUsage method triggers eviction when memory usage exceeds the threshold.
+     * Test that the memory usage monitoring does not trigger adaptive eviction
+     * when memory usage is below the configured threshold.
      */
     @Test
-    @SuppressWarnings("unchecked")
-    public void testMonitorMemoryUsageTriggersEviction() {
-        // Arrange
-        // Mock Redis memory info with usage above threshold (85%)
-        when(redisConnection.serverCommands()).thenReturn(redisServerCommands);
-        when(redisServerCommands.info("memory")).thenReturn(
-                "used_memory:850000000\n" +
-                "total_system_memory:1000000000\n");
+    public void testMonitorMemoryUsageWithLowMemoryUsage() {
+        // Setup memory info with low memory usage (below threshold)
+        Map<String, Object> memoryInfo = new HashMap<>();
+        memoryInfo.put("used_memory", "500000"); // 500KB
+        memoryInfo.put("maxmemory", "1000000"); // 1MB
+        when(redisConnection.info("memory")).thenReturn(memoryInfo);
         
-        // Capture the RedisCallback
-        ArgumentCaptor<RedisCallback<Object>> callbackCaptor = ArgumentCaptor.forClass(RedisCallback.class);
-        when(redisTemplate.execute(callbackCaptor.capture())).thenAnswer(invocation -> {
-            RedisCallback<Object> callback = callbackCaptor.getValue();
-            return callback.doInRedis(redisConnection);
-        });
-
-        // Mock pattern-based cache clearing
-        Set<String> lowPriorityKeys = new HashSet<>(Arrays.asList("application:lowpriority:1", "application:lowpriority:2"));
-        when(redisTemplate.keys("application:lowpriority:*")).thenReturn(lowPriorityKeys);
+        // Mock the performAdaptiveEviction method to verify it's not called
+        CacheEvictionScheduler spyScheduler = Mockito.spy(cacheEvictionScheduler);
         
-        Set<String> tempKeys = new HashSet<>(Arrays.asList("temp:1", "temp:2"));
-        when(redisTemplate.keys("temp:*")).thenReturn(tempKeys);
-
-        // Act
-        cacheEvictionScheduler.monitorMemoryUsage();
-
-        // Assert
-        // Verify Redis memory info was retrieved
-        verify(redisServerCommands).info("memory");
+        // Execute the method under test
+        spyScheduler.monitorMemoryUsage();
         
-        // Verify low-priority cache was cleared
-        verify(redisTemplate).keys("application:lowpriority:*");
-        verify(redisTemplate).delete(lowPriorityKeys);
-        
-        // Verify temp cache was cleared
-        verify(redisTemplate).keys("temp:*");
-        verify(redisTemplate).delete(tempKeys);
+        // Verify that adaptive eviction was not performed due to low memory usage
+        verify(spyScheduler, never()).performAdaptiveEviction(anyDouble());
     }
-
+    
     /**
-     * Test that the monitorMemoryUsage method does not trigger eviction when memory usage is below the threshold.
+     * Test that the adaptive eviction correctly evicts keys based on memory usage.
+     * This verifies that the scheduler correctly prioritizes keys for eviction
+     * based on TTL and access patterns.
      */
     @Test
-    @SuppressWarnings("unchecked")
-    public void testMonitorMemoryUsageBelowThreshold() {
-        // Arrange
-        // Mock Redis memory info with usage below threshold (70%)
-        when(redisConnection.serverCommands()).thenReturn(redisServerCommands);
-        when(redisServerCommands.info("memory")).thenReturn(
-                "used_memory:700000000\n" +
-                "total_system_memory:1000000000\n");
+    public void testPerformAdaptiveEviction() {
+        // Setup memory info for initial and post-eviction checks
+        Map<String, Object> initialMemoryInfo = new HashMap<>();
+        initialMemoryInfo.put("used_memory", "900000"); // 900KB
+        initialMemoryInfo.put("maxmemory", "1000000"); // 1MB
         
-        // Capture the RedisCallback
-        ArgumentCaptor<RedisCallback<Object>> callbackCaptor = ArgumentCaptor.forClass(RedisCallback.class);
-        when(redisTemplate.execute(callbackCaptor.capture())).thenAnswer(invocation -> {
-            RedisCallback<Object> callback = callbackCaptor.getValue();
-            return callback.doInRedis(redisConnection);
-        });
-
-        // Act
-        cacheEvictionScheduler.monitorMemoryUsage();
-
-        // Assert
-        // Verify Redis memory info was retrieved
-        verify(redisServerCommands).info("memory");
+        Map<String, Object> reducedMemoryInfo = new HashMap<>();
+        reducedMemoryInfo.put("used_memory", "700000"); // 700KB after eviction
+        reducedMemoryInfo.put("maxmemory", "1000000"); // 1MB
         
-        // Verify no cache clearing was performed
-        verify(redisTemplate, never()).keys("application:lowpriority:*");
-        verify(redisTemplate, never()).delete(anySet());
+        // Mock the memory info calls to return different values on successive calls
+        when(redisConnection.info("memory"))
+            .thenReturn(initialMemoryInfo)
+            .thenReturn(reducedMemoryInfo);
+        
+        // Mock the eviction methods to return counts of evicted keys
+        CacheEvictionScheduler spyScheduler = Mockito.spy(cacheEvictionScheduler);
+        doReturn(5L).when(spyScheduler).evictNearExpiryKeys();
+        doReturn(0L).when(spyScheduler).evictLeastRecentlyUsedKeys(anyString());
+        
+        // Execute the method under test
+        long evictedCount = spyScheduler.performAdaptiveEviction(0.9); // 90% memory usage
+        
+        // Verify that the correct number of keys were evicted
+        assertEquals(5L, evictedCount);
+        
+        // Verify that near-expiry keys were evicted first
+        verify(spyScheduler, times(1)).evictNearExpiryKeys();
+        
+        // Verify that LRU eviction was not needed since memory usage was reduced enough
+        verify(spyScheduler, never()).evictLeastRecentlyUsedKeys(anyString());
     }
-
+    
     /**
-     * Test that the monitorMemoryUsage method does nothing when eviction is disabled.
+     * Test that the adaptive eviction correctly evicts LRU keys when near-expiry
+     * eviction is not sufficient to reduce memory usage.
      */
     @Test
-    public void testMonitorMemoryUsageWhenDisabled() {
-        // Arrange
-        ReflectionTestUtils.setField(cacheEvictionScheduler, "evictionEnabled", false);
-
-        // Act
-        cacheEvictionScheduler.monitorMemoryUsage();
-
-        // Assert
-        verify(redisTemplate, never()).execute(any(RedisCallback.class));
+    public void testPerformAdaptiveEvictionWithLRU() {
+        // Setup memory info for initial, post-near-expiry, and post-LRU checks
+        Map<String, Object> initialMemoryInfo = new HashMap<>();
+        initialMemoryInfo.put("used_memory", "900000"); // 900KB
+        initialMemoryInfo.put("maxmemory", "1000000"); // 1MB
+        
+        Map<String, Object> afterNearExpiryMemoryInfo = new HashMap<>();
+        afterNearExpiryMemoryInfo.put("used_memory", "850000"); // 850KB after near-expiry eviction
+        afterNearExpiryMemoryInfo.put("maxmemory", "1000000"); // 1MB
+        
+        Map<String, Object> afterLRUMemoryInfo = new HashMap<>();
+        afterLRUMemoryInfo.put("used_memory", "700000"); // 700KB after LRU eviction
+        afterLRUMemoryInfo.put("maxmemory", "1000000"); // 1MB
+        
+        // Mock the memory info calls to return different values on successive calls
+        when(redisConnection.info("memory"))
+            .thenReturn(initialMemoryInfo)
+            .thenReturn(afterNearExpiryMemoryInfo)
+            .thenReturn(afterLRUMemoryInfo);
+        
+        // Mock the eviction methods to return counts of evicted keys
+        CacheEvictionScheduler spyScheduler = Mockito.spy(cacheEvictionScheduler);
+        doReturn(3L).when(spyScheduler).evictNearExpiryKeys();
+        doReturn(5L).when(spyScheduler).evictLeastRecentlyUsedKeys(CacheConstants.KeyPrefix.APPLICATION + "*");
+        doReturn(2L).when(spyScheduler).evictLeastRecentlyUsedKeys(CacheConstants.KeyPrefix.DOCUMENT + "*");
+        doReturn(1L).when(spyScheduler).evictLeastRecentlyUsedKeys(CacheConstants.KeyPrefix.MERCHANT + "*");
+        
+        // Execute the method under test
+        long evictedCount = spyScheduler.performAdaptiveEviction(0.9); // 90% memory usage
+        
+        // Verify that the correct number of keys were evicted
+        assertEquals(11L, evictedCount); // 3 + 5 + 2 + 1 = 11
+        
+        // Verify that near-expiry keys were evicted first
+        verify(spyScheduler, times(1)).evictNearExpiryKeys();
+        
+        // Verify that LRU eviction was performed for application data
+        verify(spyScheduler, times(1)).evictLeastRecentlyUsedKeys(CacheConstants.KeyPrefix.APPLICATION + "*");
+        verify(spyScheduler, times(1)).evictLeastRecentlyUsedKeys(CacheConstants.KeyPrefix.DOCUMENT + "*");
+        verify(spyScheduler, times(1)).evictLeastRecentlyUsedKeys(CacheConstants.KeyPrefix.MERCHANT + "*");
+        
+        // Verify that session data eviction was not needed
+        verify(spyScheduler, never()).evictLeastRecentlyUsedKeys(CacheConstants.KeyPrefix.SESSION + "*");
     }
-
+    
     /**
-     * Test that the logCacheStatistics method properly collects and logs cache statistics.
-     */
-    @Test
-    @SuppressWarnings("unchecked")
-    public void testLogCacheStatistics() {
-        // Arrange
-        // Mock key counts by prefix
-        when(redisTemplate.keys("application:*")).thenReturn(new HashSet<>(Arrays.asList("application:1", "application:2")));
-        when(redisTemplate.keys("document:*")).thenReturn(new HashSet<>(Arrays.asList("document:1")));
-        when(redisTemplate.keys("merchant:*")).thenReturn(new HashSet<>(Arrays.asList("merchant:1", "merchant:2", "merchant:3")));
-        when(redisTemplate.keys("session:*")).thenReturn(new HashSet<>(Arrays.asList("session:1")));
-        when(redisTemplate.keys("*")).thenReturn(new HashSet<>(Arrays.asList(
-                "application:1", "application:2", "document:1", "merchant:1", "merchant:2", "merchant:3", "session:1", "other:1")));
-        
-        // Mock Redis stats
-        when(redisConnection.serverCommands()).thenReturn(redisServerCommands);
-        when(redisServerCommands.info("stats")).thenReturn(
-                "keyspace_hits:150\n" +
-                "keyspace_misses:50\n");
-        
-        // Capture the RedisCallback
-        ArgumentCaptor<RedisCallback<Object>> callbackCaptor = ArgumentCaptor.forClass(RedisCallback.class);
-        when(redisTemplate.execute(callbackCaptor.capture())).thenAnswer(invocation -> {
-            RedisCallback<Object> callback = callbackCaptor.getValue();
-            return callback.doInRedis(redisConnection);
-        });
-
-        // Act
-        cacheEvictionScheduler.logCacheStatistics();
-
-        // Assert
-        // Verify key counts were retrieved
-        verify(redisTemplate).keys("application:*");
-        verify(redisTemplate).keys("document:*");
-        verify(redisTemplate).keys("merchant:*");
-        verify(redisTemplate).keys("session:*");
-        verify(redisTemplate).keys("*");
-        
-        // Verify Redis stats were retrieved
-        verify(redisServerCommands).info("stats");
-    }
-
-    /**
-     * Test that the clearCacheByPattern method properly clears cache entries matching a pattern.
+     * Test that the pattern-based cache clearing works correctly.
+     * This verifies that the scheduler correctly identifies and clears all keys
+     * matching a specified pattern.
      */
     @Test
     public void testClearCacheByPattern() {
-        // Arrange
-        String pattern = "test:pattern:*";
-        Set<String> keys = new HashSet<>(Arrays.asList("test:pattern:1", "test:pattern:2", "test:pattern:3"));
-        when(redisTemplate.keys(pattern)).thenReturn(keys);
-
-        // Act
-        int result = cacheEvictionScheduler.clearCacheByPattern(pattern);
-
-        // Assert
-        assertEquals(3, result, "Should return the number of keys cleared");
-        verify(redisTemplate).keys(pattern);
-        verify(redisTemplate).delete(keys);
+        // Setup test data
+        String pattern = "test:*";
+        Set<String> matchingKeys = new HashSet<>(Arrays.asList("test:1", "test:2", "test:3"));
+        
+        // Mock Redis keys method to return our test keys
+        when(redisTemplate.keys(pattern)).thenReturn(matchingKeys);
+        
+        // Mock successful deletion
+        when(redisTemplate.delete(matchingKeys)).thenReturn(3L);
+        
+        // Execute the method under test
+        long deletedCount = cacheEvictionScheduler.clearCacheByPattern(pattern);
+        
+        // Verify that the correct number of keys were deleted
+        assertEquals(3L, deletedCount);
+        
+        // Verify that the delete method was called with the correct keys
+        verify(redisTemplate, times(1)).delete(matchingKeys);
     }
-
+    
     /**
-     * Test that the clearCacheByPattern method returns 0 when no keys match the pattern.
+     * Test that the cache statistics logging works correctly.
+     * This verifies that the scheduler correctly logs cache statistics
+     * at the configured interval.
      */
     @Test
-    public void testClearCacheByPatternNoMatches() {
-        // Arrange
-        String pattern = "test:pattern:*";
-        when(redisTemplate.keys(pattern)).thenReturn(new HashSet<>());
-
-        // Act
-        int result = cacheEvictionScheduler.clearCacheByPattern(pattern);
-
-        // Assert
-        assertEquals(0, result, "Should return 0 when no keys match");
-        verify(redisTemplate).keys(pattern);
-        verify(redisTemplate, never()).delete(anySet());
+    public void testLogCacheStatistics() {
+        // Setup memory info
+        Map<String, Object> memoryInfo = new HashMap<>();
+        memoryInfo.put("used_memory", "500000"); // 500KB
+        memoryInfo.put("maxmemory", "1000000"); // 1MB
+        when(redisConnection.info("memory")).thenReturn(memoryInfo);
+        
+        // Mock metrics snapshot
+        Map<String, Map<String, Number>> metricsSnapshot = new HashMap<>();
+        Map<String, Number> appMetrics = new HashMap<>();
+        appMetrics.put("hits", 100);
+        appMetrics.put("misses", 20);
+        appMetrics.put("puts", 50);
+        appMetrics.put("evictions", 5);
+        appMetrics.put("size", 45);
+        appMetrics.put("hitRatio", 0.83);
+        metricsSnapshot.put(CacheConstants.CacheName.APPLICATIONS, appMetrics);
+        
+        when(metricsCollector.getMetricsSnapshot()).thenReturn(metricsSnapshot);
+        
+        // Set last stats log time to be older than the log interval
+        ReflectionTestUtils.setField(cacheEvictionScheduler, "lastStatsLogTime", 
+                java.time.LocalDateTime.now().minusMinutes(61));
+        
+        // Execute the method under test
+        cacheEvictionScheduler.logCacheStatistics();
+        
+        // Verify that metrics were retrieved
+        verify(metricsCollector, times(1)).getMetricsSnapshot();
+        
+        // Verify that memory info was retrieved
+        verify(redisConnection, times(1)).info("memory");
     }
-
+    
     /**
-     * Test that the clearCacheByPattern method returns -1 when an exception occurs.
+     * Test that the eviction settings can be updated correctly.
+     * This verifies that the scheduler correctly updates its configuration
+     * when the updateEvictionSettings method is called.
      */
     @Test
-    public void testClearCacheByPatternException() {
-        // Arrange
-        String pattern = "test:pattern:*";
-        when(redisTemplate.keys(pattern)).thenThrow(new RuntimeException("Test exception"));
-
-        // Act
-        int result = cacheEvictionScheduler.clearCacheByPattern(pattern);
-
-        // Assert
-        assertEquals(-1, result, "Should return -1 when an exception occurs");
-        verify(redisTemplate).keys(pattern);
-        verify(redisTemplate, never()).delete(anySet());
+    public void testUpdateEvictionSettings() {
+        // Setup new settings
+        Map<String, Object> newSettings = new HashMap<>();
+        newSettings.put("evictionEnabled", false);
+        newSettings.put("memoryThreshold", 0.7);
+        newSettings.put("idleTimeMinutes", 45L);
+        newSettings.put("maxKeysPerScan", 500L);
+        newSettings.put("logIntervalMinutes", 30L);
+        
+        // Execute the method under test
+        cacheEvictionScheduler.updateEvictionSettings(newSettings);
+        
+        // Verify that the settings were updated
+        assertEquals(false, ReflectionTestUtils.getField(cacheEvictionScheduler, "evictionEnabled"));
+        assertEquals(0.7, ReflectionTestUtils.getField(cacheEvictionScheduler, "memoryThreshold"));
+        assertEquals(45L, ReflectionTestUtils.getField(cacheEvictionScheduler, "idleTimeMinutes"));
+        assertEquals(500L, ReflectionTestUtils.getField(cacheEvictionScheduler, "maxKeysPerScan"));
+        assertEquals(30L, ReflectionTestUtils.getField(cacheEvictionScheduler, "logIntervalMinutes"));
     }
-
+    
     /**
-     * Test that the monitorMemoryUsage method takes more aggressive action when memory usage
-     * remains high after initial eviction.
+     * Test that the eviction is skipped when evictionEnabled is set to false.
+     * This verifies that the scheduler respects the evictionEnabled flag.
      */
     @Test
-    @SuppressWarnings("unchecked")
-    public void testMonitorMemoryUsageWithAggressiveEviction() {
-        // Arrange
-        // Mock Redis memory info with usage above threshold (85%)
-        when(redisConnection.serverCommands()).thenReturn(redisServerCommands);
+    public void testEvictionSkippedWhenDisabled() {
+        // Disable eviction
+        ReflectionTestUtils.setField(cacheEvictionScheduler, "evictionEnabled", false);
         
-        // First call returns high memory usage
-        when(redisServerCommands.info("memory"))
-            .thenReturn("used_memory:850000000\ntotal_system_memory:1000000000\n")
-            .thenReturn("used_memory:820000000\ntotal_system_memory:1000000000\n"); // Still above threshold after initial eviction
-        
-        // Capture the RedisCallback
-        ArgumentCaptor<RedisCallback<Object>> callbackCaptor = ArgumentCaptor.forClass(RedisCallback.class);
-        when(redisTemplate.execute(callbackCaptor.capture())).thenAnswer(invocation -> {
-            RedisCallback<Object> callback = callbackCaptor.getValue();
-            return callback.doInRedis(redisConnection);
-        });
-
-        // Mock pattern-based cache clearing
-        Set<String> lowPriorityKeys = new HashSet<>(Arrays.asList("application:lowpriority:1", "application:lowpriority:2"));
-        when(redisTemplate.keys("application:lowpriority:*")).thenReturn(lowPriorityKeys);
-        
-        Set<String> tempKeys = new HashSet<>(Arrays.asList("temp:1", "temp:2"));
-        when(redisTemplate.keys("temp:*")).thenReturn(tempKeys);
-        
-        Set<String> nonCriticalKeys = new HashSet<>(Arrays.asList("application:1:details", "application:2:details"));
-        when(redisTemplate.keys("application:*:details")).thenReturn(nonCriticalKeys);
-
-        // Mock dbSize for expired keys eviction
-        when(redisServerCommands.dbSize()).thenReturn(10L);
-
-        // Act
+        // Execute the methods under test
+        cacheEvictionScheduler.evictStaleApplicationData();
+        cacheEvictionScheduler.evictStaleSessionData();
+        cacheEvictionScheduler.evictStaleLookupData();
         cacheEvictionScheduler.monitorMemoryUsage();
-
-        // Assert
-        // Verify Redis memory info was retrieved twice (before and after initial eviction)
-        verify(redisServerCommands, times(2)).info("memory");
         
-        // Verify initial cache clearing was performed
-        verify(redisTemplate).keys("application:lowpriority:*");
-        verify(redisTemplate).delete(lowPriorityKeys);
-        verify(redisTemplate).keys("temp:*");
-        verify(redisTemplate).delete(tempKeys);
-        
-        // Verify aggressive cache clearing was performed
-        verify(redisTemplate).keys("application:*:details");
-        verify(redisTemplate).delete(nonCriticalKeys);
+        // Verify that no Redis operations were performed
+        verify(redisTemplate, never()).keys(anyString());
+        verify(redisConnection, never()).info(anyString());
     }
-
+    
     /**
-     * Test that the scheduled tasks are properly configured with the expected cron expressions or fixed rates.
-     * This test verifies the presence of the @Scheduled annotation with the correct parameters.
+     * Test that the getEvictionSettings method returns the correct settings.
+     * This verifies that the scheduler correctly reports its current configuration.
      */
     @Test
-    public void testScheduledAnnotations() throws NoSuchMethodException {
-        // Verify evictStaleApplicationData is scheduled with cron = "0 0 * * * *"
-        org.springframework.scheduling.annotation.Scheduled evictStaleDataAnnotation = 
-                CacheEvictionScheduler.class.getMethod("evictStaleApplicationData").getAnnotation(org.springframework.scheduling.annotation.Scheduled.class);
-        assertNotNull(evictStaleDataAnnotation, "evictStaleApplicationData should have @Scheduled annotation");
-        assertEquals("0 0 * * * *", evictStaleDataAnnotation.cron(), "evictStaleApplicationData should run at the top of every hour");
+    public void testGetEvictionSettings() {
+        // Setup expected settings
+        boolean evictionEnabled = true;
+        double memoryThreshold = 0.8;
+        long idleTimeMinutes = 30L;
+        long maxKeysPerScan = 1000L;
+        long logIntervalMinutes = 60L;
         
-        // Verify evictStaleSessions is scheduled with cron = "0 0 0 * * *"
-        org.springframework.scheduling.annotation.Scheduled evictSessionsAnnotation = 
-                CacheEvictionScheduler.class.getMethod("evictStaleSessions").getAnnotation(org.springframework.scheduling.annotation.Scheduled.class);
-        assertNotNull(evictSessionsAnnotation, "evictStaleSessions should have @Scheduled annotation");
-        assertEquals("0 0 0 * * *", evictSessionsAnnotation.cron(), "evictStaleSessions should run at midnight every day");
+        // Execute the method under test
+        Map<String, Object> settings = cacheEvictionScheduler.getEvictionSettings();
         
-        // Verify monitorMemoryUsage is scheduled with fixedRate = 900000 (15 minutes)
-        org.springframework.scheduling.annotation.Scheduled monitorMemoryAnnotation = 
-                CacheEvictionScheduler.class.getMethod("monitorMemoryUsage").getAnnotation(org.springframework.scheduling.annotation.Scheduled.class);
-        assertNotNull(monitorMemoryAnnotation, "monitorMemoryUsage should have @Scheduled annotation");
-        assertEquals(900000, monitorMemoryAnnotation.fixedRate(), "monitorMemoryUsage should run every 15 minutes");
-        
-        // Verify logCacheStatistics is scheduled with fixedRate = 1800000 (30 minutes)
-        org.springframework.scheduling.annotation.Scheduled logStatsAnnotation = 
-                CacheEvictionScheduler.class.getMethod("logCacheStatistics").getAnnotation(org.springframework.scheduling.annotation.Scheduled.class);
-        assertNotNull(logStatsAnnotation, "logCacheStatistics should have @Scheduled annotation");
-        assertEquals(1800000, logStatsAnnotation.fixedRate(), "logCacheStatistics should run every 30 minutes");
+        // Verify that the settings match the expected values
+        assertEquals(evictionEnabled, settings.get("evictionEnabled"));
+        assertEquals(memoryThreshold, settings.get("memoryThreshold"));
+        assertEquals(idleTimeMinutes, settings.get("idleTimeMinutes"));
+        assertEquals(maxKeysPerScan, settings.get("maxKeysPerScan"));
+        assertEquals(logIntervalMinutes, settings.get("logIntervalMinutes"));
+    }
+    
+    /**
+     * Helper method to mock the idle time for a key.
+     * 
+     * @param key the key to mock idle time for
+     * @param idleTimeSeconds the idle time in seconds
+     */
+    private void mockIdleTime(String key, long idleTimeSeconds) {
+        when(redisConnection.objectCommands().idletime(key.getBytes())).thenReturn(idleTimeSeconds);
     }
 }
