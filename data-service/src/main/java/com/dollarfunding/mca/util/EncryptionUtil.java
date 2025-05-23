@@ -40,11 +40,47 @@ public class EncryptionUtil {
     private static final int KEY_LENGTH = 256; // Key length in bits
     private static final int ITERATION_COUNT = 65536; // Number of iterations for key derivation
     
-    @Value("${encryption.secret:#{environment.ENCRYPTION_SECRET}}")
     private String encryptionSecret;
     
-    @Value("${encryption.salt:#{environment.ENCRYPTION_SALT}}")
     private String encryptionSalt;
+    
+    /**
+     * Sets the encryption secret used for key derivation.
+     * 
+     * @param encryptionSecret The encryption secret
+     */
+    public void setEncryptionSecret(String encryptionSecret) {
+        this.encryptionSecret = encryptionSecret;
+    }
+    
+    /**
+     * Sets the encryption salt used for key derivation.
+     * 
+     * @param encryptionSalt The encryption salt
+     */
+    public void setEncryptionSalt(String encryptionSalt) {
+        this.encryptionSalt = encryptionSalt;
+    }
+    
+    /**
+     * Gets the encryption secret.
+     * This method is used by the EncryptionConfig class for key rotation.
+     * 
+     * @return The encryption secret
+     */
+    public String getEncryptionSecret() {
+        return encryptionSecret;
+    }
+    
+    /**
+     * Gets the encryption salt.
+     * This method is used by the EncryptionConfig class for key rotation.
+     * 
+     * @return The encryption salt
+     */
+    public String getEncryptionSalt() {
+        return encryptionSalt;
+    }
 
     /**
      * Encrypts a string using AES-256 encryption with GCM mode.
