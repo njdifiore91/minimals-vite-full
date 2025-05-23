@@ -1,32 +1,37 @@
 package com.dollarfunding.mca.service;
 
+import com.dollarfunding.mca.dto.ApplicationResponseDTO;
+import com.dollarfunding.mca.dto.DocumentResponseDTO;
 import com.dollarfunding.mca.entity.Application;
 import com.dollarfunding.mca.entity.ApplicationStatus;
 import com.dollarfunding.mca.entity.Document;
+import com.dollarfunding.mca.entity.DocumentClassification;
 import com.dollarfunding.mca.entity.DocumentType;
 import com.dollarfunding.mca.entity.MerchantDetails;
 import com.dollarfunding.mca.entity.ReviewStatus;
-import com.dollarfunding.mca.exception.BusinessRuleException;
-import com.dollarfunding.mca.exception.DocumentProcessingException;
-import com.dollarfunding.mca.exception.ResourceNotFoundException;
-import com.dollarfunding.mca.exception.ValidationException;
-import com.dollarfunding.mca.messaging.DocumentProcessingMessage;
+import com.dollarfunding.mca.exception.ProcessingException;
 import com.dollarfunding.mca.repository.ApplicationRepository;
 import com.dollarfunding.mca.repository.DocumentRepository;
-import com.dollarfunding.mca.repository.MerchantDetailsRepository;
+import com.dollarfunding.mca.service.ValidationService.ValidationResult;
+import com.dollarfunding.mca.service.ValidationService.ValidationSeverity;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.time.Duration;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * Implementation of the ProcessingService interface that manages application processing workflows
@@ -41,39 +46,33 @@ public class ProcessingServiceImpl implements ProcessingService {
 
     private static final Logger logger = LoggerFactory.getLogger(ProcessingServiceImpl.class);
     
+    private static final int TARGET_PROCESSING_MINUTES = 5;
+    private static final double REQUIRED_CONFIDENCE_THRESHOLD = 0.75;
+    private static final int MAX_RETRY_ATTEMPTS = 3;
+    
     private final ApplicationRepository applicationRepository;
     private final DocumentRepository documentRepository;
-    private final MerchantDetailsRepository merchantDetailsRepository;
     private final ValidationService validationService;
     private final DocumentService documentService;
     private final NotificationService notificationService;
-    
-    /**
-     * Confidence threshold for document classification and field extraction.
-     * Fields with confidence below this threshold will be flagged for review.
-     */
-    private static final double CONFIDENCE_THRESHOLD = 75.0;
     
     /**
      * Constructor with required dependencies.
      * 
      * @param applicationRepository Repository for Application entities
      * @param documentRepository Repository for Document entities
-     * @param merchantDetailsRepository Repository for MerchantDetails entities
      * @param validationService Service for data validation and business rule application
      * @param documentService Service for document management
      * @param notificationService Service for notification delivery
      */
     @Autowired
     public ProcessingServiceImpl(ApplicationRepository applicationRepository,
-                               DocumentRepository documentRepository,
-                               MerchantDetailsRepository merchantDetailsRepository,
-                               ValidationService validationService,
-                               DocumentService documentService,
-                               NotificationService notificationService) {
+                                DocumentRepository documentRepository,
+                                ValidationService validationService,
+                                DocumentService documentService,
+                                NotificationService notificationService) {
         this.applicationRepository = applicationRepository;
         this.documentRepository = documentRepository;
-        this.merchantDetailsRepository = merchantDetailsRepository;
         this.validationService = validationService;
         this.documentService = documentService;
         this.notificationService = notificationService;
@@ -84,272 +83,40 @@ public class ProcessingServiceImpl implements ProcessingService {
      */
     @Override
     @Transactional
-    public String processNewApplication(DocumentProcessingMessage message) {
-        logger.info("Processing new application from document: {}", message.getDocumentId());
+    public ApplicationResponseDTO processNewApplication(UUID documentId, Map<String, Object> extractedData) throws ProcessingException {
+        logger.info("Processing new application from document ID: {}", documentId);
         
-        // Validate the message
-        validateProcessingMessage(message);
-        
-        // Check if the document type is valid for creating a new application
-        if (message.getDocumentType() != DocumentProcessingMessage.DocumentType.APPLICATION_FORM) {
-            throw new ValidationException("Cannot create new application from document type: " + message.getDocumentType());
-        }
-        
-        // Create a new application
-        Application application = new Application();
-        application.setStatus(ApplicationStatus.NEW);
-        application.setReviewStatus(ReviewStatus.NOT_REVIEWED);
-        
-        // Extract metadata from the document
-        Map<String, Object> metadata = new HashMap<>();
-        metadata.put("source", "email");
-        metadata.put("creation_timestamp", LocalDateTime.now().toString());
-        metadata.put("document_id", message.getDocumentId());
-        metadata.put("classification_confidence", message.getClassificationConfidence());
-        
-        // Add any low confidence fields to metadata for review
-        Map<String, Object> lowConfidenceFields = new HashMap<>();
-        message.getExtractedFields().forEach((fieldName, field) -> {
-            if (field.getConfidence() < CONFIDENCE_THRESHOLD) {
-                lowConfidenceFields.put(fieldName, field.getValue());
-            }
-        });
-        
-        if (!lowConfidenceFields.isEmpty()) {
-            metadata.put("low_confidence_fields", lowConfidenceFields);
-        }
-        
-        application.setMetadata(metadata);
-        
-        // Save the application
-        application = applicationRepository.save(application);
-        logger.info("Created new application with ID: {}", application.getId());
-        
-        // Create and associate the document
-        Document document = createDocumentFromMessage(message, application);
-        
-        // Create merchant details if available in the document
-        createMerchantDetailsIfAvailable(message, application);
-        
-        // Validate the application data
-        boolean isValid = validationService.validateApplication(application.getId());
-        
-        // Update application status based on validation
-        if (isValid) {
-            updateApplicationStatus(application.getId(), ApplicationStatus.PENDING.name(), "Initial validation passed");
-        } else {
-            updateApplicationStatus(application.getId(), ApplicationStatus.PENDING.name(), "Needs additional information");
-        }
-        
-        // Evaluate completeness
-        evaluateApplicationCompleteness(application.getId());
-        
-        // Send notification
-        notificationService.sendApplicationStatusNotification(application.getId(), ApplicationStatus.NEW.name());
-        
-        return application.getId();
-    }
-
-    /**
-     * {@inheritDoc}
-     */
-    @Override
-    @Transactional
-    public String updateExistingApplication(DocumentProcessingMessage message) {
-        logger.info("Updating existing application: {} with document: {}", 
-                message.getApplicationId(), message.getDocumentId());
-        
-        // Validate the message
-        validateProcessingMessage(message);
-        
-        // Check if application ID is provided
-        if (message.getApplicationId() == null || message.getApplicationId().isEmpty()) {
-            throw new ValidationException("Application ID is required for updating an existing application");
-        }
-        
-        // Find the application
-        Application application = applicationRepository.findById(message.getApplicationId())
-                .orElseThrow(() -> new ResourceNotFoundException("Application not found with ID: " + message.getApplicationId()));
-        
-        // Create and associate the document
-        Document document = createDocumentFromMessage(message, application);
-        
-        // Update application metadata
-        Map<String, Object> metadata = application.getMetadata();
-        if (metadata == null) {
-            metadata = new HashMap<>();
-        }
-        
-        // Add document to the list of associated documents
-        @SuppressWarnings("unchecked")
-        List<String> documentIds = (List<String>) metadata.getOrDefault("document_ids", new java.util.ArrayList<String>());
-        documentIds.add(document.getId());
-        metadata.put("document_ids", documentIds);
-        
-        // Add last update information
-        metadata.put("last_updated_timestamp", LocalDateTime.now().toString());
-        metadata.put("last_document_id", message.getDocumentId());
-        
-        // Add any low confidence fields to metadata for review
-        Map<String, Object> lowConfidenceFields = new HashMap<>();
-        message.getExtractedFields().forEach((fieldName, field) -> {
-            if (field.getConfidence() < CONFIDENCE_THRESHOLD) {
-                lowConfidenceFields.put(fieldName, field.getValue());
-            }
-        });
-        
-        if (!lowConfidenceFields.isEmpty()) {
-            metadata.put("low_confidence_fields", lowConfidenceFields);
-        }
-        
-        application.setMetadata(metadata);
-        
-        // Update merchant details if available in the document
-        updateMerchantDetailsIfAvailable(message, application);
-        
-        // Save the updated application
-        application = applicationRepository.save(application);
-        
-        // Validate the application data
-        boolean isValid = validationService.validateApplication(application.getId());
-        
-        // Evaluate completeness
-        boolean isComplete = evaluateApplicationCompleteness(application.getId());
-        
-        // Update application status based on validation and completeness
-        if (isComplete && isValid) {
-            updateApplicationStatus(application.getId(), ApplicationStatus.PROCESSING.name(), "Application complete and valid");
-        } else if (!isValid) {
-            updateApplicationStatus(application.getId(), ApplicationStatus.PENDING.name(), "Validation failed");
-        }
-        
-        // Send notification
-        notificationService.sendApplicationStatusNotification(application.getId(), application.getStatus().name());
-        
-        return application.getId();
-    }
-
-    /**
-     * {@inheritDoc}
-     */
-    @Override
-    @Transactional
-    public String processSupportingDocument(DocumentProcessingMessage message) {
-        logger.info("Processing supporting document: {} for application: {}", 
-                message.getDocumentId(), message.getApplicationId());
-        
-        // Validate the message
-        validateProcessingMessage(message);
-        
-        // Check if application ID is provided
-        if (message.getApplicationId() == null || message.getApplicationId().isEmpty()) {
-            throw new ValidationException("Application ID is required for processing a supporting document");
-        }
-        
-        // Find the application
-        Application application = applicationRepository.findById(message.getApplicationId())
-                .orElseThrow(() -> new ResourceNotFoundException("Application not found with ID: " + message.getApplicationId()));
-        
-        // Create and associate the document
-        Document document = createDocumentFromMessage(message, application);
-        
-        // Update application metadata
-        Map<String, Object> metadata = application.getMetadata();
-        if (metadata == null) {
-            metadata = new HashMap<>();
-        }
-        
-        // Add document to the list of associated documents
-        @SuppressWarnings("unchecked")
-        List<String> documentIds = (List<String>) metadata.getOrDefault("document_ids", new java.util.ArrayList<String>());
-        documentIds.add(document.getId());
-        metadata.put("document_ids", documentIds);
-        
-        // Add last update information
-        metadata.put("last_updated_timestamp", LocalDateTime.now().toString());
-        metadata.put("last_document_id", message.getDocumentId());
-        
-        application.setMetadata(metadata);
-        
-        // Save the updated application
-        application = applicationRepository.save(application);
-        
-        // Evaluate completeness
-        boolean isComplete = evaluateApplicationCompleteness(application.getId());
-        
-        // Update application status if complete
-        if (isComplete && application.getStatus() == ApplicationStatus.PENDING) {
-            updateApplicationStatus(application.getId(), ApplicationStatus.PROCESSING.name(), "Application complete with supporting documents");
+        try {
+            // Retrieve the document
+            Document document = findDocumentById(documentId);
+            
+            // Validate extracted data
+            validateExtractedData(document.getType(), extractedData);
+            
+            // Create a new application
+            Application application = createNewApplication(extractedData);
+            
+            // Associate the document with the application
+            associateDocumentWithApplication(document, application);
+            
+            // Apply business rules
+            applyBusinessRules(application.getId());
+            
+            // Save the application
+            application = applicationRepository.save(application);
             
             // Send notification
-            notificationService.sendApplicationStatusNotification(application.getId(), ApplicationStatus.PROCESSING.name());
+            notificationService.sendApplicationCreatedNotification(application);
+            
+            logger.info("Successfully processed new application with ID: {}", application.getId());
+            
+            // Return the response DTO
+            return ApplicationResponseDTO.fromEntityWithAllDetails(application, true);
+        } catch (Exception e) {
+            String errorMessage = "Failed to process new application from document ID: " + documentId;
+            logger.error(errorMessage, e);
+            throw new ProcessingException(errorMessage, e, "NEW_APPLICATION_PROCESSING_ERROR", documentId, null, extractedData);
         }
-        
-        return application.getId();
-    }
-
-    /**
-     * {@inheritDoc}
-     */
-    @Override
-    public boolean evaluateApplicationCompleteness(String applicationId) {
-        logger.info("Evaluating completeness of application: {}", applicationId);
-        
-        // Find the application
-        Application application = applicationRepository.findById(applicationId)
-                .orElseThrow(() -> new ResourceNotFoundException("Application not found with ID: " + applicationId));
-        
-        // Find all documents associated with the application
-        List<Document> documents = documentRepository.findByApplicationId(applicationId);
-        
-        // Check if application form exists
-        boolean hasApplicationForm = documents.stream()
-                .anyMatch(doc -> doc.getType() == DocumentType.APPLICATION_FORM);
-        
-        if (!hasApplicationForm) {
-            logger.info("Application {} is incomplete: Missing application form", applicationId);
-            return false;
-        }
-        
-        // Check if merchant details exist
-        Optional<MerchantDetails> merchantDetails = merchantDetailsRepository.findByApplicationId(applicationId);
-        if (!merchantDetails.isPresent()) {
-            logger.info("Application {} is incomplete: Missing merchant details", applicationId);
-            return false;
-        }
-        
-        // Check for required supporting documents based on business rules
-        // This is a simplified example - actual implementation would have more complex rules
-        boolean hasIdentityDocument = documents.stream()
-                .anyMatch(doc -> doc.getType() == DocumentType.IDENTITY_DOCUMENT);
-                
-        boolean hasBankStatement = documents.stream()
-                .anyMatch(doc -> doc.getType() == DocumentType.BANK_STATEMENT);
-                
-        boolean hasTaxReturn = documents.stream()
-                .anyMatch(doc -> doc.getType() == DocumentType.TAX_RETURN);
-        
-        boolean isComplete = hasIdentityDocument && hasBankStatement && hasTaxReturn;
-        
-        // Update application metadata with completeness status
-        Map<String, Object> metadata = application.getMetadata();
-        if (metadata == null) {
-            metadata = new HashMap<>();
-        }
-        
-        metadata.put("completeness_status", isComplete ? "complete" : "incomplete");
-        metadata.put("completeness_timestamp", LocalDateTime.now().toString());
-        metadata.put("missing_documents", new HashMap<String, Boolean>() {{
-            put("identity_document", !hasIdentityDocument);
-            put("bank_statement", !hasBankStatement);
-            put("tax_return", !hasTaxReturn);
-        }});
-        
-        application.setMetadata(metadata);
-        applicationRepository.save(application);
-        
-        logger.info("Application {} completeness evaluation result: {}", applicationId, isComplete);
-        return isComplete;
     }
 
     /**
@@ -357,440 +124,975 @@ public class ProcessingServiceImpl implements ProcessingService {
      */
     @Override
     @Transactional
-    public boolean updateApplicationStatus(String applicationId, String status, String reason) {
-        logger.info("Updating status of application: {} to {} with reason: {}", applicationId, status, reason);
+    public ApplicationResponseDTO updateApplicationWithDocument(UUID applicationId, UUID documentId, Map<String, Object> extractedData) throws ProcessingException {
+        logger.info("Updating application ID: {} with document ID: {}", applicationId, documentId);
         
-        // Find the application
-        Application application = applicationRepository.findById(applicationId)
-                .orElseThrow(() -> new ResourceNotFoundException("Application not found with ID: " + applicationId));
-        
-        // Validate the status
-        ApplicationStatus newStatus;
         try {
-            newStatus = ApplicationStatus.valueOf(status);
-        } catch (IllegalArgumentException e) {
-            throw new ValidationException("Invalid application status: " + status);
-        }
-        
-        // Check if the status transition is valid
-        validateStatusTransition(application.getStatus(), newStatus);
-        
-        // Update the status
-        application.setStatus(newStatus);
-        
-        // Update metadata with status change history
-        Map<String, Object> metadata = application.getMetadata();
-        if (metadata == null) {
-            metadata = new HashMap<>();
-        }
-        
-        @SuppressWarnings("unchecked")
-        List<Map<String, String>> statusHistory = (List<Map<String, String>>) 
-                metadata.getOrDefault("status_history", new java.util.ArrayList<Map<String, String>>());
-        
-        Map<String, String> statusChange = new HashMap<>();
-        statusChange.put("from", application.getStatus().name());
-        statusChange.put("to", newStatus.name());
-        statusChange.put("timestamp", LocalDateTime.now().toString());
-        statusChange.put("reason", reason);
-        
-        statusHistory.add(statusChange);
-        metadata.put("status_history", statusHistory);
-        
-        application.setMetadata(metadata);
-        
-        // Save the updated application
-        applicationRepository.save(application);
-        
-        // Send notification about status change
-        notificationService.sendApplicationStatusNotification(applicationId, newStatus.name());
-        
-        logger.info("Successfully updated status of application: {} to {}", applicationId, newStatus);
-        return true;
-    }
-    
-    /**
-     * Validates a document processing message for required fields and data integrity.
-     * 
-     * @param message The document processing message to validate
-     * @throws ValidationException if the message is invalid
-     */
-    private void validateProcessingMessage(DocumentProcessingMessage message) {
-        if (message == null) {
-            throw new ValidationException("Document processing message cannot be null");
-        }
-        
-        if (message.getDocumentId() == null || message.getDocumentId().isEmpty()) {
-            throw new ValidationException("Document ID is required");
-        }
-        
-        if (message.getDocumentType() == null) {
-            throw new ValidationException("Document type is required");
-        }
-        
-        if (message.getClassification() == null || message.getClassification().isEmpty()) {
-            throw new ValidationException("Document classification is required");
-        }
-        
-        if (message.getProcessingAction() == null) {
-            throw new ValidationException("Processing action is required");
-        }
-        
-        if (message.getExtractedFields() == null || message.getExtractedFields().isEmpty()) {
-            throw new ValidationException("Extracted fields are required");
+            // Retrieve the application
+            Application application = findApplicationById(applicationId);
+            
+            // Retrieve the document
+            Document document = findDocumentById(documentId);
+            
+            // Validate extracted data
+            validateExtractedData(document.getType(), extractedData);
+            
+            // Associate the document with the application
+            associateDocumentWithApplication(document, application);
+            
+            // Update application data based on document content
+            updateApplicationData(application, document.getType(), extractedData);
+            
+            // Apply business rules
+            applyBusinessRules(applicationId);
+            
+            // Save the application
+            application = applicationRepository.save(application);
+            
+            // Send notification
+            notificationService.sendDocumentProcessedNotification(document, applicationId, extractedData);
+            
+            logger.info("Successfully updated application ID: {} with document ID: {}", applicationId, documentId);
+            
+            // Return the response DTO
+            return ApplicationResponseDTO.fromEntityWithAllDetails(application, true);
+        } catch (Exception e) {
+            String errorMessage = "Failed to update application ID: " + applicationId + " with document ID: " + documentId;
+            logger.error(errorMessage, e);
+            throw new ProcessingException(errorMessage, e, "UPDATE_APPLICATION_PROCESSING_ERROR", documentId, applicationId, extractedData);
         }
     }
-    
+
     /**
-     * Creates a Document entity from a document processing message and associates it with an application.
-     * 
-     * @param message The document processing message containing document data
-     * @param application The application to associate the document with
-     * @return The created Document entity
+     * {@inheritDoc}
      */
-    private Document createDocumentFromMessage(DocumentProcessingMessage message, Application application) {
+    @Override
+    @Transactional
+    public ApplicationResponseDTO processDocument(UUID documentId, Map<String, Object> extractedData) throws ProcessingException {
+        logger.info("Processing document ID: {}", documentId);
+        
         try {
-            // Convert DocumentProcessingMessage.DocumentType to entity.DocumentType
-            DocumentType documentType = mapDocumentType(message.getDocumentType());
+            // Retrieve the document
+            Document document = findDocumentById(documentId);
             
-            // Create document metadata
-            Map<String, Object> metadata = new HashMap<>();
-            metadata.put("classification_confidence", message.getClassificationConfidence());
-            metadata.put("processing_time_ms", message.getProcessingMetadata() != null ? 
-                    message.getProcessingMetadata().getProcessingTimeMs() : null);
-            metadata.put("ocr_engine", message.getProcessingMetadata() != null ? 
-                    message.getProcessingMetadata().getOcrEngine() : null);
-            metadata.put("extracted_field_count", message.getExtractedFields().size());
+            // Validate extracted data
+            validateExtractedData(document.getType(), extractedData);
             
-            // Add low confidence fields to metadata
-            Map<String, Object> lowConfidenceFields = new HashMap<>();
-            message.getExtractedFields().forEach((fieldName, field) -> {
-                if (field.getConfidence() < CONFIDENCE_THRESHOLD) {
-                    lowConfidenceFields.put(fieldName, Map.of(
-                            "value", field.getValue(),
-                            "confidence", field.getConfidence()
+            // Check if the document belongs to an existing application
+            Optional<Application> existingApplication = findApplicationByDocumentMetadata(extractedData);
+            
+            if (existingApplication.isPresent()) {
+                // Update existing application
+                return updateApplicationWithDocument(existingApplication.get().getId(), documentId, extractedData);
+            } else {
+                // Create new application
+                return processNewApplication(documentId, extractedData);
+            }
+        } catch (Exception e) {
+            String errorMessage = "Failed to process document ID: " + documentId;
+            logger.error(errorMessage, e);
+            throw new ProcessingException(errorMessage, e, "DOCUMENT_PROCESSING_ERROR", documentId, null, extractedData);
+        }
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    @Transactional
+    public ApplicationResponseDTO updateApplicationStatus(UUID applicationId, ApplicationStatus newStatus, Map<String, Object> metadata) throws ProcessingException {
+        logger.info("Updating status of application ID: {} to {}", applicationId, newStatus);
+        
+        try {
+            // Retrieve the application
+            Application application = findApplicationById(applicationId);
+            
+            // Get the current status for notification
+            ApplicationStatus currentStatus = application.getStatus();
+            
+            // Validate status transition
+            if (!currentStatus.canTransitionTo(newStatus)) {
+                String errorMessage = "Invalid status transition from " + currentStatus + " to " + newStatus;
+                logger.error(errorMessage);
+                throw new ProcessingException(errorMessage, "INVALID_STATUS_TRANSITION", null, applicationId, metadata);
+            }
+            
+            // Update the status
+            application.setStatus(newStatus);
+            
+            // Add metadata if provided
+            if (metadata != null && !metadata.isEmpty()) {
+                for (Map.Entry<String, Object> entry : metadata.entrySet()) {
+                    application.addMetadata(entry.getKey(), entry.getValue());
+                }
+            }
+            
+            // Add status change timestamp
+            application.addMetadata("statusChangedAt", LocalDateTime.now().toString());
+            
+            // If status is COMPLETED, calculate processing time
+            if (newStatus == ApplicationStatus.COMPLETED) {
+                calculateAndStoreProcessingTime(application);
+            }
+            
+            // Save the application
+            application = applicationRepository.save(application);
+            
+            // Send notification
+            notificationService.sendApplicationStatusNotification(application, currentStatus.name(), newStatus.name());
+            
+            // If status is APPROVED or REJECTED, send specific notification
+            if (newStatus == ApplicationStatus.APPROVED) {
+                notificationService.sendApplicationApprovedNotification(application);
+            } else if (newStatus == ApplicationStatus.REJECTED) {
+                String reason = metadata != null ? (String) metadata.get("rejectionReason") : "";
+                notificationService.sendApplicationRejectedNotification(application, reason);
+            }
+            
+            logger.info("Successfully updated status of application ID: {} to {}", applicationId, newStatus);
+            
+            // Return the response DTO
+            return ApplicationResponseDTO.fromEntityWithAllDetails(application, true);
+        } catch (ProcessingException e) {
+            // Rethrow ProcessingException
+            throw e;
+        } catch (Exception e) {
+            String errorMessage = "Failed to update status of application ID: " + applicationId + " to " + newStatus;
+            logger.error(errorMessage, e);
+            throw new ProcessingException(errorMessage, e, "STATUS_UPDATE_ERROR", null, applicationId, metadata);
+        }
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    @Cacheable(value = "applicationCompleteness", key = "#applicationId")
+    public boolean isApplicationComplete(UUID applicationId) throws ProcessingException {
+        logger.info("Checking if application ID: {} is complete", applicationId);
+        
+        try {
+            // Retrieve the application
+            Application application = findApplicationById(applicationId);
+            
+            // Get the validation result
+            ValidationResult validationResult = validationService.evaluateApplicationCompleteness(application);
+            
+            // Log the result
+            logger.info("Application ID: {} completeness check result: {}", applicationId, validationResult.isValid());
+            
+            return validationResult.isValid();
+        } catch (Exception e) {
+            String errorMessage = "Failed to check if application ID: " + applicationId + " is complete";
+            logger.error(errorMessage, e);
+            throw new ProcessingException(errorMessage, e, "COMPLETENESS_CHECK_ERROR", null, applicationId, null);
+        }
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public Map<String, Object> getProcessingStatus(UUID applicationId) throws ProcessingException {
+        logger.info("Getting processing status for application ID: {}", applicationId);
+        
+        try {
+            // Retrieve the application
+            Application application = findApplicationById(applicationId);
+            
+            // Create the status map
+            Map<String, Object> statusMap = new HashMap<>();
+            
+            // Add basic status information
+            statusMap.put("applicationId", application.getId());
+            statusMap.put("status", application.getStatus().name());
+            statusMap.put("reviewStatus", application.getReviewStatus().name());
+            statusMap.put("createdAt", application.getCreatedAt());
+            statusMap.put("updatedAt", application.getUpdatedAt());
+            
+            // Add document counts
+            List<Document> documents = application.getDocuments();
+            statusMap.put("documentCount", documents.size());
+            
+            // Count documents by type
+            Map<DocumentType, Long> documentCountsByType = documents.stream()
+                    .collect(Collectors.groupingBy(Document::getType, Collectors.counting()));
+            statusMap.put("documentCountsByType", documentCountsByType);
+            
+            // Check if application is complete
+            boolean isComplete = isApplicationComplete(applicationId);
+            statusMap.put("isComplete", isComplete);
+            
+            // Get required documents
+            List<String> requiredDocuments = getRequiredDocuments(applicationId);
+            statusMap.put("requiredDocuments", requiredDocuments);
+            
+            // Add processing time if available
+            if (application.getStatus() == ApplicationStatus.COMPLETED) {
+                long processingTimeMillis = application.getProcessingTimeMillis();
+                statusMap.put("processingTimeMinutes", processingTimeMillis / 60000.0);
+                statusMap.put("processedWithinTarget", processingTimeMillis < (TARGET_PROCESSING_MINUTES * 60000));
+            }
+            
+            // Add validation results if available
+            ValidationResult validationResult = validationService.validateApplication(application);
+            statusMap.put("validationPassed", validationResult.isValid());
+            statusMap.put("validationErrors", validationResult.getErrors());
+            statusMap.put("validationSeverity", validationResult.getSeverity().name());
+            
+            logger.info("Successfully retrieved processing status for application ID: {}", applicationId);
+            
+            return statusMap;
+        } catch (Exception e) {
+            String errorMessage = "Failed to get processing status for application ID: " + applicationId;
+            logger.error(errorMessage, e);
+            throw new ProcessingException(errorMessage, e, "PROCESSING_STATUS_ERROR", null, applicationId, null);
+        }
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public List<String> getRequiredDocuments(UUID applicationId) throws ProcessingException {
+        logger.info("Getting required documents for application ID: {}", applicationId);
+        
+        try {
+            // Retrieve the application
+            Application application = findApplicationById(applicationId);
+            
+            // Get the documents associated with the application
+            List<Document> documents = application.getDocuments();
+            
+            // Get the document types that are already present
+            Set<DocumentType> existingDocumentTypes = documents.stream()
+                    .map(Document::getType)
+                    .collect(Collectors.toSet());
+            
+            // Define the required document types for a complete application
+            // This could be configurable or determined by business rules
+            List<DocumentType> requiredDocumentTypes = List.of(
+                    DocumentType.BANK_STATEMENT,
+                    DocumentType.TAX_RETURN,
+                    DocumentType.BUSINESS_LICENSE,
+                    DocumentType.ID_VERIFICATION
+            );
+            
+            // Determine which required document types are missing
+            List<String> missingDocumentTypes = requiredDocumentTypes.stream()
+                    .filter(type -> !existingDocumentTypes.contains(type))
+                    .map(DocumentType::getDescription)
+                    .collect(Collectors.toList());
+            
+            logger.info("Required documents for application ID: {}: {}", applicationId, missingDocumentTypes);
+            
+            return missingDocumentTypes;
+        } catch (Exception e) {
+            String errorMessage = "Failed to get required documents for application ID: " + applicationId;
+            logger.error(errorMessage, e);
+            throw new ProcessingException(errorMessage, e, "REQUIRED_DOCUMENTS_ERROR", null, applicationId, null);
+        }
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    @Transactional
+    @CacheEvict(value = {"applicationCompleteness", "applicationDocuments"}, key = "#applicationId")
+    public ApplicationResponseDTO reprocessApplication(UUID applicationId) throws ProcessingException {
+        logger.info("Reprocessing application ID: {}", applicationId);
+        
+        try {
+            // Retrieve the application
+            Application application = findApplicationById(applicationId);
+            
+            // Update status to PROCESSING
+            ApplicationStatus currentStatus = application.getStatus();
+            application.setStatus(ApplicationStatus.PROCESSING);
+            
+            // Add reprocessing metadata
+            application.addMetadata("reprocessedAt", LocalDateTime.now().toString());
+            application.addMetadata("previousStatus", currentStatus.name());
+            
+            // Save the application
+            application = applicationRepository.save(application);
+            
+            // Get all documents associated with the application
+            List<Document> documents = application.getDocuments();
+            
+            // Reprocess each document
+            for (Document document : documents) {
+                // Get the extracted data from document metadata
+                Map<String, Object> extractedData = document.getMetadata();
+                
+                // Update application data based on document content
+                updateApplicationData(application, document.getType(), extractedData);
+            }
+            
+            // Apply business rules
+            ApplicationResponseDTO responseDTO = applyBusinessRules(applicationId);
+            
+            logger.info("Successfully reprocessed application ID: {}", applicationId);
+            
+            return responseDTO;
+        } catch (Exception e) {
+            String errorMessage = "Failed to reprocess application ID: " + applicationId;
+            logger.error(errorMessage, e);
+            throw new ProcessingException(errorMessage, e, "REPROCESSING_ERROR", null, applicationId, null);
+        }
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    @Transactional
+    public void handleProcessingException(UUID documentId, UUID applicationId, Exception exception, Map<String, Object> metadata) throws ProcessingException {
+        logger.error("Handling processing exception for document ID: {}, application ID: {}", documentId, applicationId, exception);
+        
+        try {
+            // Create error metadata
+            Map<String, Object> errorMetadata = new HashMap<>();
+            errorMetadata.put("errorTimestamp", LocalDateTime.now().toString());
+            errorMetadata.put("errorMessage", exception.getMessage());
+            errorMetadata.put("errorType", exception.getClass().getName());
+            
+            if (metadata != null) {
+                errorMetadata.putAll(metadata);
+            }
+            
+            // If there's an application ID, update the application status
+            if (applicationId != null) {
+                try {
+                    Application application = findApplicationById(applicationId);
+                    
+                    // Update status to ERROR
+                    application.setStatus(ApplicationStatus.ERROR);
+                    
+                    // Add error metadata
+                    application.addMetadata("processingError", errorMetadata);
+                    
+                    // Save the application
+                    applicationRepository.save(application);
+                    
+                    // Send notification
+                    Map<String, Object> notificationPayload = new HashMap<>();
+                    notificationPayload.put("applicationId", applicationId);
+                    notificationPayload.put("errorDetails", errorMetadata);
+                    notificationService.sendSystemEventNotification(EventType.APPLICATION_PROCESSING_ERROR, notificationPayload);
+                } catch (Exception e) {
+                    logger.error("Failed to update application status for error handling", e);
+                }
+            }
+            
+            // If there's a document ID, update the document metadata
+            if (documentId != null) {
+                try {
+                    Document document = findDocumentById(documentId);
+                    
+                    // Add error metadata
+                    document.addMetadata("processingError", errorMetadata);
+                    
+                    // Save the document
+                    documentRepository.save(document);
+                    
+                    // Send notification
+                    Map<String, Object> notificationPayload = new HashMap<>();
+                    notificationPayload.put("documentId", documentId);
+                    notificationPayload.put("errorDetails", errorMetadata);
+                    notificationService.sendSystemEventNotification(EventType.DOCUMENT_PROCESSING_ERROR, notificationPayload);
+                } catch (Exception e) {
+                    logger.error("Failed to update document metadata for error handling", e);
+                }
+            }
+            
+            logger.info("Successfully handled processing exception for document ID: {}, application ID: {}", documentId, applicationId);
+        } catch (Exception e) {
+            String errorMessage = "Failed to handle processing exception";
+            logger.error(errorMessage, e);
+            // Don't throw another exception here to avoid cascading errors
+        }
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    @Cacheable(value = "applicationDocuments", key = "#applicationId")
+    public List<DocumentResponseDTO> getApplicationDocuments(UUID applicationId) throws ProcessingException {
+        logger.info("Getting documents for application ID: {}", applicationId);
+        
+        try {
+            // Retrieve the application
+            Application application = findApplicationById(applicationId);
+            
+            // Get the documents associated with the application
+            List<Document> documents = application.getDocuments();
+            
+            // Convert to DTOs
+            List<DocumentResponseDTO> documentDTOs = new ArrayList<>();
+            for (Document document : documents) {
+                // Generate a secure URL for document access
+                String downloadUrl = documentService.generateSecureUrl(document.getId());
+                LocalDateTime urlExpiresAt = LocalDateTime.now().plusHours(1); // URL valid for 1 hour
+                
+                DocumentResponseDTO documentDTO = DocumentResponseDTO.fromEntity(document, downloadUrl, urlExpiresAt);
+                documentDTOs.add(documentDTO);
+            }
+            
+            logger.info("Successfully retrieved {} documents for application ID: {}", documentDTOs.size(), applicationId);
+            
+            return documentDTOs;
+        } catch (Exception e) {
+            String errorMessage = "Failed to get documents for application ID: " + applicationId;
+            logger.error(errorMessage, e);
+            throw new ProcessingException(errorMessage, e, "GET_DOCUMENTS_ERROR", null, applicationId, null);
+        }
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    @Transactional
+    public ApplicationResponseDTO applyBusinessRules(UUID applicationId) throws ProcessingException {
+        logger.info("Applying business rules to application ID: {}", applicationId);
+        
+        try {
+            // Retrieve the application
+            Application application = findApplicationById(applicationId);
+            
+            // Get the merchant details
+            MerchantDetails merchantDetails = application.getMerchantDetails();
+            
+            // Get the documents
+            List<Document> documents = application.getDocuments();
+            
+            // Validate business rules
+            ValidationResult validationResult = validationService.validateBusinessRules(application, merchantDetails, documents);
+            
+            // Determine the appropriate application status based on validation result
+            ApplicationStatus newStatus;
+            Map<String, Object> statusMetadata = new HashMap<>();
+            
+            if (validationResult.isValid()) {
+                // Check if the application is complete
+                ValidationResult completenessResult = validationService.evaluateApplicationCompleteness(application);
+                
+                if (completenessResult.isValid()) {
+                    // Application is complete and valid, determine if it should be approved or rejected
+                    ValidationResult approvalResult = validationService.validateApprovalRequirements(application, merchantDetails, documents);
+                    
+                    if (approvalResult.isValid()) {
+                        newStatus = ApplicationStatus.APPROVED;
+                    } else {
+                        newStatus = ApplicationStatus.REJECTED;
+                        statusMetadata.put("rejectionReason", approvalResult.getErrors().toString());
+                    }
+                } else {
+                    // Application is valid but incomplete
+                    newStatus = ApplicationStatus.PENDING;
+                    statusMetadata.put("pendingReason", completenessResult.getErrors().toString());
+                }
+            } else if (validationResult.getSeverity() == ValidationSeverity.WARNING) {
+                // Application has warnings but can still be processed
+                newStatus = ApplicationStatus.EXCEPTION;
+                statusMetadata.put("exceptionReason", validationResult.getErrors().toString());
+                statusMetadata.put("exceptionSeverity", "WARNING");
+            } else {
+                // Application has errors that prevent processing
+                newStatus = ApplicationStatus.EXCEPTION;
+                statusMetadata.put("exceptionReason", validationResult.getErrors().toString());
+                statusMetadata.put("exceptionSeverity", "ERROR");
+            }
+            
+            // Update the application status
+            return updateApplicationStatus(applicationId, newStatus, statusMetadata);
+        } catch (Exception e) {
+            String errorMessage = "Failed to apply business rules to application ID: " + applicationId;
+            logger.error(errorMessage, e);
+            throw new ProcessingException(errorMessage, e, "BUSINESS_RULES_ERROR", null, applicationId, null);
+        }
+    }
+
+    /**
+     * Finds an application by its ID.
+     * 
+     * @param applicationId The application ID
+     * @return The application
+     * @throws ProcessingException if the application is not found
+     */
+    private Application findApplicationById(UUID applicationId) throws ProcessingException {
+        return applicationRepository.findById(applicationId)
+                .orElseThrow(() -> new ProcessingException(
+                        "Application not found with ID: " + applicationId,
+                        "APPLICATION_NOT_FOUND",
+                        null,
+                        applicationId,
+                        null));
+    }
+
+    /**
+     * Finds a document by its ID.
+     * 
+     * @param documentId The document ID
+     * @return The document
+     * @throws ProcessingException if the document is not found
+     */
+    private Document findDocumentById(UUID documentId) throws ProcessingException {
+        return documentRepository.findById(documentId)
+                .orElseThrow(() -> new ProcessingException(
+                        "Document not found with ID: " + documentId,
+                        "DOCUMENT_NOT_FOUND",
+                        documentId,
+                        null,
+                        null));
+    }
+
+    /**
+     * Validates extracted data against the expected schema for the document type.
+     * 
+     * @param documentType The type of document
+     * @param extractedData The data extracted from the document
+     * @throws ProcessingException if validation fails
+     */
+    private void validateExtractedData(DocumentType documentType, Map<String, Object> extractedData) throws ProcessingException {
+        // Get confidence scores if available
+        Map<String, Double> confidenceScores = new HashMap<>();
+        if (extractedData.containsKey("confidenceScores")) {
+            try {
+                @SuppressWarnings("unchecked")
+                Map<String, Double> scores = (Map<String, Double>) extractedData.get("confidenceScores");
+                confidenceScores = scores;
+            } catch (ClassCastException e) {
+                logger.warn("Invalid confidence scores format", e);
+            }
+        }
+        
+        // Validate the extracted data
+        ValidationResult validationResult;
+        if (!confidenceScores.isEmpty()) {
+            validationResult = validationService.validateExtractedDataWithConfidence(documentType, extractedData, confidenceScores);
+        } else {
+            validationResult = validationService.validateExtractedData(documentType, extractedData);
+        }
+        
+        // If validation fails, throw an exception
+        if (!validationResult.isValid() && validationResult.getSeverity() == ValidationSeverity.ERROR) {
+            throw new ProcessingException(
+                    "Extracted data validation failed for document type: " + documentType,
+                    "VALIDATION_ERROR",
+                    null,
+                    null,
+                    Map.of(
+                            "documentType", documentType,
+                            "validationErrors", validationResult.getErrors(),
+                            "validationSeverity", validationResult.getSeverity()
                     ));
-                }
-            });
-            
-            if (!lowConfidenceFields.isEmpty()) {
-                metadata.put("low_confidence_fields", lowConfidenceFields);
-            }
-            
-            // Create the document
-            Document document = new Document();
-            document.setId(UUID.randomUUID().toString());
-            document.setApplication(application);
-            document.setType(documentType);
-            document.setClassification(message.getClassification());
-            document.setStoragePath(message.getStoragePath());
-            document.setUploadedAt(message.getTimestamp());
-            document.setMetadata(metadata);
-            
-            // Save the document
-            document = documentRepository.save(document);
-            logger.info("Created document with ID: {} for application: {}", document.getId(), application.getId());
-            
-            return document;
-        } catch (Exception e) {
-            throw new DocumentProcessingException("Failed to create document from message", e);
         }
     }
-    
+
     /**
-     * Maps DocumentProcessingMessage.DocumentType to entity.DocumentType.
+     * Creates a new application from extracted document data.
      * 
-     * @param messageType The document type from the processing message
-     * @return The corresponding entity document type
+     * @param extractedData The data extracted from the document
+     * @return The new application
      */
-    private DocumentType mapDocumentType(DocumentProcessingMessage.DocumentType messageType) {
-        switch (messageType) {
-            case APPLICATION_FORM:
-                return DocumentType.APPLICATION_FORM;
+    private Application createNewApplication(Map<String, Object> extractedData) {
+        // Create a new application with initial status
+        Application application = new Application(ApplicationStatus.PROCESSING);
+        
+        // Set creation and update timestamps
+        LocalDateTime now = LocalDateTime.now();
+        application.setCreatedAt(now);
+        application.setUpdatedAt(now);
+        
+        // Set review status
+        application.setReviewStatus(ReviewStatus.NOT_REVIEWED);
+        
+        // Add metadata from extracted data
+        application.addMetadata("sourceData", extractedData);
+        application.addMetadata("processingStarted", now.toString());
+        
+        // Create merchant details if available in extracted data
+        if (extractedData.containsKey("merchantDetails")) {
+            try {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> merchantData = (Map<String, Object>) extractedData.get("merchantDetails");
+                
+                MerchantDetails merchantDetails = new MerchantDetails();
+                merchantDetails.setApplication(application);
+                
+                // Set merchant details fields from extracted data
+                if (merchantData.containsKey("legalName")) {
+                    merchantDetails.setLegalName((String) merchantData.get("legalName"));
+                }
+                
+                if (merchantData.containsKey("dbaName")) {
+                    merchantDetails.setDbaName((String) merchantData.get("dbaName"));
+                }
+                
+                if (merchantData.containsKey("ein")) {
+                    merchantDetails.setEin((String) merchantData.get("ein"));
+                }
+                
+                if (merchantData.containsKey("address")) {
+                    merchantDetails.setAddress((String) merchantData.get("address"));
+                }
+                
+                if (merchantData.containsKey("industry")) {
+                    merchantDetails.setIndustry((String) merchantData.get("industry"));
+                }
+                
+                if (merchantData.containsKey("revenue")) {
+                    try {
+                        merchantDetails.setRevenue(Double.parseDouble(merchantData.get("revenue").toString()));
+                    } catch (NumberFormatException e) {
+                        logger.warn("Invalid revenue format", e);
+                    }
+                }
+                
+                application.setMerchantDetails(merchantDetails);
+            } catch (ClassCastException e) {
+                logger.warn("Invalid merchant details format", e);
+            }
+        }
+        
+        return application;
+    }
+
+    /**
+     * Associates a document with an application.
+     * 
+     * @param document The document to associate
+     * @param application The application to associate with
+     */
+    private void associateDocumentWithApplication(Document document, Application application) {
+        // Set the application ID on the document
+        document.setApplicationId(application.getId());
+        
+        // Add the document to the application's document list
+        application.addDocument(document);
+        
+        // Update document metadata
+        document.addMetadata("associatedAt", LocalDateTime.now().toString());
+        document.addMetadata("associatedWithApplication", application.getId().toString());
+        
+        // Save the document
+        documentRepository.save(document);
+    }
+
+    /**
+     * Updates application data based on document content.
+     * 
+     * @param application The application to update
+     * @param documentType The type of document
+     * @param extractedData The data extracted from the document
+     */
+    private void updateApplicationData(Application application, DocumentType documentType, Map<String, Object> extractedData) {
+        // Update application metadata with document data
+        application.addMetadata("lastDocumentProcessed", documentType.name());
+        application.addMetadata("lastDocumentProcessedAt", LocalDateTime.now().toString());
+        
+        // Update merchant details if available and document type is appropriate
+        if (documentType == DocumentType.BUSINESS_LICENSE && extractedData.containsKey("merchantDetails")) {
+            try {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> merchantData = (Map<String, Object>) extractedData.get("merchantDetails");
+                
+                MerchantDetails merchantDetails = application.getMerchantDetails();
+                if (merchantDetails == null) {
+                    merchantDetails = new MerchantDetails();
+                    merchantDetails.setApplication(application);
+                    application.setMerchantDetails(merchantDetails);
+                }
+                
+                // Update merchant details fields from extracted data
+                if (merchantData.containsKey("legalName") && (merchantDetails.getLegalName() == null || merchantDetails.getLegalName().isEmpty())) {
+                    merchantDetails.setLegalName((String) merchantData.get("legalName"));
+                }
+                
+                if (merchantData.containsKey("dbaName") && (merchantDetails.getDbaName() == null || merchantDetails.getDbaName().isEmpty())) {
+                    merchantDetails.setDbaName((String) merchantData.get("dbaName"));
+                }
+                
+                if (merchantData.containsKey("ein") && (merchantDetails.getEin() == null || merchantDetails.getEin().isEmpty())) {
+                    merchantDetails.setEin((String) merchantData.get("ein"));
+                }
+                
+                if (merchantData.containsKey("address") && (merchantDetails.getAddress() == null || merchantDetails.getAddress().isEmpty())) {
+                    merchantDetails.setAddress((String) merchantData.get("address"));
+                }
+                
+                if (merchantData.containsKey("industry") && (merchantDetails.getIndustry() == null || merchantDetails.getIndustry().isEmpty())) {
+                    merchantDetails.setIndustry((String) merchantData.get("industry"));
+                }
+                
+                if (merchantData.containsKey("revenue") && merchantDetails.getRevenue() == null) {
+                    try {
+                        merchantDetails.setRevenue(Double.parseDouble(merchantData.get("revenue").toString()));
+                    } catch (NumberFormatException e) {
+                        logger.warn("Invalid revenue format", e);
+                    }
+                }
+            } catch (ClassCastException e) {
+                logger.warn("Invalid merchant details format", e);
+            }
+        }
+        
+        // Update application metadata with document-specific data
+        switch (documentType) {
             case BANK_STATEMENT:
-                return DocumentType.BANK_STATEMENT;
+                updateBankStatementData(application, extractedData);
+                break;
             case TAX_RETURN:
-                return DocumentType.TAX_RETURN;
-            case IDENTITY_DOCUMENT:
-                return DocumentType.ID_VERIFICATION;
+                updateTaxReturnData(application, extractedData);
+                break;
             case BUSINESS_LICENSE:
-                return DocumentType.BUSINESS_LICENSE;
-            case CREDIT_CARD_STATEMENT:
-            case INVOICE:
-            case UTILITY_BILL:
-            case LEASE_AGREEMENT:
-                return DocumentType.MISCELLANEOUS;
+                updateBusinessLicenseData(application, extractedData);
+                break;
+            case ID_VERIFICATION:
+                updateIdVerificationData(application, extractedData);
+                break;
             default:
-                return DocumentType.MISCELLANEOUS;
+                // For other document types, just store the extracted data
+                application.addMetadata("extractedData_" + documentType.name(), extractedData);
         }
+        
+        // Update the application's update timestamp
+        application.setUpdatedAt(LocalDateTime.now());
     }
-    
+
     /**
-     * Creates merchant details from document data if available.
+     * Updates application data with bank statement information.
      * 
-     * @param message The document processing message containing extracted data
-     * @param application The application to associate the merchant details with
+     * @param application The application to update
+     * @param extractedData The data extracted from the bank statement
      */
-    private void createMerchantDetailsIfAvailable(DocumentProcessingMessage message, Application application) {
-        // Check if we have the necessary fields for merchant details
-        Map<String, DocumentProcessingMessage.ExtractedField> fields = message.getExtractedFields();
+    private void updateBankStatementData(Application application, Map<String, Object> extractedData) {
+        Map<String, Object> bankData = new HashMap<>();
         
-        boolean hasMerchantData = fields.containsKey("legal_name") || 
-                                 fields.containsKey("dba_name") || 
-                                 fields.containsKey("ein");
+        // Extract relevant fields from the bank statement
+        if (extractedData.containsKey("accountNumber")) {
+            bankData.put("accountNumber", extractedData.get("accountNumber"));
+        }
         
-        if (!hasMerchantData) {
-            logger.info("No merchant data available in document: {}", message.getDocumentId());
-            return;
+        if (extractedData.containsKey("bankName")) {
+            bankData.put("bankName", extractedData.get("bankName"));
+        }
+        
+        if (extractedData.containsKey("statementDate")) {
+            bankData.put("statementDate", extractedData.get("statementDate"));
+        }
+        
+        if (extractedData.containsKey("balance")) {
+            bankData.put("balance", extractedData.get("balance"));
+        }
+        
+        if (extractedData.containsKey("averageBalance")) {
+            bankData.put("averageBalance", extractedData.get("averageBalance"));
+        }
+        
+        if (extractedData.containsKey("transactions")) {
+            bankData.put("transactions", extractedData.get("transactions"));
+        }
+        
+        // Add the bank data to the application metadata
+        application.addMetadata("bankStatementData", bankData);
+    }
+
+    /**
+     * Updates application data with tax return information.
+     * 
+     * @param application The application to update
+     * @param extractedData The data extracted from the tax return
+     */
+    private void updateTaxReturnData(Application application, Map<String, Object> extractedData) {
+        Map<String, Object> taxData = new HashMap<>();
+        
+        // Extract relevant fields from the tax return
+        if (extractedData.containsKey("taxYear")) {
+            taxData.put("taxYear", extractedData.get("taxYear"));
+        }
+        
+        if (extractedData.containsKey("ein")) {
+            taxData.put("ein", extractedData.get("ein"));
+        }
+        
+        if (extractedData.containsKey("grossIncome")) {
+            taxData.put("grossIncome", extractedData.get("grossIncome"));
+        }
+        
+        if (extractedData.containsKey("netIncome")) {
+            taxData.put("netIncome", extractedData.get("netIncome"));
+        }
+        
+        if (extractedData.containsKey("taxesPaid")) {
+            taxData.put("taxesPaid", extractedData.get("taxesPaid"));
+        }
+        
+        // Add the tax data to the application metadata
+        application.addMetadata("taxReturnData", taxData);
+    }
+
+    /**
+     * Updates application data with business license information.
+     * 
+     * @param application The application to update
+     * @param extractedData The data extracted from the business license
+     */
+    private void updateBusinessLicenseData(Application application, Map<String, Object> extractedData) {
+        Map<String, Object> licenseData = new HashMap<>();
+        
+        // Extract relevant fields from the business license
+        if (extractedData.containsKey("licenseNumber")) {
+            licenseData.put("licenseNumber", extractedData.get("licenseNumber"));
+        }
+        
+        if (extractedData.containsKey("issueDate")) {
+            licenseData.put("issueDate", extractedData.get("issueDate"));
+        }
+        
+        if (extractedData.containsKey("expirationDate")) {
+            licenseData.put("expirationDate", extractedData.get("expirationDate"));
+        }
+        
+        if (extractedData.containsKey("businessType")) {
+            licenseData.put("businessType", extractedData.get("businessType"));
+        }
+        
+        if (extractedData.containsKey("issuingAuthority")) {
+            licenseData.put("issuingAuthority", extractedData.get("issuingAuthority"));
+        }
+        
+        // Add the license data to the application metadata
+        application.addMetadata("businessLicenseData", licenseData);
+    }
+
+    /**
+     * Updates application data with ID verification information.
+     * 
+     * @param application The application to update
+     * @param extractedData The data extracted from the ID verification document
+     */
+    private void updateIdVerificationData(Application application, Map<String, Object> extractedData) {
+        Map<String, Object> idData = new HashMap<>();
+        
+        // Extract relevant fields from the ID verification document
+        if (extractedData.containsKey("idType")) {
+            idData.put("idType", extractedData.get("idType"));
+        }
+        
+        if (extractedData.containsKey("idNumber")) {
+            idData.put("idNumber", extractedData.get("idNumber"));
+        }
+        
+        if (extractedData.containsKey("name")) {
+            idData.put("name", extractedData.get("name"));
+        }
+        
+        if (extractedData.containsKey("address")) {
+            idData.put("address", extractedData.get("address"));
+        }
+        
+        if (extractedData.containsKey("dateOfBirth")) {
+            idData.put("dateOfBirth", extractedData.get("dateOfBirth"));
+        }
+        
+        if (extractedData.containsKey("expirationDate")) {
+            idData.put("expirationDate", extractedData.get("expirationDate"));
+        }
+        
+        // Add the ID data to the application metadata
+        application.addMetadata("idVerificationData", idData);
+    }
+
+    /**
+     * Calculates and stores the processing time for an application.
+     * 
+     * @param application The application to calculate processing time for
+     */
+    private void calculateAndStoreProcessingTime(Application application) {
+        LocalDateTime createdAt = application.getCreatedAt();
+        LocalDateTime completedAt = LocalDateTime.now();
+        
+        // Calculate processing time in milliseconds
+        long processingTimeMillis = Duration.between(createdAt, completedAt).toMillis();
+        
+        // Store processing time in metadata
+        application.addMetadata("processingTimeMillis", processingTimeMillis);
+        application.addMetadata("processingTimeMinutes", processingTimeMillis / 60000.0);
+        application.addMetadata("completedAt", completedAt.toString());
+        
+        // Check if processing time meets the target
+        boolean meetsTarget = processingTimeMillis < (TARGET_PROCESSING_MINUTES * 60000);
+        application.addMetadata("processedWithinTarget", meetsTarget);
+        
+        logger.info("Application ID: {} processing time: {} ms ({} minutes)", 
+                application.getId(), processingTimeMillis, processingTimeMillis / 60000.0);
+    }
+
+    /**
+     * Finds an application based on document metadata.
+     * This method attempts to match a document with an existing application
+     * based on identifying information in the extracted data.
+     * 
+     * @param extractedData The data extracted from the document
+     * @return An optional containing the matching application, or empty if no match is found
+     */
+    private Optional<Application> findApplicationByDocumentMetadata(Map<String, Object> extractedData) {
+        // Check if the extracted data contains merchant details
+        if (!extractedData.containsKey("merchantDetails")) {
+            return Optional.empty();
         }
         
         try {
-            // Create merchant details
-            MerchantDetails merchantDetails = new MerchantDetails();
-            merchantDetails.setId(UUID.randomUUID().toString());
-            merchantDetails.setApplication(application);
+            @SuppressWarnings("unchecked")
+            Map<String, Object> merchantData = (Map<String, Object>) extractedData.get("merchantDetails");
             
-            // Set fields if available
-            if (fields.containsKey("legal_name")) {
-                merchantDetails.setLegalName(fields.get("legal_name").getValue().toString());
-            }
-            
-            if (fields.containsKey("dba_name")) {
-                merchantDetails.setDbaName(fields.get("dba_name").getValue().toString());
-            }
-            
-            if (fields.containsKey("ein")) {
-                merchantDetails.setEin(fields.get("ein").getValue().toString());
-            }
-            
-            // Handle address as a complex object
-            Map<String, String> address = new HashMap<>();
-            if (fields.containsKey("address_line1")) {
-                address.put("line1", fields.get("address_line1").getValue().toString());
-            }
-            
-            if (fields.containsKey("address_line2")) {
-                address.put("line2", fields.get("address_line2").getValue().toString());
-            }
-            
-            if (fields.containsKey("city")) {
-                address.put("city", fields.get("city").getValue().toString());
-            }
-            
-            if (fields.containsKey("state")) {
-                address.put("state", fields.get("state").getValue().toString());
-            }
-            
-            if (fields.containsKey("zip_code")) {
-                address.put("zip", fields.get("zip_code").getValue().toString());
-            }
-            
-            if (!address.isEmpty()) {
-                merchantDetails.setAddress(address);
-            }
-            
-            if (fields.containsKey("industry")) {
-                merchantDetails.setIndustry(fields.get("industry").getValue().toString());
-            }
-            
-            if (fields.containsKey("annual_revenue")) {
-                Object revenueObj = fields.get("annual_revenue").getValue();
-                if (revenueObj instanceof Number) {
-                    merchantDetails.setRevenue(((Number) revenueObj).doubleValue());
-                } else if (revenueObj instanceof String) {
-                    try {
-                        // Remove any non-numeric characters except decimal point
-                        String revenueStr = ((String) revenueObj).replaceAll("[^\\d.]", "");
-                        merchantDetails.setRevenue(Double.parseDouble(revenueStr));
-                    } catch (NumberFormatException e) {
-                        logger.warn("Could not parse revenue value: {}", revenueObj);
+            // Try to match by EIN if available
+            if (merchantData.containsKey("ein")) {
+                String ein = (String) merchantData.get("ein");
+                if (ein != null && !ein.isEmpty()) {
+                    List<Application> applications = applicationRepository.findByMerchantDetailsEin(ein);
+                    if (!applications.isEmpty()) {
+                        // Return the most recently updated application
+                        return applications.stream()
+                                .max((a1, a2) -> a1.getUpdatedAt().compareTo(a2.getUpdatedAt()));
                     }
                 }
             }
             
-            // Save the merchant details
-            merchantDetailsRepository.save(merchantDetails);
-            logger.info("Created merchant details for application: {}", application.getId());
-            
-        } catch (Exception e) {
-            logger.error("Failed to create merchant details from document data", e);
-            // Don't throw exception here, as we can still proceed with application processing
-        }
-    }
-    
-    /**
-     * Updates merchant details from document data if available.
-     * 
-     * @param message The document processing message containing extracted data
-     * @param application The application associated with the merchant details
-     */
-    private void updateMerchantDetailsIfAvailable(DocumentProcessingMessage message, Application application) {
-        // Check if we have the necessary fields for merchant details
-        Map<String, DocumentProcessingMessage.ExtractedField> fields = message.getExtractedFields();
-        
-        boolean hasMerchantData = fields.containsKey("legal_name") || 
-                                 fields.containsKey("dba_name") || 
-                                 fields.containsKey("ein") ||
-                                 fields.containsKey("address_line1") ||
-                                 fields.containsKey("industry") ||
-                                 fields.containsKey("annual_revenue");
-        
-        if (!hasMerchantData) {
-            logger.info("No merchant data available in document: {}", message.getDocumentId());
-            return;
-        }
-        
-        try {
-            // Find existing merchant details or create new ones
-            MerchantDetails merchantDetails = merchantDetailsRepository.findByApplicationId(application.getId())
-                    .orElseGet(() -> {
-                        MerchantDetails newDetails = new MerchantDetails();
-                        newDetails.setId(UUID.randomUUID().toString());
-                        newDetails.setApplication(application);
-                        return newDetails;
-                    });
-            
-            // Update fields if available and if confidence is high enough
-            if (fields.containsKey("legal_name") && 
-                    fields.get("legal_name").getConfidence() >= CONFIDENCE_THRESHOLD) {
-                merchantDetails.setLegalName(fields.get("legal_name").getValue().toString());
-            }
-            
-            if (fields.containsKey("dba_name") && 
-                    fields.get("dba_name").getConfidence() >= CONFIDENCE_THRESHOLD) {
-                merchantDetails.setDbaName(fields.get("dba_name").getValue().toString());
-            }
-            
-            if (fields.containsKey("ein") && 
-                    fields.get("ein").getConfidence() >= CONFIDENCE_THRESHOLD) {
-                merchantDetails.setEin(fields.get("ein").getValue().toString());
-            }
-            
-            // Handle address as a complex object
-            Map<String, String> address = merchantDetails.getAddress();
-            if (address == null) {
-                address = new HashMap<>();
-            }
-            
-            boolean addressUpdated = false;
-            
-            if (fields.containsKey("address_line1") && 
-                    fields.get("address_line1").getConfidence() >= CONFIDENCE_THRESHOLD) {
-                address.put("line1", fields.get("address_line1").getValue().toString());
-                addressUpdated = true;
-            }
-            
-            if (fields.containsKey("address_line2") && 
-                    fields.get("address_line2").getConfidence() >= CONFIDENCE_THRESHOLD) {
-                address.put("line2", fields.get("address_line2").getValue().toString());
-                addressUpdated = true;
-            }
-            
-            if (fields.containsKey("city") && 
-                    fields.get("city").getConfidence() >= CONFIDENCE_THRESHOLD) {
-                address.put("city", fields.get("city").getValue().toString());
-                addressUpdated = true;
-            }
-            
-            if (fields.containsKey("state") && 
-                    fields.get("state").getConfidence() >= CONFIDENCE_THRESHOLD) {
-                address.put("state", fields.get("state").getValue().toString());
-                addressUpdated = true;
-            }
-            
-            if (fields.containsKey("zip_code") && 
-                    fields.get("zip_code").getConfidence() >= CONFIDENCE_THRESHOLD) {
-                address.put("zip", fields.get("zip_code").getValue().toString());
-                addressUpdated = true;
-            }
-            
-            if (addressUpdated) {
-                merchantDetails.setAddress(address);
-            }
-            
-            if (fields.containsKey("industry") && 
-                    fields.get("industry").getConfidence() >= CONFIDENCE_THRESHOLD) {
-                merchantDetails.setIndustry(fields.get("industry").getValue().toString());
-            }
-            
-            if (fields.containsKey("annual_revenue") && 
-                    fields.get("annual_revenue").getConfidence() >= CONFIDENCE_THRESHOLD) {
-                Object revenueObj = fields.get("annual_revenue").getValue();
-                if (revenueObj instanceof Number) {
-                    merchantDetails.setRevenue(((Number) revenueObj).doubleValue());
-                } else if (revenueObj instanceof String) {
-                    try {
-                        // Remove any non-numeric characters except decimal point
-                        String revenueStr = ((String) revenueObj).replaceAll("[^\\d.]", "");
-                        merchantDetails.setRevenue(Double.parseDouble(revenueStr));
-                    } catch (NumberFormatException e) {
-                        logger.warn("Could not parse revenue value: {}", revenueObj);
+            // Try to match by legal name if available
+            if (merchantData.containsKey("legalName")) {
+                String legalName = (String) merchantData.get("legalName");
+                if (legalName != null && !legalName.isEmpty()) {
+                    List<Application> applications = applicationRepository.findByMerchantDetailsLegalName(legalName);
+                    if (!applications.isEmpty()) {
+                        // Return the most recently updated application
+                        return applications.stream()
+                                .max((a1, a2) -> a1.getUpdatedAt().compareTo(a2.getUpdatedAt()));
                     }
                 }
             }
             
-            // Save the updated merchant details
-            merchantDetailsRepository.save(merchantDetails);
-            logger.info("Updated merchant details for application: {}", application.getId());
-            
-        } catch (Exception e) {
-            logger.error("Failed to update merchant details from document data", e);
-            // Don't throw exception here, as we can still proceed with application processing
-        }
-    }
-    
-    /**
-     * Validates if a status transition is allowed based on business rules.
-     * 
-     * @param currentStatus The current application status
-     * @param newStatus The new application status
-     * @throws BusinessRuleException if the transition is not allowed
-     */
-    private void validateStatusTransition(ApplicationStatus currentStatus, ApplicationStatus newStatus) {
-        // Define valid transitions
-        boolean isValid = false;
-        
-        switch (currentStatus) {
-            case NEW:
-                // NEW can transition to PENDING or REJECTED
-                isValid = newStatus == ApplicationStatus.PENDING || 
-                          newStatus == ApplicationStatus.REJECTED;
-                break;
-                
-            case PENDING:
-                // PENDING can transition to PROCESSING, REJECTED, or back to NEW
-                isValid = newStatus == ApplicationStatus.PROCESSING || 
-                          newStatus == ApplicationStatus.REJECTED || 
-                          newStatus == ApplicationStatus.NEW;
-                break;
-                
-            case PROCESSING:
-                // PROCESSING can transition to APPROVED, REJECTED, or back to PENDING
-                isValid = newStatus == ApplicationStatus.APPROVED || 
-                          newStatus == ApplicationStatus.REJECTED || 
-                          newStatus == ApplicationStatus.PENDING;
-                break;
-                
-            case APPROVED:
-                // APPROVED can transition to COMPLETED or back to PROCESSING
-                isValid = newStatus == ApplicationStatus.COMPLETED || 
-                          newStatus == ApplicationStatus.PROCESSING;
-                break;
-                
-            case REJECTED:
-                // REJECTED is a terminal state, but can go back to PENDING for reconsideration
-                isValid = newStatus == ApplicationStatus.PENDING;
-                break;
-                
-            case COMPLETED:
-                // COMPLETED is a terminal state
-                isValid = false;
-                break;
+            // Try to match by DBA name if available
+            if (merchantData.containsKey("dbaName")) {
+                String dbaName = (String) merchantData.get("dbaName");
+                if (dbaName != null && !dbaName.isEmpty()) {
+                    List<Application> applications = applicationRepository.findByMerchantDetailsDbaName(dbaName);
+                    if (!applications.isEmpty()) {
+                        // Return the most recently updated application
+                        return applications.stream()
+                                .max((a1, a2) -> a1.getUpdatedAt().compareTo(a2.getUpdatedAt()));
+                    }
+                }
+            }
+        } catch (ClassCastException e) {
+            logger.warn("Invalid merchant details format", e);
         }
         
-        if (!isValid) {
-            throw new BusinessRuleException("Invalid status transition from " + 
-                    currentStatus + " to " + newStatus);
-        }
+        return Optional.empty();
     }
 }
