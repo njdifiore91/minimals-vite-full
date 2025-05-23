@@ -1,469 +1,511 @@
-import pytest
-import unittest.mock as mock
-import numpy as np
-from typing import Dict, List, Any
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 
-# Import the classification service and related types
+"""
+Unit tests for the document classification service.
+
+This module contains tests that verify the classification service correctly orchestrates
+feature extraction, model selection, classification, and confidence scoring to determine
+document types with high accuracy.
+"""
+
+import pytest
+import logging
+import json
+import time
+from unittest.mock import Mock, patch, MagicMock
+from typing import Dict, Any, List
+import numpy as np
+
+# Import the service to test
 from src.services.classification_service import ClassificationService
-from src.models.document_classifier import DocumentClassifier
-from src.models.svm_classifier import SVMClassifier
-from src.models.random_forest_classifier import RandomForestClassifier
-from src.types.documents import Document, DocumentType, ProcessingStatus
-from src.types.classification import ClassificationResult, ConfidenceScore
-from src.config.model_config import model_config
-from src.utils.logging_utils import get_logger
+
+# Import models and types
+from src.models import DocumentClassifier
+from src.models.feature_extraction import extract_features
+from src.types.classification import ClassificationResult, FeatureVector, ConfidenceScore
+from src.types.documents import DocumentType
+from src.types.storage import StorageMetadata
 
 
 @pytest.fixture
 def mock_document_classifier():
-    """Fixture for mocking the DocumentClassifier."""
-    classifier = mock.MagicMock(spec=DocumentClassifier)
-    return classifier
-
-
-@pytest.fixture
-def mock_svm_classifier():
-    """Fixture for mocking the SVMClassifier."""
-    classifier = mock.MagicMock(spec=SVMClassifier)
-    return classifier
-
-
-@pytest.fixture
-def mock_random_forest_classifier():
-    """Fixture for mocking the RandomForestClassifier."""
-    classifier = mock.MagicMock(spec=RandomForestClassifier)
-    return classifier
-
-
-@pytest.fixture
-def mock_logger():
-    """Fixture for mocking the logger."""
-    logger = mock.MagicMock()
-    return logger
-
-
-@pytest.fixture
-def sample_document():
-    """Fixture for creating a sample document for testing."""
-    return Document(
-        id="doc123",
-        filename="test_document.pdf",
-        content=b"test document content",
-        mime_type="application/pdf",
-        size=1024,
-        metadata={
-            "source": "email",
-            "received_at": "2023-01-01T12:00:00Z",
-            "sender": "test@example.com"
-        },
-        status=ProcessingStatus.RECEIVED
+    """
+    Fixture that provides a mocked DocumentClassifier.
+    """
+    mock_classifier = Mock(spec=DocumentClassifier)
+    
+    # Configure the mock to return a document type and confidence scores
+    mock_classifier.classify.return_value = (
+        DocumentType.APPLICATION,
+        {
+            "application": 0.85,
+            "tax_return": 0.05,
+            "bank_statement": 0.05,
+            "pay_stub": 0.03,
+            "id_document": 0.01,
+            "other": 0.01
+        }
     )
+    
+    return mock_classifier
 
 
 @pytest.fixture
-def classification_service(mock_document_classifier, mock_svm_classifier, 
-                          mock_random_forest_classifier, mock_logger):
-    """Fixture for creating a ClassificationService with mocked dependencies."""
-    with mock.patch('src.services.classification_service.get_logger', return_value=mock_logger):
-        service = ClassificationService(
-            document_classifier=mock_document_classifier,
-            svm_classifier=mock_svm_classifier,
-            random_forest_classifier=mock_random_forest_classifier,
-            config=model_config
-        )
-        return service
+def mock_feature_extractor():
+    """
+    Fixture that provides a mocked feature extraction function.
+    """
+    with patch('src.models.feature_extraction.extract_features') as mock_extract:
+        # Configure the mock to return a feature vector
+        mock_extract.return_value = np.array([0.1, 0.2, 0.3, 0.4, 0.5])
+        yield mock_extract
+
+
+@pytest.fixture
+def mock_confidence_metrics():
+    """
+    Fixture that provides a mocked confidence metrics calculation function.
+    """
+    with patch('src.utils.ml_utils.calculate_confidence_metrics') as mock_metrics:
+        # Configure the mock to return confidence metrics
+        mock_metrics.return_value = {
+            "primary_confidence": 0.85,
+            "margin": 0.80,  # Difference between top and second highest confidence
+            "entropy": 0.75,  # Measure of uncertainty
+            "confidence_level": "high"
+        }
+        yield mock_metrics
+
+
+@pytest.fixture
+def mock_document_validator():
+    """
+    Fixture that provides a mocked document format validator.
+    """
+    with patch('src.utils.validation_utils.validate_document_format') as mock_validator:
+        # Configure the mock to return True (valid document)
+        mock_validator.return_value = True
+        yield mock_validator
+
+
+@pytest.fixture
+def classification_service(mock_document_classifier):
+    """
+    Fixture that provides a ClassificationService instance with mocked dependencies.
+    """
+    with patch('src.services.classification_service.DocumentClassifier',
+              return_value=mock_document_classifier):
+        service = ClassificationService()
+        # Override confidence threshold for testing
+        service.confidence_threshold = 0.7
+        # Set document types
+        service.document_types = [
+            "application", "tax_return", "bank_statement", 
+            "pay_stub", "id_document", "other"
+        ]
+        yield service
+
+
+@pytest.fixture
+def sample_document_data():
+    """
+    Fixture that provides sample document data for testing.
+    """
+    # Create a simple PDF-like byte array
+    return b'%PDF-1.5\n1 0 obj\n<</Type/Catalog/Pages 2 0 R>>\nendobj\n'
+
+
+@pytest.fixture
+def sample_document_metadata():
+    """
+    Fixture that provides sample document metadata for testing.
+    """
+    return {
+        "file_name": "test_application.pdf",
+        "content_type": "application/pdf",
+        "file_size": 1024,
+        "page_count": 2
+    }
 
 
 class TestClassificationService:
-    """Test suite for the ClassificationService."""
-
-    def test_classify_document_success(self, classification_service, sample_document, mock_document_classifier):
-        """Test successful document classification."""
-        # Arrange
-        expected_result = ClassificationResult(
-            document_id=sample_document.id,
-            document_type=DocumentType.APPLICATION,
-            confidence=ConfidenceScore(score=0.95, threshold=0.8),
-            metadata={
-                "processing_time_ms": 150,
-                "model_version": "1.0.0",
-                "features_used": ["text_content", "page_count", "has_signature"]
-            }
-        )
-        mock_document_classifier.classify.return_value = expected_result
+    """
+    Test suite for the ClassificationService class.
+    """
+    
+    def test_initialization(self):
+        """
+        Test that the ClassificationService initializes correctly.
+        """
+        with patch('src.services.classification_service.DocumentClassifier'):
+            service = ClassificationService()
+            
+            # Verify that the service has been initialized with expected attributes
+            assert hasattr(service, 'classifier')
+            assert hasattr(service, 'logger')
+            assert hasattr(service, 'confidence_threshold')
+            assert hasattr(service, 'document_types')
+            assert hasattr(service, 'classification_metrics')
+            
+            # Verify that metrics are initialized to zero
+            assert service.classification_metrics["total_documents"] == 0
+            assert service.classification_metrics["successful_classifications"] == 0
+            assert service.classification_metrics["low_confidence_classifications"] == 0
+            assert service.classification_metrics["failed_classifications"] == 0
+    
+    def test_classify_document_success(self, classification_service, sample_document_data, 
+                                      sample_document_metadata, mock_feature_extractor,
+                                      mock_confidence_metrics):
+        """
+        Test successful document classification with high confidence.
+        """
+        # Classify the document
+        result = classification_service.classify_document(sample_document_data, sample_document_metadata)
         
-        # Act
-        result = classification_service.classify_document(sample_document)
+        # Verify that feature extraction was called
+        mock_feature_extractor.assert_called_once_with(sample_document_data, sample_document_metadata)
         
-        # Assert
-        assert result == expected_result
-        mock_document_classifier.classify.assert_called_once_with(sample_document)
-        assert sample_document.status == ProcessingStatus.CLASSIFIED
-        assert sample_document.metadata.get("classification_result") is not None
-
-    def test_classify_document_with_low_confidence(self, classification_service, sample_document, mock_document_classifier):
-        """Test document classification with low confidence score."""
-        # Arrange
-        low_confidence_result = ClassificationResult(
-            document_id=sample_document.id,
-            document_type=DocumentType.OTHER,
-            confidence=ConfidenceScore(score=0.65, threshold=0.8),  # Below threshold
-            metadata={
-                "processing_time_ms": 120,
-                "model_version": "1.0.0",
-                "features_used": ["text_content", "page_count"]
-            }
-        )
-        mock_document_classifier.classify.return_value = low_confidence_result
+        # Verify that the classifier was called
+        classification_service.classifier.classify.assert_called_once()
         
-        # Act
-        result = classification_service.classify_document(sample_document)
+        # Verify that confidence metrics were calculated
+        mock_confidence_metrics.assert_called_once()
         
-        # Assert
-        assert result == low_confidence_result
-        assert result.confidence.score < result.confidence.threshold
-        assert sample_document.status == ProcessingStatus.NEEDS_REVIEW
-        assert sample_document.metadata.get("requires_manual_review") is True
-
-    def test_classify_document_with_different_classifiers(self, classification_service, sample_document, 
-                                                        mock_svm_classifier, mock_random_forest_classifier):
-        """Test document classification using different classifier models."""
-        # Arrange
-        svm_result = ClassificationResult(
-            document_id=sample_document.id,
-            document_type=DocumentType.APPLICATION,
-            confidence=ConfidenceScore(score=0.92, threshold=0.8),
-            metadata={"model_type": "svm"}
-        )
+        # Verify the result structure
+        assert result["document_type"] == "application"
+        assert result["confidence_score"] == 0.85
+        assert result["requires_review"] is False  # 0.85 > 0.7 threshold
+        assert "confidence_metrics" in result
+        assert "storage_metadata" in result
+        assert "all_scores" in result
         
-        rf_result = ClassificationResult(
-            document_id=sample_document.id,
-            document_type=DocumentType.APPLICATION,
-            confidence=ConfidenceScore(score=0.88, threshold=0.8),
-            metadata={"model_type": "random_forest"}
-        )
-        
-        mock_svm_classifier.classify.return_value = svm_result
-        mock_random_forest_classifier.classify.return_value = rf_result
-        
-        # Act
-        result_svm = classification_service.classify_with_model(sample_document, "svm")
-        result_rf = classification_service.classify_with_model(sample_document, "random_forest")
-        
-        # Assert
-        assert result_svm == svm_result
-        assert result_rf == rf_result
-        mock_svm_classifier.classify.assert_called_once_with(sample_document)
-        mock_random_forest_classifier.classify.assert_called_once_with(sample_document)
-
-    def test_ensemble_classification(self, classification_service, sample_document, 
-                                   mock_svm_classifier, mock_random_forest_classifier):
-        """Test ensemble classification combining multiple model results."""
-        # Arrange
-        svm_result = ClassificationResult(
-            document_id=sample_document.id,
-            document_type=DocumentType.APPLICATION,
-            confidence=ConfidenceScore(score=0.92, threshold=0.8),
-            metadata={"model_type": "svm"}
-        )
-        
-        rf_result = ClassificationResult(
-            document_id=sample_document.id,
-            document_type=DocumentType.BANK_STATEMENT,  # Different classification
-            confidence=ConfidenceScore(score=0.88, threshold=0.8),
-            metadata={"model_type": "random_forest"}
-        )
-        
-        mock_svm_classifier.classify.return_value = svm_result
-        mock_random_forest_classifier.classify.return_value = rf_result
-        
-        # Expected ensemble result (higher confidence wins)
-        expected_result = ClassificationResult(
-            document_id=sample_document.id,
-            document_type=DocumentType.APPLICATION,  # SVM result wins due to higher confidence
-            confidence=ConfidenceScore(score=0.92, threshold=0.8),
-            metadata={
-                "ensemble": True,
-                "models_used": ["svm", "random_forest"],
-                "individual_results": {
-                    "svm": {"type": "APPLICATION", "confidence": 0.92},
-                    "random_forest": {"type": "BANK_STATEMENT", "confidence": 0.88}
-                }
-            }
-        )
-        
-        classification_service.ensemble_classify = mock.MagicMock(return_value=expected_result)
-        
-        # Act
-        result = classification_service.ensemble_classify(sample_document)
-        
-        # Assert
-        assert result.document_type == DocumentType.APPLICATION
-        assert result.confidence.score == 0.92
-        assert result.metadata.get("ensemble") is True
-        assert "models_used" in result.metadata
-        assert "individual_results" in result.metadata
-
-    def test_classification_performance_metrics(self, classification_service, sample_document, mock_document_classifier, mock_logger):
-        """Test that performance metrics are logged during classification."""
-        # Arrange
-        result = ClassificationResult(
-            document_id=sample_document.id,
-            document_type=DocumentType.APPLICATION,
-            confidence=ConfidenceScore(score=0.95, threshold=0.8),
-            metadata={
-                "processing_time_ms": 150,
-                "model_version": "1.0.0"
-            }
-        )
-        mock_document_classifier.classify.return_value = result
-        
-        # Act
-        classification_service.classify_document(sample_document)
-        
-        # Assert
-        # Verify that performance metrics are logged
-        mock_logger.info.assert_any_call(
-            mock.ANY,  # Log message format string
-            mock.ANY,  # Document ID
-            mock.ANY,  # Document type
-            mock.ANY,  # Confidence score
-            mock.ANY   # Processing time
-        )
-        
-        # Verify that metrics are tracked for monitoring
-        assert classification_service.metrics["total_documents_processed"] > 0
-        assert "processing_times" in classification_service.metrics
-        assert "confidence_scores" in classification_service.metrics
-
-    def test_document_type_determination(self, classification_service, sample_document):
-        """Test document type determination based on content and features."""
-        # Arrange
-        # Mock the feature extraction to return specific features
-        features = {
-            "text_content": "LOAN APPLICATION FORM",
-            "has_signature": True,
-            "has_date": True,
-            "page_count": 3
+        # Verify that metrics were updated
+        assert classification_service.classification_metrics["total_documents"] == 1
+        assert classification_service.classification_metrics["successful_classifications"] == 1
+        assert classification_service.classification_metrics["low_confidence_classifications"] == 0
+    
+    def test_classify_document_low_confidence(self, classification_service, sample_document_data, 
+                                            sample_document_metadata, mock_feature_extractor,
+                                            mock_confidence_metrics):
+        """
+        Test document classification with low confidence requiring review.
+        """
+        # Configure mock to return low confidence
+        mock_confidence_metrics.return_value = {
+            "primary_confidence": 0.65,  # Below the 0.7 threshold
+            "margin": 0.30,
+            "entropy": 1.2,
+            "confidence_level": "medium"
         }
         
-        classification_service.extract_features = mock.MagicMock(return_value=features)
+        # Classify the document
+        result = classification_service.classify_document(sample_document_data, sample_document_metadata)
         
-        # Mock the classifier to use our features
-        classification_service.document_classifier.classify = mock.MagicMock(side_effect=lambda doc: 
-            ClassificationResult(
-                document_id=doc.id,
-                document_type=DocumentType.APPLICATION,
-                confidence=ConfidenceScore(score=0.98, threshold=0.8),
-                metadata={"features": features}
-            )
+        # Verify the result indicates review is required
+        assert result["requires_review"] is True
+        assert result["confidence_score"] == 0.65
+        
+        # Verify that metrics were updated correctly
+        assert classification_service.classification_metrics["total_documents"] == 1
+        assert classification_service.classification_metrics["successful_classifications"] == 0
+        assert classification_service.classification_metrics["low_confidence_classifications"] == 1
+    
+    def test_classify_document_validation_error(self, classification_service, sample_document_data, 
+                                              sample_document_metadata, mock_document_validator):
+        """
+        Test document classification with validation error.
+        """
+        # Configure validator to raise an exception
+        mock_document_validator.side_effect = ValueError("Invalid document format")
+        
+        # Attempt to classify the document and expect an exception
+        with pytest.raises(ValueError, match="Invalid document format"):
+            classification_service.classify_document(sample_document_data, sample_document_metadata)
+        
+        # Verify that metrics were updated correctly
+        assert classification_service.classification_metrics["total_documents"] == 1
+        assert classification_service.classification_metrics["failed_classifications"] == 1
+    
+    def test_classify_document_classification_error(self, classification_service, sample_document_data, 
+                                                 sample_document_metadata, mock_feature_extractor):
+        """
+        Test document classification with classification error.
+        """
+        # Configure classifier to raise an exception
+        classification_service.classifier.classify.side_effect = Exception("Classification failed")
+        
+        # Attempt to classify the document and expect an exception
+        with pytest.raises(RuntimeError, match="Document classification failed"):
+            classification_service.classify_document(sample_document_data, sample_document_metadata)
+        
+        # Verify that metrics were updated correctly
+        assert classification_service.classification_metrics["total_documents"] == 1
+        assert classification_service.classification_metrics["failed_classifications"] == 1
+    
+    def test_extract_document_features(self, classification_service, sample_document_data, 
+                                     sample_document_metadata, mock_feature_extractor):
+        """
+        Test feature extraction from document.
+        """
+        # Extract features
+        features = classification_service._extract_document_features(sample_document_data, sample_document_metadata)
+        
+        # Verify that feature extraction was called
+        mock_feature_extractor.assert_called_once_with(sample_document_data, sample_document_metadata)
+        
+        # Verify that features were returned
+        assert features is not None
+        assert isinstance(features, np.ndarray)
+    
+    def test_extract_document_features_error(self, classification_service, sample_document_data, 
+                                          sample_document_metadata, mock_feature_extractor):
+        """
+        Test feature extraction with error.
+        """
+        # Configure feature extractor to raise an exception
+        mock_feature_extractor.side_effect = Exception("Feature extraction failed")
+        
+        # Attempt to extract features and expect an exception
+        with pytest.raises(ValueError, match="Feature extraction failed"):
+            classification_service._extract_document_features(sample_document_data, sample_document_metadata)
+    
+    def test_perform_classification(self, classification_service, mock_feature_extractor):
+        """
+        Test classification of feature vector.
+        """
+        # Create a feature vector
+        features = np.array([0.1, 0.2, 0.3, 0.4, 0.5])
+        
+        # Perform classification
+        document_type, confidence_scores = classification_service._perform_classification(features)
+        
+        # Verify that the classifier was called
+        classification_service.classifier.classify.assert_called_once_with(features)
+        
+        # Verify that document type and confidence scores were returned
+        assert document_type == DocumentType.APPLICATION
+        assert confidence_scores["application"] == 0.85
+    
+    def test_perform_classification_error(self, classification_service, mock_feature_extractor):
+        """
+        Test classification with error.
+        """
+        # Create a feature vector
+        features = np.array([0.1, 0.2, 0.3, 0.4, 0.5])
+        
+        # Configure classifier to raise an exception
+        classification_service.classifier.classify.side_effect = Exception("Classification failed")
+        
+        # Attempt to classify and expect an exception
+        with pytest.raises(RuntimeError, match="Classification failed"):
+            classification_service._perform_classification(features)
+    
+    def test_create_classification_result(self, classification_service, mock_confidence_metrics):
+        """
+        Test creation of classification result.
+        """
+        # Create test data
+        document_type = "application"
+        confidence_scores = {
+            "application": 0.85,
+            "tax_return": 0.05,
+            "bank_statement": 0.05,
+            "pay_stub": 0.03,
+            "id_document": 0.01,
+            "other": 0.01
+        }
+        metadata = {
+            "file_name": "test_application.pdf",
+            "content_type": "application/pdf",
+            "file_size": 1024
+        }
+        features = np.array([0.1, 0.2, 0.3, 0.4, 0.5])
+        
+        # Create classification result
+        result = classification_service._create_classification_result(
+            document_type, confidence_scores, metadata, features
         )
         
-        # Act
-        result = classification_service.classify_document(sample_document)
+        # Verify that confidence metrics were calculated
+        mock_confidence_metrics.assert_called_once_with(confidence_scores, document_type)
         
-        # Assert
-        assert result.document_type == DocumentType.APPLICATION
-        assert result.confidence.score > 0.95  # High confidence for clear application document
-        assert "features" in result.metadata
-        assert result.metadata["features"]["text_content"] == "LOAN APPLICATION FORM"
-
-    def test_classification_result_formatting(self, classification_service, sample_document, mock_document_classifier):
-        """Test that classification results are properly formatted for downstream services."""
-        # Arrange
-        internal_result = ClassificationResult(
-            document_id=sample_document.id,
-            document_type=DocumentType.TAX_RETURN,
-            confidence=ConfidenceScore(score=0.91, threshold=0.8),
-            metadata={
-                "processing_time_ms": 130,
-                "model_version": "1.0.0",
-                "internal_model_data": {"weights": [0.1, 0.2, 0.3]}
-            }
-        )
-        mock_document_classifier.classify.return_value = internal_result
+        # Verify the result structure
+        assert result["document_type"] == document_type
+        assert result["confidence_score"] == 0.85
+        assert result["requires_review"] is False  # 0.85 > 0.7 threshold
+        assert result["all_scores"] == confidence_scores
+        assert result["metadata"] == metadata
+        assert "storage_metadata" in result
+        assert "feature_summary" in result
+    
+    def test_create_storage_metadata(self, classification_service):
+        """
+        Test creation of storage metadata.
+        """
+        # Create test data
+        document_type = "application"
+        confidence_metrics = {
+            "primary_confidence": 0.85,
+            "margin": 0.80,
+            "entropy": 0.75,
+            "confidence_level": "high"
+        }
+        requires_review = False
+        original_metadata = {
+            "file_name": "test_application.pdf",
+            "content_type": "application/pdf",
+            "file_size": 1024
+        }
         
-        # Act
-        result = classification_service.classify_document(sample_document)
-        formatted_result = classification_service.format_result_for_downstream(result)
-        
-        # Assert
-        assert formatted_result["document_id"] == sample_document.id
-        assert formatted_result["document_type"] == "TAX_RETURN"
-        assert formatted_result["confidence"] == 0.91
-        assert "processing_time_ms" in formatted_result
-        assert "internal_model_data" not in formatted_result  # Internal data should be filtered out
-        assert "classification_timestamp" in formatted_result
-
-    def test_handle_unsupported_document_type(self, classification_service, sample_document):
-        """Test handling of unsupported document types."""
-        # Arrange
-        # Modify the document to have an unsupported MIME type
-        sample_document.mime_type = "application/octet-stream"
-        
-        # Act
-        result = classification_service.classify_document(sample_document)
-        
-        # Assert
-        assert result.document_type == DocumentType.OTHER
-        assert result.confidence.score < result.confidence.threshold  # Low confidence for unsupported type
-        assert sample_document.status == ProcessingStatus.NEEDS_REVIEW
-        assert sample_document.metadata.get("unsupported_document_type") is True
-
-    def test_classification_with_empty_document(self, classification_service):
-        """Test classification behavior with empty document content."""
-        # Arrange
-        empty_document = Document(
-            id="empty123",
-            filename="empty.pdf",
-            content=b"",  # Empty content
-            mime_type="application/pdf",
-            size=0,
-            metadata={},
-            status=ProcessingStatus.RECEIVED
+        # Create storage metadata
+        storage_metadata = classification_service._create_storage_metadata(
+            document_type, confidence_metrics, requires_review, original_metadata
         )
         
-        # Act
-        result = classification_service.classify_document(empty_document)
+        # Verify the metadata structure
+        assert storage_metadata["document_type"] == document_type
+        assert storage_metadata["classification_confidence"] == 0.85
+        assert "classification_timestamp" in storage_metadata
+        assert "classification_version" in storage_metadata
+        assert storage_metadata["requires_human_review"] is False
+        assert "service_version" in storage_metadata
+        assert storage_metadata["content_type"] == "application/pdf"
+        assert storage_metadata["file_name"] == "test_application.pdf"
+        assert storage_metadata["file_size"] == 1024
+    
+    def test_summarize_features(self, classification_service):
+        """
+        Test feature vector summarization.
+        """
+        # Test with numpy array
+        features_array = np.array([[0.1, 0.2, 0.3, 0.4, 0.5]])
+        summary_array = classification_service._summarize_features(features_array)
+        assert "dimensions" in summary_array
+        assert summary_array["dimensions"] == features_array.shape
         
-        # Assert
-        assert result.document_type == DocumentType.OTHER
-        assert result.confidence.score < 0.5  # Very low confidence for empty document
-        assert empty_document.status == ProcessingStatus.ERROR
-        assert "error" in empty_document.metadata
-        assert "empty_document" in empty_document.metadata["error"]
-
-    def test_classification_error_handling(self, classification_service, sample_document, mock_document_classifier, mock_logger):
-        """Test error handling during classification process."""
-        # Arrange
-        error_message = "Classification model failed to process document"
-        mock_document_classifier.classify.side_effect = Exception(error_message)
+        # Test with dictionary
+        features_dict = {"feature1": 0.1, "feature2": 0.2, "feature3": 0.3}
+        summary_dict = classification_service._summarize_features(features_dict)
+        assert "feature_count" in summary_dict
+        assert summary_dict["feature_count"] == 3
         
-        # Act
-        result = classification_service.classify_document(sample_document)
+        # Test with other type
+        features_other = "not a feature vector"
+        summary_other = classification_service._summarize_features(features_other)
+        assert "feature_type" in summary_other
+        assert summary_other["feature_type"] == "<class 'str'>"
+    
+    def test_update_performance_metrics(self, classification_service):
+        """
+        Test updating of performance metrics.
+        """
+        # Create a test result
+        result = {
+            "document_type": "application",
+            "confidence_score": 0.85,
+            "requires_review": False
+        }
+        processing_time = 0.5  # seconds
         
-        # Assert
-        assert result.document_type == DocumentType.OTHER
-        assert result.confidence.score == 0.0
-        assert sample_document.status == ProcessingStatus.ERROR
-        assert "error" in sample_document.metadata
-        assert error_message in sample_document.metadata["error"]
+        # Enable performance metrics
+        classification_service.enable_performance_metrics = True
         
-        # Verify error is logged
-        mock_logger.error.assert_called_with(
-            mock.ANY,  # Log message format string
-            sample_document.id,
-            mock.ANY   # Exception details
-        )
-
-    def test_batch_classification(self, classification_service, mock_document_classifier):
-        """Test batch classification of multiple documents."""
-        # Arrange
-        documents = [
-            Document(id=f"doc{i}", filename=f"doc{i}.pdf", content=b"content", 
-                    mime_type="application/pdf", size=100, metadata={}, 
-                    status=ProcessingStatus.RECEIVED)
-            for i in range(5)
+        # Update metrics
+        classification_service._update_performance_metrics(result, processing_time)
+        
+        # Verify metrics were updated
+        assert classification_service.classification_metrics["total_documents"] == 1
+        assert classification_service.classification_metrics["successful_classifications"] == 1
+        assert classification_service.classification_metrics["low_confidence_classifications"] == 0
+        assert classification_service.classification_metrics["average_confidence"] == 0.85
+        assert classification_service.classification_metrics["average_processing_time"] == 0.5
+        
+        # Add another result with different values
+        result2 = {
+            "document_type": "tax_return",
+            "confidence_score": 0.75,
+            "requires_review": False
+        }
+        processing_time2 = 0.7  # seconds
+        
+        # Update metrics again
+        classification_service._update_performance_metrics(result2, processing_time2)
+        
+        # Verify metrics were updated correctly
+        assert classification_service.classification_metrics["total_documents"] == 2
+        assert classification_service.classification_metrics["successful_classifications"] == 2
+        assert classification_service.classification_metrics["low_confidence_classifications"] == 0
+        # Average confidence should be (0.85 + 0.75) / 2 = 0.8
+        assert classification_service.classification_metrics["average_confidence"] == 0.8
+        # Average processing time should be (0.5 + 0.7) / 2 = 0.6
+        assert classification_service.classification_metrics["average_processing_time"] == 0.6
+        
+        # Test with a low confidence result
+        result3 = {
+            "document_type": "bank_statement",
+            "confidence_score": 0.65,
+            "requires_review": True
+        }
+        processing_time3 = 0.6  # seconds
+        
+        # Update metrics again
+        classification_service._update_performance_metrics(result3, processing_time3)
+        
+        # Verify metrics were updated correctly
+        assert classification_service.classification_metrics["total_documents"] == 3
+        assert classification_service.classification_metrics["successful_classifications"] == 2
+        assert classification_service.classification_metrics["low_confidence_classifications"] == 1
+        # Average confidence should be (0.85 + 0.75 + 0.65) / 3 = 0.75
+        assert classification_service.classification_metrics["average_confidence"] == 0.75
+        # Average processing time should be (0.5 + 0.7 + 0.6) / 3 = 0.6
+        assert classification_service.classification_metrics["average_processing_time"] == 0.6
+    
+    def test_get_performance_metrics(self, classification_service):
+        """
+        Test retrieval of performance metrics.
+        """
+        # Set some metrics
+        classification_service.classification_metrics = {
+            "total_documents": 100,
+            "successful_classifications": 85,
+            "low_confidence_classifications": 10,
+            "failed_classifications": 5,
+            "average_confidence": 0.82,
+            "average_processing_time": 0.45
+        }
+        
+        # Get metrics
+        metrics = classification_service.get_performance_metrics()
+        
+        # Verify metrics
+        assert metrics == classification_service.classification_metrics
+        assert metrics["total_documents"] == 100
+        assert metrics["successful_classifications"] == 85
+        assert metrics["low_confidence_classifications"] == 10
+        assert metrics["failed_classifications"] == 5
+        assert metrics["average_confidence"] == 0.82
+        assert metrics["average_processing_time"] == 0.45
+    
+    def test_get_supported_document_types(self, classification_service):
+        """
+        Test retrieval of supported document types.
+        """
+        # Set document types
+        classification_service.document_types = [
+            "application", "tax_return", "bank_statement", 
+            "pay_stub", "id_document", "other"
         ]
         
-        # Mock classifier to return different results for each document
-        def mock_classify(doc):
-            doc_index = int(doc.id[3:])  # Extract index from doc id (doc0, doc1, etc.)
-            doc_types = [DocumentType.APPLICATION, DocumentType.TAX_RETURN, 
-                        DocumentType.BANK_STATEMENT, DocumentType.PAY_STUB, DocumentType.ID_DOCUMENT]
-            confidences = [0.98, 0.95, 0.92, 0.88, 0.85]
-            
-            return ClassificationResult(
-                document_id=doc.id,
-                document_type=doc_types[doc_index],
-                confidence=ConfidenceScore(score=confidences[doc_index], threshold=0.8),
-                metadata={"batch_index": doc_index}
-            )
+        # Get document types
+        document_types = classification_service.get_supported_document_types()
         
-        mock_document_classifier.classify.side_effect = mock_classify
-        
-        # Act
-        results = classification_service.batch_classify(documents)
-        
-        # Assert
-        assert len(results) == 5
-        assert results[0].document_type == DocumentType.APPLICATION
-        assert results[1].document_type == DocumentType.TAX_RETURN
-        assert results[2].document_type == DocumentType.BANK_STATEMENT
-        assert results[3].document_type == DocumentType.PAY_STUB
-        assert results[4].document_type == DocumentType.ID_DOCUMENT
-        
-        # Verify all documents were updated
-        for i, doc in enumerate(documents):
-            assert doc.status == ProcessingStatus.CLASSIFIED
-            assert "classification_result" in doc.metadata
-            assert doc.metadata.get("batch_index") == i
-
-    def test_confidence_score_calculation(self, classification_service, sample_document):
-        """Test confidence score calculation based on model outputs."""
-        # Arrange
-        # Mock probability distributions from classifiers
-        svm_probs = np.array([0.05, 0.85, 0.05, 0.03, 0.02])  # Highest for class 1 (index 1)
-        rf_probs = np.array([0.10, 0.75, 0.08, 0.05, 0.02])   # Also highest for class 1
-        
-        # Mock the classifiers to return these probabilities
-        classification_service.svm_classifier.predict_proba = mock.MagicMock(return_value=svm_probs)
-        classification_service.random_forest_classifier.predict_proba = mock.MagicMock(return_value=rf_probs)
-        
-        # Mock the document type mapping (index 1 corresponds to TAX_RETURN)
-        classification_service.index_to_document_type = mock.MagicMock(return_value=DocumentType.TAX_RETURN)
-        
-        # Act
-        # Call a method that uses these probabilities to calculate confidence
-        confidence = classification_service.calculate_confidence(svm_probs, rf_probs)
-        document_type = classification_service.get_document_type_from_probabilities(svm_probs, rf_probs)
-        
-        # Assert
-        assert confidence > 0.8  # High confidence from agreement between models
-        assert document_type == DocumentType.TAX_RETURN
-        
-        # Test with disagreeing models
-        svm_probs_2 = np.array([0.05, 0.85, 0.05, 0.03, 0.02])  # Highest for class 1
-        rf_probs_2 = np.array([0.05, 0.15, 0.70, 0.05, 0.05])   # Highest for class 2
-        
-        # Confidence should be lower when models disagree
-        confidence_2 = classification_service.calculate_confidence(svm_probs_2, rf_probs_2)
-        assert confidence_2 < confidence
-
-    def test_model_version_tracking(self, classification_service, sample_document, mock_document_classifier):
-        """Test that model version information is tracked in classification results."""
-        # Arrange
-        model_version = "1.2.3"
-        training_date = "2023-01-15"
-        
-        # Set up model metadata
-        classification_service.model_metadata = {
-            "version": model_version,
-            "training_date": training_date,
-            "accuracy": 0.992,
-            "f1_score": 0.989
-        }
-        
-        result = ClassificationResult(
-            document_id=sample_document.id,
-            document_type=DocumentType.APPLICATION,
-            confidence=ConfidenceScore(score=0.95, threshold=0.8),
-            metadata={}
-        )
-        mock_document_classifier.classify.return_value = result
-        
-        # Act
-        classification_service.enrich_result_with_model_metadata = mock.MagicMock(side_effect=
-            lambda r: r.metadata.update({
-                "model_version": model_version,
-                "model_training_date": training_date
-            })
-        )
-        
-        result = classification_service.classify_document(sample_document)
-        
-        # Assert
-        assert "model_version" in result.metadata
-        assert result.metadata["model_version"] == model_version
-        assert "model_training_date" in result.metadata
-        assert result.metadata["model_training_date"] == training_date
+        # Verify document types
+        assert document_types == classification_service.document_types
+        assert len(document_types) == 6
+        assert "application" in document_types
+        assert "tax_return" in document_types
+        assert "bank_statement" in document_types
+        assert "pay_stub" in document_types
+        assert "id_document" in document_types
+        assert "other" in document_types
