@@ -7,26 +7,30 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.Authentication;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.ResultMatcher;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders;
-import org.springframework.test.web.servlet.result.MockMvcResultHandlers;
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.web.context.WebApplicationContext;
 
 import java.io.UnsupportedEncodingException;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.stream.Collectors;
 
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
 
 /**
  * Abstract base class for controller tests using MockMvc.
@@ -35,22 +39,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * authentication setup, and result verification helpers. It standardizes the approach to
  * testing REST controllers across the application, ensuring consistent test structure
  * and reducing boilerplate code.
- * <p>
- * Features:
- * - Configures MockMvc for testing Spring MVC controllers
- * - Provides authentication utilities for testing with different user roles
- * - Includes helpers for JSON serialization/deserialization
- * - Offers methods for request building and response validation
- * <p>
- * Usage:
- * Extend this class in your controller test classes and use the provided helper methods
- * to simplify test implementation. Override setup methods as needed for specific test requirements.
+ * </p>
  */
-@AutoConfigureMockMvc
 public abstract class MockMvcTestBase {
 
     @Autowired
-    protected MockMvc mockMvc;
+    protected WebApplicationContext webApplicationContext;
 
     @Autowired
     protected ObjectMapper objectMapper;
@@ -58,345 +52,356 @@ public abstract class MockMvcTestBase {
     @MockBean
     protected JwtTokenProvider jwtTokenProvider;
 
+    protected MockMvc mockMvc;
+
     /**
-     * Setup method that runs before each test.
-     * Override this method in subclasses to add additional setup logic.
+     * Sets up MockMvc with Spring Security before each test.
      */
     @BeforeEach
-    public void setUp() {
-        // Setup mock behavior for JWT token provider if needed
-    }
-
-    /**
-     * Creates a UserPrincipal with the specified role for testing purposes.
-     *
-     * @param role The role to assign to the user principal
-     * @return A UserPrincipal object with the specified role
-     */
-    protected UserPrincipal createUserPrincipal(String role) {
-        return UserPrincipal.builder()
-                .id(1L)
-                .username("test-user")
-                .email("test@dollarfunding.com")
-                .authorities(Collections.singletonList(new SimpleGrantedAuthority(role)))
+    public void setup() {
+        this.mockMvc = MockMvcBuilders
+                .webAppContextSetup(webApplicationContext)
+                .apply(springSecurity())
                 .build();
     }
 
     /**
-     * Creates a JWT token for testing purposes with the Operations Staff role.
-     *
-     * @return A JWT token string
+     * Authenticates the test context with Operations Staff role.
+     * <p>
+     * This method sets up the SecurityContext with an authenticated user having
+     * the Operations Staff role, allowing tests to simulate requests from users
+     * with this role.
+     * </p>
      */
-    protected String createOperationsStaffToken() {
-        return createTokenWithRole(RoleConstants.ROLE_OPERATIONS_STAFF);
+    protected void authenticateAsOperationsStaff() {
+        authenticateWithRoles(RoleConstants.ROLE_OPERATIONS_STAFF);
     }
 
     /**
-     * Creates a JWT token for testing purposes with the System Admin role.
-     *
-     * @return A JWT token string
+     * Authenticates the test context with System Admin role.
+     * <p>
+     * This method sets up the SecurityContext with an authenticated user having
+     * the System Admin role, allowing tests to simulate requests from users
+     * with this role.
+     * </p>
      */
-    protected String createSystemAdminToken() {
-        return createTokenWithRole(RoleConstants.ROLE_SYSTEM_ADMIN);
+    protected void authenticateAsSystemAdmin() {
+        authenticateWithRoles(RoleConstants.ROLE_SYSTEM_ADMIN);
     }
 
     /**
-     * Creates a JWT token for testing purposes with the specified role.
+     * Authenticates the test context with the specified roles.
+     * <p>
+     * This method sets up the SecurityContext with an authenticated user having
+     * the specified roles, allowing tests to simulate requests from users
+     * with these roles.
+     * </p>
      *
-     * @param role The role to include in the token
-     * @return A JWT token string
+     * @param roles The roles to assign to the authenticated user
      */
-    protected String createTokenWithRole(String role) {
-        UserPrincipal principal = createUserPrincipal(role);
-        return jwtTokenProvider.generateToken(principal);
-    }
+    protected void authenticateWithRoles(String... roles) {
+        List<SimpleGrantedAuthority> authorities = Arrays.stream(roles)
+                .map(role -> new SimpleGrantedAuthority(role))
+                .collect(Collectors.toList());
 
-    /**
-     * Creates a JWT token for testing purposes with the specified roles.
-     *
-     * @param roles The roles to include in the token
-     * @return A JWT token string
-     */
-    protected String createTokenWithRoles(List<String> roles) {
-        UserPrincipal principal = UserPrincipal.builder()
+        UserPrincipal userPrincipal = UserPrincipal.builder()
                 .id(1L)
-                .username("test-user")
-                .email("test@dollarfunding.com")
-                .authorities(roles.stream()
-                        .map(SimpleGrantedAuthority::new)
-                        .toList())
+                .username("testuser")
+                .email("test@example.com")
+                .authorities(authorities)
                 .build();
-        return jwtTokenProvider.generateToken(principal);
+
+        Authentication authentication = new UsernamePasswordAuthenticationToken(
+                userPrincipal, null, authorities);
+
+        SecurityContextHolder.getContext().setAuthentication(authentication);
     }
 
     /**
-     * Creates an expired JWT token for testing error scenarios.
-     *
-     * @return An expired JWT token string
+     * Clears the authentication context.
+     * <p>
+     * This method clears the SecurityContext, removing any authenticated user
+     * and allowing tests to simulate requests from unauthenticated users.
+     * </p>
      */
-    protected String createExpiredToken() {
-        return jwtTokenProvider.generateTokenWithCustomExpiration(
-                createUserPrincipal(RoleConstants.ROLE_OPERATIONS_STAFF),
-                -3600 // Expired 1 hour ago
-        );
+    protected void clearAuthentication() {
+        SecurityContextHolder.clearContext();
     }
 
     /**
-     * Builds a GET request with the specified URL and authentication token.
+     * Creates a GET request builder for the specified URL.
      *
-     * @param url   The URL to send the request to
-     * @param token The authentication token to include in the request
-     * @return A configured MockHttpServletRequestBuilder
+     * @param url The URL to send the GET request to
+     * @return A MockHttpServletRequestBuilder for a GET request
      */
-    protected MockHttpServletRequestBuilder getRequest(String url, String token) {
+    protected MockHttpServletRequestBuilder get(String url) {
         return MockMvcRequestBuilders.get(url)
-                .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
                 .contentType(MediaType.APPLICATION_JSON);
     }
 
     /**
-     * Builds a POST request with the specified URL, request body, and authentication token.
+     * Creates a POST request builder for the specified URL with the given content.
      *
-     * @param url         The URL to send the request to
-     * @param requestBody The object to include as the request body
-     * @param token       The authentication token to include in the request
-     * @return A configured MockHttpServletRequestBuilder
-     * @throws JsonProcessingException If the request body cannot be serialized to JSON
+     * @param url     The URL to send the POST request to
+     * @param content The content to include in the request body
+     * @return A MockHttpServletRequestBuilder for a POST request
      */
-    protected MockHttpServletRequestBuilder postRequest(String url, Object requestBody, String token) throws JsonProcessingException {
-        return MockMvcRequestBuilders.post(url)
-                .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(requestBody));
+    protected MockHttpServletRequestBuilder post(String url, Object content) {
+        try {
+            return MockMvcRequestBuilders.post(url)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(objectMapper.writeValueAsString(content));
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException("Failed to serialize request content", e);
+        }
     }
 
     /**
-     * Builds a PUT request with the specified URL, request body, and authentication token.
+     * Creates a PUT request builder for the specified URL with the given content.
      *
-     * @param url         The URL to send the request to
-     * @param requestBody The object to include as the request body
-     * @param token       The authentication token to include in the request
-     * @return A configured MockHttpServletRequestBuilder
-     * @throws JsonProcessingException If the request body cannot be serialized to JSON
+     * @param url     The URL to send the PUT request to
+     * @param content The content to include in the request body
+     * @return A MockHttpServletRequestBuilder for a PUT request
      */
-    protected MockHttpServletRequestBuilder putRequest(String url, Object requestBody, String token) throws JsonProcessingException {
-        return MockMvcRequestBuilders.put(url)
-                .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(requestBody));
+    protected MockHttpServletRequestBuilder put(String url, Object content) {
+        try {
+            return MockMvcRequestBuilders.put(url)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(objectMapper.writeValueAsString(content));
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException("Failed to serialize request content", e);
+        }
     }
 
     /**
-     * Builds a DELETE request with the specified URL and authentication token.
+     * Creates a PATCH request builder for the specified URL with the given content.
      *
-     * @param url   The URL to send the request to
-     * @param token The authentication token to include in the request
-     * @return A configured MockHttpServletRequestBuilder
+     * @param url     The URL to send the PATCH request to
+     * @param content The content to include in the request body
+     * @return A MockHttpServletRequestBuilder for a PATCH request
      */
-    protected MockHttpServletRequestBuilder deleteRequest(String url, String token) {
+    protected MockHttpServletRequestBuilder patch(String url, Object content) {
+        try {
+            return MockMvcRequestBuilders.patch(url)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .content(objectMapper.writeValueAsString(content));
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException("Failed to serialize request content", e);
+        }
+    }
+
+    /**
+     * Creates a DELETE request builder for the specified URL.
+     *
+     * @param url The URL to send the DELETE request to
+     * @return A MockHttpServletRequestBuilder for a DELETE request
+     */
+    protected MockHttpServletRequestBuilder delete(String url) {
         return MockMvcRequestBuilders.delete(url)
-                .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
                 .contentType(MediaType.APPLICATION_JSON);
     }
 
     /**
-     * Performs a request and expects a successful response (HTTP 200 OK).
+     * Adds a JWT authorization header to the request builder.
      *
-     * @param requestBuilder The request builder to use
-     * @return The ResultActions for further assertions
-     * @throws Exception If an error occurs during the request
+     * @param requestBuilder The request builder to add the header to
+     * @param token          The JWT token to include in the header
+     * @return The updated request builder with the authorization header
      */
-    protected ResultActions performRequestAndExpectSuccess(MockHttpServletRequestBuilder requestBuilder) throws Exception {
-        return mockMvc.perform(requestBuilder)
-                .andDo(MockMvcResultHandlers.print())
-                .andExpect(status().isOk())
-                .andExpect(content().contentType(MediaType.APPLICATION_JSON));
+    protected MockHttpServletRequestBuilder withJwtAuth(MockHttpServletRequestBuilder requestBuilder, String token) {
+        return requestBuilder.header(HttpHeaders.AUTHORIZATION, "Bearer " + token);
     }
 
     /**
-     * Performs a request and expects a created response (HTTP 201 Created).
+     * Performs the request and expects a 2xx status code.
      *
-     * @param requestBuilder The request builder to use
+     * @param requestBuilder The request builder to perform
      * @return The ResultActions for further assertions
      * @throws Exception If an error occurs during the request
      */
-    protected ResultActions performRequestAndExpectCreated(MockHttpServletRequestBuilder requestBuilder) throws Exception {
+    protected ResultActions performAndExpectSuccess(MockHttpServletRequestBuilder requestBuilder) throws Exception {
         return mockMvc.perform(requestBuilder)
-                .andDo(MockMvcResultHandlers.print())
-                .andExpect(status().isCreated())
-                .andExpect(content().contentType(MediaType.APPLICATION_JSON));
+                .andExpect(MockMvcResultMatchers.status().is2xxSuccessful());
     }
 
     /**
-     * Performs a request and expects a no content response (HTTP 204 No Content).
+     * Performs the request and expects a 4xx status code.
      *
-     * @param requestBuilder The request builder to use
+     * @param requestBuilder The request builder to perform
      * @return The ResultActions for further assertions
      * @throws Exception If an error occurs during the request
      */
-    protected ResultActions performRequestAndExpectNoContent(MockHttpServletRequestBuilder requestBuilder) throws Exception {
+    protected ResultActions performAndExpectClientError(MockHttpServletRequestBuilder requestBuilder) throws Exception {
         return mockMvc.perform(requestBuilder)
-                .andDo(MockMvcResultHandlers.print())
-                .andExpect(status().isNoContent());
+                .andExpect(MockMvcResultMatchers.status().is4xxClientError());
     }
 
     /**
-     * Performs a request and expects a bad request response (HTTP 400 Bad Request).
+     * Performs the request and expects a 5xx status code.
      *
-     * @param requestBuilder The request builder to use
+     * @param requestBuilder The request builder to perform
      * @return The ResultActions for further assertions
      * @throws Exception If an error occurs during the request
      */
-    protected ResultActions performRequestAndExpectBadRequest(MockHttpServletRequestBuilder requestBuilder) throws Exception {
+    protected ResultActions performAndExpectServerError(MockHttpServletRequestBuilder requestBuilder) throws Exception {
         return mockMvc.perform(requestBuilder)
-                .andDo(MockMvcResultHandlers.print())
-                .andExpect(status().isBadRequest())
-                .andExpect(content().contentType(MediaType.APPLICATION_JSON));
+                .andExpect(MockMvcResultMatchers.status().is5xxServerError());
     }
 
     /**
-     * Performs a request and expects an unauthorized response (HTTP 401 Unauthorized).
+     * Performs the request and expects the specified status code.
      *
-     * @param requestBuilder The request builder to use
+     * @param requestBuilder The request builder to perform
+     * @param status         The expected status code
      * @return The ResultActions for further assertions
      * @throws Exception If an error occurs during the request
      */
-    protected ResultActions performRequestAndExpectUnauthorized(MockHttpServletRequestBuilder requestBuilder) throws Exception {
+    protected ResultActions performAndExpectStatus(MockHttpServletRequestBuilder requestBuilder, int status) throws Exception {
         return mockMvc.perform(requestBuilder)
-                .andDo(MockMvcResultHandlers.print())
-                .andExpect(status().isUnauthorized())
-                .andExpect(content().contentType(MediaType.APPLICATION_JSON));
+                .andExpect(MockMvcResultMatchers.status().is(status));
     }
 
     /**
-     * Performs a request and expects a forbidden response (HTTP 403 Forbidden).
+     * Performs the request and expects the specified status code and content type.
      *
-     * @param requestBuilder The request builder to use
+     * @param requestBuilder The request builder to perform
+     * @param status         The expected status code
+     * @param contentType    The expected content type
      * @return The ResultActions for further assertions
      * @throws Exception If an error occurs during the request
      */
-    protected ResultActions performRequestAndExpectForbidden(MockHttpServletRequestBuilder requestBuilder) throws Exception {
+    protected ResultActions performAndExpectStatusAndContentType(MockHttpServletRequestBuilder requestBuilder, int status, String contentType) throws Exception {
         return mockMvc.perform(requestBuilder)
-                .andDo(MockMvcResultHandlers.print())
-                .andExpect(status().isForbidden())
-                .andExpect(content().contentType(MediaType.APPLICATION_JSON));
+                .andExpect(MockMvcResultMatchers.status().is(status))
+                .andExpect(MockMvcResultMatchers.content().contentType(contentType));
     }
 
     /**
-     * Performs a request and expects a not found response (HTTP 404 Not Found).
+     * Performs the request and expects the specified status code and JSON content type.
      *
-     * @param requestBuilder The request builder to use
+     * @param requestBuilder The request builder to perform
+     * @param status         The expected status code
      * @return The ResultActions for further assertions
      * @throws Exception If an error occurs during the request
      */
-    protected ResultActions performRequestAndExpectNotFound(MockHttpServletRequestBuilder requestBuilder) throws Exception {
-        return mockMvc.perform(requestBuilder)
-                .andDo(MockMvcResultHandlers.print())
-                .andExpect(status().isNotFound())
-                .andExpect(content().contentType(MediaType.APPLICATION_JSON));
+    protected ResultActions performAndExpectStatusAndJsonContent(MockHttpServletRequestBuilder requestBuilder, int status) throws Exception {
+        return performAndExpectStatusAndContentType(requestBuilder, status, MediaType.APPLICATION_JSON_VALUE);
     }
 
     /**
-     * Performs a request and expects a specific status code.
+     * Performs the request and expects the specified status code and JSON path to exist.
      *
-     * @param requestBuilder The request builder to use
-     * @param statusMatcher  The status matcher to use
+     * @param requestBuilder The request builder to perform
+     * @param status         The expected status code
+     * @param jsonPath       The JSON path to check for existence
      * @return The ResultActions for further assertions
      * @throws Exception If an error occurs during the request
      */
-    protected ResultActions performRequestAndExpectStatus(MockHttpServletRequestBuilder requestBuilder, ResultMatcher statusMatcher) throws Exception {
-        return mockMvc.perform(requestBuilder)
-                .andDo(MockMvcResultHandlers.print())
-                .andExpect(statusMatcher);
+    protected ResultActions performAndExpectJsonPath(MockHttpServletRequestBuilder requestBuilder, int status, String jsonPath) throws Exception {
+        return performAndExpectStatusAndJsonContent(requestBuilder, status)
+                .andExpect(MockMvcResultMatchers.jsonPath(jsonPath).exists());
     }
 
     /**
-     * Extracts the response body from an MVC result as a string.
+     * Performs the request and expects the specified status code and JSON path to have the specified value.
      *
-     * @param result The MVC result to extract the response body from
-     * @return The response body as a string
+     * @param requestBuilder The request builder to perform
+     * @param status         The expected status code
+     * @param jsonPath       The JSON path to check
+     * @param expectedValue  The expected value at the JSON path
+     * @return The ResultActions for further assertions
+     * @throws Exception If an error occurs during the request
+     */
+    protected ResultActions performAndExpectJsonPathValue(MockHttpServletRequestBuilder requestBuilder, int status, String jsonPath, Object expectedValue) throws Exception {
+        return performAndExpectStatusAndJsonContent(requestBuilder, status)
+                .andExpect(MockMvcResultMatchers.jsonPath(jsonPath).value(expectedValue));
+    }
+
+    /**
+     * Extracts the response content as a string from the MVC result.
+     *
+     * @param result The MVC result to extract the content from
+     * @return The response content as a string
      * @throws UnsupportedEncodingException If the response encoding is not supported
      */
-    protected String getResponseBodyAsString(MvcResult result) throws UnsupportedEncodingException {
+    protected String getContentAsString(MvcResult result) throws UnsupportedEncodingException {
         return result.getResponse().getContentAsString();
     }
 
     /**
-     * Extracts the response body from an MVC result and deserializes it to the specified type.
+     * Extracts the response content as an object of the specified type from the MVC result.
      *
-     * @param result        The MVC result to extract the response body from
-     * @param responseClass The class to deserialize the response body to
-     * @param <T>           The type of the response
-     * @return The deserialized response body
+     * @param result        The MVC result to extract the content from
+     * @param responseClass The class to deserialize the response content to
+     * @param <T>           The type of the response object
+     * @return The response content as an object of the specified type
      * @throws Exception If an error occurs during deserialization
      */
-    protected <T> T getResponseBodyAs(MvcResult result, Class<T> responseClass) throws Exception {
-        String responseBody = getResponseBodyAsString(result);
-        return objectMapper.readValue(responseBody, responseClass);
+    protected <T> T getContentAsObject(MvcResult result, Class<T> responseClass) throws Exception {
+        String content = getContentAsString(result);
+        return objectMapper.readValue(content, responseClass);
     }
 
     /**
-     * Performs a request and returns the result.
+     * Creates a result matcher that checks if the response content contains the specified substring.
      *
-     * @param requestBuilder The request builder to use
-     * @return The MVC result
-     * @throws Exception If an error occurs during the request
+     * @param substring The substring to check for in the response content
+     * @return A result matcher that checks if the response content contains the specified substring
      */
-    protected MvcResult performRequest(MockHttpServletRequestBuilder requestBuilder) throws Exception {
-        return mockMvc.perform(requestBuilder)
-                .andDo(MockMvcResultHandlers.print())
-                .andReturn();
+    protected ResultMatcher contentContains(String substring) {
+        return result -> {
+            String content = getContentAsString(result);
+            if (!content.contains(substring)) {
+                throw new AssertionError("Response content does not contain '" + substring + "'. Content: " + content);
+            }
+        };
     }
 
     /**
-     * Expects that the JSON response contains a field with the specified value.
+     * Creates a result matcher that checks if the response content equals the specified string.
      *
-     * @param fieldPath The JSON path to the field
-     * @param value     The expected value
-     * @return A ResultMatcher that checks for the field value
+     * @param expected The expected response content
+     * @return A result matcher that checks if the response content equals the specified string
      */
-    protected ResultMatcher jsonPath(String fieldPath, Object value) {
-        return MockMvcResultMatchers.jsonPath(fieldPath).value(value);
+    protected ResultMatcher contentEquals(String expected) {
+        return result -> {
+            String content = getContentAsString(result);
+            if (!content.equals(expected)) {
+                throw new AssertionError("Response content does not equal '" + expected + "'. Content: " + content);
+            }
+        };
     }
 
     /**
-     * Expects that the JSON response contains a field.
+     * Creates a result matcher that checks if the response content matches the specified JSON.
      *
-     * @param fieldPath The JSON path to the field
-     * @return A ResultMatcher that checks for the field existence
+     * @param expectedJson The expected JSON content
+     * @return A result matcher that checks if the response content matches the specified JSON
      */
-    protected ResultMatcher jsonPathExists(String fieldPath) {
-        return MockMvcResultMatchers.jsonPath(fieldPath).exists();
+    protected ResultMatcher contentJson(String expectedJson) {
+        return result -> {
+            String content = getContentAsString(result);
+            // Use ObjectMapper to compare JSON semantically (ignoring whitespace, order, etc.)
+            Object expectedObj = objectMapper.readTree(expectedJson);
+            Object actualObj = objectMapper.readTree(content);
+            if (!expectedObj.equals(actualObj)) {
+                throw new AssertionError("Response JSON does not match expected JSON.\nExpected: " + expectedJson + "\nActual: " + content);
+            }
+        };
     }
 
     /**
-     * Expects that the JSON response does not contain a field.
+     * Creates a result matcher that checks if the response content matches the specified object as JSON.
      *
-     * @param fieldPath The JSON path to the field
-     * @return A ResultMatcher that checks for the field non-existence
+     * @param expected The expected object to match as JSON
+     * @return A result matcher that checks if the response content matches the specified object as JSON
      */
-    protected ResultMatcher jsonPathDoesNotExist(String fieldPath) {
-        return MockMvcResultMatchers.jsonPath(fieldPath).doesNotExist();
-    }
-
-    /**
-     * Expects that the JSON response contains a field with a value that is not empty.
-     *
-     * @param fieldPath The JSON path to the field
-     * @return A ResultMatcher that checks for a non-empty field value
-     */
-    protected ResultMatcher jsonPathIsNotEmpty(String fieldPath) {
-        return MockMvcResultMatchers.jsonPath(fieldPath).isNotEmpty();
-    }
-
-    /**
-     * Expects that the JSON response contains a field with an array of the specified size.
-     *
-     * @param fieldPath The JSON path to the array field
-     * @param size      The expected array size
-     * @return A ResultMatcher that checks the array size
-     */
-    protected ResultMatcher jsonPathArrayHasSize(String fieldPath, int size) {
-        return MockMvcResultMatchers.jsonPath(fieldPath + ".length()").value(size);
+    protected ResultMatcher contentJson(Object expected) {
+        try {
+            String expectedJson = objectMapper.writeValueAsString(expected);
+            return contentJson(expectedJson);
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException("Failed to serialize expected object to JSON", e);
+        }
     }
 }
