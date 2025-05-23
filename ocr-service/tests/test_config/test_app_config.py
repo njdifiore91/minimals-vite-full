@@ -2,424 +2,544 @@
 # -*- coding: utf-8 -*-
 
 """
-Unit tests for the OCR Service's app_config.py module.
+Unit tests for the OCR Service app_config module.
 
-These tests verify that application configuration correctly loads from environment variables,
-validates required settings, and provides appropriate defaults for development, staging, and
-production environments. The tests ensure that the service can be properly configured for
-different deployment scenarios.
+These tests verify that the application configuration correctly loads from environment
+variables, validates required settings, and provides appropriate defaults for development,
+staging, and production environments.
 """
 
 import os
+import unittest
+from unittest import mock
 import pytest
-from unittest.mock import patch, MagicMock
-from typing import Dict, Any
 
-# Import the module under test
-from src.config.app_config import AppConfig, Environment, LogLevel, get_config
+# Import the module to test
+from config.app_config import (
+    AppConfig,
+    Environment,
+    get_env_var,
+    get_current_environment,
+    load_service_config,
+    load_tensorflow_config,
+    load_rabbitmq_config,
+    load_s3_config,
+    load_logging_config
+)
 
 
-class TestAppConfig:
-    """Test suite for the AppConfig class."""
+class TestGetEnvVar(unittest.TestCase):
+    """Tests for the get_env_var function."""
 
-    def test_default_config_values(self):
-        """Test that default configuration values are set correctly when no environment variables are provided."""
-        # Clear all relevant environment variables
-        with patch.dict(os.environ, {}, clear=True):
-            # Set only the required environment variables to avoid validation errors
-            os.environ['ENVIRONMENT'] = 'development'
-            
-            # Create a new config instance
+    def test_get_existing_env_var(self):
+        """Test retrieving an existing environment variable."""
+        with mock.patch.dict(os.environ, {"TEST_VAR": "test_value"}):
+            value = get_env_var("TEST_VAR")
+            self.assertEqual(value, "test_value")
+
+    def test_get_nonexistent_env_var_with_default(self):
+        """Test retrieving a non-existent environment variable with a default value."""
+        with mock.patch.dict(os.environ, {}, clear=True):
+            value = get_env_var("NONEXISTENT_VAR", default="default_value")
+            self.assertEqual(value, "default_value")
+
+    def test_get_nonexistent_env_var_without_default(self):
+        """Test retrieving a non-existent environment variable without a default value."""
+        with mock.patch.dict(os.environ, {}, clear=True):
+            value = get_env_var("NONEXISTENT_VAR")
+            self.assertEqual(value, "")
+
+    def test_get_required_env_var_that_exists(self):
+        """Test retrieving a required environment variable that exists."""
+        with mock.patch.dict(os.environ, {"REQUIRED_VAR": "required_value"}):
+            value = get_env_var("REQUIRED_VAR", required=True)
+            self.assertEqual(value, "required_value")
+
+    def test_get_required_env_var_that_does_not_exist(self):
+        """Test retrieving a required environment variable that does not exist."""
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with self.assertRaises(ValueError):
+                get_env_var("REQUIRED_VAR", required=True)
+
+
+class TestGetCurrentEnvironment(unittest.TestCase):
+    """Tests for the get_current_environment function."""
+
+    def test_get_development_environment(self):
+        """Test retrieving development environment."""
+        with mock.patch.dict(os.environ, {"OCR_SERVICE_ENV": "development"}):
+            env = get_current_environment()
+            self.assertEqual(env, Environment.DEVELOPMENT)
+
+    def test_get_staging_environment(self):
+        """Test retrieving staging environment."""
+        with mock.patch.dict(os.environ, {"OCR_SERVICE_ENV": "staging"}):
+            env = get_current_environment()
+            self.assertEqual(env, Environment.STAGING)
+
+    def test_get_production_environment(self):
+        """Test retrieving production environment."""
+        with mock.patch.dict(os.environ, {"OCR_SERVICE_ENV": "production"}):
+            env = get_current_environment()
+            self.assertEqual(env, Environment.PRODUCTION)
+
+    def test_get_default_environment(self):
+        """Test retrieving default environment when not specified."""
+        with mock.patch.dict(os.environ, {}, clear=True):
+            env = get_current_environment()
+            self.assertEqual(env, Environment.DEVELOPMENT)
+
+    def test_get_invalid_environment(self):
+        """Test retrieving default environment when an invalid environment is specified."""
+        with mock.patch.dict(os.environ, {"OCR_SERVICE_ENV": "invalid"}):
+            env = get_current_environment()
+            self.assertEqual(env, Environment.DEVELOPMENT)
+
+
+class TestLoadServiceConfig(unittest.TestCase):
+    """Tests for the load_service_config function."""
+
+    def test_load_service_config_with_defaults(self):
+        """Test loading service configuration with default values."""
+        with mock.patch.dict(os.environ, {}, clear=True):
+            config = load_service_config()
+            self.assertEqual(config["name"], "ocr-service")
+            self.assertEqual(config["version"], "1.0.0")
+            self.assertEqual(config["port"], 8080)
+            self.assertEqual(config["environment"], Environment.DEVELOPMENT)
+            self.assertEqual(config["debug"], False)
+            self.assertEqual(config["correlation_id_header"], "X-Correlation-ID")
+            self.assertEqual(config["max_workers"], 4)
+            self.assertEqual(config["shutdown_timeout"], 30)
+
+    def test_load_service_config_with_custom_values(self):
+        """Test loading service configuration with custom environment variables."""
+        env_vars = {
+            "OCR_SERVICE_NAME": "custom-ocr-service",
+            "OCR_SERVICE_VERSION": "2.0.0",
+            "OCR_SERVICE_PORT": "9090",
+            "OCR_SERVICE_ENV": "production",
+            "OCR_SERVICE_DEBUG": "true",
+            "OCR_CORRELATION_ID_HEADER": "X-Custom-Correlation-ID",
+            "OCR_SERVICE_MAX_WORKERS": "8",
+            "OCR_SERVICE_SHUTDOWN_TIMEOUT": "60"
+        }
+        with mock.patch.dict(os.environ, env_vars):
+            config = load_service_config()
+            self.assertEqual(config["name"], "custom-ocr-service")
+            self.assertEqual(config["version"], "2.0.0")
+            self.assertEqual(config["port"], 9090)
+            self.assertEqual(config["environment"], Environment.PRODUCTION)
+            self.assertEqual(config["debug"], True)
+            self.assertEqual(config["correlation_id_header"], "X-Custom-Correlation-ID")
+            self.assertEqual(config["max_workers"], 8)
+            self.assertEqual(config["shutdown_timeout"], 60)
+
+
+class TestLoadTensorFlowConfig(unittest.TestCase):
+    """Tests for the load_tensorflow_config function."""
+
+    def test_load_tensorflow_config_with_defaults(self):
+        """Test loading TensorFlow configuration with default values."""
+        with mock.patch.dict(os.environ, {}, clear=True):
+            config = load_tensorflow_config()
+            self.assertEqual(config["models_path"], "/app/models")
+            self.assertEqual(config["typed_model_name"], "typed_text_model")
+            self.assertEqual(config["handwritten_model_name"], "handwritten_text_model")
+            self.assertEqual(config["hybrid_model_name"], "hybrid_text_model")
+            self.assertEqual(config["confidence_threshold"], 0.85)
+            self.assertEqual(config["low_confidence_threshold"], 0.60)
+            self.assertEqual(config["gpu_memory_limit"], 0)
+            self.assertEqual(config["use_gpu"], True)
+            self.assertEqual(config["batch_size"], 4)
+            self.assertEqual(config["model_version"], "1.0.0")
+            self.assertEqual(config["enable_optimization"], True)
+
+    def test_load_tensorflow_config_with_custom_values(self):
+        """Test loading TensorFlow configuration with custom environment variables."""
+        env_vars = {
+            "OCR_MODELS_PATH": "/custom/models",
+            "OCR_TYPED_MODEL_NAME": "custom_typed_model",
+            "OCR_HANDWRITTEN_MODEL_NAME": "custom_handwritten_model",
+            "OCR_HYBRID_MODEL_NAME": "custom_hybrid_model",
+            "OCR_CONFIDENCE_THRESHOLD": "0.95",
+            "OCR_LOW_CONFIDENCE_THRESHOLD": "0.70",
+            "OCR_GPU_MEMORY_LIMIT": "4096",
+            "OCR_USE_GPU": "false",
+            "OCR_BATCH_SIZE": "8",
+            "OCR_MODEL_VERSION": "2.0.0",
+            "OCR_ENABLE_OPTIMIZATION": "false"
+        }
+        with mock.patch.dict(os.environ, env_vars):
+            config = load_tensorflow_config()
+            self.assertEqual(config["models_path"], "/custom/models")
+            self.assertEqual(config["typed_model_name"], "custom_typed_model")
+            self.assertEqual(config["handwritten_model_name"], "custom_handwritten_model")
+            self.assertEqual(config["hybrid_model_name"], "custom_hybrid_model")
+            self.assertEqual(config["confidence_threshold"], 0.95)
+            self.assertEqual(config["low_confidence_threshold"], 0.70)
+            self.assertEqual(config["gpu_memory_limit"], 4096)
+            self.assertEqual(config["use_gpu"], False)
+            self.assertEqual(config["batch_size"], 8)
+            self.assertEqual(config["model_version"], "2.0.0")
+            self.assertEqual(config["enable_optimization"], False)
+
+
+class TestLoadRabbitMQConfig(unittest.TestCase):
+    """Tests for the load_rabbitmq_config function."""
+
+    def test_load_rabbitmq_config_with_defaults(self):
+        """Test loading RabbitMQ configuration with default values."""
+        # We need to set required values even for the "default" test
+        env_vars = {
+            "RABBITMQ_HOST": "localhost",
+            "RABBITMQ_USERNAME": "guest",
+            "RABBITMQ_PASSWORD": "guest"
+        }
+        with mock.patch.dict(os.environ, env_vars):
+            config = load_rabbitmq_config()
+            self.assertEqual(config["host"], "localhost")
+            self.assertEqual(config["port"], 5672)
+            self.assertEqual(config["username"], "guest")
+            self.assertEqual(config["password"], "guest")
+            self.assertEqual(config["vhost"], "/")
+            self.assertEqual(config["exchange"], "mca.documents")
+            self.assertEqual(config["queue"], "data-extraction")
+            self.assertEqual(config["routing_key"], "")
+            self.assertEqual(config["use_tls"], True)
+            self.assertEqual(config["cert_path"], "/app/certs/client.pem")
+            self.assertEqual(config["key_path"], "/app/certs/client.key")
+            self.assertEqual(config["ca_path"], "/app/certs/ca.pem")
+            self.assertEqual(config["prefetch_count"], 10)
+            self.assertEqual(config["connection_attempts"], 3)
+            self.assertEqual(config["retry_delay"], 5)
+            self.assertEqual(config["heartbeat"], 60)
+
+    def test_load_rabbitmq_config_with_custom_values(self):
+        """Test loading RabbitMQ configuration with custom environment variables."""
+        env_vars = {
+            "RABBITMQ_HOST": "rabbitmq.example.com",
+            "RABBITMQ_PORT": "5673",
+            "RABBITMQ_USERNAME": "custom_user",
+            "RABBITMQ_PASSWORD": "custom_password",
+            "RABBITMQ_VHOST": "/custom",
+            "RABBITMQ_EXCHANGE": "custom.exchange",
+            "RABBITMQ_QUEUE": "custom-queue",
+            "RABBITMQ_ROUTING_KEY": "custom.routing.key",
+            "RABBITMQ_USE_TLS": "false",
+            "RABBITMQ_CERT_PATH": "/custom/certs/client.pem",
+            "RABBITMQ_KEY_PATH": "/custom/certs/client.key",
+            "RABBITMQ_CA_PATH": "/custom/certs/ca.pem",
+            "RABBITMQ_PREFETCH_COUNT": "20",
+            "RABBITMQ_CONNECTION_ATTEMPTS": "5",
+            "RABBITMQ_RETRY_DELAY": "10",
+            "RABBITMQ_HEARTBEAT": "30"
+        }
+        with mock.patch.dict(os.environ, env_vars):
+            config = load_rabbitmq_config()
+            self.assertEqual(config["host"], "rabbitmq.example.com")
+            self.assertEqual(config["port"], 5673)
+            self.assertEqual(config["username"], "custom_user")
+            self.assertEqual(config["password"], "custom_password")
+            self.assertEqual(config["vhost"], "/custom")
+            self.assertEqual(config["exchange"], "custom.exchange")
+            self.assertEqual(config["queue"], "custom-queue")
+            self.assertEqual(config["routing_key"], "custom.routing.key")
+            self.assertEqual(config["use_tls"], False)
+            self.assertEqual(config["cert_path"], "/custom/certs/client.pem")
+            self.assertEqual(config["key_path"], "/custom/certs/client.key")
+            self.assertEqual(config["ca_path"], "/custom/certs/ca.pem")
+            self.assertEqual(config["prefetch_count"], 20)
+            self.assertEqual(config["connection_attempts"], 5)
+            self.assertEqual(config["retry_delay"], 10)
+            self.assertEqual(config["heartbeat"], 30)
+
+    def test_load_rabbitmq_config_missing_required_values(self):
+        """Test loading RabbitMQ configuration with missing required values."""
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with self.assertRaises(ValueError):
+                load_rabbitmq_config()
+
+
+class TestLoadS3Config(unittest.TestCase):
+    """Tests for the load_s3_config function."""
+
+    def test_load_s3_config_with_defaults_development(self):
+        """Test loading S3 configuration with default values in development environment."""
+        # We need to set required values even for the "default" test
+        env_vars = {
+            "S3_ENDPOINT": "http://localhost:9000",
+            "S3_ACCESS_KEY": "test_access_key",
+            "S3_SECRET_KEY": "test_secret_key",
+            "OCR_SERVICE_ENV": "development"
+        }
+        with mock.patch.dict(os.environ, env_vars):
+            config = load_s3_config()
+            self.assertEqual(config["endpoint"], "http://localhost:9000")
+            self.assertEqual(config["region"], "us-east-1")
+            self.assertEqual(config["bucket"], "mca-documents-staging")
+            self.assertEqual(config["access_key"], "test_access_key")
+            self.assertEqual(config["secret_key"], "test_secret_key")
+            self.assertEqual(config["use_ssl"], True)
+            self.assertEqual(config["verify_ssl"], True)
+            self.assertEqual(config["encryption"], "AES256")
+            self.assertEqual(config["presigned_url_expiry"], 3600)
+            self.assertEqual(config["max_pool_connections"], 10)
+            self.assertEqual(config["connect_timeout"], 5)
+            self.assertEqual(config["read_timeout"], 60)
+
+    def test_load_s3_config_with_defaults_production(self):
+        """Test loading S3 configuration with default values in production environment."""
+        # We need to set required values even for the "default" test
+        env_vars = {
+            "S3_ENDPOINT": "http://localhost:9000",
+            "S3_ACCESS_KEY": "test_access_key",
+            "S3_SECRET_KEY": "test_secret_key",
+            "OCR_SERVICE_ENV": "production"
+        }
+        with mock.patch.dict(os.environ, env_vars):
+            config = load_s3_config()
+            self.assertEqual(config["bucket"], "mca-documents-production")
+
+    def test_load_s3_config_with_custom_values(self):
+        """Test loading S3 configuration with custom environment variables."""
+        env_vars = {
+            "S3_ENDPOINT": "https://s3.example.com",
+            "S3_REGION": "us-west-2",
+            "S3_BUCKET": "custom-bucket",
+            "S3_ACCESS_KEY": "custom_access_key",
+            "S3_SECRET_KEY": "custom_secret_key",
+            "S3_USE_SSL": "false",
+            "S3_VERIFY_SSL": "false",
+            "S3_ENCRYPTION": "custom-encryption",
+            "S3_PRESIGNED_URL_EXPIRY": "7200",
+            "S3_MAX_POOL_CONNECTIONS": "20",
+            "S3_CONNECT_TIMEOUT": "10",
+            "S3_READ_TIMEOUT": "120"
+        }
+        with mock.patch.dict(os.environ, env_vars):
+            config = load_s3_config()
+            self.assertEqual(config["endpoint"], "https://s3.example.com")
+            self.assertEqual(config["region"], "us-west-2")
+            self.assertEqual(config["bucket"], "custom-bucket")
+            self.assertEqual(config["access_key"], "custom_access_key")
+            self.assertEqual(config["secret_key"], "custom_secret_key")
+            self.assertEqual(config["use_ssl"], False)
+            self.assertEqual(config["verify_ssl"], False)
+            self.assertEqual(config["encryption"], "custom-encryption")
+            self.assertEqual(config["presigned_url_expiry"], 7200)
+            self.assertEqual(config["max_pool_connections"], 20)
+            self.assertEqual(config["connect_timeout"], 10)
+            self.assertEqual(config["read_timeout"], 120)
+
+    def test_load_s3_config_missing_required_values(self):
+        """Test loading S3 configuration with missing required values."""
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with self.assertRaises(ValueError):
+                load_s3_config()
+
+
+class TestLoadLoggingConfig(unittest.TestCase):
+    """Tests for the load_logging_config function."""
+
+    def test_load_logging_config_with_defaults_development(self):
+        """Test loading logging configuration with default values in development environment."""
+        with mock.patch.dict(os.environ, {"OCR_SERVICE_ENV": "development"}):
+            config = load_logging_config()
+            self.assertEqual(config["level"], "DEBUG")
+            self.assertEqual(config["format"], "%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+            self.assertEqual(config["file_path"], "")
+            self.assertEqual(config["max_bytes"], 10485760)
+            self.assertEqual(config["backup_count"], 5)
+            self.assertEqual(config["json_format"], False)
+            self.assertEqual(config["include_correlation_id"], True)
+
+    def test_load_logging_config_with_defaults_staging(self):
+        """Test loading logging configuration with default values in staging environment."""
+        with mock.patch.dict(os.environ, {"OCR_SERVICE_ENV": "staging"}):
+            config = load_logging_config()
+            self.assertEqual(config["level"], "INFO")
+
+    def test_load_logging_config_with_defaults_production(self):
+        """Test loading logging configuration with default values in production environment."""
+        with mock.patch.dict(os.environ, {"OCR_SERVICE_ENV": "production"}):
+            config = load_logging_config()
+            self.assertEqual(config["level"], "WARNING")
+
+    def test_load_logging_config_with_custom_values(self):
+        """Test loading logging configuration with custom environment variables."""
+        env_vars = {
+            "OCR_LOG_LEVEL": "ERROR",
+            "OCR_LOG_FORMAT": "custom-format",
+            "OCR_LOG_FILE": "/var/log/ocr-service.log",
+            "OCR_LOG_MAX_BYTES": "20971520",
+            "OCR_LOG_BACKUP_COUNT": "10",
+            "OCR_LOG_JSON": "true",
+            "OCR_LOG_INCLUDE_CORRELATION_ID": "false"
+        }
+        with mock.patch.dict(os.environ, env_vars):
+            config = load_logging_config()
+            self.assertEqual(config["level"], "ERROR")
+            self.assertEqual(config["format"], "custom-format")
+            self.assertEqual(config["file_path"], "/var/log/ocr-service.log")
+            self.assertEqual(config["max_bytes"], 20971520)
+            self.assertEqual(config["backup_count"], 10)
+            self.assertEqual(config["json_format"], True)
+            self.assertEqual(config["include_correlation_id"], False)
+
+
+class TestAppConfig(unittest.TestCase):
+    """Tests for the AppConfig class."""
+
+    def test_app_config_initialization(self):
+        """Test initialization of AppConfig with default values."""
+        # We need to set required values for initialization
+        env_vars = {
+            "RABBITMQ_HOST": "localhost",
+            "RABBITMQ_USERNAME": "guest",
+            "RABBITMQ_PASSWORD": "guest",
+            "S3_ENDPOINT": "http://localhost:9000",
+            "S3_ACCESS_KEY": "test_access_key",
+            "S3_SECRET_KEY": "test_secret_key"
+        }
+        with mock.patch.dict(os.environ, env_vars):
             config = AppConfig()
-            
-            # Check default values
-            assert config.SERVICE_NAME == 'ocr-service'
-            assert config.SERVICE_VERSION == '1.0.0'
-            assert config.ENVIRONMENT == Environment.DEVELOPMENT
-            assert config.HOST == '0.0.0.0'
-            assert config.PORT == 8080
-            assert config.RABBITMQ_HOST == 'localhost'
-            assert config.RABBITMQ_PORT == 5672
-            assert config.RABBITMQ_USERNAME == 'guest'
-            assert config.RABBITMQ_PASSWORD == 'guest'
-            assert config.RABBITMQ_VHOST == '/'
-            assert config.RABBITMQ_EXCHANGE == 'mca.documents'
-            assert config.RABBITMQ_QUEUE == 'data-extraction'
-            assert config.S3_ENDPOINT == 's3.amazonaws.com'
-            assert config.S3_REGION == 'us-east-1'
-            assert config.S3_BUCKET == 'mca-documents-development'
-            assert config.TF_MODEL_PATH == './models'
-            assert config.TF_CONFIDENCE_THRESHOLD == 0.85
-            assert config.LOG_LEVEL == LogLevel.DEBUG
-            assert config.BATCH_SIZE == 10
-            assert config.MAX_WORKERS == 4
-            assert config.PROCESSING_TIMEOUT == 300
+            # Verify that all configuration components are initialized
+            self.assertIsNotNone(config.SERVICE)
+            self.assertIsNotNone(config.TENSORFLOW)
+            self.assertIsNotNone(config.RABBITMQ)
+            self.assertIsNotNone(config.S3)
+            self.assertIsNotNone(config.LOGGING)
 
-    def test_environment_from_string(self):
-        """Test that Environment.from_string correctly converts string values to Environment enum."""
-        assert Environment.from_string('development') == Environment.DEVELOPMENT
-        assert Environment.from_string('DEVELOPMENT') == Environment.DEVELOPMENT
-        assert Environment.from_string('staging') == Environment.STAGING
-        assert Environment.from_string('STAGING') == Environment.STAGING
-        assert Environment.from_string('production') == Environment.PRODUCTION
-        assert Environment.from_string('PRODUCTION') == Environment.PRODUCTION
+    def test_app_config_environment_overrides_development(self):
+        """Test environment-specific overrides for development environment."""
+        env_vars = {
+            "OCR_SERVICE_ENV": "development",
+            "RABBITMQ_HOST": "localhost",
+            "RABBITMQ_USERNAME": "guest",
+            "RABBITMQ_PASSWORD": "guest",
+            "S3_ENDPOINT": "http://localhost:9000",
+            "S3_ACCESS_KEY": "test_access_key",
+            "S3_SECRET_KEY": "test_secret_key"
+        }
+        with mock.patch.dict(os.environ, env_vars):
+            config = AppConfig()
+            # Verify development-specific overrides
+            self.assertEqual(config.SERVICE.environment, Environment.DEVELOPMENT)
+            self.assertEqual(config.TENSORFLOW.use_gpu, False)  # Disabled in development
+            self.assertEqual(config.TENSORFLOW.enable_optimization, False)  # Disabled in development
+
+    def test_app_config_environment_overrides_staging(self):
+        """Test environment-specific overrides for staging environment."""
+        env_vars = {
+            "OCR_SERVICE_ENV": "staging",
+            "RABBITMQ_HOST": "localhost",
+            "RABBITMQ_USERNAME": "guest",
+            "RABBITMQ_PASSWORD": "guest",
+            "S3_ENDPOINT": "http://localhost:9000",
+            "S3_ACCESS_KEY": "test_access_key",
+            "S3_SECRET_KEY": "test_secret_key"
+        }
+        with mock.patch.dict(os.environ, env_vars):
+            config = AppConfig()
+            # Verify staging-specific overrides
+            self.assertEqual(config.SERVICE.environment, Environment.STAGING)
+            self.assertEqual(config.TENSORFLOW.confidence_threshold, 0.80)  # Lower threshold for testing
+
+    def test_app_config_environment_overrides_production(self):
+        """Test environment-specific overrides for production environment."""
+        env_vars = {
+            "OCR_SERVICE_ENV": "production",
+            "RABBITMQ_HOST": "localhost",
+            "RABBITMQ_USERNAME": "guest",
+            "RABBITMQ_PASSWORD": "guest",
+            "S3_ENDPOINT": "http://localhost:9000",
+            "S3_ACCESS_KEY": "test_access_key",
+            "S3_SECRET_KEY": "test_secret_key"
+        }
+        with mock.patch.dict(os.environ, env_vars):
+            config = AppConfig()
+            # Verify production-specific overrides
+            self.assertEqual(config.SERVICE.environment, Environment.PRODUCTION)
+            self.assertEqual(config.TENSORFLOW.confidence_threshold, 0.90)  # Higher threshold for production
+            self.assertEqual(config.RABBITMQ.prefetch_count, 20)  # Higher prefetch for production throughput
+
+    @mock.patch('os.path.exists')
+    def test_app_config_validation_success(self, mock_exists):
+        """Test successful validation of configuration."""
+        # Mock os.path.exists to return True for certificate paths
+        mock_exists.return_value = True
         
-        # Test fallback to default for invalid values
-        assert Environment.from_string('invalid') == Environment.DEVELOPMENT
-        assert Environment.from_string('') == Environment.DEVELOPMENT
-
-    def test_get_env_with_default(self):
-        """Test that _get_env correctly returns default values when environment variables are not set."""
-        with patch.dict(os.environ, {}, clear=True):
+        env_vars = {
+            "RABBITMQ_HOST": "localhost",
+            "RABBITMQ_USERNAME": "guest",
+            "RABBITMQ_PASSWORD": "guest",
+            "S3_ENDPOINT": "http://localhost:9000",
+            "S3_ACCESS_KEY": "test_access_key",
+            "S3_SECRET_KEY": "test_secret_key",
+            "OCR_USE_GPU": "true",
+            "OCR_GPU_MEMORY_LIMIT": "1024"
+        }
+        with mock.patch.dict(os.environ, env_vars):
+            # This should not raise any exceptions
             config = AppConfig()
-            
-            # Test with a non-None default
-            value = config._get_env('TEST_VAR', 'default_value')
-            assert value == 'default_value'
-            
-            # Test with a None default (should raise ValueError)
-            with pytest.raises(ValueError, match="Required environment variable 'REQUIRED_VAR' is not set"):
-                config._get_env('REQUIRED_VAR', None)
+            self.assertIsNotNone(config)
 
-    def test_get_env_bool(self):
-        """Test that _get_env_bool correctly converts string values to boolean."""
-        with patch.dict(os.environ, {}, clear=True):
-            config = AppConfig()
-            
-            # Test true values
-            os.environ['BOOL_TRUE_1'] = 'true'
-            os.environ['BOOL_TRUE_2'] = 'True'
-            os.environ['BOOL_TRUE_3'] = '1'
-            os.environ['BOOL_TRUE_4'] = 'yes'
-            os.environ['BOOL_TRUE_5'] = 'y'
-            
-            assert config._get_env_bool('BOOL_TRUE_1') is True
-            assert config._get_env_bool('BOOL_TRUE_2') is True
-            assert config._get_env_bool('BOOL_TRUE_3') is True
-            assert config._get_env_bool('BOOL_TRUE_4') is True
-            assert config._get_env_bool('BOOL_TRUE_5') is True
-            
-            # Test false values
-            os.environ['BOOL_FALSE_1'] = 'false'
-            os.environ['BOOL_FALSE_2'] = 'False'
-            os.environ['BOOL_FALSE_3'] = '0'
-            os.environ['BOOL_FALSE_4'] = 'no'
-            os.environ['BOOL_FALSE_5'] = 'n'
-            os.environ['BOOL_FALSE_6'] = 'anything else'
-            
-            assert config._get_env_bool('BOOL_FALSE_1') is False
-            assert config._get_env_bool('BOOL_FALSE_2') is False
-            assert config._get_env_bool('BOOL_FALSE_3') is False
-            assert config._get_env_bool('BOOL_FALSE_4') is False
-            assert config._get_env_bool('BOOL_FALSE_5') is False
-            assert config._get_env_bool('BOOL_FALSE_6') is False
-            
-            # Test default values
-            assert config._get_env_bool('NOT_SET', True) is True
-            assert config._get_env_bool('NOT_SET', False) is False
+    def test_app_config_validation_failure_gpu_memory_limit(self):
+        """Test validation failure for invalid GPU memory limit."""
+        env_vars = {
+            "RABBITMQ_HOST": "localhost",
+            "RABBITMQ_USERNAME": "guest",
+            "RABBITMQ_PASSWORD": "guest",
+            "S3_ENDPOINT": "http://localhost:9000",
+            "S3_ACCESS_KEY": "test_access_key",
+            "S3_SECRET_KEY": "test_secret_key",
+            "OCR_USE_GPU": "true",
+            "OCR_GPU_MEMORY_LIMIT": "-1"  # Invalid value
+        }
+        with mock.patch.dict(os.environ, env_vars):
+            with self.assertRaises(ValueError):
+                AppConfig()
 
-    def test_get_default_bucket(self):
-        """Test that _get_default_bucket returns the correct bucket name based on the environment."""
-        with patch.dict(os.environ, {}, clear=True):
-            # Test development environment
-            os.environ['ENVIRONMENT'] = 'development'
-            config = AppConfig()
-            assert config._get_default_bucket() == 'mca-documents-development'
-            
-            # Test staging environment
-            os.environ['ENVIRONMENT'] = 'staging'
-            config = AppConfig()
-            assert config._get_default_bucket() == 'mca-documents-staging'
-            
-            # Test production environment
-            os.environ['ENVIRONMENT'] = 'production'
-            config = AppConfig()
-            assert config._get_default_bucket() == 'mca-documents-production'
+    def test_app_config_validation_failure_missing_s3_bucket(self):
+        """Test validation failure for missing S3 bucket."""
+        env_vars = {
+            "RABBITMQ_HOST": "localhost",
+            "RABBITMQ_USERNAME": "guest",
+            "RABBITMQ_PASSWORD": "guest",
+            "S3_ENDPOINT": "http://localhost:9000",
+            "S3_ACCESS_KEY": "test_access_key",
+            "S3_SECRET_KEY": "test_secret_key",
+            "S3_BUCKET": ""  # Empty bucket name
+        }
+        with mock.patch.dict(os.environ, env_vars):
+            with self.assertRaises(ValueError):
+                AppConfig()
 
-    def test_get_default_log_level(self):
-        """Test that _get_default_log_level returns the correct log level based on the environment."""
-        with patch.dict(os.environ, {}, clear=True):
-            # Test development environment
-            os.environ['ENVIRONMENT'] = 'development'
-            config = AppConfig()
-            assert config._get_default_log_level() == LogLevel.DEBUG.value
-            
-            # Test staging environment
-            os.environ['ENVIRONMENT'] = 'staging'
-            config = AppConfig()
-            assert config._get_default_log_level() == LogLevel.INFO.value
-            
-            # Test production environment
-            os.environ['ENVIRONMENT'] = 'production'
-            config = AppConfig()
-            assert config._get_default_log_level() == LogLevel.INFO.value
-
-    def test_validate_configuration_development(self):
-        """Test that configuration validation passes for development environment with minimal settings."""
-        with patch.dict(os.environ, {}, clear=True):
-            os.environ['ENVIRONMENT'] = 'development'
-            
-            # Create config and validate (should not raise exceptions)
-            config = AppConfig()
-            config._validate_configuration()
-
-    def test_validate_configuration_staging_missing_certs(self):
-        """Test that configuration validation fails for staging environment with missing TLS certificates."""
-        with patch.dict(os.environ, {}, clear=True):
-            os.environ['ENVIRONMENT'] = 'staging'
-            os.environ['RABBITMQ_USE_TLS'] = 'true'
-            os.environ['S3_ACCESS_KEY'] = 'test-key'
-            os.environ['S3_SECRET_KEY'] = 'test-secret'
-            
-            # Create config
-            config = AppConfig()
-            
-            # Validation should fail due to missing client cert
-            with pytest.raises(ValueError, match="RABBITMQ_CLIENT_CERT is required when TLS is enabled in staging/production"):
-                config._validate_configuration()
-            
-            # Add client cert but not client key
-            os.environ['RABBITMQ_CLIENT_CERT'] = '/path/to/cert'
-            config = AppConfig()
-            with pytest.raises(ValueError, match="RABBITMQ_CLIENT_KEY is required when TLS is enabled in staging/production"):
-                config._validate_configuration()
-            
-            # Add client key but not CA cert
-            os.environ['RABBITMQ_CLIENT_KEY'] = '/path/to/key'
-            config = AppConfig()
-            with pytest.raises(ValueError, match="RABBITMQ_CA_CERT is required when TLS is enabled in staging/production"):
-                config._validate_configuration()
-
-    def test_validate_configuration_staging_missing_s3_credentials(self):
-        """Test that configuration validation fails for staging environment with missing S3 credentials."""
-        with patch.dict(os.environ, {}, clear=True):
-            os.environ['ENVIRONMENT'] = 'staging'
-            os.environ['RABBITMQ_USE_TLS'] = 'false'  # Disable TLS to focus on S3 validation
-            
-            # Create config
-            config = AppConfig()
-            
-            # Validation should fail due to missing S3 access key
-            with pytest.raises(ValueError, match="S3_ACCESS_KEY is required in staging/production"):
-                config._validate_configuration()
-            
-            # Add access key but not secret key
-            os.environ['S3_ACCESS_KEY'] = 'test-key'
-            config = AppConfig()
-            with pytest.raises(ValueError, match="S3_SECRET_KEY is required in staging/production"):
-                config._validate_configuration()
-
-    def test_validate_configuration_production_gpu_memory(self):
-        """Test that configuration validation fails for production environment with insufficient GPU memory."""
-        with patch.dict(os.environ, {}, clear=True):
-            os.environ['ENVIRONMENT'] = 'production'
-            os.environ['RABBITMQ_USE_TLS'] = 'true'
-            os.environ['RABBITMQ_CLIENT_CERT'] = '/path/to/cert'
-            os.environ['RABBITMQ_CLIENT_KEY'] = '/path/to/key'
-            os.environ['RABBITMQ_CA_CERT'] = '/path/to/ca'
-            os.environ['S3_ACCESS_KEY'] = 'test-key'
-            os.environ['S3_SECRET_KEY'] = 'test-secret'
-            os.environ['TF_USE_GPU'] = 'true'
-            
-            # Create config
-            config = AppConfig()
-            
-            # Validation should fail due to missing GPU memory limit
-            with pytest.raises(ValueError, match="TF_GPU_MEMORY_LIMIT must be at least 8GB \(8192MB\) for production use"):
-                config._validate_configuration()
-            
-            # Set insufficient GPU memory
-            os.environ['TF_GPU_MEMORY_LIMIT'] = '4096'
-            config = AppConfig()
-            with pytest.raises(ValueError, match="TF_GPU_MEMORY_LIMIT must be at least 8GB \(8192MB\) for production use"):
-                config._validate_configuration()
-            
-            # Set sufficient GPU memory
-            os.environ['TF_GPU_MEMORY_LIMIT'] = '8192'
-            config = AppConfig()
-            # Should not raise an exception
-            config._validate_configuration()
-
-    def test_as_dict(self):
-        """Test that as_dict returns a dictionary with all configuration values."""
-        with patch.dict(os.environ, {}, clear=True):
-            os.environ['ENVIRONMENT'] = 'development'
-            
-            config = AppConfig()
-            config_dict = config.as_dict()
-            
-            # Check that the dictionary contains all expected keys
-            expected_keys = [
-                'SERVICE_NAME', 'SERVICE_VERSION', 'ENVIRONMENT', 'HOST', 'PORT',
-                'RABBITMQ_HOST', 'RABBITMQ_PORT', 'RABBITMQ_USERNAME', 'RABBITMQ_PASSWORD',
-                'RABBITMQ_VHOST', 'RABBITMQ_EXCHANGE', 'RABBITMQ_QUEUE', 'RABBITMQ_USE_TLS',
-                'RABBITMQ_CLIENT_CERT', 'RABBITMQ_CLIENT_KEY', 'RABBITMQ_CA_CERT',
-                'S3_ENDPOINT', 'S3_REGION', 'S3_ACCESS_KEY', 'S3_SECRET_KEY',
-                'S3_BUCKET', 'S3_USE_SSL', 'S3_VERIFY_SSL',
-                'TF_MODEL_PATH', 'TF_USE_GPU', 'TF_GPU_MEMORY_LIMIT', 'TF_CONFIDENCE_THRESHOLD',
-                'LOG_LEVEL', 'LOG_FORMAT', 'LOG_FILE',
-                'BATCH_SIZE', 'MAX_WORKERS', 'PROCESSING_TIMEOUT'
-            ]
-            
-            for key in expected_keys:
-                assert key in config_dict, f"Key '{key}' missing from config_dict"
-
-    def test_str_representation(self):
-        """Test that __str__ returns a string representation of the configuration."""
-        with patch.dict(os.environ, {}, clear=True):
-            os.environ['ENVIRONMENT'] = 'development'
-            
-            config = AppConfig()
-            config_str = str(config)
-            
-            assert "AppConfig" in config_str
-            assert "environment=Environment.DEVELOPMENT" in config_str
-            assert "service=ocr-service" in config_str
-            assert "version=1.0.0" in config_str
-
-    def test_get_config_singleton(self):
-        """Test that get_config returns a singleton instance of AppConfig."""
-        with patch.dict(os.environ, {}, clear=True):
-            os.environ['ENVIRONMENT'] = 'development'
-            
-            # Get the config instance twice
-            config1 = get_config()
-            config2 = get_config()
-            
-            # Check that they are the same instance
-            assert config1 is config2
-
-
-class TestAppConfigWithFixtures:
-    """Test suite for AppConfig using pytest fixtures."""
-
-    def test_development_environment(self, dev_env_vars):
-        """Test configuration with development environment variables."""
-        config = AppConfig()
-        
-        # Check environment-specific values
-        assert config.ENVIRONMENT == Environment.DEVELOPMENT
-        assert config.RABBITMQ_HOST == 'localhost'
-        assert config.RABBITMQ_USE_TLS is False
-        assert config.S3_ENDPOINT == 'localhost:4566'
-        assert config.S3_USE_SSL is False
-        assert config.TF_USE_GPU is False
-        assert config.LOG_LEVEL == LogLevel.DEBUG
-
-    def test_staging_environment(self, staging_env_vars):
-        """Test configuration with staging environment variables."""
-        config = AppConfig()
-        
-        # Check environment-specific values
-        assert config.ENVIRONMENT == Environment.STAGING
-        assert config.RABBITMQ_HOST == 'rabbitmq.staging'
-        assert config.RABBITMQ_USE_TLS is True
-        assert config.RABBITMQ_CLIENT_CERT == '/etc/rabbitmq/certs/client.pem'
-        assert config.S3_ENDPOINT == 's3.amazonaws.com'
-        assert config.S3_USE_SSL is True
-        assert config.TF_USE_GPU is True
-        assert config.TF_GPU_MEMORY_LIMIT == 8192
-        assert config.LOG_LEVEL == LogLevel.INFO
-
-    def test_production_environment(self, prod_env_vars):
-        """Test configuration with production environment variables."""
-        config = AppConfig()
-        
-        # Check environment-specific values
-        assert config.ENVIRONMENT == Environment.PRODUCTION
-        assert config.RABBITMQ_HOST == 'rabbitmq.production'
-        assert config.RABBITMQ_USE_TLS is True
-        assert config.RABBITMQ_CLIENT_CERT == '/etc/rabbitmq/certs/client.pem'
-        assert config.S3_ENDPOINT == 's3.amazonaws.com'
-        assert config.S3_USE_SSL is True
-        assert config.TF_USE_GPU is True
-        assert config.TF_GPU_MEMORY_LIMIT == 16384
-        assert config.LOG_LEVEL == LogLevel.INFO
-        assert config.TF_CONFIDENCE_THRESHOLD == 0.90
-
-    def test_missing_required_env_vars(self, env_vars, clear_env_vars):
-        """Test that missing required environment variables raise appropriate errors."""
-        # Set minimal environment
-        env_vars['ENVIRONMENT'] = 'production'
-        env_vars['RABBITMQ_USE_TLS'] = 'true'
-        
-        # Clear specific variables to test validation
-        clear_env_vars(['RABBITMQ_CLIENT_CERT', 'RABBITMQ_CLIENT_KEY', 'RABBITMQ_CA_CERT',
-                        'S3_ACCESS_KEY', 'S3_SECRET_KEY'])
-        
-        # Create config and validate
-        config = AppConfig()
-        
-        # Validation should fail due to missing required variables
-        with pytest.raises(ValueError):
-            config._validate_configuration()
-
-    def test_override_defaults(self, env_vars):
-        """Test that environment variables override default values."""
-        # Set custom values
-        env_vars['HOST'] = 'custom-host'
-        env_vars['PORT'] = '9090'
-        env_vars['RABBITMQ_HOST'] = 'custom-rabbitmq'
-        env_vars['RABBITMQ_PORT'] = '5673'
-        env_vars['S3_BUCKET'] = 'custom-bucket'
-        env_vars['TF_MODEL_PATH'] = '/custom/models'
-        env_vars['LOG_LEVEL'] = 'ERROR'
-        env_vars['BATCH_SIZE'] = '50'
-        
-        # Create config
-        config = AppConfig()
-        
-        # Check custom values
-        assert config.HOST == 'custom-host'
-        assert config.PORT == 9090
-        assert config.RABBITMQ_HOST == 'custom-rabbitmq'
-        assert config.RABBITMQ_PORT == 5673
-        assert config.S3_BUCKET == 'custom-bucket'
-        assert config.TF_MODEL_PATH == '/custom/models'
-        assert config.LOG_LEVEL == LogLevel.ERROR
-        assert config.BATCH_SIZE == 50
-
-    def test_config_validation_with_fixtures(self, config_validator, mock_app_config):
-        """Test configuration validation using the config_validator fixture."""
-        # Get config as dictionary
-        config_dict = mock_app_config.as_dict()
-        
-        # Validate required fields
-        required_fields = [
-            'SERVICE_NAME', 'ENVIRONMENT', 'HOST', 'PORT',
-            'RABBITMQ_HOST', 'RABBITMQ_PORT', 'RABBITMQ_EXCHANGE', 'RABBITMQ_QUEUE',
-            'S3_ENDPOINT', 'S3_REGION', 'S3_BUCKET',
-            'TF_MODEL_PATH', 'TF_CONFIDENCE_THRESHOLD',
-            'LOG_LEVEL', 'LOG_FORMAT',
-            'BATCH_SIZE', 'MAX_WORKERS', 'PROCESSING_TIMEOUT'
-        ]
-        
-        config_validator(config_dict, required_fields)
-
-    def test_config_defaults_with_fixtures(self, config_defaults, mock_app_config):
-        """Test configuration defaults using the config_defaults fixture."""
-        # Get config as dictionary
-        config_dict = mock_app_config.as_dict()
-        
-        # Check default values
-        expected_defaults = {
-            'SERVICE_NAME': 'ocr-service-test',
-            'SERVICE_VERSION': '1.0.0-test',
-            'ENVIRONMENT': Environment.DEVELOPMENT,
-            'HOST': 'localhost',
-            'PORT': 8080,
-            'RABBITMQ_HOST': 'localhost',
-            'RABBITMQ_PORT': 5672,
-            'RABBITMQ_VHOST': '/',
-            'RABBITMQ_EXCHANGE': 'mca.documents',
-            'RABBITMQ_QUEUE': 'data-extraction',
-            'S3_BUCKET': 'mca-documents-development',
-            'TF_MODEL_PATH': './models',
-            'TF_CONFIDENCE_THRESHOLD': 0.75,
-            'LOG_LEVEL': LogLevel.DEBUG,
-            'BATCH_SIZE': 10,
-            'MAX_WORKERS': 4,
-            'PROCESSING_TIMEOUT': 300
+    @mock.patch('logging.Logger.info')
+    @mock.patch('logging.Logger.warning')
+    def test_app_config_logging(self, mock_warning, mock_info):
+        """Test that configuration logging works correctly."""
+        env_vars = {
+            "RABBITMQ_HOST": "localhost",
+            "RABBITMQ_USERNAME": "guest",
+            "RABBITMQ_PASSWORD": "guest",
+            "S3_ENDPOINT": "http://localhost:9000",
+            "S3_ACCESS_KEY": "test_access_key",
+            "S3_SECRET_KEY": "test_secret_key",
+            "OCR_SERVICE_DEBUG": "true",  # Enable debug mode to trigger logging
+            "RABBITMQ_USE_TLS": "true"  # Enable TLS to test certificate path warnings
         }
         
-        config_defaults(config_dict, expected_defaults)
+        # Mock certificate paths to not exist
+        with mock.patch('os.path.exists', return_value=False):
+            with mock.patch.dict(os.environ, env_vars):
+                AppConfig()
+                # Verify that warning logs were called for missing certificate files
+                self.assertTrue(mock_warning.called)
+                # Verify that info logs were called for configuration summary
+                self.assertTrue(mock_info.called)
+
+
+if __name__ == "__main__":
+    unittest.main()
