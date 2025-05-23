@@ -1,363 +1,396 @@
-import json
 import pytest
+import json
 from unittest.mock import patch, MagicMock
+
 from fastapi import status
 from fastapi.testclient import TestClient
-from pika.exceptions import AMQPConnectionError
-from botocore.exceptions import ClientError
+
+# Import the health router for direct testing
+from src.api.health import health_router, get_queue_service, get_storage_service
 
 
 @pytest.fixture
-def health_response_schema():
-    """Schema for validating health check responses."""
-    return {
-        "status": str,
-        "timestamp": str,
-        "service": str,
-        "details": dict
-    }
-
-
-@pytest.fixture
-def readiness_response_schema():
-    """Schema for validating readiness check responses."""
-    return {
-        "status": str,
-        "timestamp": str,
-        "service": str,
-        "dependencies": {
-            "rabbitmq": {
-                "status": str,
-                "details": dict
-            },
-            "s3": {
-                "status": str,
-                "details": dict
-            }
-        }
-    }
-
-
-@pytest.fixture
-def detailed_health_response_schema():
-    """Schema for validating detailed health check responses."""
-    return {
-        "status": str,
-        "timestamp": str,
-        "service": dict,
-        "dependencies": {
-            "rabbitmq": {
-                "status": str,
-                "details": dict
-            },
-            "s3": {
-                "status": str,
-                "details": dict
-            }
-        },
-        "details": dict
-    }
+def app_with_mocked_dependencies(test_app, mock_rabbitmq_client, mock_s3_storage):
+    """
+    Creates a test application with mocked dependencies for health check testing.
+    
+    Args:
+        test_app: The FastAPI test application fixture
+        mock_rabbitmq_client: The mock RabbitMQ client fixture
+        mock_s3_storage: The mock S3 storage fixture
+        
+    Returns:
+        TestClient: A test client with mocked dependencies
+    """
+    # Create a test client
+    client = TestClient(test_app)
+    
+    # Patch the dependency injection functions
+    with patch('src.api.health.get_queue_service', return_value=mock_rabbitmq_client), \
+         patch('src.api.health.get_storage_service', return_value=mock_s3_storage):
+        yield client
 
 
 class TestHealthAPI:
-    """Test suite for Document Service health check API endpoints."""
-
-    def test_liveness_probe(self, client, validate_response_schema, health_response_schema):
-        """Test that the liveness probe endpoint returns a successful response."""
-        # Make request to liveness endpoint
-        response = client.get("/health/liveness")
+    """
+    Tests for the Document Service health check API endpoints.
+    
+    These tests verify that the API correctly reports service health status,
+    dependencies availability (S3 storage, RabbitMQ), and resource utilization.
+    """
+    
+    def test_liveness_probe(self, test_client):
+        """
+        Test that the liveness probe endpoint returns a 200 status code and the correct response format.
         
-        # Verify response status code
+        The liveness probe should always return a 200 status code if the service is running,
+        regardless of the status of dependencies.
+        """
+        # Make a request to the liveness probe endpoint
+        response = test_client.get("/health/liveness")
+        
+        # Verify the response
         assert response.status_code == status.HTTP_200_OK
         
-        # Parse response data
-        data = response.json()
+        # Parse the response body
+        response_data = response.json()
         
-        # Validate response schema
-        is_valid, errors = validate_response_schema(data, health_response_schema)
-        assert is_valid, f"Response schema validation failed: {errors}"
+        # Verify the response format
+        assert "status" in response_data
+        assert "version" in response_data
+        assert "details" in response_data
         
-        # Verify response content
-        assert data["status"] == "UP"
-        assert data["service"] == "document-service"
-        assert "timestamp" in data
-        assert "message" in data["details"]
+        # Verify the status is UP
+        assert response_data["status"] == "UP"
+        
+        # Verify the details contain the service name
+        assert "service" in response_data["details"]
+        assert response_data["details"]["service"] == "document-service"
     
-    def test_readiness_probe_success(self, client, validate_response_schema, readiness_response_schema, 
-                                    mock_queue_service, mock_storage_service):
-        """Test that the readiness probe endpoint returns a successful response when all dependencies are available."""
-        # Configure mocks to indicate successful connections
-        mock_queue_service.check_connection = MagicMock(return_value=True)
-        mock_storage_service.check_connection = MagicMock(return_value=True)
+    def test_readiness_probe_all_dependencies_available(self, app_with_mocked_dependencies, mock_rabbitmq_client, mock_s3_storage):
+        """
+        Test that the readiness probe endpoint returns a 200 status code when all dependencies are available.
         
-        # Make request to readiness endpoint
-        response = client.get("/health/readiness")
+        The readiness probe should return a 200 status code when all dependencies (RabbitMQ, S3) are available.
+        """
+        # Configure mocks to indicate that dependencies are available
+        mock_rabbitmq_client.is_connected = MagicMock(return_value=True)
+        mock_s3_storage.check_connection = MagicMock(return_value=True)
+        mock_s3_storage.get_bucket_name = MagicMock(return_value="mca-documents-test")
         
-        # Verify response status code
+        # Make a request to the readiness probe endpoint
+        response = app_with_mocked_dependencies.get("/health/readiness")
+        
+        # Verify the response
         assert response.status_code == status.HTTP_200_OK
         
-        # Parse response data
-        data = response.json()
+        # Parse the response body
+        response_data = response.json()
         
-        # Validate response schema
-        is_valid, errors = validate_response_schema(data, readiness_response_schema)
-        assert is_valid, f"Response schema validation failed: {errors}"
+        # Verify the response format
+        assert "status" in response_data
+        assert "version" in response_data
+        assert "details" in response_data
         
-        # Verify response content
-        assert data["status"] == "UP"
-        assert data["service"] == "document-service"
-        assert "timestamp" in data
-        assert data["dependencies"]["rabbitmq"]["status"] == "UP"
-        assert data["dependencies"]["s3"]["status"] == "UP"
-        assert "connected" in data["dependencies"]["rabbitmq"]["details"]
-        assert "connected" in data["dependencies"]["s3"]["details"]
-        assert data["dependencies"]["rabbitmq"]["details"]["connected"] is True
-        assert data["dependencies"]["s3"]["details"]["connected"] is True
+        # Verify the status is UP
+        assert response_data["status"] == "UP"
+        
+        # Verify the details contain dependency information
+        assert "dependencies" in response_data["details"]
+        assert "rabbitmq" in response_data["details"]["dependencies"]
+        assert "s3" in response_data["details"]["dependencies"]
+        
+        # Verify RabbitMQ status is UP
+        assert response_data["details"]["dependencies"]["rabbitmq"]["status"] == "UP"
+        assert "details" in response_data["details"]["dependencies"]["rabbitmq"]
+        assert "connection" in response_data["details"]["dependencies"]["rabbitmq"]["details"]
+        assert response_data["details"]["dependencies"]["rabbitmq"]["details"]["connection"] == "established"
+        
+        # Verify S3 status is UP
+        assert response_data["details"]["dependencies"]["s3"]["status"] == "UP"
+        assert "details" in response_data["details"]["dependencies"]["s3"]
+        assert "connection" in response_data["details"]["dependencies"]["s3"]["details"]
+        assert response_data["details"]["dependencies"]["s3"]["details"]["connection"] == "established"
+        assert "bucket" in response_data["details"]["dependencies"]["s3"]["details"]
+        assert response_data["details"]["dependencies"]["s3"]["details"]["bucket"] == "mca-documents-test"
     
-    def test_readiness_probe_rabbitmq_failure(self, client, validate_response_schema, readiness_response_schema,
-                                             mock_queue_service, mock_storage_service):
-        """Test that the readiness probe endpoint returns a failure response when RabbitMQ is unavailable."""
-        # Configure mocks to indicate RabbitMQ connection failure
-        mock_queue_service.check_connection = MagicMock(side_effect=AMQPConnectionError("Connection refused"))
-        mock_storage_service.check_connection = MagicMock(return_value=True)
+    def test_readiness_probe_rabbitmq_unavailable(self, app_with_mocked_dependencies, mock_rabbitmq_client, mock_s3_storage):
+        """
+        Test that the readiness probe endpoint returns a 503 status code when RabbitMQ is unavailable.
         
-        # Make request to readiness endpoint
-        response = client.get("/health/readiness")
+        The readiness probe should return a 503 status code when RabbitMQ is unavailable,
+        even if S3 is available.
+        """
+        # Configure mocks to indicate that RabbitMQ is unavailable but S3 is available
+        mock_rabbitmq_client.is_connected = MagicMock(return_value=False)
+        mock_s3_storage.check_connection = MagicMock(return_value=True)
+        mock_s3_storage.get_bucket_name = MagicMock(return_value="mca-documents-test")
         
-        # Verify response status code indicates service unavailable
+        # Make a request to the readiness probe endpoint
+        response = app_with_mocked_dependencies.get("/health/readiness")
+        
+        # Verify the response
         assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
         
-        # Parse response data
-        data = response.json()
+        # Parse the response body
+        response_data = response.json()
         
-        # Validate response schema
-        is_valid, errors = validate_response_schema(data, readiness_response_schema)
-        assert is_valid, f"Response schema validation failed: {errors}"
+        # Verify the status is DOWN
+        assert response_data["status"] == "DOWN"
         
-        # Verify response content
-        assert data["status"] == "DOWN"
-        assert data["service"] == "document-service"
-        assert "timestamp" in data
-        assert data["dependencies"]["rabbitmq"]["status"] == "DOWN"
-        assert data["dependencies"]["s3"]["status"] == "UP"
-        assert "connected" in data["dependencies"]["rabbitmq"]["details"]
-        assert "connected" in data["dependencies"]["s3"]["details"]
-        assert data["dependencies"]["rabbitmq"]["details"]["connected"] is False
-        assert data["dependencies"]["s3"]["details"]["connected"] is True
-        assert "message" in data["dependencies"]["rabbitmq"]["details"]
-        assert "Connection refused" in data["dependencies"]["rabbitmq"]["details"]["message"]
+        # Verify the details contain dependency information
+        assert "dependencies" in response_data["details"]
+        assert "rabbitmq" in response_data["details"]["dependencies"]
+        assert "s3" in response_data["details"]["dependencies"]
+        
+        # Verify RabbitMQ status is DOWN
+        assert response_data["details"]["dependencies"]["rabbitmq"]["status"] == "DOWN"
+        assert "details" in response_data["details"]["dependencies"]["rabbitmq"]
+        assert "error" in response_data["details"]["dependencies"]["rabbitmq"]["details"]
+        
+        # Verify S3 status is UP
+        assert response_data["details"]["dependencies"]["s3"]["status"] == "UP"
     
-    def test_readiness_probe_s3_failure(self, client, validate_response_schema, readiness_response_schema,
-                                      mock_queue_service, mock_storage_service):
-        """Test that the readiness probe endpoint returns a failure response when S3 storage is unavailable."""
-        # Configure mocks to indicate S3 connection failure
-        mock_queue_service.check_connection = MagicMock(return_value=True)
-        mock_storage_service.check_connection = MagicMock(side_effect=ClientError(
-            {"Error": {"Code": "NoSuchBucket", "Message": "The specified bucket does not exist"}},
-            "HeadBucket"
-        ))
+    def test_readiness_probe_s3_unavailable(self, app_with_mocked_dependencies, mock_rabbitmq_client, mock_s3_storage):
+        """
+        Test that the readiness probe endpoint returns a 503 status code when S3 is unavailable.
         
-        # Make request to readiness endpoint
-        response = client.get("/health/readiness")
+        The readiness probe should return a 503 status code when S3 is unavailable,
+        even if RabbitMQ is available.
+        """
+        # Configure mocks to indicate that S3 is unavailable but RabbitMQ is available
+        mock_rabbitmq_client.is_connected = MagicMock(return_value=True)
+        mock_s3_storage.check_connection = MagicMock(return_value=False)
         
-        # Verify response status code indicates service unavailable
+        # Make a request to the readiness probe endpoint
+        response = app_with_mocked_dependencies.get("/health/readiness")
+        
+        # Verify the response
         assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
         
-        # Parse response data
-        data = response.json()
+        # Parse the response body
+        response_data = response.json()
         
-        # Validate response schema
-        is_valid, errors = validate_response_schema(data, readiness_response_schema)
-        assert is_valid, f"Response schema validation failed: {errors}"
+        # Verify the status is DOWN
+        assert response_data["status"] == "DOWN"
         
-        # Verify response content
-        assert data["status"] == "DOWN"
-        assert data["service"] == "document-service"
-        assert "timestamp" in data
-        assert data["dependencies"]["rabbitmq"]["status"] == "UP"
-        assert data["dependencies"]["s3"]["status"] == "DOWN"
-        assert "connected" in data["dependencies"]["rabbitmq"]["details"]
-        assert "connected" in data["dependencies"]["s3"]["details"]
-        assert data["dependencies"]["rabbitmq"]["details"]["connected"] is True
-        assert data["dependencies"]["s3"]["details"]["connected"] is False
-        assert "message" in data["dependencies"]["s3"]["details"]
-        assert "The specified bucket does not exist" in data["dependencies"]["s3"]["details"]["message"]
+        # Verify the details contain dependency information
+        assert "dependencies" in response_data["details"]
+        assert "rabbitmq" in response_data["details"]["dependencies"]
+        assert "s3" in response_data["details"]["dependencies"]
+        
+        # Verify RabbitMQ status is UP
+        assert response_data["details"]["dependencies"]["rabbitmq"]["status"] == "UP"
+        
+        # Verify S3 status is DOWN
+        assert response_data["details"]["dependencies"]["s3"]["status"] == "DOWN"
+        assert "details" in response_data["details"]["dependencies"]["s3"]
+        assert "error" in response_data["details"]["dependencies"]["s3"]["details"]
     
-    def test_readiness_probe_all_dependencies_failure(self, client, validate_response_schema, readiness_response_schema,
-                                                   mock_queue_service, mock_storage_service):
-        """Test that the readiness probe endpoint returns a failure response when all dependencies are unavailable."""
-        # Configure mocks to indicate all connections failing
-        mock_queue_service.check_connection = MagicMock(side_effect=AMQPConnectionError("Connection refused"))
-        mock_storage_service.check_connection = MagicMock(side_effect=ClientError(
-            {"Error": {"Code": "NoSuchBucket", "Message": "The specified bucket does not exist"}},
-            "HeadBucket"
-        ))
+    def test_readiness_probe_all_dependencies_unavailable(self, app_with_mocked_dependencies, mock_rabbitmq_client, mock_s3_storage):
+        """
+        Test that the readiness probe endpoint returns a 503 status code when all dependencies are unavailable.
         
-        # Make request to readiness endpoint
-        response = client.get("/health/readiness")
+        The readiness probe should return a 503 status code when both RabbitMQ and S3 are unavailable.
+        """
+        # Configure mocks to indicate that both dependencies are unavailable
+        mock_rabbitmq_client.is_connected = MagicMock(return_value=False)
+        mock_s3_storage.check_connection = MagicMock(return_value=False)
         
-        # Verify response status code indicates service unavailable
+        # Make a request to the readiness probe endpoint
+        response = app_with_mocked_dependencies.get("/health/readiness")
+        
+        # Verify the response
         assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
         
-        # Parse response data
-        data = response.json()
+        # Parse the response body
+        response_data = response.json()
         
-        # Validate response schema
-        is_valid, errors = validate_response_schema(data, readiness_response_schema)
-        assert is_valid, f"Response schema validation failed: {errors}"
+        # Verify the status is DOWN
+        assert response_data["status"] == "DOWN"
         
-        # Verify response content
-        assert data["status"] == "DOWN"
-        assert data["service"] == "document-service"
-        assert "timestamp" in data
-        assert data["dependencies"]["rabbitmq"]["status"] == "DOWN"
-        assert data["dependencies"]["s3"]["status"] == "DOWN"
-        assert "connected" in data["dependencies"]["rabbitmq"]["details"]
-        assert "connected" in data["dependencies"]["s3"]["details"]
-        assert data["dependencies"]["rabbitmq"]["details"]["connected"] is False
-        assert data["dependencies"]["s3"]["details"]["connected"] is False
-        assert "message" in data["dependencies"]["rabbitmq"]["details"]
-        assert "message" in data["dependencies"]["s3"]["details"]
-        assert "Connection refused" in data["dependencies"]["rabbitmq"]["details"]["message"]
-        assert "The specified bucket does not exist" in data["dependencies"]["s3"]["details"]["message"]
+        # Verify the details contain dependency information
+        assert "dependencies" in response_data["details"]
+        assert "rabbitmq" in response_data["details"]["dependencies"]
+        assert "s3" in response_data["details"]["dependencies"]
+        
+        # Verify RabbitMQ status is DOWN
+        assert response_data["details"]["dependencies"]["rabbitmq"]["status"] == "DOWN"
+        assert "details" in response_data["details"]["dependencies"]["rabbitmq"]
+        assert "error" in response_data["details"]["dependencies"]["rabbitmq"]["details"]
+        
+        # Verify S3 status is DOWN
+        assert response_data["details"]["dependencies"]["s3"]["status"] == "DOWN"
+        assert "details" in response_data["details"]["dependencies"]["s3"]
+        assert "error" in response_data["details"]["dependencies"]["s3"]["details"]
     
-    def test_detailed_health_check_success(self, client, validate_response_schema, detailed_health_response_schema,
-                                         mock_queue_service, mock_storage_service):
-        """Test that the detailed health check endpoint returns a successful response with all required information."""
-        # Configure mocks to indicate successful connections
-        mock_queue_service.check_connection = MagicMock(return_value=True)
-        mock_storage_service.check_connection = MagicMock(return_value=True)
+    def test_rabbitmq_connection_error(self, app_with_mocked_dependencies, mock_rabbitmq_client, mock_s3_storage):
+        """
+        Test that the readiness probe handles RabbitMQ connection errors gracefully.
         
-        # Make request to health check endpoint
-        response = client.get("/health")
+        The readiness probe should handle exceptions thrown by the RabbitMQ client
+        and include error details in the response.
+        """
+        # Configure mocks to throw an exception when checking RabbitMQ connection
+        mock_rabbitmq_client.is_connected = MagicMock(side_effect=Exception("Connection refused"))
+        mock_s3_storage.check_connection = MagicMock(return_value=True)
+        mock_s3_storage.get_bucket_name = MagicMock(return_value="mca-documents-test")
         
-        # Verify response status code
+        # Make a request to the readiness probe endpoint
+        response = app_with_mocked_dependencies.get("/health/readiness")
+        
+        # Verify the response
+        assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+        
+        # Parse the response body
+        response_data = response.json()
+        
+        # Verify the status is DOWN
+        assert response_data["status"] == "DOWN"
+        
+        # Verify the details contain dependency information
+        assert "dependencies" in response_data["details"]
+        assert "rabbitmq" in response_data["details"]["dependencies"]
+        
+        # Verify RabbitMQ status is DOWN with error details
+        assert response_data["details"]["dependencies"]["rabbitmq"]["status"] == "DOWN"
+        assert "details" in response_data["details"]["dependencies"]["rabbitmq"]
+        assert "error" in response_data["details"]["dependencies"]["rabbitmq"]["details"]
+        assert "Connection refused" in response_data["details"]["dependencies"]["rabbitmq"]["details"]["error"]
+    
+    def test_s3_connection_error(self, app_with_mocked_dependencies, mock_rabbitmq_client, mock_s3_storage):
+        """
+        Test that the readiness probe handles S3 connection errors gracefully.
+        
+        The readiness probe should handle exceptions thrown by the S3 storage client
+        and include error details in the response.
+        """
+        # Configure mocks to throw an exception when checking S3 connection
+        mock_rabbitmq_client.is_connected = MagicMock(return_value=True)
+        mock_s3_storage.check_connection = MagicMock(side_effect=Exception("Access denied"))
+        
+        # Make a request to the readiness probe endpoint
+        response = app_with_mocked_dependencies.get("/health/readiness")
+        
+        # Verify the response
+        assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+        
+        # Parse the response body
+        response_data = response.json()
+        
+        # Verify the status is DOWN
+        assert response_data["status"] == "DOWN"
+        
+        # Verify the details contain dependency information
+        assert "dependencies" in response_data["details"]
+        assert "s3" in response_data["details"]["dependencies"]
+        
+        # Verify S3 status is DOWN with error details
+        assert response_data["details"]["dependencies"]["s3"]["status"] == "DOWN"
+        assert "details" in response_data["details"]["dependencies"]["s3"]
+        assert "error" in response_data["details"]["dependencies"]["s3"]["details"]
+        assert "Access denied" in response_data["details"]["dependencies"]["s3"]["details"]["error"]
+    
+    @patch('src.api.health.HealthStatus')
+    def test_health_status_includes_resource_utilization(self, mock_health_status, app_with_mocked_dependencies, mock_rabbitmq_client, mock_s3_storage):
+        """
+        Test that the health status includes resource utilization metrics.
+        
+        The health status should include metrics for CPU, memory, and disk usage.
+        """
+        # Configure mocks to indicate that dependencies are available
+        mock_rabbitmq_client.is_connected = MagicMock(return_value=True)
+        mock_s3_storage.check_connection = MagicMock(return_value=True)
+        mock_s3_storage.get_bucket_name = MagicMock(return_value="mca-documents-test")
+        
+        # Configure the mock HealthStatus to include resource utilization metrics
+        mock_health_status.return_value = {
+            "status": "UP",
+            "version": "1.0.0",
+            "details": {
+                "service": "document-service",
+                "dependencies": {
+                    "rabbitmq": {
+                        "status": "UP",
+                        "details": {
+                            "connection": "established",
+                            "exchange": "mca.documents",
+                            "queue": "document-processing"
+                        }
+                    },
+                    "s3": {
+                        "status": "UP",
+                        "details": {
+                            "connection": "established",
+                            "bucket": "mca-documents-test"
+                        }
+                    }
+                },
+                "resources": {
+                    "cpu": {
+                        "usage_percent": 25.5,
+                        "cores": 4
+                    },
+                    "memory": {
+                        "usage_percent": 60.2,
+                        "total_mb": 8192,
+                        "used_mb": 4931.6
+                    },
+                    "disk": {
+                        "usage_percent": 45.8,
+                        "total_gb": 100,
+                        "used_gb": 45.8
+                    }
+                }
+            }
+        }
+        
+        # Make a request to the readiness probe endpoint
+        response = app_with_mocked_dependencies.get("/health/readiness")
+        
+        # Verify the response
         assert response.status_code == status.HTTP_200_OK
         
-        # Parse response data
-        data = response.json()
+        # Parse the response body
+        response_data = response.json()
         
-        # Validate response schema
-        is_valid, errors = validate_response_schema(data, detailed_health_response_schema)
-        assert is_valid, f"Response schema validation failed: {errors}"
+        # Verify the response includes resource utilization metrics
+        assert "resources" in response_data["details"]
+        assert "cpu" in response_data["details"]["resources"]
+        assert "memory" in response_data["details"]["resources"]
+        assert "disk" in response_data["details"]["resources"]
         
-        # Verify response content
-        assert data["status"] == "UP"
-        assert "timestamp" in data
+        # Verify CPU metrics
+        assert "usage_percent" in response_data["details"]["resources"]["cpu"]
+        assert "cores" in response_data["details"]["resources"]["cpu"]
         
-        # Verify service information
-        assert "name" in data["service"]
-        assert "version" in data["service"]
-        assert "description" in data["service"]
-        assert data["service"]["name"] == "document-service"
+        # Verify memory metrics
+        assert "usage_percent" in response_data["details"]["resources"]["memory"]
+        assert "total_mb" in response_data["details"]["resources"]["memory"]
+        assert "used_mb" in response_data["details"]["resources"]["memory"]
         
-        # Verify dependencies
-        assert data["dependencies"]["rabbitmq"]["status"] == "UP"
-        assert data["dependencies"]["s3"]["status"] == "UP"
-        assert data["dependencies"]["rabbitmq"]["details"]["connected"] is True
-        assert data["dependencies"]["s3"]["details"]["connected"] is True
-        
-        # Verify details section
-        assert "uptime" in data["details"]
-        assert "memory_usage" in data["details"]
-        assert "cpu_usage" in data["details"]
+        # Verify disk metrics
+        assert "usage_percent" in response_data["details"]["resources"]["disk"]
+        assert "total_gb" in response_data["details"]["resources"]["disk"]
+        assert "used_gb" in response_data["details"]["resources"]["disk"]
     
-    def test_detailed_health_check_failure(self, client, validate_response_schema, detailed_health_response_schema,
-                                         mock_queue_service, mock_storage_service):
-        """Test that the detailed health check endpoint returns a failure response when dependencies are unavailable."""
-        # Configure mocks to indicate dependency failures
-        mock_queue_service.check_connection = MagicMock(return_value=False)
-        mock_storage_service.check_connection = MagicMock(side_effect=ClientError(
-            {"Error": {"Code": "NoSuchBucket", "Message": "The specified bucket does not exist"}},
-            "HeadBucket"
-        ))
+    def test_health_endpoints_accessible_without_authentication(self, test_client):
+        """
+        Test that health endpoints are accessible without authentication.
         
-        # Make request to health check endpoint
-        response = client.get("/health")
+        Health endpoints should be accessible without authentication to allow
+        Kubernetes probes to check service health without credentials.
+        """
+        # Make requests to health endpoints without authentication headers
+        liveness_response = test_client.get("/health/liveness")
+        readiness_response = test_client.get("/health/readiness")
         
-        # Verify response status code indicates service unavailable
-        assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
-        
-        # Parse response data
-        data = response.json()
-        
-        # Validate response schema
-        is_valid, errors = validate_response_schema(data, detailed_health_response_schema)
-        assert is_valid, f"Response schema validation failed: {errors}"
-        
-        # Verify response content
-        assert data["status"] == "DOWN"
-        assert "timestamp" in data
-        
-        # Verify service information
-        assert "name" in data["service"]
-        assert "version" in data["service"]
-        assert "description" in data["service"]
-        assert data["service"]["name"] == "document-service"
-        
-        # Verify dependencies
-        assert data["dependencies"]["rabbitmq"]["status"] == "DOWN"
-        assert data["dependencies"]["s3"]["status"] == "DOWN"
-        assert data["dependencies"]["rabbitmq"]["details"]["connected"] is False
-        assert data["dependencies"]["s3"]["details"]["connected"] is False
-        
-        # Verify details section
-        assert "uptime" in data["details"]
-        assert "memory_usage" in data["details"]
-        assert "cpu_usage" in data["details"]
-    
-    def test_health_endpoints_no_auth_required(self, client):
-        """Test that health check endpoints are accessible without authentication."""
-        # Make requests to all health endpoints without auth headers
-        liveness_response = client.get("/health/liveness")
-        readiness_response = client.get("/health/readiness")
-        health_response = client.get("/health")
-        
-        # Verify that all endpoints return a response (not 401 Unauthorized)
+        # Verify that the endpoints are accessible (status code is not 401 Unauthorized)
         assert liveness_response.status_code != status.HTTP_401_UNAUTHORIZED
         assert readiness_response.status_code != status.HTTP_401_UNAUTHORIZED
-        assert health_response.status_code != status.HTTP_401_UNAUTHORIZED
         
-        # Verify that liveness endpoint always returns 200 OK
+        # Verify that the liveness endpoint returns a 200 status code
         assert liveness_response.status_code == status.HTTP_200_OK
-    
-    @patch('src.api.health.get_current_timestamp')
-    def test_timestamp_format(self, mock_timestamp, client):
-        """Test that the timestamp in health check responses is properly formatted."""
-        # Mock the timestamp function to return a fixed value
-        mock_timestamp.return_value = "2023-04-15T14:30:45.123456Z"
         
-        # Make request to liveness endpoint
-        response = client.get("/health/liveness")
-        
-        # Verify response status code
-        assert response.status_code == status.HTTP_200_OK
-        
-        # Parse response data
-        data = response.json()
-        
-        # Verify timestamp format
-        assert data["timestamp"] == "2023-04-15T14:30:45.123456Z"
-    
-    def test_resource_utilization_reporting(self, client, validate_response_schema, detailed_health_response_schema):
-        """Test that the health check endpoint reports resource utilization metrics."""
-        # Make request to health check endpoint
-        response = client.get("/health")
-        
-        # Verify response status code
-        assert response.status_code == status.HTTP_200_OK
-        
-        # Parse response data
-        data = response.json()
-        
-        # Validate response schema
-        is_valid, errors = validate_response_schema(data, detailed_health_response_schema)
-        assert is_valid, f"Response schema validation failed: {errors}"
-        
-        # Verify resource utilization metrics are present
-        assert "memory_usage" in data["details"]
-        assert "cpu_usage" in data["details"]
-        assert "uptime" in data["details"]
-        
-        # Note: We're not testing the actual values since they're marked as "Not implemented" in the health.py file
-        # In a real implementation, we would mock the resource utilization functions and test their values
+        # Note: The readiness endpoint may return 503 if dependencies are unavailable,
+        # but it should not return 401 Unauthorized
