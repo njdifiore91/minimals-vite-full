@@ -2,164 +2,185 @@
 
 ## Overview
 
-This directory contains the configuration files for the Kong API Gateway (version 3.5.0), which serves as the unified entry point for all API requests in the Merchant Cash Advance (MCA) Application Processing System. The gateway provides consistent security controls, request routing, and monitoring across all microservices.
+This directory contains the configuration files for the Kong API Gateway (version 3.5.0), which serves as the unified entry point for all API requests in the Merchant Cash Advance (MCA) Application Processing System. The gateway provides consistent security controls, request routing, and monitoring across all backend microservices.
 
-## Gateway Role in System Architecture
+## Role in System Architecture
 
-The Kong API Gateway serves as the primary security boundary for all external requests, implementing multiple layers of protection:
+The Kong API Gateway serves as:
 
-- **Unified Entry Point**: All frontend requests pass through the gateway before reaching backend services
-- **Security Controls**: Centralized authentication, authorization, and rate limiting
-- **Request Routing**: Dynamic routing to appropriate microservices
-- **Monitoring**: Request logging and performance tracking
-- **Cross-Cutting Concerns**: CORS, request/response transformation, and error handling
+- **Unified Entry Point**: Single access point for all frontend client requests
+- **Security Boundary**: Primary security layer implementing multiple protection mechanisms
+- **Request Router**: Directs traffic to appropriate backend microservices
+- **Cross-Cutting Concerns Handler**: Manages authentication, rate limiting, and monitoring
 
 ## Configuration Structure
 
-### Main Configuration Files
+This directory uses a declarative configuration approach for version control while supporting database-backed deployment for dynamic updates.
 
-- **kong.yml**: The primary declarative configuration file that defines all services, routes, plugins, and consumers. This file serves as the single source of truth for the gateway's behavior.
+### File Organization
 
-### JWT Authentication Files
+```
+config/
+├── README.md                 # This documentation file
+├── kong.yml                  # Main declarative configuration file
+├── routes/                   # Route-specific configurations
+│   ├── applications.yml      # Application API routes
+│   ├── documents.yml         # Document API routes
+│   └── webhooks.yml          # Webhook configuration routes
+├── plugins/                  # Plugin configurations
+│   ├── authentication.yml    # JWT authentication settings
+│   ├── rate-limiting.yml     # Rate limiting policies
+│   ├── cors.yml              # CORS configuration
+│   └── security.yml          # Additional security plugins
+└── certificates/            # TLS certificates (referenced only, not stored in repo)
+```
 
-The `jwt-keys/` directory contains files related to JWT authentication:
+### Key Configuration Files
 
-- **jwt_config.json**: Configuration for the JWT plugin including validation parameters
-- **README.md**: Documentation for JWT key management
-- **key_rotation.md**: Procedures for rotating JWT signing keys
+- **kong.yml**: The main configuration file that defines services, routes, and global plugins. This file serves as the entry point for Kong's declarative configuration.
+
+- **routes/*.yml**: Individual route configurations for different API groups. These files define the paths, methods, and service mappings for each API endpoint.
+
+- **plugins/*.yml**: Plugin-specific configurations that implement security features, monitoring, and other cross-cutting concerns.
 
 ## Deployment Process
 
-The Kong API Gateway is deployed using a hybrid approach:
+The Kong API Gateway is deployed using a database-backed configuration approach, which allows for dynamic updates while maintaining version control through declarative configuration files.
 
-1. **Database-Backed Configuration**: The gateway uses a PostgreSQL database to store its runtime configuration, allowing for dynamic updates through the Admin API.
+### Initial Deployment
 
-2. **Declarative Configuration**: The `kong.yml` file provides a version-controlled representation of the gateway configuration that can be applied using the `kong config` commands.
-
-### Deployment Steps
-
-1. **Initial Setup**:
+1. **Database Initialization**:
    ```bash
-   # Apply the declarative configuration
-   kong config db_import ./kong.yml
+   kong migrations bootstrap
    ```
 
-2. **Configuration Updates**:
+2. **Configuration Loading**:
    ```bash
-   # Update the configuration
-   kong config db_import ./kong.yml
+   kong config db_import kong.yml
    ```
 
-3. **Validation**:
+3. **Gateway Start**:
    ```bash
-   # Validate configuration before applying
-   kong config parse ./kong.yml
+   kong start
    ```
 
-## Security Plugin Configurations
+### Configuration Updates
 
-The gateway implements several security plugins:
+1. **Update Configuration Files**: Modify the relevant YAML files in this directory
+
+2. **Validate Configuration**:
+   ```bash
+   kong config parse kong.yml
+   ```
+
+3. **Apply Changes**:
+   ```bash
+   kong config db_import kong.yml
+   ```
+
+4. **Verify Deployment**:
+   ```bash
+   kong config db_export
+   ```
+
+## Security Features
+
+The Kong API Gateway implements multiple layers of security:
 
 ### JWT Authentication
 
-The JWT plugin validates tokens using RS256 asymmetric key signing with the following parameters:
-- Algorithm: RS256
-- Token expiry: 60 minutes
-- Refresh token: 7 days
-
-JWT validation includes token expiration, issuer validation, and audience verification to prevent token forgery or replay attacks.
+- **Algorithm**: RS256 (asymmetric key signing)
+- **Validation**: Token expiration, issuer validation, and audience verification
+- **Key Rotation**: Automatic key rotation support
 
 ### Rate Limiting
 
-Tiered rate limiting is enforced with the following default limits:
-- Authenticated users: 60 requests per minute
-- Unauthenticated requests: 10 requests per minute
-
-Rate limits are stored in Redis to ensure consistent enforcement across multiple gateway instances.
+- **Authenticated Users**: 60 requests per minute
+- **Unauthenticated Requests**: 10 requests per minute
+- **Administrative Endpoints**: Custom limits based on endpoint sensitivity
 
 ### CORS Policies
 
-Strict Cross-Origin Resource Sharing policies are configured with explicit allowed origins, methods, and headers. Pre-flight request caching is optimized for performance while maintaining security boundaries.
+- **Allowed Origins**: Explicitly configured for frontend domains
+- **Allowed Methods**: Restricted to required HTTP methods
+- **Allowed Headers**: Limited to necessary request headers
+- **Pre-flight Caching**: Optimized for performance while maintaining security
 
-### IP Restriction
+### Request Transformation
 
-Configurable IP-based access controls for administrative endpoints with allowlist functionality and audit logging of blocked requests.
+- **Security Headers**: Automatic addition of security headers
+- **Request Sanitization**: Removal of potentially harmful metadata
 
-## Updating Configurations
+### IP Filtering
 
-### Making Configuration Changes
+- **Administrative Endpoints**: Restricted by IP allowlists
+- **Blocked Request Logging**: Audit logging of denied access attempts
 
-1. **Edit the declarative configuration file**:
-   - Modify `kong.yml` to add/update services, routes, or plugins
-   - Follow the Kong declarative configuration format (https://docs.konghq.com/gateway/latest/reference/db-less-and-declarative-config/)
+## Management Guidelines
 
-2. **Validate the configuration**:
-   ```bash
-   kong config parse ./kong.yml
-   ```
+### Adding New Routes
 
-3. **Apply the configuration**:
-   ```bash
-   kong config db_import ./kong.yml
-   ```
+1. Create a new route configuration in the `routes/` directory or update an existing one
+2. Define the path, methods, and target service
+3. Specify any route-specific plugins
+4. Validate and import the configuration
 
-4. **Verify the changes**:
-   ```bash
-   # List all services
-   curl http://localhost:8001/services
-   
-   # List all routes
-   curl http://localhost:8001/routes
-   
-   # List all plugins
-   curl http://localhost:8001/plugins
-   ```
+### Configuring Plugins
 
-### JWT Key Rotation
+1. Modify the relevant plugin configuration in the `plugins/` directory
+2. For global plugins, update the `kong.yml` file
+3. For route-specific plugins, update the appropriate route configuration
+4. Validate and import the configuration
 
-For JWT key rotation procedures, refer to the `jwt-keys/key_rotation.md` document, which provides detailed steps for both scheduled and emergency key rotations.
+### Monitoring and Logging
+
+- Kong Admin API provides access to gateway metrics and status
+- Logs are forwarded to the centralized logging system
+- Prometheus metrics are exposed for monitoring dashboards
 
 ## Troubleshooting
 
 ### Common Issues
 
-1. **JWT Authentication Failures**:
-   - Check token expiration
-   - Verify the correct public key is being used
-   - Ensure the token contains the required claims (iss, aud, exp)
+1. **Authentication Failures**:
+   - Verify JWT configuration in `plugins/authentication.yml`
+   - Check public key configuration
+   - Validate token format and claims
 
-2. **Rate Limiting Issues**:
-   - Verify Redis connection
-   - Check rate limit configuration
-   - Examine rate limit headers in responses
+2. **Rate Limiting Problems**:
+   - Review rate limit settings in `plugins/rate-limiting.yml`
+   - Check Redis configuration for distributed rate limiting
+   - Verify consumer identification
 
-3. **CORS Errors**:
-   - Confirm the origin is in the allowed list
-   - Check that the required methods and headers are permitted
-   - Verify pre-flight requests are being handled correctly
+3. **Routing Errors**:
+   - Confirm route definitions in `routes/` directory
+   - Check service availability
+   - Verify path and method configurations
 
-4. **Routing Problems**:
-   - Validate route path patterns
-   - Check service host and port configurations
-   - Examine route priorities for conflicts
+4. **Plugin Conflicts**:
+   - Review plugin execution order
+   - Check for conflicting plugin configurations
+   - Validate plugin compatibility
 
-### Logs and Monitoring
+### Diagnostic Commands
 
-Kong logs are available at the following locations:
+```bash
+# Check Kong status
+kong health
 
-- **Access Logs**: `/var/log/kong/access.log`
-- **Error Logs**: `/var/log/kong/error.log`
+# List all routes
+kong config db_export | grep -A 10 routes:
 
-For detailed troubleshooting, increase the log level in `kong.conf`:
+# List all services
+kong config db_export | grep -A 10 services:
 
-```
-log_level = debug  # Options: debug, info, notice, warn, error, crit
+# Check specific plugin configuration
+kong config db_export | grep -A 20 "name: jwt"
 ```
 
 ## References
 
-- [Kong Documentation](https://docs.konghq.com/gateway/latest/)
-- [Kong Declarative Configuration Format](https://docs.konghq.com/gateway/latest/reference/db-less-and-declarative-config/)
-- [Kong JWT Plugin](https://docs.konghq.com/hub/kong-inc/jwt/)
-- [Kong Rate Limiting Plugin](https://docs.konghq.com/hub/kong-inc/rate-limiting/)
-- [Kong CORS Plugin](https://docs.konghq.com/hub/kong-inc/cors/)
+- [Kong Documentation](https://docs.konghq.com/)
+- [Kong Plugins](https://docs.konghq.com/hub/)
+- [Declarative Configuration Format](https://docs.konghq.com/gateway/latest/reference/db-less-and-declarative-config/)
+- [Kong Admin API](https://docs.konghq.com/gateway/latest/admin-api/)
