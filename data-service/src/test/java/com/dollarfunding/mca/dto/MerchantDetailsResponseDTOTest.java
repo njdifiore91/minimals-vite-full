@@ -1,463 +1,439 @@
 package com.dollarfunding.mca.dto;
 
+import com.dollarfunding.mca.entity.Application;
 import com.dollarfunding.mca.entity.MerchantDetails;
-import com.dollarfunding.mca.util.JsonUtil;
+import com.dollarfunding.mca.util.EncryptionUtil;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.NullAndEmptySource;
-import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.Mock;
+import org.mockito.MockitoAnnotations;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 /**
- * Test class for {@link MerchantDetailsResponseDTO} that validates the merchant details structure,
- * JSON serialization/deserialization, and entity conversion.
+ * Test class for {@link MerchantDetailsResponseDTO}.
  * 
- * This test suite ensures that the DTO properly represents merchant information,
- * handles sensitive PII data appropriately, and formats address and financial
- * information consistently.
+ * This class tests the functionality of the MerchantDetailsResponseDTO, including:
+ * - Basic DTO functionality (getters, setters, constructors)
+ * - JSON serialization/deserialization
+ * - Conversion from entity objects
+ * - PII data masking
+ * - Address and financial information formatting
  */
-@DisplayName("MerchantDetailsResponseDTO Tests")
-class MerchantDetailsResponseDTOTest {
+public class MerchantDetailsResponseDTOTest {
 
     private ObjectMapper objectMapper;
-    private MerchantDetails mockMerchantDetails;
-    private Map<String, String> testAddress;
+    private MerchantDetails merchantDetails;
+    private Application application;
+    private LocalDateTime testDateTime;
+    
+    @Mock
+    private EncryptionUtil encryptionUtil;
 
     @BeforeEach
     void setUp() {
-        // Initialize ObjectMapper
-        objectMapper = JsonUtil.getObjectMapper();
+        // Initialize Mockito annotations
+        MockitoAnnotations.openMocks(this);
         
-        // Create test address
-        testAddress = new HashMap<>();
-        testAddress.put("street", "123 Main St");
-        testAddress.put("city", "New York");
-        testAddress.put("state", "NY");
-        testAddress.put("zip", "10001");
-        testAddress.put("country", "USA");
+        // Initialize ObjectMapper for JSON serialization/deserialization tests
+        objectMapper = new ObjectMapper();
+        objectMapper.findAndRegisterModules(); // For LocalDateTime serialization
+
+        // Initialize test date time
+        testDateTime = LocalDateTime.of(2023, 1, 15, 10, 30, 0);
+
+        // Create a test Application entity
+        application = new Application();
+        application.setId(UUID.randomUUID());
+
+        // Create a test MerchantDetails entity with all fields populated
+        merchantDetails = new MerchantDetails();
+        merchantDetails.setId(UUID.randomUUID());
+        merchantDetails.setApplication(application);
+        merchantDetails.setLegalName("Acme Corporation");
+        merchantDetails.setDbaName("Acme Corp");
+        merchantDetails.setEin("12-3456789");
+        merchantDetails.setEncryptionUtil(encryptionUtil); // Set the mock encryption util
         
-        // Create mock MerchantDetails entity
-        mockMerchantDetails = mock(MerchantDetails.class);
-        when(mockMerchantDetails.getId()).thenReturn(1L);
-        when(mockMerchantDetails.getApplicationId()).thenReturn(100L);
-        when(mockMerchantDetails.getLegalName()).thenReturn("Acme Corporation");
-        when(mockMerchantDetails.getDbaName()).thenReturn("Acme Corp");
-        when(mockMerchantDetails.getEin()).thenReturn("12-3456789");
-        when(mockMerchantDetails.getAddress()).thenReturn(testAddress);
-        when(mockMerchantDetails.getIndustry()).thenReturn("Technology");
-        when(mockMerchantDetails.getRevenue()).thenReturn(new BigDecimal("1000000.00"));
+        // Set up address
+        Map<String, Object> address = new HashMap<>();
+        address.put("street", "123 Main Street");
+        address.put("city", "New York");
+        address.put("state", "NY");
+        address.put("zip", "10001");
+        address.put("country", "USA");
+        merchantDetails.setAddress(address);
+        
+        merchantDetails.setIndustry("Technology");
+        merchantDetails.setRevenue(new BigDecimal("1000000.00"));
+        
+        // Set up created_at and updated_at timestamps
+        merchantDetails.setCreatedAt(testDateTime);
+        merchantDetails.setUpdatedAt(testDateTime);
+        
+        // Set up mock behavior for encryption util
+        // When decrypting, return the original value (simulating decryption)
+        when(encryptionUtil.decrypt("Acme Corporation")).thenReturn("Acme Corporation");
+        when(encryptionUtil.decrypt("Acme Corp")).thenReturn("Acme Corp");
+        when(encryptionUtil.decrypt("12-3456789")).thenReturn("12-3456789");
     }
 
-    @Nested
-    @DisplayName("PII Data Masking Tests")
-    class PiiDataMaskingTests {
+    @Test
+    @DisplayName("Test basic DTO functionality")
+    void testBasicDtoFunctionality() {
+        // Create a DTO using builder pattern
+        MerchantDetailsResponseDTO dto = MerchantDetailsResponseDTO.builder()
+                .id(1L)
+                .applicationId(2L)
+                .legalName("Test Company")
+                .dbaName("Test Co")
+                .ein("98-7654321")
+                .address(MerchantDetailsResponseDTO.AddressDTO.builder()
+                        .street("456 Elm Street")
+                        .city("Chicago")
+                        .state("IL")
+                        .zipCode("60601")
+                        .country("USA")
+                        .build())
+                .industry("Finance")
+                .revenue(new BigDecimal("500000.00"))
+                .createdAt(testDateTime)
+                .updatedAt(testDateTime)
+                .build();
 
-        @Test
-        @DisplayName("Legal name should be properly masked")
-        void legalNameShouldBeProperlyMasked() {
-            // When
-            MerchantDetailsResponseDTO dto = new MerchantDetailsResponseDTO(mockMerchantDetails);
-            
-            // Then
-            String maskedName = dto.getLegalName();
-            assertNotNull(maskedName, "Masked legal name should not be null");
-            assertEquals("A****************n", maskedName, "Legal name should be masked with first and last characters visible");
-        }
+        // Verify all fields are set correctly
+        assertEquals(1L, dto.getId());
+        assertEquals(2L, dto.getApplicationId());
+        assertEquals("Test Company", dto.getLegalName());
+        assertEquals("Test Co", dto.getDbaName());
+        assertEquals("98-7654321", dto.getEin());
+        assertNotNull(dto.getAddress());
+        assertEquals("456 Elm Street", dto.getAddress().getStreet());
+        assertEquals("Chicago", dto.getAddress().getCity());
+        assertEquals("IL", dto.getAddress().getState());
+        assertEquals("60601", dto.getAddress().getZipCode());
+        assertEquals("USA", dto.getAddress().getCountry());
+        assertEquals("Finance", dto.getIndustry());
+        assertEquals(new BigDecimal("500000.00"), dto.getRevenue());
+        assertEquals(testDateTime, dto.getCreatedAt());
+        assertEquals(testDateTime, dto.getUpdatedAt());
 
-        @Test
-        @DisplayName("DBA name should be properly masked")
-        void dbaNameShouldBeProperlyMasked() {
-            // When
-            MerchantDetailsResponseDTO dto = new MerchantDetailsResponseDTO(mockMerchantDetails);
-            
-            // Then
-            String maskedName = dto.getDbaName();
-            assertNotNull(maskedName, "Masked DBA name should not be null");
-            assertEquals("A*******p", maskedName, "DBA name should be masked with first and last characters visible");
-        }
-
-        @Test
-        @DisplayName("EIN should be properly masked")
-        void einShouldBeProperlyMasked() {
-            // When
-            MerchantDetailsResponseDTO dto = new MerchantDetailsResponseDTO(mockMerchantDetails);
-            
-            // Then
-            String maskedEin = dto.getEin();
-            assertNotNull(maskedEin, "Masked EIN should not be null");
-            assertEquals("**-***6789", maskedEin, "EIN should be masked with only last 4 digits visible");
-        }
-
-        @Test
-        @DisplayName("EIN without hyphen should be properly masked")
-        void einWithoutHyphenShouldBeProperlyMasked() {
-            // Given
-            when(mockMerchantDetails.getEin()).thenReturn("123456789");
-            
-            // When
-            MerchantDetailsResponseDTO dto = new MerchantDetailsResponseDTO(mockMerchantDetails);
-            
-            // Then
-            String maskedEin = dto.getEin();
-            assertNotNull(maskedEin, "Masked EIN should not be null");
-            assertEquals("*****6789", maskedEin, "EIN without hyphen should be masked with only last 4 digits visible");
-        }
-
-        @ParameterizedTest
-        @NullAndEmptySource
-        @DisplayName("Null or empty legal name should remain unchanged")
-        void nullOrEmptyLegalNameShouldRemainUnchanged(String legalName) {
-            // Given
-            when(mockMerchantDetails.getLegalName()).thenReturn(legalName);
-            
-            // When
-            MerchantDetailsResponseDTO dto = new MerchantDetailsResponseDTO(mockMerchantDetails);
-            
-            // Then
-            assertEquals(legalName, dto.getLegalName(), "Null or empty legal name should remain unchanged");
-        }
-
-        @ParameterizedTest
-        @NullAndEmptySource
-        @DisplayName("Null or empty DBA name should remain unchanged")
-        void nullOrEmptyDbaNameShouldRemainUnchanged(String dbaName) {
-            // Given
-            when(mockMerchantDetails.getDbaName()).thenReturn(dbaName);
-            
-            // When
-            MerchantDetailsResponseDTO dto = new MerchantDetailsResponseDTO(mockMerchantDetails);
-            
-            // Then
-            assertEquals(dbaName, dto.getDbaName(), "Null or empty DBA name should remain unchanged");
-        }
-
-        @ParameterizedTest
-        @NullAndEmptySource
-        @DisplayName("Null or empty EIN should remain unchanged")
-        void nullOrEmptyEinShouldRemainUnchanged(String ein) {
-            // Given
-            when(mockMerchantDetails.getEin()).thenReturn(ein);
-            
-            // When
-            MerchantDetailsResponseDTO dto = new MerchantDetailsResponseDTO(mockMerchantDetails);
-            
-            // Then
-            assertEquals(ein, dto.getEin(), "Null or empty EIN should remain unchanged");
-        }
-
-        @ParameterizedTest
-        @ValueSource(strings = {"A", "AB"})
-        @DisplayName("Short legal name (2 chars or less) should remain unchanged")
-        void shortLegalNameShouldRemainUnchanged(String legalName) {
-            // Given
-            when(mockMerchantDetails.getLegalName()).thenReturn(legalName);
-            
-            // When
-            MerchantDetailsResponseDTO dto = new MerchantDetailsResponseDTO(mockMerchantDetails);
-            
-            // Then
-            assertEquals(legalName, dto.getLegalName(), "Short legal name should remain unchanged");
-        }
-
-        @ParameterizedTest
-        @ValueSource(strings = {"A", "AB"})
-        @DisplayName("Short DBA name (2 chars or less) should remain unchanged")
-        void shortDbaNameShouldRemainUnchanged(String dbaName) {
-            // Given
-            when(mockMerchantDetails.getDbaName()).thenReturn(dbaName);
-            
-            // When
-            MerchantDetailsResponseDTO dto = new MerchantDetailsResponseDTO(mockMerchantDetails);
-            
-            // Then
-            assertEquals(dbaName, dto.getDbaName(), "Short DBA name should remain unchanged");
-        }
-
-        @ParameterizedTest
-        @ValueSource(strings = {"123", "12-3", "1-23"})
-        @DisplayName("Short or invalid format EIN should remain unchanged")
-        void shortOrInvalidFormatEinShouldRemainUnchanged(String ein) {
-            // Given
-            when(mockMerchantDetails.getEin()).thenReturn(ein);
-            
-            // When
-            MerchantDetailsResponseDTO dto = new MerchantDetailsResponseDTO(mockMerchantDetails);
-            
-            // Then
-            assertEquals(ein, dto.getEin(), "Short or invalid format EIN should remain unchanged");
-        }
+        // Test no-args constructor and setters
+        MerchantDetailsResponseDTO emptyDto = new MerchantDetailsResponseDTO();
+        emptyDto.setId(3L);
+        emptyDto.setApplicationId(4L);
+        emptyDto.setLegalName("Another Company");
+        
+        assertEquals(3L, emptyDto.getId());
+        assertEquals(4L, emptyDto.getApplicationId());
+        assertEquals("Another Company", emptyDto.getLegalName());
     }
 
-    @Nested
-    @DisplayName("JSON Serialization/Deserialization Tests")
-    class JsonTests {
+    @Test
+    @DisplayName("Test JSON serialization/deserialization")
+    void testJsonSerializationDeserialization() throws Exception {
+        // Create a DTO with test data
+        MerchantDetailsResponseDTO dto = MerchantDetailsResponseDTO.builder()
+                .id(1L)
+                .applicationId(2L)
+                .legalName("Test Company")
+                .dbaName("Test Co")
+                .ein("98-7654321")
+                .address(MerchantDetailsResponseDTO.AddressDTO.builder()
+                        .street("456 Elm Street")
+                        .city("Chicago")
+                        .state("IL")
+                        .zipCode("60601")
+                        .country("USA")
+                        .build())
+                .industry("Finance")
+                .revenue(new BigDecimal("500000.00"))
+                .createdAt(testDateTime)
+                .updatedAt(testDateTime)
+                .build();
 
-        @Test
-        @DisplayName("DTO should serialize to JSON correctly")
-        void dtoShouldSerializeToJsonCorrectly() throws Exception {
-            // Given
-            MerchantDetailsResponseDTO dto = new MerchantDetailsResponseDTO(mockMerchantDetails);
-            
-            // When
-            String json = objectMapper.writeValueAsString(dto);
-            
-            // Then
-            assertNotNull(json, "JSON should not be null");
-            assertTrue(json.contains("\"id\":1"), "JSON should contain id field");
-            assertTrue(json.contains("\"application_id\":100"), "JSON should contain application_id field");
-            assertTrue(json.contains("\"legal_name\":\"A****************n\""), "JSON should contain masked legal_name field");
-            assertTrue(json.contains("\"dba_name\":\"A*******p\""), "JSON should contain masked dba_name field");
-            assertTrue(json.contains("\"ein\":\"**-***6789\""), "JSON should contain masked ein field");
-            assertTrue(json.contains("\"industry\":\"Technology\""), "JSON should contain industry field");
-            assertTrue(json.contains("\"revenue\":\"1000000.00\""), "JSON should contain revenue field as string");
-            assertTrue(json.contains("\"address\":"), "JSON should contain address field");
-            assertTrue(json.contains("\"street\":\"123 Main St\""), "JSON should contain street in address");
-            assertTrue(json.contains("\"city\":\"New York\""), "JSON should contain city in address");
-            assertTrue(json.contains("\"state\":\"NY\""), "JSON should contain state in address");
-            assertTrue(json.contains("\"zip\":\"10001\""), "JSON should contain zip in address");
-            assertTrue(json.contains("\"country\":\"USA\""), "JSON should contain country in address");
+        // Serialize to JSON
+        String json = objectMapper.writeValueAsString(dto);
+
+        // Verify JSON structure
+        assertTrue(json.contains("\"id\":1"));
+        assertTrue(json.contains("\"application_id\":2"));
+        assertTrue(json.contains("\"legal_name\":\"Test Company\""));
+        assertTrue(json.contains("\"dba_name\":\"Test Co\""));
+        assertTrue(json.contains("\"ein\":\"98-7654321\""));
+        assertTrue(json.contains("\"street\":\"456 Elm Street\""));
+        assertTrue(json.contains("\"city\":\"Chicago\""));
+        assertTrue(json.contains("\"state\":\"IL\""));
+        assertTrue(json.contains("\"zip_code\":\"60601\""));
+        assertTrue(json.contains("\"country\":\"USA\""));
+        assertTrue(json.contains("\"industry\":\"Finance\""));
+        assertTrue(json.contains("\"revenue\":\"500000.00\""));
+
+        // Deserialize from JSON
+        MerchantDetailsResponseDTO deserializedDto = objectMapper.readValue(json, MerchantDetailsResponseDTO.class);
+
+        // Verify deserialized object
+        assertEquals(dto.getId(), deserializedDto.getId());
+        assertEquals(dto.getApplicationId(), deserializedDto.getApplicationId());
+        assertEquals(dto.getLegalName(), deserializedDto.getLegalName());
+        assertEquals(dto.getDbaName(), deserializedDto.getDbaName());
+        assertEquals(dto.getEin(), deserializedDto.getEin());
+        assertEquals(dto.getAddress().getStreet(), deserializedDto.getAddress().getStreet());
+        assertEquals(dto.getAddress().getCity(), deserializedDto.getAddress().getCity());
+        assertEquals(dto.getAddress().getState(), deserializedDto.getAddress().getState());
+        assertEquals(dto.getAddress().getZipCode(), deserializedDto.getAddress().getZipCode());
+        assertEquals(dto.getAddress().getCountry(), deserializedDto.getAddress().getCountry());
+        assertEquals(dto.getIndustry(), deserializedDto.getIndustry());
+        assertEquals(dto.getRevenue(), deserializedDto.getRevenue());
+    }
+
+    @Test
+    @DisplayName("Test conversion from entity with full PII data")
+    void testFromEntityWithFullPii() {
+        // Convert entity to DTO with full PII data
+        MerchantDetailsResponseDTO dto = MerchantDetailsResponseDTO.fromEntityWithFullPii(merchantDetails);
+
+        // Verify all fields are set correctly
+        assertEquals(merchantDetails.getId().toString(), dto.getId().toString());
+        assertEquals(application.getId().toString(), dto.getApplicationId().toString());
+        assertEquals(merchantDetails.getLegalName(), dto.getLegalName());
+        assertEquals(merchantDetails.getDbaName(), dto.getDbaName());
+        assertEquals(merchantDetails.getEin(), dto.getEin());
+        
+        // Verify address fields
+        assertNotNull(dto.getAddress());
+        assertEquals(merchantDetails.getAddressField("street"), dto.getAddress().getStreet());
+        assertEquals(merchantDetails.getAddressField("city"), dto.getAddress().getCity());
+        assertEquals(merchantDetails.getAddressField("state"), dto.getAddress().getState());
+        assertEquals(merchantDetails.getAddressField("zip"), dto.getAddress().getZipCode());
+        assertEquals(merchantDetails.getAddressField("country"), dto.getAddress().getCountry());
+        
+        // Verify other fields
+        assertEquals(merchantDetails.getIndustry(), dto.getIndustry());
+        assertEquals(merchantDetails.getRevenue(), dto.getRevenue());
+    }
+
+    @Test
+    @DisplayName("Test conversion from entity with masked PII data")
+    void testFromEntityWithMaskedPii() {
+        // Convert entity to DTO with masked PII data
+        MerchantDetailsResponseDTO dto = MerchantDetailsResponseDTO.fromEntityWithMaskedPii(merchantDetails);
+
+        // Verify non-PII fields are set correctly
+        assertEquals(merchantDetails.getId().toString(), dto.getId().toString());
+        assertEquals(application.getId().toString(), dto.getApplicationId().toString());
+        assertEquals(merchantDetails.getIndustry(), dto.getIndustry());
+        assertEquals(merchantDetails.getRevenue(), dto.getRevenue());
+
+        // Verify PII fields are masked
+        assertNotEquals(merchantDetails.getLegalName(), dto.getLegalName());
+        assertTrue(dto.getLegalName().startsWith("A"));
+        assertTrue(dto.getLegalName().contains("*"));
+        
+        assertNotEquals(merchantDetails.getDbaName(), dto.getDbaName());
+        assertTrue(dto.getDbaName().startsWith("A"));
+        assertTrue(dto.getDbaName().contains("*"));
+        
+        assertNotEquals(merchantDetails.getEin(), dto.getEin());
+        assertTrue(dto.getEin().startsWith("**-***"));
+        assertTrue(dto.getEin().endsWith("6789"));
+        
+        // Verify address is masked
+        assertNotNull(dto.getAddress());
+        assertNotEquals(merchantDetails.getAddressField("street"), dto.getAddress().getStreet());
+        assertTrue(dto.getAddress().getStreet().startsWith("123"));
+        assertTrue(dto.getAddress().getStreet().contains("*"));
+        
+        // City, state, and ZIP should not be masked
+        assertEquals(merchantDetails.getAddressField("city"), dto.getAddress().getCity());
+        assertEquals(merchantDetails.getAddressField("state"), dto.getAddress().getState());
+        assertEquals(merchantDetails.getAddressField("zip"), dto.getAddress().getZipCode());
+        assertEquals(merchantDetails.getAddressField("country"), dto.getAddress().getCountry());
+    }
+
+    @Test
+    @DisplayName("Test name masking functionality")
+    void testNameMasking() {
+        // Create a DTO with masked PII data
+        MerchantDetailsResponseDTO dto = MerchantDetailsResponseDTO.fromEntityWithMaskedPii(merchantDetails);
+
+        // Verify legal name masking ("Acme Corporation" -> "A*** C***********")
+        String maskedLegalName = dto.getLegalName();
+        assertEquals('A', maskedLegalName.charAt(0));
+        for (int i = 1; i < maskedLegalName.indexOf(' '); i++) {
+            assertEquals('*', maskedLegalName.charAt(i));
+        }
+        assertEquals('C', maskedLegalName.charAt(maskedLegalName.indexOf(' ') + 1));
+        for (int i = maskedLegalName.indexOf(' ') + 2; i < maskedLegalName.length(); i++) {
+            assertEquals('*', maskedLegalName.charAt(i));
         }
 
-        @Test
-        @DisplayName("JSON should deserialize to DTO correctly")
-        void jsonShouldDeserializeToDtoCorrectly() throws Exception {
-            // Given
-            String json = "{\"id\":2,\"application_id\":200,\"legal_name\":\"X**Y\",\"dba_name\":\"X*Z\",\"ein\":\"**-***4321\",\"address\":{\"street\":\"456 Park Ave\",\"city\":\"Chicago\",\"state\":\"IL\",\"zip\":\"60601\",\"country\":\"USA\"},\"industry\":\"Finance\",\"revenue\":\"500000.00\"}";
-            
-            // When
-            MerchantDetailsResponseDTO dto = objectMapper.readValue(json, MerchantDetailsResponseDTO.class);
-            
-            // Then
-            assertNotNull(dto, "DTO should not be null");
-            assertEquals(2L, dto.getId(), "ID should match");
-            assertEquals(200L, dto.getApplicationId(), "Application ID should match");
-            assertEquals("X**Y", dto.getLegalName(), "Legal name should match");
-            assertEquals("X*Z", dto.getDbaName(), "DBA name should match");
-            assertEquals("**-***4321", dto.getEin(), "EIN should match");
-            assertEquals("Finance", dto.getIndustry(), "Industry should match");
-            assertEquals(new BigDecimal("500000.00"), dto.getRevenue(), "Revenue should match");
-            
-            assertNotNull(dto.getAddress(), "Address should not be null");
-            assertEquals("456 Park Ave", dto.getAddress().get("street"), "Street should match");
-            assertEquals("Chicago", dto.getAddress().get("city"), "City should match");
-            assertEquals("IL", dto.getAddress().get("state"), "State should match");
-            assertEquals("60601", dto.getAddress().get("zip"), "ZIP should match");
-            assertEquals("USA", dto.getAddress().get("country"), "Country should match");
+        // Verify DBA name masking ("Acme Corp" -> "A*** C***")
+        String maskedDbaName = dto.getDbaName();
+        assertEquals('A', maskedDbaName.charAt(0));
+        for (int i = 1; i < maskedDbaName.indexOf(' '); i++) {
+            assertEquals('*', maskedDbaName.charAt(i));
         }
-
-        @Test
-        @DisplayName("JSON with missing optional fields should deserialize correctly")
-        void jsonWithMissingOptionalFieldsShouldDeserializeCorrectly() throws Exception {
-            // Given
-            String json = "{\"id\":3,\"application_id\":300,\"legal_name\":\"Z****A\",\"ein\":\"**-***5678\",\"address\":{\"street\":\"789 Broadway\",\"city\":\"San Francisco\",\"state\":\"CA\",\"zip\":\"94105\"},\"industry\":\"Retail\",\"revenue\":\"750000.00\"}";
-            
-            // When
-            MerchantDetailsResponseDTO dto = objectMapper.readValue(json, MerchantDetailsResponseDTO.class);
-            
-            // Then
-            assertNotNull(dto, "DTO should not be null");
-            assertEquals(3L, dto.getId(), "ID should match");
-            assertEquals(300L, dto.getApplicationId(), "Application ID should match");
-            assertEquals("Z****A", dto.getLegalName(), "Legal name should match");
-            assertNull(dto.getDbaName(), "DBA name should be null");
-            assertEquals("**-***5678", dto.getEin(), "EIN should match");
-            assertEquals("Retail", dto.getIndustry(), "Industry should match");
-            assertEquals(new BigDecimal("750000.00"), dto.getRevenue(), "Revenue should match");
-            
-            assertNotNull(dto.getAddress(), "Address should not be null");
-            assertEquals("789 Broadway", dto.getAddress().get("street"), "Street should match");
-            assertEquals("San Francisco", dto.getAddress().get("city"), "City should match");
-            assertEquals("CA", dto.getAddress().get("state"), "State should match");
-            assertEquals("94105", dto.getAddress().get("zip"), "ZIP should match");
-            assertNull(dto.getAddress().get("country"), "Country should be null");
-        }
-
-        @Test
-        @DisplayName("DTO should ignore unknown JSON properties")
-        void dtoShouldIgnoreUnknownJsonProperties() throws Exception {
-            // Given
-            String json = "{\"id\":4,\"application_id\":400,\"legal_name\":\"W****E\",\"dba_name\":\"W*E\",\"ein\":\"**-***9012\",\"address\":{\"street\":\"321 Oak St\",\"city\":\"Boston\",\"state\":\"MA\",\"zip\":\"02108\",\"country\":\"USA\",\"unknown_field\":\"value\"},\"industry\":\"Healthcare\",\"revenue\":\"1250000.00\",\"unknown_field\":\"value\"}";
-            
-            // When
-            MerchantDetailsResponseDTO dto = objectMapper.readValue(json, MerchantDetailsResponseDTO.class);
-            
-            // Then
-            assertNotNull(dto, "DTO should not be null");
-            assertEquals(4L, dto.getId(), "ID should match");
-            assertEquals(400L, dto.getApplicationId(), "Application ID should match");
-            assertEquals("W****E", dto.getLegalName(), "Legal name should match");
-            assertEquals("W*E", dto.getDbaName(), "DBA name should match");
-            assertEquals("**-***9012", dto.getEin(), "EIN should match");
-            assertEquals("Healthcare", dto.getIndustry(), "Industry should match");
-            assertEquals(new BigDecimal("1250000.00"), dto.getRevenue(), "Revenue should match");
-            
-            assertNotNull(dto.getAddress(), "Address should not be null");
-            assertEquals("321 Oak St", dto.getAddress().get("street"), "Street should match");
-            assertEquals("Boston", dto.getAddress().get("city"), "City should match");
-            assertEquals("MA", dto.getAddress().get("state"), "State should match");
-            assertEquals("02108", dto.getAddress().get("zip"), "ZIP should match");
-            assertEquals("USA", dto.getAddress().get("country"), "Country should match");
-            // Unknown fields should be ignored without exception
+        assertEquals('C', maskedDbaName.charAt(maskedDbaName.indexOf(' ') + 1));
+        for (int i = maskedDbaName.indexOf(' ') + 2; i < maskedDbaName.length(); i++) {
+            assertEquals('*', maskedDbaName.charAt(i));
         }
     }
 
-    @Nested
-    @DisplayName("Entity Conversion Tests")
-    class EntityConversionTests {
+    @Test
+    @DisplayName("Test EIN masking functionality")
+    void testEinMasking() {
+        // Create a DTO with masked PII data
+        MerchantDetailsResponseDTO dto = MerchantDetailsResponseDTO.fromEntityWithMaskedPii(merchantDetails);
 
-        @Test
-        @DisplayName("Entity should convert to DTO correctly")
-        void entityShouldConvertToDtoCorrectly() {
-            // When
-            MerchantDetailsResponseDTO dto = new MerchantDetailsResponseDTO(mockMerchantDetails);
-            
-            // Then
-            assertNotNull(dto, "DTO should not be null");
-            assertEquals(mockMerchantDetails.getId(), dto.getId(), "ID should match");
-            assertEquals(mockMerchantDetails.getApplicationId(), dto.getApplicationId(), "Application ID should match");
-            assertEquals("A****************n", dto.getLegalName(), "Legal name should be masked");
-            assertEquals("A*******p", dto.getDbaName(), "DBA name should be masked");
-            assertEquals("**-***6789", dto.getEin(), "EIN should be masked");
-            assertEquals(mockMerchantDetails.getIndustry(), dto.getIndustry(), "Industry should match");
-            assertEquals(mockMerchantDetails.getRevenue(), dto.getRevenue(), "Revenue should match");
-            assertEquals(mockMerchantDetails.getAddress(), dto.getAddress(), "Address should match");
-        }
-
-        @Test
-        @DisplayName("Static factory method should convert entity to DTO correctly")
-        void staticFactoryMethodShouldConvertEntityToDtoCorrectly() {
-            // When
-            MerchantDetailsResponseDTO dto = MerchantDetailsResponseDTO.fromEntity(mockMerchantDetails);
-            
-            // Then
-            assertNotNull(dto, "DTO should not be null");
-            assertEquals(mockMerchantDetails.getId(), dto.getId(), "ID should match");
-            assertEquals(mockMerchantDetails.getApplicationId(), dto.getApplicationId(), "Application ID should match");
-            assertEquals("A****************n", dto.getLegalName(), "Legal name should be masked");
-            assertEquals("A*******p", dto.getDbaName(), "DBA name should be masked");
-            assertEquals("**-***6789", dto.getEin(), "EIN should be masked");
-            assertEquals(mockMerchantDetails.getIndustry(), dto.getIndustry(), "Industry should match");
-            assertEquals(mockMerchantDetails.getRevenue(), dto.getRevenue(), "Revenue should match");
-            assertEquals(mockMerchantDetails.getAddress(), dto.getAddress(), "Address should match");
-        }
-
-        @Test
-        @DisplayName("Null entity should convert to null DTO")
-        void nullEntityShouldConvertToNullDto() {
-            // When
-            MerchantDetailsResponseDTO dto = MerchantDetailsResponseDTO.fromEntity(null);
-            
-            // Then
-            assertNull(dto, "DTO should be null when entity is null");
-        }
-
-        @Test
-        @DisplayName("Entity with null fields should convert to DTO with null fields")
-        void entityWithNullFieldsShouldConvertToDtoWithNullFields() {
-            // Given
-            when(mockMerchantDetails.getDbaName()).thenReturn(null);
-            when(mockMerchantDetails.getAddress()).thenReturn(null);
-            
-            // When
-            MerchantDetailsResponseDTO dto = new MerchantDetailsResponseDTO(mockMerchantDetails);
-            
-            // Then
-            assertNotNull(dto, "DTO should not be null");
-            assertEquals(mockMerchantDetails.getId(), dto.getId(), "ID should match");
-            assertEquals(mockMerchantDetails.getApplicationId(), dto.getApplicationId(), "Application ID should match");
-            assertEquals("A****************n", dto.getLegalName(), "Legal name should be masked");
-            assertNull(dto.getDbaName(), "DBA name should be null");
-            assertEquals("**-***6789", dto.getEin(), "EIN should be masked");
-            assertEquals(mockMerchantDetails.getIndustry(), dto.getIndustry(), "Industry should match");
-            assertEquals(mockMerchantDetails.getRevenue(), dto.getRevenue(), "Revenue should match");
-            assertNull(dto.getAddress(), "Address should be null");
-        }
+        // Verify EIN masking ("12-3456789" -> "**-***6789")
+        String maskedEin = dto.getEin();
+        assertEquals("**-***6789", maskedEin);
     }
 
-    @Nested
-    @DisplayName("Address and Financial Information Tests")
-    class AddressAndFinancialInformationTests {
+    @Test
+    @DisplayName("Test address masking functionality")
+    void testAddressMasking() {
+        // Create a DTO with masked PII data
+        MerchantDetailsResponseDTO dto = MerchantDetailsResponseDTO.fromEntityWithMaskedPii(merchantDetails);
 
-        @Test
-        @DisplayName("Address map structure should be preserved")
-        void addressMapStructureShouldBePreserved() {
-            // Given
-            Map<String, String> complexAddress = new HashMap<>();
-            complexAddress.put("street", "123 Main St");
-            complexAddress.put("street2", "Suite 100");
-            complexAddress.put("city", "New York");
-            complexAddress.put("state", "NY");
-            complexAddress.put("zip", "10001");
-            complexAddress.put("country", "USA");
-            complexAddress.put("type", "business");
-            when(mockMerchantDetails.getAddress()).thenReturn(complexAddress);
-            
-            // When
-            MerchantDetailsResponseDTO dto = new MerchantDetailsResponseDTO(mockMerchantDetails);
-            
-            // Then
-            assertNotNull(dto.getAddress(), "Address should not be null");
-            assertEquals(7, dto.getAddress().size(), "Address should have all keys");
-            assertEquals("123 Main St", dto.getAddress().get("street"), "Street should match");
-            assertEquals("Suite 100", dto.getAddress().get("street2"), "Street2 should match");
-            assertEquals("New York", dto.getAddress().get("city"), "City should match");
-            assertEquals("NY", dto.getAddress().get("state"), "State should match");
-            assertEquals("10001", dto.getAddress().get("zip"), "ZIP should match");
-            assertEquals("USA", dto.getAddress().get("country"), "Country should match");
-            assertEquals("business", dto.getAddress().get("type"), "Type should match");
+        // Verify street address masking ("123 Main Street" -> "123 **** ******")
+        String maskedStreet = dto.getAddress().getStreet();
+        assertTrue(maskedStreet.startsWith("123 "));
+        for (int i = 4; i < maskedStreet.length(); i++) {
+            if (maskedStreet.charAt(i) != ' ') {
+                assertEquals('*', maskedStreet.charAt(i));
+            }
         }
 
-        @Test
-        @DisplayName("Revenue should be formatted as string in JSON")
-        void revenueShouldBeFormattedAsStringInJson() throws Exception {
-            // Given
-            when(mockMerchantDetails.getRevenue()).thenReturn(new BigDecimal("1234567.89"));
-            MerchantDetailsResponseDTO dto = new MerchantDetailsResponseDTO(mockMerchantDetails);
-            
-            // When
-            String json = objectMapper.writeValueAsString(dto);
-            
-            // Then
-            assertTrue(json.contains("\"revenue\":\"1234567.89\""), "Revenue should be formatted as string in JSON");
-        }
+        // Verify that city, state, ZIP, and country are not masked
+        assertEquals("New York", dto.getAddress().getCity());
+        assertEquals("NY", dto.getAddress().getState());
+        assertEquals("10001", dto.getAddress().getZipCode());
+        assertEquals("USA", dto.getAddress().getCountry());
+    }
 
-        @Test
-        @DisplayName("Revenue with zero decimal places should be formatted correctly")
-        void revenueWithZeroDecimalPlacesShouldBeFormattedCorrectly() throws Exception {
-            // Given
-            when(mockMerchantDetails.getRevenue()).thenReturn(new BigDecimal("1000000"));
-            MerchantDetailsResponseDTO dto = new MerchantDetailsResponseDTO(mockMerchantDetails);
-            
-            // When
-            String json = objectMapper.writeValueAsString(dto);
-            
-            // Then
-            assertTrue(json.contains("\"revenue\":\"1000000\""), "Revenue with zero decimal places should be formatted correctly");
-        }
+    @Test
+    @DisplayName("Test AddressDTO functionality")
+    void testAddressDtoFunctionality() {
+        // Create an AddressDTO using builder pattern
+        MerchantDetailsResponseDTO.AddressDTO addressDto = MerchantDetailsResponseDTO.AddressDTO.builder()
+                .street("789 Oak Avenue")
+                .city("Los Angeles")
+                .state("CA")
+                .zipCode("90001")
+                .country("USA")
+                .build();
 
-        @Test
-        @DisplayName("Revenue with many decimal places should be preserved")
-        void revenueWithManyDecimalPlacesShouldBePreserved() throws Exception {
-            // Given
-            when(mockMerchantDetails.getRevenue()).thenReturn(new BigDecimal("1234.56789"));
-            MerchantDetailsResponseDTO dto = new MerchantDetailsResponseDTO(mockMerchantDetails);
-            
-            // When
-            String json = objectMapper.writeValueAsString(dto);
-            
-            // Then
-            assertTrue(json.contains("\"revenue\":\"1234.56789\""), "Revenue with many decimal places should be preserved");
-        }
+        // Verify all fields are set correctly
+        assertEquals("789 Oak Avenue", addressDto.getStreet());
+        assertEquals("Los Angeles", addressDto.getCity());
+        assertEquals("CA", addressDto.getState());
+        assertEquals("90001", addressDto.getZipCode());
+        assertEquals("USA", addressDto.getCountry());
+
+        // Test fromAddressObject method with a Map
+        Map<String, Object> addressMap = new HashMap<>();
+        addressMap.put("street", "321 Pine Road");
+        addressMap.put("city", "Miami");
+        addressMap.put("state", "FL");
+        addressMap.put("zip", "33101");
+        addressMap.put("country", "USA");
+        merchantDetails.setAddress(addressMap);
+
+        // Create a mock Address object using the Map
+        // Note: In the actual implementation, the Address object is created from the Map
+        // in the MerchantDetailsResponseDTO.AddressDTO.fromAddressObject method
+        MerchantDetailsResponseDTO.AddressDTO convertedAddressDto = 
+                MerchantDetailsResponseDTO.AddressDTO.fromAddressObject(merchantDetails.getAddress());
+
+        // Verify converted address
+        assertEquals("321 Pine Road", convertedAddressDto.getStreet());
+        assertEquals("Miami", convertedAddressDto.getCity());
+        assertEquals("FL", convertedAddressDto.getState());
+        assertEquals("33101", convertedAddressDto.getZipCode());
+        assertEquals("USA", convertedAddressDto.getCountry());
+    }
+
+    @Test
+    @DisplayName("Test handling of null entity")
+    void testHandlingOfNullEntity() {
+        // Test fromEntity with null
+        assertNull(MerchantDetailsResponseDTO.fromEntity(null, false));
+        assertNull(MerchantDetailsResponseDTO.fromEntityWithFullPii(null));
+        assertNull(MerchantDetailsResponseDTO.fromEntityWithMaskedPii(null));
+    }
+
+    @Test
+    @DisplayName("Test handling of null fields in entity")
+    void testHandlingOfNullFieldsInEntity() {
+        // Create entity with null fields
+        MerchantDetails entityWithNulls = new MerchantDetails();
+        entityWithNulls.setId(UUID.randomUUID());
+        entityWithNulls.setLegalName("Test Company");
+        // Leave other fields null
+
+        // Convert to DTO
+        MerchantDetailsResponseDTO dto = MerchantDetailsResponseDTO.fromEntityWithFullPii(entityWithNulls);
+
+        // Verify non-null fields
+        assertEquals(entityWithNulls.getId().toString(), dto.getId().toString());
+        assertEquals("Test Company", dto.getLegalName());
+
+        // Verify null fields
+        assertNull(dto.getApplicationId());
+        assertNull(dto.getDbaName());
+        assertNull(dto.getEin());
+        assertNull(dto.getAddress());
+        assertNull(dto.getIndustry());
+        assertNull(dto.getRevenue());
+    }
+
+    @Test
+    @DisplayName("Test handling of empty address in entity")
+    void testHandlingOfEmptyAddressInEntity() {
+        // Create entity with empty address
+        MerchantDetails entityWithEmptyAddress = new MerchantDetails();
+        entityWithEmptyAddress.setId(UUID.randomUUID());
+        entityWithEmptyAddress.setLegalName("Test Company");
+        entityWithEmptyAddress.setAddress(new HashMap<>()); // Empty address
+
+        // Convert to DTO with full PII
+        MerchantDetailsResponseDTO dtoWithFullPii = MerchantDetailsResponseDTO.fromEntityWithFullPii(entityWithEmptyAddress);
+
+        // Verify address is null (since the map is empty)
+        assertNull(dtoWithFullPii.getAddress());
+
+        // Convert to DTO with masked PII
+        MerchantDetailsResponseDTO dtoWithMaskedPii = MerchantDetailsResponseDTO.fromEntityWithMaskedPii(entityWithEmptyAddress);
+
+        // Verify address is null (since the map is empty)
+        assertNull(dtoWithMaskedPii.getAddress());
+    }
+
+    @Test
+    @DisplayName("Test revenue formatting")
+    void testRevenueFormatting() throws Exception {
+        // Create a DTO with revenue
+        MerchantDetailsResponseDTO dto = MerchantDetailsResponseDTO.builder()
+                .id(1L)
+                .legalName("Test Company")
+                .revenue(new BigDecimal("1234567.89"))
+                .build();
+
+        // Serialize to JSON
+        String json = objectMapper.writeValueAsString(dto);
+
+        // Verify revenue is formatted as a string with two decimal places
+        assertTrue(json.contains("\"revenue\":\"1234567.89\""));
     }
 }
