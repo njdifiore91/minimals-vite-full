@@ -6,238 +6,245 @@ S3 Configuration for OCR Service
 
 This module configures the S3-compatible storage client for the OCR Service to access
 documents for OCR processing. It defines connection parameters, bucket settings,
-encryption options, and access controls. The configuration enables the service to
-securely access documents from the document repository for text extraction.
+encryption options, and access controls. The configuration ensures secure access to
+documents in the document repository for text extraction.
 
 Key features:
-1. Environment-specific bucket configuration
+1. S3 client connection with appropriate authentication
 2. AES-256 encryption for document storage
-3. Secure credential management
-4. Connection options with appropriate timeouts
-5. Error handling and retry configuration
+3. Environment-specific bucket configurations
+4. Secure credential management
+5. Connection options with appropriate timeouts and retry settings
+
+Example:
+    from config import s3_config
+    
+    # Get S3 client configuration
+    client_config = s3_config.get_s3_client_config()
+    
+    # Get bucket name for current environment
+    bucket_name = s3_config.get_bucket_name()
+    
+    # Get storage options with AES-256 encryption
+    storage_options = s3_config.get_storage_options('application/pdf')
 """
 
 import os
 import logging
-from typing import Dict, Optional, Any
-
+from typing import Dict, Any, Optional, Union, cast
 from botocore.config import Config
 
-from ..types.storage import S3ClientConfig, BucketConfig, StorageOptions, BUCKET_CONFIGS
+from ..types.storage import (
+    S3ClientConfig,
+    S3Credentials,
+    StorageOptions,
+    EncryptionType,
+    StorageClass,
+    BUCKET_CONFIGS
+)
+from .app_config import app_config
+from ..utils.logging_utils import get_logger
 
 # Configure logging
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
-# Environment variable names
-ENV_VAR_ENVIRONMENT = 'OCR_ENVIRONMENT'
-ENV_VAR_S3_ENDPOINT = 'S3_ENDPOINT_URL'
-ENV_VAR_AWS_REGION = 'AWS_REGION'
-ENV_VAR_AWS_ACCESS_KEY = 'AWS_ACCESS_KEY_ID'
-ENV_VAR_AWS_SECRET_KEY = 'AWS_SECRET_ACCESS_KEY'
-ENV_VAR_AWS_SESSION_TOKEN = 'AWS_SESSION_TOKEN'
-ENV_VAR_DOCUMENT_BUCKET = 'OCR_DOCUMENT_BUCKET'
-ENV_VAR_EXTRACTED_DATA_BUCKET = 'OCR_EXTRACTED_DATA_BUCKET'
+# S3 bucket names
+DOCUMENT_BUCKET = app_config.S3_BUCKET
+EXTRACTED_DATA_BUCKET = f"{app_config.S3_BUCKET}-extracted"
 
-# Default values
-DEFAULT_ENVIRONMENT = 'development'
-DEFAULT_REGION = 'us-east-1'
-DEFAULT_TIMEOUT = 60  # seconds
-DEFAULT_MAX_ATTEMPTS = 3
-DEFAULT_CONNECT_TIMEOUT = 10  # seconds
-DEFAULT_READ_TIMEOUT = 60  # seconds
+# Default storage options
+DEFAULT_STORAGE_OPTIONS = StorageOptions(
+    encryption=EncryptionType.AES256,
+    storage_class=StorageClass.STANDARD,
+    metadata={},
+    content_type=None,
+    content_disposition=None,
+    cache_control="private, max-age=0",
+    tags={},
+    acl="private"
+)
 
-# Get current environment
-ENVIRONMENT = os.environ.get(ENV_VAR_ENVIRONMENT, DEFAULT_ENVIRONMENT)
+# Signed URL expiration (1 hour)
+SIGNED_URL_EXPIRATION = 3600
 
-# Validate environment
-if ENVIRONMENT not in BUCKET_CONFIGS:
-    logger.warning(f"Unknown environment '{ENVIRONMENT}', defaulting to '{DEFAULT_ENVIRONMENT}'")
-    ENVIRONMENT = DEFAULT_ENVIRONMENT
+# Multipart upload settings
+MULTIPART_THRESHOLD = 8 * 1024 * 1024  # 8 MB
+MULTIPART_CHUNKSIZE = 8 * 1024 * 1024  # 8 MB
 
-# Get bucket configuration for current environment
-BUCKET_CONFIG = BUCKET_CONFIGS[ENVIRONMENT]
+# S3 client configuration
+S3_CLIENT_CONFIG = S3ClientConfig(
+    endpoint_url=app_config.S3_ENDPOINT,
+    region=app_config.S3_REGION,
+    credentials=S3Credentials(
+        access_key=app_config.S3_ACCESS_KEY,
+        secret_key=app_config.S3_SECRET_KEY
+    ),
+    verify_ssl=app_config.S3_VERIFY_SSL,
+    use_path_style=False,  # Use virtual hosted-style addressing by default
+    max_pool_connections=10,
+    timeout=60,
+    retries=3
+)
 
-# Document bucket name (can be overridden by environment variable)
-DOCUMENT_BUCKET = os.environ.get(ENV_VAR_DOCUMENT_BUCKET, BUCKET_CONFIG['name'])
-
-# Extracted data bucket name (defaults to same as document bucket if not specified)
-EXTRACTED_DATA_BUCKET = os.environ.get(ENV_VAR_EXTRACTED_DATA_BUCKET, DOCUMENT_BUCKET)
-
-# S3 endpoint URL (optional, for non-AWS S3-compatible storage)
-S3_ENDPOINT_URL = os.environ.get(ENV_VAR_S3_ENDPOINT)
-
-# AWS region
-AWS_REGION = os.environ.get(ENV_VAR_AWS_REGION, DEFAULT_REGION)
-
-# Default S3 client configuration
-S3_CLIENT_CONFIG: S3ClientConfig = {
-    'endpoint_url': S3_ENDPOINT_URL,
-    'region_name': AWS_REGION,
-    'aws_access_key_id': os.environ.get(ENV_VAR_AWS_ACCESS_KEY, ''),
-    'aws_secret_access_key': os.environ.get(ENV_VAR_AWS_SECRET_KEY, ''),
-    'use_ssl': True,
-    'verify': True,
-    'signature_version': 's3v4'
-}
-
-# Remove None values from S3 client config
-S3_CLIENT_CONFIG = {k: v for k, v in S3_CLIENT_CONFIG.items() if v is not None}
-
-# Boto3 connection configuration with timeouts and retries
+# Boto3 configuration with retry settings
 S3_BOTO_CONFIG = Config(
+    region_name=app_config.S3_REGION,
     signature_version='s3v4',
     retries={
-        'max_attempts': DEFAULT_MAX_ATTEMPTS,
+        'max_attempts': 3,
         'mode': 'standard'
     },
-    connect_timeout=DEFAULT_CONNECT_TIMEOUT,
-    read_timeout=DEFAULT_READ_TIMEOUT,
-    region_name=AWS_REGION,
+    connect_timeout=5,
+    read_timeout=60,
+    max_pool_connections=10,
     s3={
-        'addressing_style': 'virtual',
-        'payload_signing_enabled': True
+        'addressing_style': 'virtual',  # Use virtual hosted-style addressing
+        'payload_signing_enabled': True,
+        'use_accelerate_endpoint': False
     }
 )
 
-# Default storage options with AES-256 encryption
-DEFAULT_STORAGE_OPTIONS: StorageOptions = {
-    'ServerSideEncryption': 'AES256',
-    'ContentType': 'application/octet-stream',
-    'ACL': 'private',
-}
 
-# Signed URL expiration time (15 minutes)
-SIGNED_URL_EXPIRATION = 15 * 60  # seconds
-
-# Multipart upload configuration
-MULTIPART_THRESHOLD = 100 * 1024 * 1024  # 100 MB
-MULTIPART_CHUNKSIZE = 25 * 1024 * 1024  # 25 MB
-
-# Document storage paths
-DOCUMENT_PATH_PREFIX = 'documents/'
-EXTRACTED_DATA_PATH_PREFIX = 'extracted_data/'
-THUMBNAIL_PATH_PREFIX = 'thumbnails/'
-
-
-def get_bucket_name(environment: Optional[str] = None) -> str:
+def get_bucket_name(bucket_type: str = 'document') -> str:
     """
-    Get the appropriate bucket name for the specified environment.
+    Get the appropriate bucket name based on the current environment.
     
     Args:
-        environment: Environment name (development, staging, production)
+        bucket_type: Type of bucket ('document' or 'extracted')
         
     Returns:
-        Bucket name for the specified environment
+        str: Bucket name for the current environment
     """
-    env = environment or ENVIRONMENT
-    if env not in BUCKET_CONFIGS:
-        logger.warning(f"Unknown environment '{env}', defaulting to '{DEFAULT_ENVIRONMENT}'")
-        env = DEFAULT_ENVIRONMENT
-    
-    return BUCKET_CONFIGS[env]['name']
+    if bucket_type == 'extracted':
+        return EXTRACTED_DATA_BUCKET
+    else:
+        return DOCUMENT_BUCKET
 
 
 def get_s3_client_config() -> Dict[str, Any]:
     """
-    Get the S3 client configuration with credentials.
-    
-    This function ensures that credentials are properly loaded from environment
-    variables and returns a configuration dictionary suitable for boto3.client.
+    Get the S3 client configuration for boto3.client().
     
     Returns:
-        Dict containing S3 client configuration
+        Dict[str, Any]: Configuration dictionary for boto3.client()
     """
-    config = S3_CLIENT_CONFIG.copy()
+    config = {
+        'endpoint_url': S3_CLIENT_CONFIG.endpoint_url,
+        'region_name': S3_CLIENT_CONFIG.region,
+        'aws_access_key_id': S3_CLIENT_CONFIG.credentials.access_key,
+        'aws_secret_access_key': S3_CLIENT_CONFIG.credentials.secret_key,
+        'verify': S3_CLIENT_CONFIG.verify_ssl,
+        'use_ssl': app_config.S3_USE_SSL
+    }
     
-    # Check if credentials are available
-    if not config.get('aws_access_key_id') or not config.get('aws_secret_access_key'):
-        logger.warning("AWS credentials not found in environment variables")
-        
-        # Try to load from AWS credentials file or instance profile
-        # This will use the default credential provider chain
-        config.pop('aws_access_key_id', None)
-        config.pop('aws_secret_access_key', None)
+    # Add session token if available
+    if S3_CLIENT_CONFIG.credentials.session_token:
+        config['aws_session_token'] = S3_CLIENT_CONFIG.credentials.session_token
+    
+    # Log configuration (without sensitive data)
+    logger.debug(
+        f"S3 client configuration: endpoint={config['endpoint_url']}, "
+        f"region={config['region_name']}, verify_ssl={config['verify']}, "
+        f"use_ssl={config['use_ssl']}"
+    )
     
     return config
 
 
-def validate_s3_configuration() -> bool:
+def get_storage_options(content_type: Optional[str] = None, 
+                      metadata: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     """
-    Validate the S3 configuration.
-    
-    This function checks that the required configuration is available and valid.
-    It logs warnings for any issues found.
-    
-    Returns:
-        True if configuration is valid, False otherwise
-    """
-    valid = True
-    
-    # Check if bucket exists in configuration
-    if ENVIRONMENT not in BUCKET_CONFIGS:
-        logger.error(f"Environment '{ENVIRONMENT}' not found in bucket configurations")
-        valid = False
-    
-    # Check if document bucket is configured
-    if not DOCUMENT_BUCKET:
-        logger.error("Document bucket not configured")
-        valid = False
-    
-    # Check if extracted data bucket is configured
-    if not EXTRACTED_DATA_BUCKET:
-        logger.error("Extracted data bucket not configured")
-        valid = False
-    
-    # Check if region is configured
-    if not AWS_REGION:
-        logger.error("AWS region not configured")
-        valid = False
-    
-    # Check if credentials are available (warn only, not error)
-    if not S3_CLIENT_CONFIG.get('aws_access_key_id') or not S3_CLIENT_CONFIG.get('aws_secret_access_key'):
-        logger.warning("AWS credentials not found in environment variables")
-        logger.warning("Will attempt to use instance profile or AWS credentials file")
-    
-    return valid
-
-
-def get_storage_options(content_type: Optional[str] = None, metadata: Optional[Dict[str, str]] = None) -> StorageOptions:
-    """
-    Get storage options with AES-256 encryption and optional content type and metadata.
+    Get storage options for S3 operations with AES-256 encryption.
     
     Args:
-        content_type: MIME type of the document
-        metadata: Custom metadata to attach to the document
+        content_type: Content type of the document (optional)
+        metadata: Document metadata (optional)
         
     Returns:
-        StorageOptions dictionary
+        Dict[str, Any]: Storage options for S3 operations
     """
-    options = DEFAULT_STORAGE_OPTIONS.copy()
+    options = {}
     
+    # Set server-side encryption
+    options['ServerSideEncryption'] = DEFAULT_STORAGE_OPTIONS.encryption.value
+    
+    # Set storage class
+    options['StorageClass'] = DEFAULT_STORAGE_OPTIONS.storage_class.value
+    
+    # Set content type if provided
     if content_type:
         options['ContentType'] = content_type
     
+    # Set metadata if provided
     if metadata:
         options['Metadata'] = metadata
+    
+    # Set cache control
+    if DEFAULT_STORAGE_OPTIONS.cache_control:
+        options['CacheControl'] = DEFAULT_STORAGE_OPTIONS.cache_control
+    
+    # Set content disposition if provided
+    if DEFAULT_STORAGE_OPTIONS.content_disposition:
+        options['ContentDisposition'] = DEFAULT_STORAGE_OPTIONS.content_disposition
+    
+    # Set ACL if provided
+    if DEFAULT_STORAGE_OPTIONS.acl:
+        options['ACL'] = DEFAULT_STORAGE_OPTIONS.acl
+    
+    # Set tags if provided
+    if DEFAULT_STORAGE_OPTIONS.tags:
+        tag_set = [{'Key': k, 'Value': v} for k, v in DEFAULT_STORAGE_OPTIONS.tags.items()]
+        options['Tagging'] = '&'.join([f"{tag['Key']}={tag['Value']}" for tag in tag_set])
     
     return options
 
 
+def validate_s3_configuration() -> bool:
+    """
+    Validate the S3 configuration to ensure it meets security requirements.
+    
+    Returns:
+        bool: True if configuration is valid, False otherwise
+    """
+    try:
+        # Check if encryption is enabled
+        if DEFAULT_STORAGE_OPTIONS.encryption != EncryptionType.AES256:
+            logger.error("AES-256 encryption is required for document storage")
+            return False
+        
+        # Check if credentials are provided for non-development environments
+        if app_config.ENVIRONMENT.value != 'development':
+            if not S3_CLIENT_CONFIG.credentials.access_key or not S3_CLIENT_CONFIG.credentials.secret_key:
+                logger.error("S3 credentials are required for non-development environments")
+                return False
+        
+        # Check if SSL is enabled for non-development environments
+        if app_config.ENVIRONMENT.value != 'development' and not app_config.S3_USE_SSL:
+            logger.error("SSL is required for S3 connections in non-development environments")
+            return False
+        
+        # Check if bucket exists in configuration
+        env = app_config.ENVIRONMENT.value
+        if env not in BUCKET_CONFIGS:
+            logger.error(f"No bucket configuration found for environment: {env}")
+            return False
+        
+        # Check if bucket name matches configuration
+        expected_bucket = BUCKET_CONFIGS[env]['name']
+        if DOCUMENT_BUCKET != expected_bucket:
+            logger.warning(
+                f"Document bucket name ({DOCUMENT_BUCKET}) does not match "
+                f"expected value for {env} environment ({expected_bucket})"
+            )
+        
+        logger.info("S3 configuration validation successful")
+        return True
+        
+    except Exception as e:
+        logger.error(f"S3 configuration validation failed: {str(e)}")
+        return False
+
+
 # Validate configuration on module import
 if not validate_s3_configuration():
-    logger.warning("S3 configuration validation failed")
-
-
-# Export bucket configurations for easy access
-BUCKETS = {
-    'document': DOCUMENT_BUCKET,
-    'extracted_data': EXTRACTED_DATA_BUCKET
-}
-
-
-# Log configuration summary
-logger.info(f"S3 Configuration: Environment={ENVIRONMENT}, Region={AWS_REGION}")
-logger.info(f"Document Bucket: {DOCUMENT_BUCKET}")
-logger.info(f"Extracted Data Bucket: {EXTRACTED_DATA_BUCKET}")
-if S3_ENDPOINT_URL:
-    logger.info(f"S3 Endpoint URL: {S3_ENDPOINT_URL}")
+    logger.warning("S3 configuration validation failed, service may not function correctly")
