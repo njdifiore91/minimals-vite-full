@@ -1,9 +1,10 @@
-# OCR Service - Test Data Tables .gitignore
+# OCR Service Test Data - Tables .gitignore
+#
+# This file specifies which document files should be excluded from version control
+# to prevent repository bloat while ensuring that documentation and configuration
+# files are properly tracked.
 
-# Exclude binary document files containing tables to prevent repository bloat
-# These files should be downloaded separately or generated during test setup
-
-# Document files
+# Exclude all binary document files by default
 *.pdf
 *.PDF
 *.tiff
@@ -17,29 +18,43 @@
 *.jpeg
 *.JPEG
 
-# Exclude generated OCR output files
-*.csv
-*.json
-*.xml
+# Exclude large data files
+*.zip
+*.ZIP
+*.tar.gz
+*.TAR.GZ
 
-# Exception: Do not ignore these files
+# Exclude temporary files
+*.tmp
+*~
+
+# Keep all README files and documentation
 !README.md
-!metadata.json
-!table_samples.md
-!download_test_data.sh
-!generate_test_data.py
-!table_formats.json
+!README.txt
+!*.md
 
-# Instructions for obtaining test documents:
-# 1. Run the download_test_data.sh script to fetch standard test documents from the project's data repository
-# 2. For custom test cases, place your table documents in this directory manually
-# 3. Use generate_test_data.py to create synthetic test tables with controlled variations
+# Keep configuration files
+!*.json
+!*.yaml
+!*.yml
+!*.config
+
+# Keep metadata files
+!metadata.csv
+!table_definitions.csv
+!annotations.csv
+
+# INSTRUCTIONS FOR TEST DOCUMENTS WITH TABULAR DATA
 #
-# Note: Test data should include various table formats:
-# - Simple tables with clear borders
-# - Complex tables with merged cells
-# - Tables with varying font sizes and styles
-# - Low-quality scanned tables
-# - Tables with handwritten entries
-# - Financial tables with currency values
-# - Tables embedded in larger documents
+# The actual test documents containing tables are not stored in the Git repository to avoid bloat.
+# To obtain the test documents for development and testing:
+#
+# 1. Download the tabular test document package from the secure S3 bucket:
+#    s3://mca-documents-staging/test-data/tables.zip
+#
+# 2. Extract the package to this directory, preserving the folder structure
+#
+# 3. Run the verification script to ensure all required test documents are present:
+#    python ../../verify_test_data.py tables
+#
+# For more information, see the README.md file in this directory.
