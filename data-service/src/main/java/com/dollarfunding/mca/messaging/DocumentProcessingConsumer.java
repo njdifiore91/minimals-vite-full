@@ -1,5 +1,8 @@
 package com.dollarfunding.mca.messaging;
 
+import com.dollarfunding.mca.dto.DocumentProcessingMessage;
+import com.dollarfunding.mca.entity.DocumentType;
+import com.dollarfunding.mca.exception.ProcessingException;
 import com.dollarfunding.mca.service.ProcessingService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -7,233 +10,293 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.amqp.AmqpRejectAndDontRequeueException;
-import org.springframework.amqp.core.Message;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
-import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.amqp.support.AmqpHeaders;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.dao.DataAccessException;
+import org.springframework.messaging.handler.annotation.Header;
+import org.springframework.messaging.handler.annotation.Payload;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.UUID;
 
 /**
- * RabbitMQ consumer class that listens for document processing messages from the data.processing queue.
- * It deserializes incoming messages, validates their content, and delegates processing to the appropriate service.
- * This class implements error handling, retry logic, and dead-letter queue routing for failed messages.
+ * RabbitMQ consumer that listens for document processing messages from the data.processing queue.
+ * 
+ * This class is responsible for consuming messages containing extracted document data from the OCR Service,
+ * validating the message content, and delegating processing to the appropriate service. It implements
+ * error handling, retry logic, and dead-letter queue routing for failed messages.
+ * 
+ * The consumer applies data validation, business rules, and application state management logic
+ * to process merchant cash advance applications. It manages transactions across PostgreSQL and Redis,
+ * and publishes status updates to RabbitMQ for notification delivery.
  */
 @Component
 public class DocumentProcessingConsumer {
 
-    private static final Logger logger = LoggerFactory.getLogger(DocumentProcessingConsumer.class);
-
+    private static final Logger log = LoggerFactory.getLogger(DocumentProcessingConsumer.class);
+    
     private final ProcessingService processingService;
     private final ObjectMapper objectMapper;
-    private final RabbitTemplate rabbitTemplate;
-
-    @Value("${rabbitmq.exchange.documents}")
-    private String documentsExchange;
-
-    @Value("${rabbitmq.routing-key.document.error}")
-    private String documentErrorRoutingKey;
-
-    @Value("${rabbitmq.max-retry-attempts}")
-    private int maxRetryAttempts;
-
+    
+    @Value("${application.processing.confidence-threshold:0.75}")
+    private double confidenceThreshold;
+    
+    @Value("${application.processing.max-retries:3}")
+    private int maxRetries;
+    
     /**
-     * Constructor for DocumentProcessingConsumer.
-     *
+     * Constructor with required dependencies.
+     * 
      * @param processingService Service for processing document data
-     * @param objectMapper     JSON object mapper for message serialization/deserialization
-     * @param rabbitTemplate   RabbitMQ template for message operations
+     * @param objectMapper Jackson ObjectMapper for JSON serialization/deserialization
      */
     @Autowired
-    public DocumentProcessingConsumer(ProcessingService processingService, 
-                                     ObjectMapper objectMapper,
-                                     RabbitTemplate rabbitTemplate) {
+    public DocumentProcessingConsumer(ProcessingService processingService, ObjectMapper objectMapper) {
         this.processingService = processingService;
         this.objectMapper = objectMapper;
-        this.rabbitTemplate = rabbitTemplate;
     }
-
+    
     /**
-     * Processes document processing messages from the data.processing queue.
-     * This method deserializes the message, validates its content, and delegates processing to the ProcessingService.
-     * It implements error handling with retry and dead-letter queue routing for failed messages.
-     *
-     * @param message The RabbitMQ message containing document processing data
+     * Consumes document processing messages from the data.processing queue.
+     * 
+     * This method is annotated with @RabbitListener to listen for messages on the specified queue.
+     * It deserializes the message payload, validates its content, and delegates processing to the
+     * appropriate service method based on the message content.
+     * 
+     * @param payload The message payload as a JSON string
+     * @param messageId The RabbitMQ message ID
+     * @param retryCount The number of times this message has been retried
+     * @throws AmqpRejectAndDontRequeueException if the message should be rejected and not requeued
      */
-    @RabbitListener(queues = "${rabbitmq.queue.data.processing}")
+    @RabbitListener(queues = "${application.messaging.queues.data-processing.name:data.processing}")
     @Transactional
-    public void processDocumentMessage(Message message) {
-        String messageBody = new String(message.getBody(), StandardCharsets.UTF_8);
-        logger.info("Received document processing message: {}", messageBody);
-
+    public void consumeDocumentProcessingMessage(
+            @Payload String payload,
+            @Header(AmqpHeaders.MESSAGE_ID) String messageId,
+            @Header(value = "x-retry-count", defaultValue = "0") int retryCount) {
+        
+        log.info("Received document processing message with ID: {}, retry count: {}", messageId, retryCount);
+        
         try {
-            // Extract retry count from message headers
-            Integer retryCount = (Integer) message.getMessageProperties().getHeaders().getOrDefault("x-retry-count", 0);
+            // Deserialize the message payload
+            DocumentProcessingMessage message = deserializeMessage(payload);
             
-            // Deserialize message
-            DocumentProcessingMessage processingMessage = deserializeMessage(messageBody);
+            // Validate the message content
+            validateMessage(message);
             
-            // Validate message content
-            validateMessage(processingMessage);
+            // Process the document based on the message content
+            processDocument(message, retryCount);
             
-            // Process the document data based on processing type
-            processDocumentData(processingMessage);
+            log.info("Successfully processed document with ID: {}", message.getDocumentId());
             
-            logger.info("Successfully processed document message with ID: {}", processingMessage.getDocumentId());
         } catch (JsonProcessingException e) {
-            // Handle deserialization errors
-            logger.error("Failed to deserialize document processing message: {}", e.getMessage());
-            handleMessageError(message, e, "DESERIALIZATION_ERROR");
+            // Handle JSON deserialization errors
+            log.error("Failed to deserialize document processing message: {}", e.getMessage(), e);
+            handleDeserializationError(payload, messageId, retryCount, e);
+            
         } catch (IllegalArgumentException e) {
             // Handle validation errors
-            logger.error("Invalid document processing message: {}", e.getMessage());
-            handleMessageError(message, e, "VALIDATION_ERROR");
-        } catch (DataAccessException e) {
-            // Handle database errors
-            logger.error("Database error while processing document message: {}", e.getMessage());
-            handleMessageError(message, e, "DATABASE_ERROR");
+            log.error("Invalid document processing message: {}", e.getMessage(), e);
+            handleValidationError(payload, messageId, retryCount, e);
+            
+        } catch (ProcessingException e) {
+            // Handle processing errors
+            log.error("Error processing document: {}", e.getMessage(), e);
+            handleProcessingError(payload, messageId, retryCount, e);
+            
         } catch (Exception e) {
-            // Handle other unexpected errors
-            logger.error("Unexpected error while processing document message: {}", e.getMessage(), e);
-            handleMessageError(message, e, "PROCESSING_ERROR");
+            // Handle unexpected errors
+            log.error("Unexpected error processing document message: {}", e.getMessage(), e);
+            handleUnexpectedError(payload, messageId, retryCount, e);
         }
     }
-
+    
     /**
-     * Deserializes the message body into a DocumentProcessingMessage object.
-     *
-     * @param messageBody The message body as a string
+     * Deserializes the message payload into a DocumentProcessingMessage object.
+     * 
+     * @param payload The message payload as a JSON string
      * @return The deserialized DocumentProcessingMessage
-     * @throws JsonProcessingException If deserialization fails
+     * @throws JsonProcessingException if the payload cannot be deserialized
      */
-    private DocumentProcessingMessage deserializeMessage(String messageBody) throws JsonProcessingException {
+    private DocumentProcessingMessage deserializeMessage(String payload) throws JsonProcessingException {
         try {
-            return objectMapper.readValue(messageBody, DocumentProcessingMessage.class);
+            return objectMapper.readValue(payload, DocumentProcessingMessage.class);
         } catch (JsonProcessingException e) {
-            logger.error("Failed to deserialize message: {}", messageBody);
+            log.error("Failed to deserialize message payload: {}", payload);
             throw e;
         }
     }
-
+    
     /**
-     * Validates the content of the document processing message.
-     *
+     * Validates the content of a document processing message.
+     * 
      * @param message The document processing message to validate
-     * @throws IllegalArgumentException If the message is invalid
+     * @throws IllegalArgumentException if the message is invalid
      */
     private void validateMessage(DocumentProcessingMessage message) {
         if (message == null) {
             throw new IllegalArgumentException("Message cannot be null");
         }
         
-        if (message.getDocumentId() == null || message.getDocumentId().isEmpty()) {
-            throw new IllegalArgumentException("Document ID is required");
+        if (!message.isValid()) {
+            throw new IllegalArgumentException("Message is missing required fields: " + message);
         }
         
-        if (message.getDocumentType() == null) {
-            throw new IllegalArgumentException("Document type is required");
+        // Validate document type
+        try {
+            DocumentType.findByName(message.getDocumentType())
+                .orElseThrow(() -> new IllegalArgumentException("Invalid document type: " + message.getDocumentType()));
+        } catch (Exception e) {
+            throw new IllegalArgumentException("Invalid document type: " + message.getDocumentType(), e);
         }
         
+        // Validate storage path
+        if (message.getStoragePath() == null || !message.getStoragePath().startsWith("s3://")) {
+            throw new IllegalArgumentException("Invalid storage path: " + message.getStoragePath());
+        }
+        
+        // Validate extracted data
         if (message.getExtractedData() == null || message.getExtractedData().isEmpty()) {
-            throw new IllegalArgumentException("Extracted data is required");
+            throw new IllegalArgumentException("Message contains no extracted data");
         }
         
-        logger.debug("Message validation successful for document ID: {}", message.getDocumentId());
+        log.debug("Message validation successful for document ID: {}", message.getDocumentId());
     }
-
+    
     /**
-     * Processes the document data based on the processing type.
-     *
-     * @param message The document processing message containing extracted data
+     * Processes a document based on the message content.
+     * 
+     * This method delegates processing to the appropriate service method based on the message content.
+     * If the message contains an application ID, it updates the existing application with the new document.
+     * Otherwise, it processes the document as a new application or associates it with an existing application
+     * based on the document content.
+     * 
+     * @param message The document processing message
+     * @param retryCount The number of times this message has been retried
+     * @throws ProcessingException if an error occurs during processing
      */
-    private void processDocumentData(DocumentProcessingMessage message) {
-        logger.debug("Processing document data for document ID: {}, type: {}", 
-                message.getDocumentId(), message.getDocumentType());
+    private void processDocument(DocumentProcessingMessage message, int retryCount) throws ProcessingException {
+        UUID documentId = message.getDocumentId();
+        UUID applicationId = message.getApplicationId();
+        Map<String, Object> extractedData = message.getExtractedData();
         
-        switch (message.getProcessingType()) {
-            case NEW_APPLICATION:
-                processingService.processNewApplication(message);
-                break;
-            case UPDATE_EXISTING:
-                processingService.updateExistingApplication(message);
-                break;
-            case SUPPORTING_DOCUMENT:
-                processingService.processSupportingDocument(message);
-                break;
-            default:
-                throw new IllegalArgumentException("Unknown processing type: " + message.getProcessingType());
+        // Add metadata about the processing
+        Map<String, Object> processingMetadata = new HashMap<>();
+        processingMetadata.put("messageId", documentId.toString());
+        processingMetadata.put("retryCount", retryCount);
+        processingMetadata.put("confidenceScores", message.getConfidenceScores());
+        processingMetadata.put("averageConfidence", message.getAverageConfidenceScore());
+        processingMetadata.put("processedAt", message.getProcessedAt());
+        processingMetadata.put("documentType", message.getDocumentType());
+        processingMetadata.put("classification", message.getClassification());
+        
+        try {
+            // Check if this is an update to an existing application
+            if (applicationId != null) {
+                log.info("Updating existing application {} with document {}", applicationId, documentId);
+                processingService.updateApplicationWithDocument(applicationId, documentId, extractedData);
+            } else {
+                // Process the document, which will either create a new application or associate with an existing one
+                log.info("Processing document {} to determine application association", documentId);
+                processingService.processDocument(documentId, extractedData);
+            }
+        } catch (ProcessingException e) {
+            // Add context to the exception and rethrow
+            log.error("Processing failed for document {}: {}", documentId, e.getMessage());
+            
+            // Handle the exception with the processing service
+            processingService.handleProcessingException(documentId, applicationId, e, processingMetadata);
+            
+            // Rethrow the exception to trigger retry or dead-letter handling
+            throw e;
         }
     }
-
+    
     /**
-     * Handles message processing errors with retry logic and dead-letter queue routing.
-     *
-     * @param message    The original RabbitMQ message
-     * @param exception  The exception that occurred during processing
-     * @param errorType  The type of error that occurred
+     * Handles deserialization errors.
+     * 
+     * @param payload The original message payload
+     * @param messageId The RabbitMQ message ID
+     * @param retryCount The number of times this message has been retried
+     * @param exception The exception that occurred
+     * @throws AmqpRejectAndDontRequeueException to reject the message without requeuing
      */
-    private void handleMessageError(Message message, Exception exception, String errorType) {
-        Integer retryCount = (Integer) message.getMessageProperties().getHeaders().getOrDefault("x-retry-count", 0);
-        
-        // Check if we should retry or send to dead-letter queue
-        if (retryCount < maxRetryAttempts && isRetryableError(errorType)) {
-            // Increment retry count and publish for retry
-            retryCount++;
-            message.getMessageProperties().getHeaders().put("x-retry-count", retryCount);
-            message.getMessageProperties().getHeaders().put("x-error-type", errorType);
-            message.getMessageProperties().getHeaders().put("x-error-message", exception.getMessage());
-            
-            // Calculate exponential backoff delay
-            long delay = calculateBackoffDelay(retryCount);
-            message.getMessageProperties().getHeaders().put("x-delay", delay);
-            
-            logger.info("Retrying message processing, attempt {} of {}, delay: {} ms", 
-                    retryCount, maxRetryAttempts, delay);
-            
-            // Re-queue the message with the same routing key
-            rabbitTemplate.send(message.getMessageProperties().getReceivedExchange(), 
-                    message.getMessageProperties().getReceivedRoutingKey(), 
-                    message);
+    private void handleDeserializationError(String payload, String messageId, int retryCount, Exception exception) {
+        if (retryCount < maxRetries) {
+            // Log the error and let the message be requeued for retry
+            log.warn("Deserialization failed for message {}, retry {}/{}: {}", 
+                    messageId, retryCount, maxRetries, exception.getMessage());
+            throw new RuntimeException("Deserialization failed, will retry: " + exception.getMessage(), exception);
         } else {
-            // Send to dead-letter queue
-            logger.warn("Sending message to dead-letter queue after {} retry attempts or non-retryable error: {}", 
-                    retryCount, errorType);
-            
-            message.getMessageProperties().getHeaders().put("x-error-type", errorType);
-            message.getMessageProperties().getHeaders().put("x-error-message", exception.getMessage());
-            
-            rabbitTemplate.send(documentsExchange, documentErrorRoutingKey, message);
-            
-            // Reject the message to prevent redelivery
-            throw new AmqpRejectAndDontRequeueException("Message processing failed after retries or non-retryable error", 
-                    exception);
+            // Max retries reached, reject the message
+            log.error("Deserialization failed for message {} after {} retries, sending to dead-letter queue", 
+                    messageId, retryCount);
+            throw new AmqpRejectAndDontRequeueException("Deserialization failed after max retries: " + exception.getMessage(), exception);
         }
     }
-
+    
     /**
-     * Determines if an error is retryable based on its type.
-     *
-     * @param errorType The type of error
-     * @return true if the error is retryable, false otherwise
+     * Handles validation errors.
+     * 
+     * @param payload The original message payload
+     * @param messageId The RabbitMQ message ID
+     * @param retryCount The number of times this message has been retried
+     * @param exception The exception that occurred
+     * @throws AmqpRejectAndDontRequeueException to reject the message without requeuing
      */
-    private boolean isRetryableError(String errorType) {
-        // Database errors and processing errors are retryable
-        // Deserialization and validation errors are not retryable
-        return "DATABASE_ERROR".equals(errorType) || "PROCESSING_ERROR".equals(errorType);
+    private void handleValidationError(String payload, String messageId, int retryCount, Exception exception) {
+        // Validation errors are not retryable, send to dead-letter queue immediately
+        log.error("Validation failed for message {}: {}", messageId, exception.getMessage());
+        throw new AmqpRejectAndDontRequeueException("Validation failed: " + exception.getMessage(), exception);
     }
-
+    
     /**
-     * Calculates the backoff delay for retry attempts using exponential backoff.
-     *
-     * @param retryCount The current retry count
-     * @return The delay in milliseconds
+     * Handles processing errors.
+     * 
+     * @param payload The original message payload
+     * @param messageId The RabbitMQ message ID
+     * @param retryCount The number of times this message has been retried
+     * @param exception The exception that occurred
+     * @throws AmqpRejectAndDontRequeueException to reject the message without requeuing
      */
-    private long calculateBackoffDelay(int retryCount) {
-        // Exponential backoff: 1s, 2s, 4s, 8s, 16s, etc.
-        return (long) (Math.pow(2, retryCount - 1) * 1000);
+    private void handleProcessingError(String payload, String messageId, int retryCount, Exception exception) {
+        if (retryCount < maxRetries) {
+            // Log the error and let the message be requeued for retry
+            log.warn("Processing failed for message {}, retry {}/{}: {}", 
+                    messageId, retryCount, maxRetries, exception.getMessage());
+            throw new RuntimeException("Processing failed, will retry: " + exception.getMessage(), exception);
+        } else {
+            // Max retries reached, reject the message
+            log.error("Processing failed for message {} after {} retries, sending to dead-letter queue", 
+                    messageId, retryCount);
+            throw new AmqpRejectAndDontRequeueException("Processing failed after max retries: " + exception.getMessage(), exception);
+        }
+    }
+    
+    /**
+     * Handles unexpected errors.
+     * 
+     * @param payload The original message payload
+     * @param messageId The RabbitMQ message ID
+     * @param retryCount The number of times this message has been retried
+     * @param exception The exception that occurred
+     * @throws AmqpRejectAndDontRequeueException to reject the message without requeuing
+     */
+    private void handleUnexpectedError(String payload, String messageId, int retryCount, Exception exception) {
+        if (retryCount < maxRetries) {
+            // Log the error and let the message be requeued for retry
+            log.warn("Unexpected error for message {}, retry {}/{}: {}", 
+                    messageId, retryCount, maxRetries, exception.getMessage());
+            throw new RuntimeException("Unexpected error, will retry: " + exception.getMessage(), exception);
+        } else {
+            // Max retries reached, reject the message
+            log.error("Unexpected error for message {} after {} retries, sending to dead-letter queue", 
+                    messageId, retryCount);
+            throw new AmqpRejectAndDontRequeueException("Unexpected error after max retries: " + exception.getMessage(), exception);
+        }
     }
 }
