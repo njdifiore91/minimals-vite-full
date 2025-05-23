@@ -83,8 +83,12 @@ from .errors import (
     ErrorDetails,
     LogEntry,
     ErrorCategory,
+    ErrorSeverity,
+    MonitoringLevel,
     MonitoringAlert,
     Result,
+    ErrorResult,
+    OperationResult
 )
 
 # Import and re-export types from documents module
@@ -168,8 +172,12 @@ __all__ = [
     'ErrorDetails',
     'LogEntry',
     'ErrorCategory',
+    'ErrorSeverity',
+    'MonitoringLevel',
     'MonitoringAlert',
     'Result',
+    'ErrorResult',
+    'OperationResult',
     
     # Document types
     'DocumentMetadata',
