@@ -4,6 +4,20 @@
 aws_region     = "us-east-1"  # Primary region
 replica_region = "us-west-2"  # Replica region for disaster recovery
 
+# AWS account configuration
+# aws_account_id = "123456789012"  # Should be provided via environment variables or secure secrets management
+
+# Domain configuration
+domain_name = "dollarfunding.com"
+
+# Kubernetes configuration
+cluster_name = "mca-production"
+# kubernetes_config_path = "~/.kube/config"  # Should be provided via environment variables or secure secrets management
+# kubernetes_config_context = "mca-production"  # Should be provided via environment variables or secure secrets management
+
+# Grafana configuration
+# grafana_admin_password should be provided via environment variables or secure secrets management
+
 # Database configuration
 db_name = "mca_production"
 # db_username and db_password should be provided via environment variables or secure secrets management
