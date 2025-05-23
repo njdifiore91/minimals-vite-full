@@ -1,26 +1,23 @@
 package com.dollarfunding.mca.service;
 
+import com.dollarfunding.mca.dto.ApplicationFilterDTO;
 import com.dollarfunding.mca.dto.ApplicationRequestDTO;
+import com.dollarfunding.mca.dto.ApplicationResponseDTO;
 import com.dollarfunding.mca.entity.Application;
 import com.dollarfunding.mca.entity.ApplicationStatus;
 import com.dollarfunding.mca.entity.Document;
-import com.dollarfunding.mca.entity.DocumentType;
-import com.dollarfunding.mca.entity.EventType;
-import com.dollarfunding.mca.entity.MerchantDetails;
 import com.dollarfunding.mca.entity.ReviewStatus;
 import com.dollarfunding.mca.exception.ApplicationNotFoundException;
 import com.dollarfunding.mca.exception.InvalidApplicationStateException;
 import com.dollarfunding.mca.exception.ValidationException;
 import com.dollarfunding.mca.repository.ApplicationRepository;
-import com.dollarfunding.mca.service.ValidationService.ValidationResult;
-import com.dollarfunding.mca.service.ValidationService.ValidationSeverity;
+import com.dollarfunding.mca.util.ValidationResult;
+
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
-import org.mockito.Captor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -28,11 +25,10 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.domain.Specification;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -40,855 +36,712 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 /**
  * Unit tests for the ApplicationServiceImpl class.
  * 
- * This test suite verifies that the ApplicationServiceImpl correctly processes application data,
+ * These tests verify that the ApplicationService correctly processes application data,
  * applies business rules and validation logic, manages transactions across PostgreSQL and Redis,
- * evaluates application completeness, integrates with ValidationService for business rule application,
- * and delivers notifications for application status changes.
- * 
- * The tests use Mockito to mock dependencies including ApplicationRepository, ValidationService,
- * and NotificationService, allowing for isolated testing of the service's functionality.
+ * validates application completeness, integrates with ValidationService for business rule application,
+ * and verifies notification delivery for application status changes.
  */
 @ExtendWith(MockitoExtension.class)
 public class ApplicationServiceImplTest {
 
     @Mock
     private ApplicationRepository applicationRepository;
-
+    
     @Mock
     private ValidationService validationService;
-
+    
     @Mock
     private NotificationService notificationService;
-
+    
     @InjectMocks
     private ApplicationServiceImpl applicationService;
-
-    @Captor
-    private ArgumentCaptor<Application> applicationCaptor;
-
-    private UUID testId;
-    private Application testApplication;
-    private ApplicationRequestDTO testApplicationDTO;
-    private Map<String, Object> testMetadata;
-    private ValidationResult validValidationResult;
-    private ValidationResult invalidValidationResult;
-    private Document testDocument;
-
+    
+    private UUID applicationId;
+    private Application application;
+    private ApplicationRequestDTO applicationRequestDTO;
+    private Map<String, Object> metadata;
+    
     @BeforeEach
     void setUp() {
         // Initialize test data
-        testId = UUID.randomUUID();
-        testMetadata = new HashMap<>();
-        testMetadata.put("source", "api");
-        testMetadata.put("processingStartTime", LocalDateTime.now().toString());
+        applicationId = UUID.randomUUID();
+        metadata = new HashMap<>();
+        metadata.put("businessName", "Test Business");
+        metadata.put("requestedAmount", 50000);
+        metadata.put("industry", "Retail");
         
-        // Create test application
-        testApplication = new Application();
-        testApplication.setId(testId);
-        testApplication.setStatus(ApplicationStatus.NEW);
-        testApplication.setReviewStatus(ReviewStatus.NOT_REVIEWED);
-        testApplication.setMetadata(testMetadata);
-        testApplication.setCreatedAt(LocalDateTime.now());
-        testApplication.setUpdatedAt(LocalDateTime.now());
+        // Create application entity
+        application = new Application();
+        application.setId(applicationId);
+        application.setStatus(ApplicationStatus.NEW);
+        application.setReviewStatus(ReviewStatus.NOT_REVIEWED);
+        application.setMetadata(metadata);
+        application.setCreatedAt(LocalDateTime.now());
+        application.setUpdatedAt(LocalDateTime.now());
         
-        // Create test application DTO
-        testApplicationDTO = new ApplicationRequestDTO();
-        testApplicationDTO.setMetadata(testMetadata);
+        // Create application request DTO
+        applicationRequestDTO = new ApplicationRequestDTO();
+        applicationRequestDTO.setMetadata(metadata);
+    }
+    
+    @Test
+    @DisplayName("Should create a new application successfully")
+    void createApplication_Success() {
+        // Arrange
+        ValidationResult validationResult = new ValidationResult();
+        validationResult.setValid(true);
         
-        // Create validation results
-        Map<String, String> noErrors = Collections.emptyMap();
-        validValidationResult = new ValidationResult(true, noErrors);
+        when(validationService.validateApplicationData(any(ApplicationRequestDTO.class)))
+                .thenReturn(validationResult);
+        when(applicationRepository.save(any(Application.class)))
+                .thenReturn(application);
         
+        // Act
+        ApplicationResponseDTO result = applicationService.createApplication(applicationRequestDTO);
+        
+        // Assert
+        assertNotNull(result);
+        assertEquals(applicationId, result.getId());
+        assertEquals(ApplicationStatus.NEW, result.getStatus());
+        assertEquals(ReviewStatus.NOT_REVIEWED, result.getReviewStatus());
+        assertEquals(metadata, result.getMetadata());
+        
+        // Verify interactions
+        verify(validationService).validateApplicationData(applicationRequestDTO);
+        verify(applicationRepository).save(any(Application.class));
+        verify(notificationService).sendApplicationStatusNotification(applicationId, ApplicationStatus.NEW);
+    }
+    
+    @Test
+    @DisplayName("Should throw ValidationException when application data is invalid")
+    void createApplication_ValidationFailure() {
+        // Arrange
+        ValidationResult validationResult = new ValidationResult();
+        validationResult.setValid(false);
         Map<String, String> errors = new HashMap<>();
-        errors.put("field1", "Error message 1");
-        errors.put("field2", "Error message 2");
-        invalidValidationResult = new ValidationResult(false, errors, ValidationSeverity.ERROR);
+        errors.put("businessName", "Business name is required");
+        validationResult.setErrors(errors);
         
-        // Create test document
-        testDocument = new Document(testId, DocumentType.BANK_STATEMENT, "s3://mca-documents-production/test-document.pdf");
-        testDocument.setId(UUID.randomUUID());
-        testDocument.setClassification("Bank Statement");
-        testDocument.setUploadedAt(LocalDateTime.now());
+        when(validationService.validateApplicationData(any(ApplicationRequestDTO.class)))
+                .thenReturn(validationResult);
         
-        Map<String, Object> docMetadata = new HashMap<>();
-        docMetadata.put("pageCount", 5);
-        docMetadata.put("fileSize", 1024);
-        testDocument.setMetadata(docMetadata);
+        // Act & Assert
+        ValidationException exception = assertThrows(ValidationException.class, () -> {
+            applicationService.createApplication(applicationRequestDTO);
+        });
+        
+        // Verify exception details
+        assertEquals("Application data validation failed", exception.getMessage());
+        assertEquals(errors, exception.getErrors());
+        
+        // Verify interactions
+        verify(validationService).validateApplicationData(applicationRequestDTO);
+        verify(applicationRepository, never()).save(any(Application.class));
+        verify(notificationService, never()).sendApplicationStatusNotification(any(UUID.class), any(ApplicationStatus.class));
     }
     
-    @Nested
-    @DisplayName("Create Application Tests")
-    class CreateApplicationTests {
+    @Test
+    @DisplayName("Should retrieve an application by ID successfully")
+    void getApplicationById_Success() {
+        // Arrange
+        when(applicationRepository.findById(applicationId))
+                .thenReturn(Optional.of(application));
         
-        @Test
-        @DisplayName("Should create application successfully")
-        void shouldCreateApplicationSuccessfully() {
-            // Arrange
-            when(validationService.validateApplicationData(any(ApplicationRequestDTO.class)))
-                    .thenReturn(validValidationResult);
-            when(applicationRepository.save(any(Application.class))).thenReturn(testApplication);
-            when(notificationService.sendApplicationCreatedNotification(any(Application.class)))
-                    .thenReturn(true);
-
-            // Act
-            Application result = applicationService.createApplication(testApplicationDTO);
-
-            // Assert
-            assertNotNull(result);
-            assertEquals(testId, result.getId());
-            assertEquals(ApplicationStatus.NEW, result.getStatus());
-            assertEquals(ReviewStatus.NOT_REVIEWED, result.getReviewStatus());
-            assertTrue(result.getMetadata().containsKey("source"));
-            assertTrue(result.getMetadata().containsKey("processingStartTime"));
-
-            // Verify interactions
-            verify(validationService).validateApplicationData(testApplicationDTO);
-            verify(applicationRepository).save(any(Application.class));
-            verify(notificationService).sendApplicationCreatedNotification(any(Application.class));
-        }
-
-        @Test
-        @DisplayName("Should throw ValidationException when validation fails")
-        void shouldThrowValidationExceptionWhenValidationFails() {
-            // Arrange
-            when(validationService.validateApplicationData(any(ApplicationRequestDTO.class)))
-                    .thenReturn(invalidValidationResult);
-
-            // Act & Assert
-            ValidationException exception = assertThrows(ValidationException.class, () -> {
-                applicationService.createApplication(testApplicationDTO);
-            });
-
-            // Verify exception details
-            assertEquals("Invalid application data", exception.getMessage());
-            assertEquals(2, exception.getErrors().size());
-            assertTrue(exception.getErrors().containsKey("field1"));
-            assertTrue(exception.getErrors().containsKey("field2"));
-
-            // Verify interactions
-            verify(validationService).validateApplicationData(testApplicationDTO);
-            verify(applicationRepository, never()).save(any(Application.class));
-            verify(notificationService, never()).sendApplicationCreatedNotification(any(Application.class));
-        }
+        // Act
+        ApplicationResponseDTO result = applicationService.getApplicationById(applicationId);
+        
+        // Assert
+        assertNotNull(result);
+        assertEquals(applicationId, result.getId());
+        assertEquals(ApplicationStatus.NEW, result.getStatus());
+        assertEquals(ReviewStatus.NOT_REVIEWED, result.getReviewStatus());
+        assertEquals(metadata, result.getMetadata());
+        
+        // Verify interactions
+        verify(applicationRepository).findById(applicationId);
     }
     
-    @Nested
-    @DisplayName("Get Application Tests")
-    class GetApplicationTests {
+    @Test
+    @DisplayName("Should throw ApplicationNotFoundException when application is not found")
+    void getApplicationById_NotFound() {
+        // Arrange
+        when(applicationRepository.findById(applicationId))
+                .thenReturn(Optional.empty());
         
-        @Test
-        @DisplayName("Should retrieve application by ID successfully")
-        void shouldRetrieveApplicationByIdSuccessfully() {
-            // Arrange
-            when(applicationRepository.findById(testId)).thenReturn(Optional.of(testApplication));
-
-            // Act
-            Application result = applicationService.getApplicationById(testId);
-
-            // Assert
-            assertNotNull(result);
-            assertEquals(testId, result.getId());
-            assertEquals(ApplicationStatus.NEW, result.getStatus());
-            assertEquals(ReviewStatus.NOT_REVIEWED, result.getReviewStatus());
-
-            // Verify interactions
-            verify(applicationRepository).findById(testId);
-        }
-
-        @Test
-        @DisplayName("Should throw ApplicationNotFoundException when application not found")
-        void shouldThrowApplicationNotFoundExceptionWhenApplicationNotFound() {
-            // Arrange
-            when(applicationRepository.findById(testId)).thenReturn(Optional.empty());
-
-            // Act & Assert
-            ApplicationNotFoundException exception = assertThrows(ApplicationNotFoundException.class, () -> {
-                applicationService.getApplicationById(testId);
-            });
-
-            // Verify exception details
-            assertEquals("Application not found with ID: " + testId, exception.getMessage());
-
-            // Verify interactions
-            verify(applicationRepository).findById(testId);
-        }
+        // Act & Assert
+        ApplicationNotFoundException exception = assertThrows(ApplicationNotFoundException.class, () -> {
+            applicationService.getApplicationById(applicationId);
+        });
         
-        @Test
-        @DisplayName("Should retrieve all applications with pagination")
-        void shouldRetrieveAllApplicationsWithPagination() {
-            // Arrange
-            Pageable pageable = PageRequest.of(0, 10);
-            List<Application> applications = Arrays.asList(testApplication);
-            Page<Application> applicationPage = new PageImpl<>(applications, pageable, applications.size());
-            
-            when(applicationRepository.findAll(pageable)).thenReturn(applicationPage);
-
-            // Act
-            Page<Application> result = applicationService.getAllApplications(pageable);
-
-            // Assert
-            assertNotNull(result);
-            assertEquals(1, result.getTotalElements());
-            assertEquals(testId, result.getContent().get(0).getId());
-
-            // Verify interactions
-            verify(applicationRepository).findAll(pageable);
-        }
+        // Verify exception details
+        assertEquals("Application not found with ID: " + applicationId, exception.getMessage());
         
-        @Test
-        @DisplayName("Should retrieve applications by status with pagination")
-        void shouldRetrieveApplicationsByStatusWithPagination() {
-            // Arrange
-            Pageable pageable = PageRequest.of(0, 10);
-            List<Application> applications = Arrays.asList(testApplication);
-            Page<Application> applicationPage = new PageImpl<>(applications, pageable, applications.size());
-            
-            when(applicationRepository.findByStatus(ApplicationStatus.NEW, pageable)).thenReturn(applicationPage);
-
-            // Act
-            Page<Application> result = applicationService.getApplicationsByStatus(ApplicationStatus.NEW, pageable);
-
-            // Assert
-            assertNotNull(result);
-            assertEquals(1, result.getTotalElements());
-            assertEquals(testId, result.getContent().get(0).getId());
-            assertEquals(ApplicationStatus.NEW, result.getContent().get(0).getStatus());
-
-            // Verify interactions
-            verify(applicationRepository).findByStatus(ApplicationStatus.NEW, pageable);
-        }
-        
-        @Test
-        @DisplayName("Should retrieve applications by review status with pagination")
-        void shouldRetrieveApplicationsByReviewStatusWithPagination() {
-            // Arrange
-            Pageable pageable = PageRequest.of(0, 10);
-            List<Application> applications = Arrays.asList(testApplication);
-            Page<Application> applicationPage = new PageImpl<>(applications, pageable, applications.size());
-            
-            when(applicationRepository.findByReviewStatus(ReviewStatus.NOT_REVIEWED, pageable)).thenReturn(applicationPage);
-
-            // Act
-            Page<Application> result = applicationService.getApplicationsByReviewStatus(ReviewStatus.NOT_REVIEWED, pageable);
-
-            // Assert
-            assertNotNull(result);
-            assertEquals(1, result.getTotalElements());
-            assertEquals(testId, result.getContent().get(0).getId());
-            assertEquals(ReviewStatus.NOT_REVIEWED, result.getContent().get(0).getReviewStatus());
-
-            // Verify interactions
-            verify(applicationRepository).findByReviewStatus(ReviewStatus.NOT_REVIEWED, pageable);
-        }
+        // Verify interactions
+        verify(applicationRepository).findById(applicationId);
     }
     
-    @Nested
-    @DisplayName("Update Application Tests")
-    class UpdateApplicationTests {
+    @Test
+    @DisplayName("Should update an application successfully")
+    void updateApplication_Success() {
+        // Arrange
+        Map<String, Object> updatedMetadata = new HashMap<>(metadata);
+        updatedMetadata.put("requestedAmount", 75000);
+        updatedMetadata.put("notes", "Updated application");
         
-        @Test
-        @DisplayName("Should update application successfully")
-        void shouldUpdateApplicationSuccessfully() {
-            // Arrange
-            when(applicationRepository.findById(testId)).thenReturn(Optional.of(testApplication));
-            when(validationService.validateApplicationData(any(ApplicationRequestDTO.class)))
-                    .thenReturn(validValidationResult);
-            when(applicationRepository.save(any(Application.class))).thenReturn(testApplication);
-
-            // Update metadata in DTO
-            Map<String, Object> updatedMetadata = new HashMap<>(testMetadata);
-            updatedMetadata.put("additionalField", "value");
-            testApplicationDTO.setMetadata(updatedMetadata);
-
-            // Act
-            Application result = applicationService.updateApplication(testId, testApplicationDTO);
-
-            // Assert
-            assertNotNull(result);
-            assertEquals(testId, result.getId());
-            assertTrue(result.getMetadata().containsKey("additionalField"));
-            assertTrue(result.getMetadata().containsKey("lastUpdated"));
-
-            // Verify interactions
-            verify(applicationRepository).findById(testId);
-            verify(validationService).validateApplicationData(testApplicationDTO);
-            verify(applicationRepository).save(any(Application.class));
-        }
-
-        @Test
-        @DisplayName("Should throw ApplicationNotFoundException when updating non-existent application")
-        void shouldThrowApplicationNotFoundExceptionWhenUpdatingNonExistentApplication() {
-            // Arrange
-            when(applicationRepository.findById(testId)).thenReturn(Optional.empty());
-            when(validationService.validateApplicationData(any(ApplicationRequestDTO.class)))
-                    .thenReturn(validValidationResult);
-
-            // Act & Assert
-            ApplicationNotFoundException exception = assertThrows(ApplicationNotFoundException.class, () -> {
-                applicationService.updateApplication(testId, testApplicationDTO);
-            });
-
-            // Verify exception details
-            assertEquals("Application not found with ID: " + testId, exception.getMessage());
-
-            // Verify interactions
-            verify(applicationRepository).findById(testId);
-            verify(validationService).validateApplicationData(testApplicationDTO);
-            verify(applicationRepository, never()).save(any(Application.class));
-        }
-
-        @Test
-        @DisplayName("Should throw ValidationException when update validation fails")
-        void shouldThrowValidationExceptionWhenUpdateValidationFails() {
-            // Arrange
-            when(validationService.validateApplicationData(any(ApplicationRequestDTO.class)))
-                    .thenReturn(invalidValidationResult);
-
-            // Act & Assert
-            ValidationException exception = assertThrows(ValidationException.class, () -> {
-                applicationService.updateApplication(testId, testApplicationDTO);
-            });
-
-            // Verify exception details
-            assertEquals("Invalid application data", exception.getMessage());
-            assertEquals(2, exception.getErrors().size());
-
-            // Verify interactions
-            verify(validationService).validateApplicationData(testApplicationDTO);
-            verify(applicationRepository, never()).findById(testId);
-            verify(applicationRepository, never()).save(any(Application.class));
-        }
+        ApplicationRequestDTO updateRequest = new ApplicationRequestDTO();
+        updateRequest.setMetadata(updatedMetadata);
+        updateRequest.setStatus(ApplicationStatus.PROCESSING);
+        
+        ValidationResult validationResult = new ValidationResult();
+        validationResult.setValid(true);
+        
+        when(applicationRepository.findById(applicationId))
+                .thenReturn(Optional.of(application));
+        when(validationService.validateApplicationData(any(ApplicationRequestDTO.class)))
+                .thenReturn(validationResult);
+        when(applicationRepository.save(any(Application.class)))
+                .thenReturn(application);
+        
+        // Act
+        ApplicationResponseDTO result = applicationService.updateApplication(applicationId, updateRequest);
+        
+        // Assert
+        assertNotNull(result);
+        assertEquals(applicationId, result.getId());
+        assertEquals(ApplicationStatus.PROCESSING, result.getStatus());
+        
+        // Verify interactions
+        verify(applicationRepository).findById(applicationId);
+        verify(validationService).validateApplicationData(updateRequest);
+        verify(applicationRepository).save(any(Application.class));
+        verify(notificationService).sendApplicationStatusNotification(applicationId, ApplicationStatus.PROCESSING);
+        
+        // Verify application was updated correctly
+        ArgumentCaptor<Application> applicationCaptor = ArgumentCaptor.forClass(Application.class);
+        verify(applicationRepository).save(applicationCaptor.capture());
+        Application savedApplication = applicationCaptor.getValue();
+        assertEquals(updatedMetadata, savedApplication.getMetadata());
+        assertEquals(ApplicationStatus.PROCESSING, savedApplication.getStatus());
     }
     
-    @Nested
-    @DisplayName("Status Update Tests")
-    class StatusUpdateTests {
+    @Test
+    @DisplayName("Should throw ApplicationNotFoundException when updating non-existent application")
+    void updateApplication_NotFound() {
+        // Arrange
+        when(applicationRepository.findById(applicationId))
+                .thenReturn(Optional.empty());
         
-        @Test
-        @DisplayName("Should update application status successfully")
-        void shouldUpdateApplicationStatusSuccessfully() {
-            // Arrange
-            testApplication.setStatus(ApplicationStatus.NEW);
-            when(applicationRepository.findById(testId)).thenReturn(Optional.of(testApplication));
-            when(applicationRepository.save(any(Application.class))).thenReturn(testApplication);
-            when(notificationService.sendApplicationStatusNotification(any(Application.class), anyString(), anyString()))
-                    .thenReturn(true);
-
-            // Act
-            Application result = applicationService.updateApplicationStatus(testId, ApplicationStatus.PROCESSING);
-
-            // Assert
-            assertNotNull(result);
-            assertEquals(ApplicationStatus.PROCESSING, result.getStatus());
-
-            // Verify interactions
-            verify(applicationRepository).findById(testId);
-            verify(applicationRepository).save(any(Application.class));
-            verify(notificationService).sendApplicationStatusNotification(
-                    any(Application.class), eq("NEW"), eq("PROCESSING"));
-        }
-
-        @Test
-        @DisplayName("Should throw InvalidApplicationStateException for invalid status transition")
-        void shouldThrowInvalidApplicationStateExceptionForInvalidStatusTransition() {
-            // Arrange
-            testApplication.setStatus(ApplicationStatus.COMPLETED);
-            when(applicationRepository.findById(testId)).thenReturn(Optional.of(testApplication));
-
-            // Act & Assert
-            InvalidApplicationStateException exception = assertThrows(InvalidApplicationStateException.class, () -> {
-                applicationService.updateApplicationStatus(testId, ApplicationStatus.PROCESSING);
-            });
-
-            // Verify exception details
-            assertEquals("Invalid status transition from COMPLETED to PROCESSING", exception.getMessage());
-
-            // Verify interactions
-            verify(applicationRepository).findById(testId);
-            verify(applicationRepository, never()).save(any(Application.class));
-            verify(notificationService, never()).sendApplicationStatusNotification(any(Application.class), anyString(), anyString());
-        }
-
-        @Test
-        @DisplayName("Should send specific notification for approved status")
-        void shouldSendSpecificNotificationForApprovedStatus() {
-            // Arrange
-            testApplication.setStatus(ApplicationStatus.PROCESSING);
-            when(applicationRepository.findById(testId)).thenReturn(Optional.of(testApplication));
-            when(applicationRepository.save(any(Application.class))).thenReturn(testApplication);
-            when(notificationService.sendApplicationStatusNotification(any(Application.class), anyString(), anyString()))
-                    .thenReturn(true);
-            when(notificationService.sendApplicationApprovedNotification(any(Application.class)))
-                    .thenReturn(true);
-
-            // Act
-            Application result = applicationService.updateApplicationStatus(testId, ApplicationStatus.APPROVED);
-
-            // Assert
-            assertNotNull(result);
-            assertEquals(ApplicationStatus.APPROVED, result.getStatus());
-
-            // Verify interactions
-            verify(applicationRepository).findById(testId);
-            verify(applicationRepository).save(any(Application.class));
-            verify(notificationService).sendApplicationStatusNotification(
-                    any(Application.class), eq("PROCESSING"), eq("APPROVED"));
-            verify(notificationService).sendApplicationApprovedNotification(any(Application.class));
-        }
+        // Act & Assert
+        ApplicationNotFoundException exception = assertThrows(ApplicationNotFoundException.class, () -> {
+            applicationService.updateApplication(applicationId, applicationRequestDTO);
+        });
         
-        @Test
-        @DisplayName("Should update application review status successfully")
-        void shouldUpdateApplicationReviewStatusSuccessfully() {
-            // Arrange
-            testApplication.setReviewStatus(ReviewStatus.NOT_REVIEWED);
-            when(applicationRepository.findById(testId)).thenReturn(Optional.of(testApplication));
-            when(applicationRepository.save(any(Application.class))).thenReturn(testApplication);
-            when(notificationService.sendSystemEventNotification(any(EventType.class), anyMap()))
-                    .thenReturn(true);
-
-            // Act
-            Application result = applicationService.updateApplicationReviewStatus(testId, ReviewStatus.IN_REVIEW);
-
-            // Assert
-            assertNotNull(result);
-            assertEquals(ReviewStatus.IN_REVIEW, result.getReviewStatus());
-
-            // Verify interactions
-            verify(applicationRepository).findById(testId);
-            verify(applicationRepository).save(any(Application.class));
-            verify(notificationService).sendSystemEventNotification(eq(EventType.APPLICATION_UPDATED), anyMap());
-        }
-
-        @Test
-        @DisplayName("Should throw InvalidApplicationStateException for invalid review status transition")
-        void shouldThrowInvalidApplicationStateExceptionForInvalidReviewStatusTransition() {
-            // Arrange
-            testApplication.setReviewStatus(ReviewStatus.APPROVED);
-            when(applicationRepository.findById(testId)).thenReturn(Optional.of(testApplication));
-
-            // Act & Assert
-            InvalidApplicationStateException exception = assertThrows(InvalidApplicationStateException.class, () -> {
-                applicationService.updateApplicationReviewStatus(testId, ReviewStatus.NEEDS_INFORMATION);
-            });
-
-            // Verify exception details
-            assertEquals("Invalid review status transition from APPROVED to NEEDS_INFORMATION", exception.getMessage());
-
-            // Verify interactions
-            verify(applicationRepository).findById(testId);
-            verify(applicationRepository, never()).save(any(Application.class));
-            verify(notificationService, never()).sendSystemEventNotification(any(EventType.class), anyMap());
-        }
+        // Verify exception details
+        assertEquals("Application not found with ID: " + applicationId, exception.getMessage());
+        
+        // Verify interactions
+        verify(applicationRepository).findById(applicationId);
+        verify(validationService, never()).validateApplicationData(any(ApplicationRequestDTO.class));
+        verify(applicationRepository, never()).save(any(Application.class));
     }
     
-    @Nested
-    @DisplayName("Delete Application Tests")
-    class DeleteApplicationTests {
+    @Test
+    @DisplayName("Should throw ValidationException when update data is invalid")
+    void updateApplication_ValidationFailure() {
+        // Arrange
+        ValidationResult validationResult = new ValidationResult();
+        validationResult.setValid(false);
+        Map<String, String> errors = new HashMap<>();
+        errors.put("requestedAmount", "Requested amount must be positive");
+        validationResult.setErrors(errors);
         
-        @Test
-        @DisplayName("Should delete application successfully")
-        void shouldDeleteApplicationSuccessfully() {
-            // Arrange
-            when(applicationRepository.existsById(testId)).thenReturn(true);
-            doNothing().when(applicationRepository).deleteById(testId);
-
-            // Act
-            applicationService.deleteApplication(testId);
-
-            // Verify interactions
-            verify(applicationRepository).existsById(testId);
-            verify(applicationRepository).deleteById(testId);
-        }
-
-        @Test
-        @DisplayName("Should throw ApplicationNotFoundException when deleting non-existent application")
-        void shouldThrowApplicationNotFoundExceptionWhenDeletingNonExistentApplication() {
-            // Arrange
-            when(applicationRepository.existsById(testId)).thenReturn(false);
-
-            // Act & Assert
-            ApplicationNotFoundException exception = assertThrows(ApplicationNotFoundException.class, () -> {
-                applicationService.deleteApplication(testId);
-            });
-
-            // Verify exception details
-            assertEquals("Application not found with ID: " + testId, exception.getMessage());
-
-            // Verify interactions
-            verify(applicationRepository).existsById(testId);
-            verify(applicationRepository, never()).deleteById(any());
-        }
+        when(applicationRepository.findById(applicationId))
+                .thenReturn(Optional.of(application));
+        when(validationService.validateApplicationData(any(ApplicationRequestDTO.class)))
+                .thenReturn(validationResult);
+        
+        // Act & Assert
+        ValidationException exception = assertThrows(ValidationException.class, () -> {
+            applicationService.updateApplication(applicationId, applicationRequestDTO);
+        });
+        
+        // Verify exception details
+        assertEquals("Application data validation failed", exception.getMessage());
+        assertEquals(errors, exception.getErrors());
+        
+        // Verify interactions
+        verify(applicationRepository).findById(applicationId);
+        verify(validationService).validateApplicationData(applicationRequestDTO);
+        verify(applicationRepository, never()).save(any(Application.class));
     }
     
-    @Nested
-    @DisplayName("Document Management Tests")
-    class DocumentManagementTests {
+    @Test
+    @DisplayName("Should delete an application successfully")
+    void deleteApplication_Success() {
+        // Arrange
+        when(applicationRepository.existsById(applicationId))
+                .thenReturn(true);
+        doNothing().when(applicationRepository).deleteById(applicationId);
         
-        @Test
-        @DisplayName("Should add document to application successfully")
-        void shouldAddDocumentToApplicationSuccessfully() {
-            // Arrange
-            when(applicationRepository.findById(testId)).thenReturn(Optional.of(testApplication));
-            when(applicationRepository.save(any(Application.class))).thenReturn(testApplication);
-            when(notificationService.sendDocumentUploadedNotification(any(Document.class), any(UUID.class)))
-                    .thenReturn(true);
-            doNothing().when(applicationService).evaluateApplicationStatus(testId);
-
-            // Act
-            Application result = applicationService.addDocumentToApplication(testId, testDocument);
-
-            // Assert
-            assertNotNull(result);
-            verify(applicationRepository).findById(testId);
-            verify(applicationRepository).save(any(Application.class));
-            verify(notificationService).sendDocumentUploadedNotification(eq(testDocument), eq(testId));
-        }
+        // Act
+        applicationService.deleteApplication(applicationId);
         
-        @Test
-        @DisplayName("Should retrieve application documents successfully")
-        void shouldRetrieveApplicationDocumentsSuccessfully() {
-            // Arrange
-            List<Document> documents = Arrays.asList(testDocument);
-            testApplication.setDocuments(documents);
-            when(applicationRepository.findById(testId)).thenReturn(Optional.of(testApplication));
-
-            // Act
-            List<Document> result = applicationService.getApplicationDocuments(testId);
-
-            // Assert
-            assertNotNull(result);
-            assertEquals(1, result.size());
-            assertEquals(testDocument.getId(), result.get(0).getId());
-
-            // Verify interactions
-            verify(applicationRepository).findById(testId);
-        }
-        
-        @Test
-        @DisplayName("Should retrieve application documents by type successfully")
-        void shouldRetrieveApplicationDocumentsByTypeSuccessfully() {
-            // Arrange
-            List<Document> documents = Arrays.asList(testDocument);
-            testApplication.setDocuments(documents);
-            when(applicationRepository.findById(testId)).thenReturn(Optional.of(testApplication));
-
-            // Act
-            List<Document> result = applicationService.getApplicationDocumentsByType(testId, DocumentType.BANK_STATEMENT);
-
-            // Assert
-            assertNotNull(result);
-            assertEquals(1, result.size());
-            assertEquals(DocumentType.BANK_STATEMENT, result.get(0).getType());
-
-            // Verify interactions
-            verify(applicationRepository).findById(testId);
-        }
-        
-        @Test
-        @DisplayName("Should process document successfully")
-        void shouldProcessDocumentSuccessfully() {
-            // Arrange
-            UUID documentId = UUID.randomUUID();
-            testDocument.setId(documentId);
-            List<Document> documents = Arrays.asList(testDocument);
-            testApplication.setDocuments(documents);
-            
-            Map<String, Object> extractedData = new HashMap<>();
-            extractedData.put("accountNumber", "123456789");
-            extractedData.put("balance", "5000.00");
-            
-            Map<String, Double> confidenceScores = new HashMap<>();
-            confidenceScores.put("accountNumber", 0.95);
-            confidenceScores.put("balance", 0.90);
-            
-            when(applicationRepository.findById(testId)).thenReturn(Optional.of(testApplication));
-            when(applicationRepository.save(any(Application.class))).thenReturn(testApplication);
-            when(validationService.validateExtractedDataWithConfidence(
-                    any(DocumentType.class), anyMap(), anyMap()))
-                    .thenReturn(validValidationResult);
-            when(notificationService.sendDocumentProcessedNotification(
-                    any(Document.class), any(UUID.class), anyMap()))
-                    .thenReturn(true);
-            doNothing().when(applicationService).evaluateApplicationStatus(testId);
-
-            // Act
-            Application result = applicationService.processDocument(testId, documentId, extractedData, confidenceScores);
-
-            // Assert
-            assertNotNull(result);
-            verify(applicationRepository).findById(testId);
-            verify(validationService).validateExtractedDataWithConfidence(
-                    eq(DocumentType.BANK_STATEMENT), eq(extractedData), eq(confidenceScores));
-            verify(applicationRepository).save(any(Application.class));
-            verify(notificationService).sendDocumentProcessedNotification(
-                    eq(testDocument), eq(testId), eq(extractedData));
-        }
+        // Verify interactions
+        verify(applicationRepository).existsById(applicationId);
+        verify(applicationRepository).deleteById(applicationId);
     }
     
-    @Nested
-    @DisplayName("Application Evaluation Tests")
-    class ApplicationEvaluationTests {
+    @Test
+    @DisplayName("Should throw ApplicationNotFoundException when deleting non-existent application")
+    void deleteApplication_NotFound() {
+        // Arrange
+        when(applicationRepository.existsById(applicationId))
+                .thenReturn(false);
         
-        @Test
-        @DisplayName("Should evaluate application status successfully")
-        void shouldEvaluateApplicationStatusSuccessfully() {
-            // Arrange
-            when(applicationRepository.findById(testId)).thenReturn(Optional.of(testApplication));
-            when(validationService.evaluateApplicationCompleteness(any(Application.class)))
-                    .thenReturn(validValidationResult);
-            when(validationService.determineApplicationStatus(any(Application.class)))
-                    .thenReturn(ApplicationStatus.PROCESSING);
-            when(validationService.determineReviewStatus(any(Application.class)))
-                    .thenReturn(ReviewStatus.IN_REVIEW);
-            when(applicationRepository.save(any(Application.class))).thenReturn(testApplication);
-
-            // Act
-            Application result = applicationService.evaluateApplicationStatus(testId);
-
-            // Assert
-            assertNotNull(result);
-            verify(applicationRepository).findById(testId);
-            verify(validationService).evaluateApplicationCompleteness(testApplication);
-            verify(validationService).determineApplicationStatus(testApplication);
-            verify(validationService).determineReviewStatus(testApplication);
-            verify(applicationRepository).save(any(Application.class));
-        }
+        // Act & Assert
+        ApplicationNotFoundException exception = assertThrows(ApplicationNotFoundException.class, () -> {
+            applicationService.deleteApplication(applicationId);
+        });
         
-        @Test
-        @DisplayName("Should validate application successfully")
-        void shouldValidateApplicationSuccessfully() {
-            // Arrange
-            when(applicationRepository.findById(testId)).thenReturn(Optional.of(testApplication));
-            when(validationService.validateApplication(any(Application.class)))
-                    .thenReturn(validValidationResult);
-
-            // Act
-            ValidationResult result = applicationService.validateApplication(testId);
-
-            // Assert
-            assertNotNull(result);
-            assertTrue(result.isValid());
-            verify(applicationRepository).findById(testId);
-            verify(validationService).validateApplication(testApplication);
-        }
+        // Verify exception details
+        assertEquals("Application not found with ID: " + applicationId, exception.getMessage());
         
-        @Test
-        @DisplayName("Should check if application has all required documents")
-        void shouldCheckIfApplicationHasAllRequiredDocuments() {
-            // Arrange
-            when(applicationRepository.findById(testId)).thenReturn(Optional.of(testApplication));
-            // Mock the hasAllRequiredDocuments method to return true
-            doReturn(true).when(testApplication).hasAllRequiredDocuments();
-
-            // Act
-            boolean result = applicationService.hasAllRequiredDocuments(testId);
-
-            // Assert
-            assertTrue(result);
-            verify(applicationRepository).findById(testId);
-        }
-        
-        @Test
-        @DisplayName("Should calculate application processing time")
-        void shouldCalculateApplicationProcessingTime() {
-            // Arrange
-            when(applicationRepository.findById(testId)).thenReturn(Optional.of(testApplication));
-            // Mock the getProcessingTimeMinutes method to return 3 minutes
-            doReturn(3L).when(testApplication).getProcessingTimeMinutes();
-
-            // Act
-            long result = applicationService.getApplicationProcessingTime(testId);
-
-            // Assert
-            assertEquals(3L, result);
-            verify(applicationRepository).findById(testId);
-        }
-        
-        @Test
-        @DisplayName("Should check if application was processed within target time")
-        void shouldCheckIfApplicationWasProcessedWithinTargetTime() {
-            // Arrange
-            when(applicationRepository.findById(testId)).thenReturn(Optional.of(testApplication));
-            // Mock the isProcessedWithinTargetTime method to return true
-            doReturn(true).when(testApplication).isProcessedWithinTargetTime();
-
-            // Act
-            boolean result = applicationService.isApplicationProcessedWithinTargetTime(testId);
-
-            // Assert
-            assertTrue(result);
-            verify(applicationRepository).findById(testId);
-        }
+        // Verify interactions
+        verify(applicationRepository).existsById(applicationId);
+        verify(applicationRepository, never()).deleteById(any(UUID.class));
     }
     
-    @Nested
-    @DisplayName("Application Statistics Tests")
-    class ApplicationStatisticsTests {
+    @Test
+    @DisplayName("Should retrieve applications with filter criteria")
+    void getApplications_WithFilter() {
+        // Arrange
+        ApplicationFilterDTO filterDTO = new ApplicationFilterDTO();
+        filterDTO.setStatus(ApplicationStatus.NEW);
+        filterDTO.setReviewStatus(ReviewStatus.NOT_REVIEWED);
+        filterDTO.setStartDate(LocalDateTime.now().minusDays(7));
+        filterDTO.setEndDate(LocalDateTime.now());
         
-        @Test
-        @DisplayName("Should count applications by status")
-        void shouldCountApplicationsByStatus() {
-            // Arrange
-            when(applicationRepository.countByStatus(ApplicationStatus.NEW)).thenReturn(5L);
-
-            // Act
-            long result = applicationService.countApplicationsByStatus(ApplicationStatus.NEW);
-
-            // Assert
-            assertEquals(5L, result);
-            verify(applicationRepository).countByStatus(ApplicationStatus.NEW);
-        }
+        Pageable pageable = PageRequest.of(0, 10);
+        List<Application> applications = List.of(application);
+        Page<Application> applicationPage = new PageImpl<>(applications, pageable, applications.size());
         
-        @Test
-        @DisplayName("Should count applications by review status")
-        void shouldCountApplicationsByReviewStatus() {
-            // Arrange
-            when(applicationRepository.countByReviewStatus(ReviewStatus.NOT_REVIEWED)).thenReturn(3L);
-
-            // Act
-            long result = applicationService.countApplicationsByReviewStatus(ReviewStatus.NOT_REVIEWED);
-
-            // Assert
-            assertEquals(3L, result);
-            verify(applicationRepository).countByReviewStatus(ReviewStatus.NOT_REVIEWED);
-        }
+        when(applicationRepository.findAll(any(Specification.class), eq(pageable)))
+                .thenReturn(applicationPage);
         
-        @Test
-        @DisplayName("Should calculate average processing time")
-        void shouldCalculateAverageProcessingTime() {
-            // Arrange
-            when(applicationRepository.calculateAverageProcessingTimeMinutes()).thenReturn(4.5);
-
-            // Act
-            double result = applicationService.calculateAverageProcessingTime();
-
-            // Assert
-            assertEquals(4.5, result, 0.001);
-            verify(applicationRepository).calculateAverageProcessingTimeMinutes();
-        }
+        // Act
+        Page<ApplicationResponseDTO> result = applicationService.getApplications(filterDTO, pageable);
         
-        @Test
-        @DisplayName("Should calculate average processing time for date range")
-        void shouldCalculateAverageProcessingTimeForDateRange() {
-            // Arrange
-            LocalDateTime startDate = LocalDateTime.now().minusDays(7);
-            LocalDateTime endDate = LocalDateTime.now();
-            when(applicationRepository.calculateAverageProcessingTimeMinutes(startDate, endDate)).thenReturn(3.2);
-
-            // Act
-            double result = applicationService.calculateAverageProcessingTime(startDate, endDate);
-
-            // Assert
-            assertEquals(3.2, result, 0.001);
-            verify(applicationRepository).calculateAverageProcessingTimeMinutes(startDate, endDate);
-        }
+        // Assert
+        assertNotNull(result);
+        assertEquals(1, result.getTotalElements());
+        assertEquals(applicationId, result.getContent().get(0).getId());
         
-        @Test
-        @DisplayName("Should retrieve applications requiring review")
-        void shouldRetrieveApplicationsRequiringReview() {
-            // Arrange
-            Pageable pageable = PageRequest.of(0, 10);
-            List<Application> applications = Arrays.asList(testApplication);
-            Page<Application> applicationPage = new PageImpl<>(applications, pageable, applications.size());
-            
-            when(applicationRepository.findApplicationsRequiringReview(pageable)).thenReturn(applicationPage);
-
-            // Act
-            Page<Application> result = applicationService.getApplicationsRequiringReview(pageable);
-
-            // Assert
-            assertNotNull(result);
-            assertEquals(1, result.getTotalElements());
-            verify(applicationRepository).findApplicationsRequiringReview(pageable);
-        }
-        
-        @Test
-        @DisplayName("Should retrieve active applications")
-        void shouldRetrieveActiveApplications() {
-            // Arrange
-            Pageable pageable = PageRequest.of(0, 10);
-            List<Application> applications = Arrays.asList(testApplication);
-            Page<Application> applicationPage = new PageImpl<>(applications, pageable, applications.size());
-            
-            when(applicationRepository.findActiveApplications(pageable)).thenReturn(applicationPage);
-
-            // Act
-            Page<Application> result = applicationService.getActiveApplications(pageable);
-
-            // Assert
-            assertNotNull(result);
-            assertEquals(1, result.getTotalElements());
-            verify(applicationRepository).findActiveApplications(pageable);
-        }
-        
-        @Test
-        @DisplayName("Should retrieve decided applications")
-        void shouldRetrieveDecidedApplications() {
-            // Arrange
-            Pageable pageable = PageRequest.of(0, 10);
-            List<Application> applications = Arrays.asList(testApplication);
-            Page<Application> applicationPage = new PageImpl<>(applications, pageable, applications.size());
-            
-            when(applicationRepository.findDecidedApplications(pageable)).thenReturn(applicationPage);
-
-            // Act
-            Page<Application> result = applicationService.getDecidedApplications(pageable);
-
-            // Assert
-            assertNotNull(result);
-            assertEquals(1, result.getTotalElements());
-            verify(applicationRepository).findDecidedApplications(pageable);
-        }
+        // Verify interactions
+        verify(applicationRepository).findAll(any(Specification.class), eq(pageable));
     }
     
-    @Nested
-    @DisplayName("Batch Processing Tests")
-    class BatchProcessingTests {
+    @Test
+    @DisplayName("Should update application status successfully")
+    void updateApplicationStatus_Success() {
+        // Arrange
+        ApplicationStatus newStatus = ApplicationStatus.PROCESSING;
+        application.setStatus(ApplicationStatus.NEW); // Ensure initial status is set
         
-        @Test
-        @DisplayName("Should process batch applications successfully")
-        void shouldProcessBatchApplicationsSuccessfully() {
-            // Arrange
-            List<Long> applicationIds = Arrays.asList(1L, 2L, 3L);
-            UUID id1 = UUID.randomUUID();
-            UUID id2 = UUID.randomUUID();
-            UUID id3 = UUID.randomUUID();
-            
-            Application app1 = new Application();
-            app1.setId(id1);
-            app1.setStatus(ApplicationStatus.NEW);
-            
-            Application app2 = new Application();
-            app2.setId(id2);
-            app2.setStatus(ApplicationStatus.PENDING);
-            
-            Application app3 = new Application();
-            app3.setId(id3);
-            app3.setStatus(ApplicationStatus.NEW);
-            
-            when(applicationRepository.findById(id1)).thenReturn(Optional.of(app1));
-            when(applicationRepository.findById(id2)).thenReturn(Optional.of(app2));
-            when(applicationRepository.findById(id3)).thenReturn(Optional.of(app3));
-            
-            // Mock successful processing for app1 and app3, but app2 fails
-            doNothing().when(applicationService).processApplication(id1, null);
-            doThrow(new RuntimeException("Processing failed")).when(applicationService).processApplication(id2, null);
-            doNothing().when(applicationService).processApplication(id3, null);
-
-            // Act
-            int successCount = applicationService.processBatchApplications(Arrays.asList(id1, id2, id3));
-
-            // Assert
-            assertEquals(2, successCount);
-            verify(applicationService).processApplication(id1, null);
-            verify(applicationService).processApplication(id2, null);
-            verify(applicationService).processApplication(id3, null);
-        }
+        when(applicationRepository.findById(applicationId))
+                .thenReturn(Optional.of(application));
+        when(applicationRepository.save(any(Application.class)))
+                .thenReturn(application);
+        
+        // Act
+        ApplicationResponseDTO result = applicationService.updateApplicationStatus(applicationId, newStatus);
+        
+        // Assert
+        assertNotNull(result);
+        assertEquals(applicationId, result.getId());
+        assertEquals(newStatus, result.getStatus());
+        
+        // Verify interactions
+        verify(applicationRepository).findById(applicationId);
+        verify(applicationRepository).save(any(Application.class));
+        verify(notificationService).sendApplicationStatusNotification(applicationId, newStatus);
+        
+        // Verify application was updated correctly
+        ArgumentCaptor<Application> applicationCaptor = ArgumentCaptor.forClass(Application.class);
+        verify(applicationRepository).save(applicationCaptor.capture());
+        Application savedApplication = applicationCaptor.getValue();
+        assertEquals(newStatus, savedApplication.getStatus());
+    }
+    
+    @Test
+    @DisplayName("Should throw ApplicationNotFoundException when updating status of non-existent application")
+    void updateApplicationStatus_NotFound() {
+        // Arrange
+        when(applicationRepository.findById(applicationId))
+                .thenReturn(Optional.empty());
+        
+        // Act & Assert
+        ApplicationNotFoundException exception = assertThrows(ApplicationNotFoundException.class, () -> {
+            applicationService.updateApplicationStatus(applicationId, ApplicationStatus.PROCESSING);
+        });
+        
+        // Verify exception details
+        assertEquals("Application not found with ID: " + applicationId, exception.getMessage());
+        
+        // Verify interactions
+        verify(applicationRepository).findById(applicationId);
+        verify(applicationRepository, never()).save(any(Application.class));
+    }
+    
+    @Test
+    @DisplayName("Should throw InvalidApplicationStateException for invalid status transition")
+    void updateApplicationStatus_InvalidTransition() {
+        // Arrange
+        application.setStatus(ApplicationStatus.NEW);
+        ApplicationStatus invalidStatus = ApplicationStatus.APPROVED; // Invalid direct transition from NEW to APPROVED
+        
+        when(applicationRepository.findById(applicationId))
+                .thenReturn(Optional.of(application));
+        
+        // Act & Assert
+        InvalidApplicationStateException exception = assertThrows(InvalidApplicationStateException.class, () -> {
+            applicationService.updateApplicationStatus(applicationId, invalidStatus);
+        });
+        
+        // Verify exception details
+        assertEquals("Invalid status transition from NEW to APPROVED", exception.getMessage());
+        
+        // Verify interactions
+        verify(applicationRepository).findById(applicationId);
+        verify(applicationRepository, never()).save(any(Application.class));
+    }
+    
+    @Test
+    @DisplayName("Should update application review status successfully")
+    void updateApplicationReviewStatus_Success() {
+        // Arrange
+        ReviewStatus newReviewStatus = ReviewStatus.IN_REVIEW;
+        
+        when(applicationRepository.findById(applicationId))
+                .thenReturn(Optional.of(application));
+        when(applicationRepository.save(any(Application.class)))
+                .thenReturn(application);
+        
+        // Act
+        ApplicationResponseDTO result = applicationService.updateApplicationReviewStatus(applicationId, newReviewStatus);
+        
+        // Assert
+        assertNotNull(result);
+        assertEquals(applicationId, result.getId());
+        assertEquals(newReviewStatus, result.getReviewStatus());
+        
+        // Verify interactions
+        verify(applicationRepository).findById(applicationId);
+        verify(applicationRepository).save(any(Application.class));
+        verify(notificationService).sendApplicationReviewStatusNotification(applicationId, newReviewStatus);
+        
+        // Verify application was updated correctly
+        ArgumentCaptor<Application> applicationCaptor = ArgumentCaptor.forClass(Application.class);
+        verify(applicationRepository).save(applicationCaptor.capture());
+        Application savedApplication = applicationCaptor.getValue();
+        assertEquals(newReviewStatus, savedApplication.getReviewStatus());
+    }
+    
+    @Test
+    @DisplayName("Should throw ApplicationNotFoundException when updating review status of non-existent application")
+    void updateApplicationReviewStatus_NotFound() {
+        // Arrange
+        when(applicationRepository.findById(applicationId))
+                .thenReturn(Optional.empty());
+        
+        // Act & Assert
+        ApplicationNotFoundException exception = assertThrows(ApplicationNotFoundException.class, () -> {
+            applicationService.updateApplicationReviewStatus(applicationId, ReviewStatus.IN_REVIEW);
+        });
+        
+        // Verify exception details
+        assertEquals("Application not found with ID: " + applicationId, exception.getMessage());
+        
+        // Verify interactions
+        verify(applicationRepository).findById(applicationId);
+        verify(applicationRepository, never()).save(any(Application.class));
+    }
+    
+    @Test
+    @DisplayName("Should add document to application successfully")
+    void addDocumentToApplication_Success() {
+        // Arrange
+        Document document = new Document();
+        document.setId(UUID.randomUUID());
+        document.setType("BANK_STATEMENT");
+        document.setStoragePath("s3://mca-documents/12345.pdf");
+        
+        when(applicationRepository.findById(applicationId))
+                .thenReturn(Optional.of(application));
+        when(applicationRepository.save(any(Application.class)))
+                .thenReturn(application);
+        
+        // Act
+        ApplicationResponseDTO result = applicationService.addDocumentToApplication(applicationId, document);
+        
+        // Assert
+        assertNotNull(result);
+        assertEquals(applicationId, result.getId());
+        
+        // Verify interactions
+        verify(applicationRepository).findById(applicationId);
+        verify(applicationRepository).save(any(Application.class));
+        
+        // Verify document was added to application
+        ArgumentCaptor<Application> applicationCaptor = ArgumentCaptor.forClass(Application.class);
+        verify(applicationRepository).save(applicationCaptor.capture());
+        Application savedApplication = applicationCaptor.getValue();
+        assertTrue(savedApplication.getDocuments().contains(document));
+        assertEquals(application, document.getApplication());
+    }
+    
+    @Test
+    @DisplayName("Should throw ApplicationNotFoundException when adding document to non-existent application")
+    void addDocumentToApplication_NotFound() {
+        // Arrange
+        Document document = new Document();
+        document.setId(UUID.randomUUID());
+        
+        when(applicationRepository.findById(applicationId))
+                .thenReturn(Optional.empty());
+        
+        // Act & Assert
+        ApplicationNotFoundException exception = assertThrows(ApplicationNotFoundException.class, () -> {
+            applicationService.addDocumentToApplication(applicationId, document);
+        });
+        
+        // Verify exception details
+        assertEquals("Application not found with ID: " + applicationId, exception.getMessage());
+        
+        // Verify interactions
+        verify(applicationRepository).findById(applicationId);
+        verify(applicationRepository, never()).save(any(Application.class));
+    }
+    
+    @Test
+    @DisplayName("Should evaluate application completeness correctly when complete")
+    void isApplicationComplete_Complete() {
+        // Arrange
+        when(applicationRepository.findById(applicationId))
+                .thenReturn(Optional.of(application));
+        
+        ValidationResult validationResult = new ValidationResult();
+        validationResult.setValid(true);
+        
+        when(validationService.validateApplicationCompleteness(application))
+                .thenReturn(validationResult);
+        
+        // Act
+        boolean result = applicationService.isApplicationComplete(applicationId);
+        
+        // Assert
+        assertTrue(result);
+        
+        // Verify interactions
+        verify(applicationRepository).findById(applicationId);
+        verify(validationService).validateApplicationCompleteness(application);
+    }
+    
+    @Test
+    @DisplayName("Should evaluate application completeness correctly when incomplete")
+    void isApplicationComplete_Incomplete() {
+        // Arrange
+        when(applicationRepository.findById(applicationId))
+                .thenReturn(Optional.of(application));
+        
+        ValidationResult validationResult = new ValidationResult();
+        validationResult.setValid(false);
+        Map<String, String> errors = new HashMap<>();
+        errors.put("documents", "Missing required document: Bank Statement");
+        validationResult.setErrors(errors);
+        
+        when(validationService.validateApplicationCompleteness(application))
+                .thenReturn(validationResult);
+        
+        // Act
+        boolean result = applicationService.isApplicationComplete(applicationId);
+        
+        // Assert
+        assertFalse(result);
+        
+        // Verify interactions
+        verify(applicationRepository).findById(applicationId);
+        verify(validationService).validateApplicationCompleteness(application);
+    }
+    
+    @Test
+    @DisplayName("Should throw ApplicationNotFoundException when evaluating completeness of non-existent application")
+    void isApplicationComplete_NotFound() {
+        // Arrange
+        when(applicationRepository.findById(applicationId))
+                .thenReturn(Optional.empty());
+        
+        // Act & Assert
+        ApplicationNotFoundException exception = assertThrows(ApplicationNotFoundException.class, () -> {
+            applicationService.isApplicationComplete(applicationId);
+        });
+        
+        // Verify exception details
+        assertEquals("Application not found with ID: " + applicationId, exception.getMessage());
+        
+        // Verify interactions
+        verify(applicationRepository).findById(applicationId);
+        verify(validationService, never()).validateApplicationCompleteness(any(Application.class));
+    }
+    
+    @Test
+    @DisplayName("Should process application successfully and mark as COMPLETED when valid and complete")
+    void processApplication_ValidAndComplete() {
+        // Arrange
+        when(applicationRepository.findById(applicationId))
+                .thenReturn(Optional.of(application));
+        when(applicationRepository.save(any(Application.class)))
+                .thenReturn(application);
+        
+        ValidationResult validationResult = new ValidationResult();
+        validationResult.setValid(true);
+        
+        when(validationService.validateApplication(application))
+                .thenReturn(validationResult);
+        
+        // Mock isApplicationComplete to return true
+        doReturn(true).when(applicationService).isApplicationComplete(applicationId);
+        
+        // Act
+        ApplicationResponseDTO result = applicationService.processApplication(applicationId);
+        
+        // Assert
+        assertNotNull(result);
+        assertEquals(applicationId, result.getId());
+        assertEquals(ApplicationStatus.COMPLETED, result.getStatus());
+        
+        // Verify interactions
+        verify(applicationRepository, times(2)).findById(applicationId);
+        verify(applicationRepository, times(2)).save(any(Application.class));
+        verify(validationService).validateApplication(application);
+        verify(applicationService).isApplicationComplete(applicationId);
+        verify(notificationService).sendApplicationStatusNotification(applicationId, ApplicationStatus.COMPLETED);
+        
+        // Verify application status transitions
+        ArgumentCaptor<Application> applicationCaptor = ArgumentCaptor.forClass(Application.class);
+        verify(applicationRepository, times(2)).save(applicationCaptor.capture());
+        List<Application> savedApplications = applicationCaptor.getAllValues();
+        assertEquals(ApplicationStatus.PROCESSING, savedApplications.get(0).getStatus()); // First save: NEW -> PROCESSING
+        assertEquals(ApplicationStatus.COMPLETED, savedApplications.get(1).getStatus()); // Second save: PROCESSING -> COMPLETED
+    }
+    
+    @Test
+    @DisplayName("Should process application successfully and mark as PENDING when valid but incomplete")
+    void processApplication_ValidButIncomplete() {
+        // Arrange
+        when(applicationRepository.findById(applicationId))
+                .thenReturn(Optional.of(application));
+        when(applicationRepository.save(any(Application.class)))
+                .thenReturn(application);
+        
+        ValidationResult validationResult = new ValidationResult();
+        validationResult.setValid(true);
+        
+        when(validationService.validateApplication(application))
+                .thenReturn(validationResult);
+        
+        // Mock isApplicationComplete to return false
+        doReturn(false).when(applicationService).isApplicationComplete(applicationId);
+        
+        // Act
+        ApplicationResponseDTO result = applicationService.processApplication(applicationId);
+        
+        // Assert
+        assertNotNull(result);
+        assertEquals(applicationId, result.getId());
+        assertEquals(ApplicationStatus.PENDING, result.getStatus());
+        
+        // Verify interactions
+        verify(applicationRepository, times(2)).findById(applicationId);
+        verify(applicationRepository, times(2)).save(any(Application.class));
+        verify(validationService).validateApplication(application);
+        verify(applicationService).isApplicationComplete(applicationId);
+        verify(notificationService).sendApplicationStatusNotification(applicationId, ApplicationStatus.PENDING);
+        
+        // Verify application status transitions
+        ArgumentCaptor<Application> applicationCaptor = ArgumentCaptor.forClass(Application.class);
+        verify(applicationRepository, times(2)).save(applicationCaptor.capture());
+        List<Application> savedApplications = applicationCaptor.getAllValues();
+        assertEquals(ApplicationStatus.PROCESSING, savedApplications.get(0).getStatus()); // First save: NEW -> PROCESSING
+        assertEquals(ApplicationStatus.PENDING, savedApplications.get(1).getStatus()); // Second save: PROCESSING -> PENDING
+    }
+    
+    @Test
+    @DisplayName("Should process application and mark as REJECTED when validation fails")
+    void processApplication_ValidationFailure() {
+        // Arrange
+        when(applicationRepository.findById(applicationId))
+                .thenReturn(Optional.of(application));
+        when(applicationRepository.save(any(Application.class)))
+                .thenReturn(application);
+        
+        ValidationResult validationResult = new ValidationResult();
+        validationResult.setValid(false);
+        Map<String, String> errors = new HashMap<>();
+        errors.put("businessName", "Business name is required");
+        validationResult.setErrors(errors);
+        
+        when(validationService.validateApplication(application))
+                .thenReturn(validationResult);
+        
+        // Act
+        ApplicationResponseDTO result = applicationService.processApplication(applicationId);
+        
+        // Assert
+        assertNotNull(result);
+        assertEquals(applicationId, result.getId());
+        assertEquals(ApplicationStatus.REJECTED, result.getStatus());
+        
+        // Verify interactions
+        verify(applicationRepository, times(2)).findById(applicationId);
+        verify(applicationRepository, times(2)).save(any(Application.class));
+        verify(validationService).validateApplication(application);
+        verify(applicationService, never()).isApplicationComplete(any(UUID.class));
+        verify(notificationService).sendApplicationStatusNotification(applicationId, ApplicationStatus.REJECTED);
+        
+        // Verify application status transitions
+        ArgumentCaptor<Application> applicationCaptor = ArgumentCaptor.forClass(Application.class);
+        verify(applicationRepository, times(2)).save(applicationCaptor.capture());
+        List<Application> savedApplications = applicationCaptor.getAllValues();
+        assertEquals(ApplicationStatus.PROCESSING, savedApplications.get(0).getStatus()); // First save: NEW -> PROCESSING
+        assertEquals(ApplicationStatus.REJECTED, savedApplications.get(1).getStatus()); // Second save: PROCESSING -> REJECTED
+    }
+    
+    @Test
+    @DisplayName("Should throw ApplicationNotFoundException when processing non-existent application")
+    void processApplication_NotFound() {
+        // Arrange
+        when(applicationRepository.findById(applicationId))
+                .thenReturn(Optional.empty());
+        
+        // Act & Assert
+        ApplicationNotFoundException exception = assertThrows(ApplicationNotFoundException.class, () -> {
+            applicationService.processApplication(applicationId);
+        });
+        
+        // Verify exception details
+        assertEquals("Application not found with ID: " + applicationId, exception.getMessage());
+        
+        // Verify interactions
+        verify(applicationRepository).findById(applicationId);
+        verify(applicationRepository, never()).save(any(Application.class));
+        verify(validationService, never()).validateApplication(any(Application.class));
     }
 }
