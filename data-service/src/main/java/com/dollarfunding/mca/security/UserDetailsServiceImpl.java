@@ -3,7 +3,6 @@ package com.dollarfunding.mca.security;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.cache.annotation.CacheConfig;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.core.userdetails.UserDetailsService;
@@ -12,18 +11,15 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Implementation of Spring Security's UserDetailsService interface that loads user details
- * from the database for authentication and authorization.
+ * Implementation of Spring Security's UserDetailsService that loads user details from the database
+ * for authentication and authorization. This service is critical for the authentication process as it
+ * retrieves user credentials and authorities from the database and converts them to UserPrincipal objects
+ * that Spring Security can use.
  * 
- * This class is critical for the authentication process as it retrieves user credentials
- * and authorities from the database and converts them to UserPrincipal objects that
- * Spring Security can use for authentication and authorization.
- * 
- * It integrates with the Minimal UI Kit's JWT authentication system and supports
- * the two specific roles defined in the requirements: Operations Staff and System Admin.
+ * <p>This implementation integrates with the Minimal UI Kit's JWT authentication system and supports
+ * the two specific roles required by the MCA Application Processing System: Operations Staff and System Admin.</p>
  */
 @Service
-@CacheConfig(cacheNames = "userDetails")
 public class UserDetailsServiceImpl implements UserDetailsService {
 
     private static final Logger logger = LoggerFactory.getLogger(UserDetailsServiceImpl.class);
@@ -31,8 +27,8 @@ public class UserDetailsServiceImpl implements UserDetailsService {
     private final UserRepository userRepository;
 
     /**
-     * Constructor with required dependencies.
-     *
+     * Constructor-based dependency injection for UserRepository.
+     * 
      * @param userRepository the repository for accessing user data
      */
     @Autowired
@@ -44,86 +40,127 @@ public class UserDetailsServiceImpl implements UserDetailsService {
      * Loads a user by username from the database and converts it to a UserPrincipal object
      * that Spring Security can use for authentication and authorization.
      * 
-     * This method is called by Spring Security during the authentication process.
+     * <p>This method is called by Spring Security during the authentication process.</p>
      * 
-     * The result is cached to improve performance for subsequent authentication requests
-     * with the same username.
-     *
-     * @param username the username to load
+     * @param usernameOrEmail the username or email of the user to load
      * @return a UserDetails object containing the user's credentials and authorities
      * @throws UsernameNotFoundException if the user is not found in the database
      */
     @Override
     @Transactional(readOnly = true)
-    @Cacheable(key = "#username", unless = "#result == null")
-    public UserDetails loadUserByUsername(String username) throws UsernameNotFoundException {
-        logger.debug("Loading user by username: {}", username);
+    @Cacheable(value = "userDetails", key = "#usernameOrEmail", unless = "#result == null")
+    public UserDetails loadUserByUsername(String usernameOrEmail) throws UsernameNotFoundException {
+        logger.debug("Loading user by username or email: {}", usernameOrEmail);
         
-        User user = userRepository.findByUsername(username)
+        // Try to find the user by username or email
+        User user = userRepository.findByUsernameOrEmail(usernameOrEmail, usernameOrEmail)
                 .orElseThrow(() -> {
-                    logger.warn("User not found with username: {}", username);
-                    return new UsernameNotFoundException("User not found with username: " + username);
+                    logger.error("User not found with username or email: {}", usernameOrEmail);
+                    return new UsernameNotFoundException("User not found with username or email: " + usernameOrEmail);
                 });
         
         logger.debug("User found: {}", user.getUsername());
         
         // Update last login timestamp
-        user.updateLastLogin();
+        updateLastLogin(user);
         
+        // Convert User entity to UserPrincipal
         return UserPrincipal.create(user);
     }
-
+    
+    /**
+     * Updates the last login timestamp for a user.
+     * This method is called after successful authentication.
+     * 
+     * @param user the user to update
+     */
+    @Transactional
+    public void updateLastLogin(User user) {
+        try {
+            user.setLastLoginAt(java.time.LocalDateTime.now());
+            userRepository.save(user);
+            logger.debug("Updated last login timestamp for user: {}", user.getUsername());
+        } catch (Exception e) {
+            // Log the error but don't fail the authentication process
+            logger.warn("Failed to update last login timestamp for user: {}", user.getUsername(), e);
+        }
+    }
+    
     /**
      * Loads a user by ID from the database and converts it to a UserPrincipal object.
+     * This method is useful for token-based authentication where the user ID is extracted from the token.
      * 
-     * This method can be used when the user ID is available but not the username.
-     * 
-     * The result is cached to improve performance for subsequent requests with the same ID.
-     *
-     * @param id the user ID to load
+     * @param id the ID of the user to load
      * @return a UserDetails object containing the user's credentials and authorities
      * @throws UsernameNotFoundException if the user is not found in the database
      */
     @Transactional(readOnly = true)
-    @Cacheable(key = "'id_' + #id", unless = "#result == null")
+    @Cacheable(value = "userDetailsById", key = "#id", unless = "#result == null")
     public UserDetails loadUserById(Long id) throws UsernameNotFoundException {
         logger.debug("Loading user by ID: {}", id);
         
         User user = userRepository.findById(id)
                 .orElseThrow(() -> {
-                    logger.warn("User not found with ID: {}", id);
+                    logger.error("User not found with ID: {}", id);
                     return new UsernameNotFoundException("User not found with ID: " + id);
                 });
         
-        logger.debug("User found: {}", user.getUsername());
+        logger.debug("User found by ID: {}", user.getUsername());
         
         return UserPrincipal.create(user);
     }
-
+    
     /**
-     * Loads a user by email from the database and converts it to a UserPrincipal object.
+     * Checks if a user exists with the given username or email.
+     * This method is useful for registration and password reset functionality.
      * 
-     * This method can be used when the email is available but not the username.
+     * @param usernameOrEmail the username or email to check
+     * @return true if a user exists with the given username or email, false otherwise
+     */
+    @Transactional(readOnly = true)
+    public boolean existsByUsernameOrEmail(String usernameOrEmail) {
+        return userRepository.existsByUsername(usernameOrEmail) || 
+               userRepository.existsByEmail(usernameOrEmail);
+    }
+    
+    /**
+     * Checks if a user with the given username or email has the specified role.
+     * This method is useful for role-based authorization checks.
      * 
-     * The result is cached to improve performance for subsequent requests with the same email.
-     *
-     * @param email the email to load
-     * @return a UserDetails object containing the user's credentials and authorities
+     * @param usernameOrEmail the username or email of the user to check
+     * @param roleName the role name to check (without ROLE_ prefix)
+     * @return true if the user has the specified role, false otherwise
      * @throws UsernameNotFoundException if the user is not found in the database
      */
     @Transactional(readOnly = true)
-    @Cacheable(key = "'email_' + #email", unless = "#result == null")
-    public UserDetails loadUserByEmail(String email) throws UsernameNotFoundException {
-        logger.debug("Loading user by email: {}", email);
+    public boolean hasRole(String usernameOrEmail, String roleName) throws UsernameNotFoundException {
+        User user = userRepository.findByUsernameOrEmail(usernameOrEmail, usernameOrEmail)
+                .orElseThrow(() -> new UsernameNotFoundException("User not found with username or email: " + usernameOrEmail));
         
-        User user = userRepository.findByEmail(email)
-                .orElseThrow(() -> {
-                    logger.warn("User not found with email: {}", email);
-                    return new UsernameNotFoundException("User not found with email: " + email);
-                });
-        
-        logger.debug("User found: {}", user.getUsername());
-        
-        return UserPrincipal.create(user);
+        return user.hasRole(roleName);
+    }
+    
+    /**
+     * Checks if a user with the given username or email is an Operations Staff.
+     * 
+     * @param usernameOrEmail the username or email of the user to check
+     * @return true if the user is an Operations Staff, false otherwise
+     * @throws UsernameNotFoundException if the user is not found in the database
+     */
+    @Transactional(readOnly = true)
+    public boolean isOperationsStaff(String usernameOrEmail) throws UsernameNotFoundException {
+        return hasRole(usernameOrEmail, RoleConstants.OPERATIONS_STAFF);
+    }
+    
+    /**
+     * Checks if a user with the given username or email is a System Admin.
+     * 
+     * @param usernameOrEmail the username or email of the user to check
+     * @return true if the user is a System Admin, false otherwise
+     * @throws UsernameNotFoundException if the user is not found in the database
+     */
+    @Transactional(readOnly = true)
+    public boolean isSystemAdmin(String usernameOrEmail) throws UsernameNotFoundException {
+        return hasRole(usernameOrEmail, RoleConstants.SYSTEM_ADMIN);
     }
 }
