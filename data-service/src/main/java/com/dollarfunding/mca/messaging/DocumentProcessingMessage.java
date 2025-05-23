@@ -1,720 +1,268 @@
 package com.dollarfunding.mca.messaging;
 
+import com.dollarfunding.mca.entity.DocumentType;
 import com.fasterxml.jackson.annotation.JsonFormat;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
 
 import javax.validation.constraints.NotBlank;
-import javax.validation.constraints.NotEmpty;
 import javax.validation.constraints.NotNull;
-import javax.validation.constraints.Min;
-import javax.validation.constraints.Max;
+import javax.validation.constraints.Pattern;
+import javax.validation.constraints.Size;
 import java.time.LocalDateTime;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
 /**
  * Model class for document processing messages consumed from RabbitMQ.
- * This class defines the structure of messages received from the OCR Service
- * containing extracted document data.
+ * 
+ * This class defines the structure of messages received from the OCR Service containing
+ * extracted document data. It includes fields for document metadata, extracted field values
+ * with confidence scores, and processing instructions.
+ * 
+ * The Data Service consumes these messages from the RabbitMQ queue, processes the extracted
+ * document data, and updates the application state accordingly.
  */
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+@JsonIgnoreProperties(ignoreUnknown = true)
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class DocumentProcessingMessage {
 
     /**
-     * Enum defining the types of documents that can be processed.
+     * Unique identifier for the message.
      */
-    public enum DocumentType {
-        APPLICATION_FORM,
-        BANK_STATEMENT,
-        TAX_RETURN,
-        IDENTITY_DOCUMENT,
-        BUSINESS_LICENSE,
-        CREDIT_CARD_STATEMENT,
-        INVOICE,
-        UTILITY_BILL,
-        LEASE_AGREEMENT,
-        OTHER
-    }
+    @NotBlank(message = "Message ID is required")
+    @Pattern(regexp = "^[a-zA-Z0-9\\-]+$", message = "Message ID must contain only alphanumeric characters and hyphens")
+    @JsonProperty("message_id")
+    private String messageId;
 
     /**
-     * Enum defining the processing actions to be taken.
+     * ID of the document being processed.
      */
-    public enum ProcessingAction {
-        CREATE_NEW_APPLICATION,
-        UPDATE_EXISTING_APPLICATION,
-        APPEND_TO_APPLICATION,
-        VERIFICATION_ONLY,
-        ARCHIVE_ONLY
-    }
-
-    @NotBlank
-    @JsonProperty("id")
-    private String id;
-
-    @NotBlank
+    @NotBlank(message = "Document ID is required")
+    @Pattern(regexp = "^[a-zA-Z0-9\\-]+$", message = "Document ID must contain only alphanumeric characters and hyphens")
     @JsonProperty("document_id")
     private String documentId;
 
-    @NotNull
+    /**
+     * Type of document (application_form, tax_return, etc.).
+     */
+    @NotNull(message = "Document type is required")
     @JsonProperty("document_type")
     private DocumentType documentType;
 
-    @NotBlank
-    @JsonProperty("classification")
-    private String classification;
-
-    @NotNull
-    @Min(0)
-    @Max(100)
-    @JsonProperty("classification_confidence")
-    private Double classificationConfidence;
-
-    @NotNull
-    @JsonProperty("processing_action")
-    private ProcessingAction processingAction;
-
+    /**
+     * ID of the application this document belongs to.
+     * May be null for documents not yet associated with an application.
+     */
+    @Pattern(regexp = "^[a-zA-Z0-9\\-]+$", message = "Application ID must contain only alphanumeric characters and hyphens")
     @JsonProperty("application_id")
     private String applicationId;
 
-    @NotNull
-    @JsonProperty("timestamp")
-    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
-    private LocalDateTime timestamp;
-
+    /**
+     * S3 storage path for the document.
+     */
+    @NotBlank(message = "Storage path is required")
+    @Size(max = 1024, message = "Storage path cannot exceed 1024 characters")
     @JsonProperty("storage_path")
     private String storagePath;
 
-    @NotNull
-    @JsonProperty("extracted_fields")
-    private Map<String, ExtractedField> extractedFields;
+    /**
+     * MIME type of the document.
+     */
+    @NotBlank(message = "Content type is required")
+    @Size(max = 255, message = "Content type cannot exceed 255 characters")
+    @JsonProperty("content_type")
+    private String contentType;
 
+    /**
+     * ISO 8601 timestamp when the message was created.
+     */
+    @NotNull(message = "Timestamp is required")
+    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd'T'HH:mm:ss.SSSXXX")
+    @JsonProperty("timestamp")
+    private LocalDateTime timestamp;
+
+    /**
+     * Service that published the message (typically "ocr-service").
+     */
+    @NotBlank(message = "Source service is required")
+    @Size(max = 255, message = "Source service cannot exceed 255 characters")
+    @JsonProperty("source_service")
+    private String sourceService;
+
+    /**
+     * Processing status of the document.
+     */
+    @NotBlank(message = "Status is required")
+    @Pattern(regexp = "^(received|processing|completed|failed|pending_verification)$", 
+             message = "Status must be one of: received, processing, completed, failed, pending_verification")
+    @JsonProperty("status")
+    private String status;
+
+    /**
+     * Additional document metadata.
+     * This may include classification confidence, page count, etc.
+     */
     @JsonProperty("metadata")
     private Map<String, Object> metadata;
 
-    @JsonProperty("processing_metadata")
-    private ProcessingMetadata processingMetadata;
+    /**
+     * OCR extraction results.
+     * This contains the structured data extracted from the document.
+     * The structure varies based on document type.
+     */
+    @JsonProperty("extraction_results")
+    private Map<String, Object> extractionResults;
 
     /**
-     * Default constructor for serialization frameworks.
+     * Confidence scores for extracted fields.
+     * Maps field names to confidence scores (0.0-1.0).
      */
-    public DocumentProcessingMessage() {
-        this.timestamp = LocalDateTime.now();
-        this.extractedFields = new HashMap<>();
-        this.metadata = new HashMap<>();
-    }
+    @JsonProperty("confidence_scores")
+    private Map<String, Float> confidenceScores;
 
     /**
-     * Constructor with essential fields.
-     *
-     * @param id                      Unique identifier for the message
-     * @param documentId              Identifier for the document
-     * @param documentType            Type of document
-     * @param classification          Classification of the document
-     * @param classificationConfidence Confidence score for the classification
-     * @param processingAction        Action to take for processing
-     * @param extractedFields         Map of extracted fields with values and confidence scores
+     * Error information if processing failed.
      */
-    public DocumentProcessingMessage(String id, String documentId, DocumentType documentType,
-                                    String classification, Double classificationConfidence,
-                                    ProcessingAction processingAction,
-                                    Map<String, ExtractedField> extractedFields) {
-        this.id = id;
-        this.documentId = documentId;
-        this.documentType = documentType;
-        this.classification = classification;
-        this.classificationConfidence = classificationConfidence;
-        this.processingAction = processingAction;
-        this.timestamp = LocalDateTime.now();
-        this.extractedFields = extractedFields;
-        this.metadata = new HashMap<>();
-    }
+    @JsonProperty("error")
+    private Map<String, Object> error;
 
     /**
-     * Inner class representing an extracted field with value and confidence score.
+     * Processing time in milliseconds.
      */
-    @JsonInclude(JsonInclude.Include.NON_NULL)
-    public static class ExtractedField {
-        @NotNull
-        @JsonProperty("value")
-        private Object value;
+    @JsonProperty("processing_time_ms")
+    private Float processingTimeMs;
 
-        @NotNull
-        @Min(0)
-        @Max(100)
-        @JsonProperty("confidence")
-        private Double confidence;
+    /**
+     * Whether human verification is required.
+     */
+    @JsonProperty("requires_verification")
+    private Boolean requiresVerification;
 
-        @JsonProperty("original_text")
-        private String originalText;
+    /**
+     * Fields requiring verification.
+     * List of field names that have low confidence scores and require human verification.
+     */
+    @JsonProperty("verification_fields")
+    private List<String> verificationFields;
 
-        @JsonProperty("bounding_box")
-        private BoundingBox boundingBox;
-
-        @JsonProperty("alternatives")
-        private List<Alternative> alternatives;
-
-        /**
-         * Default constructor for serialization frameworks.
-         */
-        public ExtractedField() {
-        }
-
-        /**
-         * Constructor with essential fields.
-         *
-         * @param value      The extracted value
-         * @param confidence Confidence score for the extraction
-         */
-        public ExtractedField(Object value, Double confidence) {
-            this.value = value;
-            this.confidence = confidence;
-        }
-
-        /**
-         * Constructor with all fields.
-         *
-         * @param value        The extracted value
-         * @param confidence   Confidence score for the extraction
-         * @param originalText The original text from which the value was extracted
-         * @param boundingBox  The bounding box of the text in the document
-         * @param alternatives Alternative extractions with lower confidence
-         */
-        public ExtractedField(Object value, Double confidence, String originalText,
-                             BoundingBox boundingBox, List<Alternative> alternatives) {
-            this.value = value;
-            this.confidence = confidence;
-            this.originalText = originalText;
-            this.boundingBox = boundingBox;
-            this.alternatives = alternatives;
-        }
-
-        public Object getValue() {
-            return value;
-        }
-
-        public void setValue(Object value) {
-            this.value = value;
-        }
-
-        public Double getConfidence() {
-            return confidence;
-        }
-
-        public void setConfidence(Double confidence) {
-            this.confidence = confidence;
-        }
-
-        public String getOriginalText() {
-            return originalText;
-        }
-
-        public void setOriginalText(String originalText) {
-            this.originalText = originalText;
-        }
-
-        public BoundingBox getBoundingBox() {
-            return boundingBox;
-        }
-
-        public void setBoundingBox(BoundingBox boundingBox) {
-            this.boundingBox = boundingBox;
-        }
-
-        public List<Alternative> getAlternatives() {
-            return alternatives;
-        }
-
-        public void setAlternatives(List<Alternative> alternatives) {
-            this.alternatives = alternatives;
-        }
+    /**
+     * Checks if this message indicates a new application should be created.
+     * 
+     * @return true if this document should create a new application, false otherwise
+     */
+    public boolean isNewApplication() {
+        // If this is a loan application document and no application ID is provided,
+        // it should create a new application
+        return DocumentType.LOAN_APPLICATION.equals(documentType) && 
+               (applicationId == null || applicationId.isEmpty());
     }
 
     /**
-     * Inner class representing an alternative extraction with lower confidence.
+     * Checks if this message requires human verification.
+     * 
+     * @return true if human verification is required, false otherwise
      */
-    @JsonInclude(JsonInclude.Include.NON_NULL)
-    public static class Alternative {
-        @NotNull
-        @JsonProperty("value")
-        private Object value;
-
-        @NotNull
-        @Min(0)
-        @Max(100)
-        @JsonProperty("confidence")
-        private Double confidence;
-
-        /**
-         * Default constructor for serialization frameworks.
-         */
-        public Alternative() {
-        }
-
-        /**
-         * Constructor with all fields.
-         *
-         * @param value      The alternative value
-         * @param confidence Confidence score for the alternative
-         */
-        public Alternative(Object value, Double confidence) {
-            this.value = value;
-            this.confidence = confidence;
-        }
-
-        public Object getValue() {
-            return value;
-        }
-
-        public void setValue(Object value) {
-            this.value = value;
-        }
-
-        public Double getConfidence() {
-            return confidence;
-        }
-
-        public void setConfidence(Double confidence) {
-            this.confidence = confidence;
-        }
+    public boolean requiresHumanVerification() {
+        return Boolean.TRUE.equals(requiresVerification) || 
+               "pending_verification".equals(status);
     }
 
     /**
-     * Inner class representing a bounding box in the document.
+     * Gets the average confidence score across all extracted fields.
+     * 
+     * @return the average confidence score, or null if no confidence scores are available
      */
-    @JsonInclude(JsonInclude.Include.NON_NULL)
-    public static class BoundingBox {
-        @NotNull
-        @JsonProperty("x")
-        private Integer x;
-
-        @NotNull
-        @JsonProperty("y")
-        private Integer y;
-
-        @NotNull
-        @JsonProperty("width")
-        private Integer width;
-
-        @NotNull
-        @JsonProperty("height")
-        private Integer height;
-
-        @JsonProperty("page")
-        private Integer page;
-
-        /**
-         * Default constructor for serialization frameworks.
-         */
-        public BoundingBox() {
+    public Float getAverageConfidenceScore() {
+        if (confidenceScores == null || confidenceScores.isEmpty()) {
+            return null;
         }
-
-        /**
-         * Constructor with essential fields.
-         *
-         * @param x      X-coordinate of the top-left corner
-         * @param y      Y-coordinate of the top-left corner
-         * @param width  Width of the bounding box
-         * @param height Height of the bounding box
-         */
-        public BoundingBox(Integer x, Integer y, Integer width, Integer height) {
-            this.x = x;
-            this.y = y;
-            this.width = width;
-            this.height = height;
-        }
-
-        /**
-         * Constructor with all fields.
-         *
-         * @param x      X-coordinate of the top-left corner
-         * @param y      Y-coordinate of the top-left corner
-         * @param width  Width of the bounding box
-         * @param height Height of the bounding box
-         * @param page   Page number in the document
-         */
-        public BoundingBox(Integer x, Integer y, Integer width, Integer height, Integer page) {
-            this.x = x;
-            this.y = y;
-            this.width = width;
-            this.height = height;
-            this.page = page;
-        }
-
-        public Integer getX() {
-            return x;
-        }
-
-        public void setX(Integer x) {
-            this.x = x;
-        }
-
-        public Integer getY() {
-            return y;
-        }
-
-        public void setY(Integer y) {
-            this.y = y;
-        }
-
-        public Integer getWidth() {
-            return width;
-        }
-
-        public void setWidth(Integer width) {
-            this.width = width;
-        }
-
-        public Integer getHeight() {
-            return height;
-        }
-
-        public void setHeight(Integer height) {
-            this.height = height;
-        }
-
-        public Integer getPage() {
-            return page;
-        }
-
-        public void setPage(Integer page) {
-            this.page = page;
-        }
+        
+        return (float) confidenceScores.values().stream()
+                .mapToDouble(Float::doubleValue)
+                .average()
+                .orElse(0.0);
     }
 
     /**
-     * Inner class representing metadata about the processing of the document.
+     * Gets the lowest confidence score among all extracted fields.
+     * 
+     * @return the lowest confidence score, or null if no confidence scores are available
      */
-    @JsonInclude(JsonInclude.Include.NON_NULL)
-    public static class ProcessingMetadata {
-        @JsonProperty("processing_time_ms")
-        private Long processingTimeMs;
-
-        @JsonProperty("ocr_engine")
-        private String ocrEngine;
-
-        @JsonProperty("ocr_engine_version")
-        private String ocrEngineVersion;
-
-        @JsonProperty("classification_model")
-        private String classificationModel;
-
-        @JsonProperty("classification_model_version")
-        private String classificationModelVersion;
-
-        @JsonProperty("processing_node")
-        private String processingNode;
-
-        @JsonProperty("retry_count")
-        private Integer retryCount;
-
-        @JsonProperty("processing_notes")
-        private List<String> processingNotes;
-
-        /**
-         * Default constructor for serialization frameworks.
-         */
-        public ProcessingMetadata() {
+    public Float getLowestConfidenceScore() {
+        if (confidenceScores == null || confidenceScores.isEmpty()) {
+            return null;
         }
-
-        public Long getProcessingTimeMs() {
-            return processingTimeMs;
-        }
-
-        public void setProcessingTimeMs(Long processingTimeMs) {
-            this.processingTimeMs = processingTimeMs;
-        }
-
-        public String getOcrEngine() {
-            return ocrEngine;
-        }
-
-        public void setOcrEngine(String ocrEngine) {
-            this.ocrEngine = ocrEngine;
-        }
-
-        public String getOcrEngineVersion() {
-            return ocrEngineVersion;
-        }
-
-        public void setOcrEngineVersion(String ocrEngineVersion) {
-            this.ocrEngineVersion = ocrEngineVersion;
-        }
-
-        public String getClassificationModel() {
-            return classificationModel;
-        }
-
-        public void setClassificationModel(String classificationModel) {
-            this.classificationModel = classificationModel;
-        }
-
-        public String getClassificationModelVersion() {
-            return classificationModelVersion;
-        }
-
-        public void setClassificationModelVersion(String classificationModelVersion) {
-            this.classificationModelVersion = classificationModelVersion;
-        }
-
-        public String getProcessingNode() {
-            return processingNode;
-        }
-
-        public void setProcessingNode(String processingNode) {
-            this.processingNode = processingNode;
-        }
-
-        public Integer getRetryCount() {
-            return retryCount;
-        }
-
-        public void setRetryCount(Integer retryCount) {
-            this.retryCount = retryCount;
-        }
-
-        public List<String> getProcessingNotes() {
-            return processingNotes;
-        }
-
-        public void setProcessingNotes(List<String> processingNotes) {
-            this.processingNotes = processingNotes;
-        }
-    }
-
-    // Getters and Setters
-
-    public String getId() {
-        return id;
-    }
-
-    public void setId(String id) {
-        this.id = id;
-    }
-
-    public String getDocumentId() {
-        return documentId;
-    }
-
-    public void setDocumentId(String documentId) {
-        this.documentId = documentId;
-    }
-
-    public DocumentType getDocumentType() {
-        return documentType;
-    }
-
-    public void setDocumentType(DocumentType documentType) {
-        this.documentType = documentType;
-    }
-
-    public String getClassification() {
-        return classification;
-    }
-
-    public void setClassification(String classification) {
-        this.classification = classification;
-    }
-
-    public Double getClassificationConfidence() {
-        return classificationConfidence;
-    }
-
-    public void setClassificationConfidence(Double classificationConfidence) {
-        this.classificationConfidence = classificationConfidence;
-    }
-
-    public ProcessingAction getProcessingAction() {
-        return processingAction;
-    }
-
-    public void setProcessingAction(ProcessingAction processingAction) {
-        this.processingAction = processingAction;
-    }
-
-    public String getApplicationId() {
-        return applicationId;
-    }
-
-    public void setApplicationId(String applicationId) {
-        this.applicationId = applicationId;
-    }
-
-    public LocalDateTime getTimestamp() {
-        return timestamp;
-    }
-
-    public void setTimestamp(LocalDateTime timestamp) {
-        this.timestamp = timestamp;
-    }
-
-    public String getStoragePath() {
-        return storagePath;
-    }
-
-    public void setStoragePath(String storagePath) {
-        this.storagePath = storagePath;
-    }
-
-    public Map<String, ExtractedField> getExtractedFields() {
-        return extractedFields;
-    }
-
-    public void setExtractedFields(Map<String, ExtractedField> extractedFields) {
-        this.extractedFields = extractedFields;
-    }
-
-    public Map<String, Object> getMetadata() {
-        return metadata;
-    }
-
-    public void setMetadata(Map<String, Object> metadata) {
-        this.metadata = metadata;
-    }
-
-    public ProcessingMetadata getProcessingMetadata() {
-        return processingMetadata;
-    }
-
-    public void setProcessingMetadata(ProcessingMetadata processingMetadata) {
-        this.processingMetadata = processingMetadata;
+        
+        return confidenceScores.values().stream()
+                .min(Float::compare)
+                .orElse(null);
     }
 
     /**
-     * Adds a field to the extractedFields map.
-     *
-     * @param fieldName The name of the field
-     * @param field     The ExtractedField instance
-     * @return This DocumentProcessingMessage instance for method chaining
+     * Checks if the document has been successfully processed.
+     * 
+     * @return true if processing is complete, false otherwise
      */
-    public DocumentProcessingMessage addExtractedField(String fieldName, ExtractedField field) {
-        this.extractedFields.put(fieldName, field);
-        return this;
+    public boolean isProcessingComplete() {
+        return "completed".equals(status);
     }
 
     /**
-     * Adds a key-value pair to the metadata map.
-     *
-     * @param key   The key for the metadata entry
-     * @param value The value for the metadata entry
-     * @return This DocumentProcessingMessage instance for method chaining
+     * Checks if the document processing has failed.
+     * 
+     * @return true if processing failed, false otherwise
      */
-    public DocumentProcessingMessage addMetadata(String key, Object value) {
-        this.metadata.put(key, value);
-        return this;
+    public boolean isProcessingFailed() {
+        return "failed".equals(status);
     }
 
     /**
-     * Creates a builder for DocumentProcessingMessage.
-     *
-     * @return A new Builder instance
+     * Gets a specific field value from the extraction results.
+     * 
+     * @param fieldName the name of the field to retrieve
+     * @return the field value, or null if not found
      */
-    public static Builder builder() {
-        return new Builder();
+    @SuppressWarnings("unchecked")
+    public Object getFieldValue(String fieldName) {
+        if (extractionResults == null) {
+            return null;
+        }
+        
+        // Handle nested field paths (e.g., "applicant.name")
+        String[] pathParts = fieldName.split("\\.");
+        Map<String, Object> currentMap = extractionResults;
+        
+        for (int i = 0; i < pathParts.length - 1; i++) {
+            Object value = currentMap.get(pathParts[i]);
+            if (!(value instanceof Map)) {
+                return null;
+            }
+            currentMap = (Map<String, Object>) value;
+        }
+        
+        return currentMap.get(pathParts[pathParts.length - 1]);
     }
 
     /**
-     * Builder class for creating DocumentProcessingMessage instances.
+     * Gets the confidence score for a specific field.
+     * 
+     * @param fieldName the name of the field
+     * @return the confidence score, or null if not found
      */
-    public static class Builder {
-        private String id;
-        private String documentId;
-        private DocumentType documentType;
-        private String classification;
-        private Double classificationConfidence;
-        private ProcessingAction processingAction;
-        private String applicationId;
-        private String storagePath;
-        private Map<String, ExtractedField> extractedFields;
-        private Map<String, Object> metadata;
-        private ProcessingMetadata processingMetadata;
-
-        private Builder() {
-            this.extractedFields = new HashMap<>();
-            this.metadata = new HashMap<>();
+    public Float getFieldConfidence(String fieldName) {
+        if (confidenceScores == null) {
+            return null;
         }
-
-        public Builder id(String id) {
-            this.id = id;
-            return this;
-        }
-
-        public Builder documentId(String documentId) {
-            this.documentId = documentId;
-            return this;
-        }
-
-        public Builder documentType(DocumentType documentType) {
-            this.documentType = documentType;
-            return this;
-        }
-
-        public Builder classification(String classification) {
-            this.classification = classification;
-            return this;
-        }
-
-        public Builder classificationConfidence(Double classificationConfidence) {
-            this.classificationConfidence = classificationConfidence;
-            return this;
-        }
-
-        public Builder processingAction(ProcessingAction processingAction) {
-            this.processingAction = processingAction;
-            return this;
-        }
-
-        public Builder applicationId(String applicationId) {
-            this.applicationId = applicationId;
-            return this;
-        }
-
-        public Builder storagePath(String storagePath) {
-            this.storagePath = storagePath;
-            return this;
-        }
-
-        public Builder extractedFields(Map<String, ExtractedField> extractedFields) {
-            this.extractedFields = extractedFields;
-            return this;
-        }
-
-        public Builder addExtractedField(String fieldName, ExtractedField field) {
-            this.extractedFields.put(fieldName, field);
-            return this;
-        }
-
-        public Builder metadata(Map<String, Object> metadata) {
-            this.metadata = metadata;
-            return this;
-        }
-
-        public Builder addMetadata(String key, Object value) {
-            this.metadata.put(key, value);
-            return this;
-        }
-
-        public Builder processingMetadata(ProcessingMetadata processingMetadata) {
-            this.processingMetadata = processingMetadata;
-            return this;
-        }
-
-        public DocumentProcessingMessage build() {
-            DocumentProcessingMessage message = new DocumentProcessingMessage();
-            message.id = this.id;
-            message.documentId = this.documentId;
-            message.documentType = this.documentType;
-            message.classification = this.classification;
-            message.classificationConfidence = this.classificationConfidence;
-            message.processingAction = this.processingAction;
-            message.applicationId = this.applicationId;
-            message.timestamp = LocalDateTime.now();
-            message.storagePath = this.storagePath;
-            message.extractedFields = this.extractedFields;
-            message.metadata = this.metadata;
-            message.processingMetadata = this.processingMetadata;
-            return message;
-        }
+        return confidenceScores.get(fieldName);
     }
 }
