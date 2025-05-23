@@ -1,1074 +1,680 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
-"""
-TensorFlow utilities for the OCR Service.
-
-This module provides utility functions for loading OCR models, performing inference,
-managing GPU resources, and handling model versioning. It's essential for the core OCR
-functionality of extracting text from documents using specialized TensorFlow models.
-
-Key features:
-- GPU acceleration configuration and management (required per section 3.2.3)
-- Model loading and versioning for different text types (typed, handwritten, hybrid)
-- Inference functions with confidence scoring (required per section 4.1.8)
-- Performance monitoring and optimization utilities
-- Memory management to prevent GPU memory leaks
-
-The module implements the requirements specified in the technical specification:
-- OCR Service must use TensorFlow with GPU acceleration (section 3.2.2)
-- Service must apply appropriate OCR model based on document type (section 4.1.8)
-- Service must implement confidence scoring for extracted fields (section 4.1.8)
-
-This module is designed to be used by the OCR Service to process documents with
-high accuracy (99% as specified in section 0.1.2) and performance.
-"""
+# tensorflow_utils.py
+# Utility functions for TensorFlow model loading, inference, and GPU management
 
 import os
 import json
-import logging
 import time
-from typing import Dict, List, Optional, Tuple, Union, Any
-
-import numpy as np
+import logging
 import tensorflow as tf
+import numpy as np
+from typing import Dict, List, Optional, Tuple, Union, Any
+from pathlib import Path
 
-# Configure logging
+# Configure logger
 logger = logging.getLogger(__name__)
 
 # Constants
-MIN_REQUIRED_VRAM_MB = 8 * 1024  # 8GB VRAM required as per technical spec section 3.2.3
-MODEL_VERSION_FILE = "version.json"
-SUPPORTED_MODEL_TYPES = ["typed", "handwritten", "hybrid"]
-
-# TensorFlow model configuration
-TF_VERSION_REQUIRED = "2.15.0"  # TensorFlow version specified in section 3.2.2
-TF_INTER_OP_PARALLELISM = 4     # Number of threads for parallel operations
-TF_INTRA_OP_PARALLELISM = 4     # Number of threads for operations that can be parallelized
-TF_GPU_MEMORY_GROWTH = True     # Allow memory growth to avoid allocating all GPU memory at once
-
-# Confidence thresholds
-DEFAULT_CONFIDENCE_THRESHOLD = 0.75  # Default threshold for confidence scoring (section 4.1.8)
-LOW_CONFIDENCE_THRESHOLD = 0.50      # Threshold below which fields require human review
+MODEL_VERSION_FILE = "model_version.json"
+GPU_MEMORY_LIMIT = 0.9  # Use 90% of available GPU memory by default
+MODEL_TYPES = ["typed", "handwritten", "hybrid", "structure"]
 
 
-def configure_gpu_memory(memory_limit: Optional[int] = None,
-                        allow_growth: bool = TF_GPU_MEMORY_GROWTH,
-                        inter_op_parallelism: int = TF_INTER_OP_PARALLELISM,
-                        intra_op_parallelism: int = TF_INTRA_OP_PARALLELISM) -> Dict[str, Any]:
+def configure_gpu_memory(memory_limit: float = GPU_MEMORY_LIMIT) -> None:
     """
-    Configure TensorFlow to use GPU with specified memory settings and thread parallelism.
-    
-    This function configures GPU memory allocation and thread parallelism for optimal
-    performance with TensorFlow. It implements the GPU acceleration requirements specified
-    in section 3.2.3 of the technical specification.
+    Configure TensorFlow to use a percentage of available GPU memory to prevent OOM errors.
     
     Args:
-        memory_limit: Memory limit in MB. If None, no limit is set.
-        allow_growth: If True, memory growth is allowed (allocates only as much as needed).
-        inter_op_parallelism: Number of threads used for parallel operations.
-        intra_op_parallelism: Number of threads used for operations that can be parallelized.
-    
-    Returns:
-        Dictionary with configuration results and settings applied
+        memory_limit: Fraction of GPU memory to allocate (0.0 to 1.0)
     """
-    config_results = {
-        "gpu_available": False,
-        "memory_growth_enabled": False,
-        "memory_limit_set": False,
-        "parallelism_configured": False,
-        "settings": {
-            "allow_growth": allow_growth,
-            "memory_limit_mb": memory_limit,
-            "inter_op_parallelism": inter_op_parallelism,
-            "intra_op_parallelism": intra_op_parallelism
-        }
-    }
-    
     try:
-        # Configure thread parallelism
-        tf.config.threading.set_inter_op_parallelism_threads(inter_op_parallelism)
-        tf.config.threading.set_intra_op_parallelism_threads(intra_op_parallelism)
-        config_results["parallelism_configured"] = True
-        logger.info(f"Configured TensorFlow thread parallelism: inter_op={inter_op_parallelism}, "
-                   f"intra_op={intra_op_parallelism}")
-        
-        # Check if GPU is available
         gpus = tf.config.list_physical_devices('GPU')
-        config_results["gpu_available"] = len(gpus) > 0
-        config_results["gpu_count"] = len(gpus)
-        
         if not gpus:
-            logger.warning("No GPU found. Running on CPU which may significantly impact performance.")
-            return config_results
+            logger.warning("No GPU found. Running on CPU which will be significantly slower.")
+            return
         
-        logger.info(f"Found {len(gpus)} GPU(s): {gpus}")
+        logger.info(f"Found {len(gpus)} GPU(s). Configuring memory growth.")
         
-        # Configure memory growth
+        # Configure memory growth for all GPUs
         for gpu in gpus:
-            if allow_growth:
-                tf.config.experimental.set_memory_growth(gpu, True)
-                config_results["memory_growth_enabled"] = True
-                logger.info(f"Enabled memory growth for GPU: {gpu}")
+            tf.config.experimental.set_memory_growth(gpu, True)
             
             # Set memory limit if specified
-            if memory_limit:
-                tf.config.set_logical_device_configuration(
-                    gpu,
-                    [tf.config.LogicalDeviceConfiguration(memory_limit=memory_limit)])
-                config_results["memory_limit_set"] = True
-                logger.info(f"Set memory limit to {memory_limit}MB for GPU: {gpu}")
-        
-        # Log GPU configuration
-        logical_gpus = tf.config.list_logical_devices('GPU')
-        config_results["logical_gpu_count"] = len(logical_gpus)
-        logger.info(f"Configured {len(logical_gpus)} logical GPU(s)")
-        
-        # Set mixed precision policy if TensorFlow version supports it
-        # This can significantly improve performance on GPUs with tensor cores
-        if tf.__version__ >= "2.4.0":
-            try:
-                policy = tf.keras.mixed_precision.Policy('mixed_float16')
-                tf.keras.mixed_precision.set_global_policy(policy)
-                config_results["mixed_precision_enabled"] = True
-                logger.info("Enabled mixed precision (float16) for faster GPU computation")
-            except Exception as mp_error:
-                logger.warning(f"Could not enable mixed precision: {str(mp_error)}")
-                config_results["mixed_precision_enabled"] = False
-        
-        # Check TensorFlow version
-        config_results["tensorflow_version"] = tf.__version__
-        if tf.__version__ != TF_VERSION_REQUIRED:
-            logger.warning(f"TensorFlow version mismatch. Required: {TF_VERSION_REQUIRED}, Found: {tf.__version__}")
-        
-        # Verify CUDA is available
-        config_results["cuda_available"] = tf.test.is_built_with_cuda()
-        if not config_results["cuda_available"]:
-            logger.warning("TensorFlow not built with CUDA support. GPU acceleration may not work properly.")
-        
-        return config_results
-        
+            if memory_limit < 1.0:
+                gpu_memory = tf.config.experimental.get_memory_info(gpu)['total'] if hasattr(tf.config.experimental, 'get_memory_info') else None
+                if gpu_memory:
+                    memory_limit_bytes = int(gpu_memory * memory_limit)
+                    tf.config.set_logical_device_configuration(
+                        gpu,
+                        [tf.config.LogicalDeviceConfiguration(memory_limit=memory_limit_bytes)]
+                    )
+                    logger.info(f"GPU {gpu.name} memory limited to {memory_limit*100:.0f}% ({memory_limit_bytes/(1024**3):.2f} GB)")
+                else:
+                    logger.info(f"GPU {gpu.name} memory growth enabled but limit not set (memory info not available)")
+            else:
+                logger.info(f"GPU {gpu.name} memory growth enabled without specific limit")
+                
     except Exception as e:
-        logger.error(f"Error configuring GPU: {str(e)}")
-        config_results["error"] = str(e)
-        return config_results
+        logger.error(f"Error configuring GPU memory: {str(e)}")
+        logger.warning("Falling back to CPU. OCR performance will be degraded.")
 
 
-def check_gpu_compatibility() -> Tuple[bool, Dict[str, Any]]:
+def get_available_gpu_memory() -> Dict[str, float]:
     """
-    Check if the available GPU(s) meet the minimum requirements for OCR processing.
+    Get available memory for each GPU in GB.
     
     Returns:
-        Tuple containing:
-            - Boolean indicating if GPU is compatible
-            - Dictionary with GPU information
+        Dictionary mapping GPU device names to available memory in GB
     """
-    gpu_info = {}
+    memory_info = {}
+    try:
+        gpus = tf.config.list_physical_devices('GPU')
+        for i, gpu in enumerate(gpus):
+            try:
+                # Get memory info if available in this TF version
+                if hasattr(tf.config.experimental, 'get_memory_info'):
+                    info = tf.config.experimental.get_memory_info(gpu)
+                    total = info['total'] / (1024**3)  # Convert to GB
+                    used = info['used'] / (1024**3)    # Convert to GB
+                    available = total - used
+                    memory_info[gpu.name] = available
+                else:
+                    # If get_memory_info is not available, use a placeholder
+                    memory_info[gpu.name] = -1.0  # Indicates memory info not available
+            except Exception as e:
+                logger.warning(f"Could not get memory info for GPU {i}: {str(e)}")
+                memory_info[gpu.name] = -1.0
+    except Exception as e:
+        logger.error(f"Error getting GPU memory info: {str(e)}")
+    
+    return memory_info
+
+
+def check_gpu_requirements(min_vram_gb: float = 8.0) -> bool:
+    """
+    Check if the system meets the GPU requirements for OCR processing.
+    
+    Args:
+        min_vram_gb: Minimum required VRAM in GB
+        
+    Returns:
+        True if requirements are met, False otherwise
+    """
     try:
         gpus = tf.config.list_physical_devices('GPU')
         if not gpus:
-            return False, {"error": "No GPU found"}
-        
-        # Get GPU memory info using TensorFlow
-        for i, gpu in enumerate(gpus):
-            # Create a small tensor to force memory allocation on the GPU
-            with tf.device(f'/GPU:{i}'):
-                # This will trigger device initialization
-                tf.random.normal([1000, 1000])
-            
-            # Get memory info
-            gpu_info[f"gpu_{i}"] = {
-                "name": gpu.name,
-                "device": str(gpu),
-            }
-        
-        # Check CUDA and cuDNN versions
-        gpu_info["cuda_version"] = tf.sysconfig.get_build_info()["cuda_version"]
-        gpu_info["cudnn_version"] = tf.sysconfig.get_build_info()["cudnn_version"]
-        
-        # Check TensorFlow version
-        gpu_info["tensorflow_version"] = tf.__version__
-        
-        # Perform a simple operation to verify GPU works
-        with tf.device('/GPU:0'):
-            a = tf.constant([[1.0, 2.0], [3.0, 4.0]])
-            b = tf.constant([[5.0, 6.0], [7.0, 8.0]])
-            c = tf.matmul(a, b)
-            # Force execution to verify GPU works
-            result = c.numpy()
-        
-        gpu_info["test_passed"] = True
-        return True, gpu_info
-        
-    except Exception as e:
-        logger.error(f"GPU compatibility check failed: {str(e)}")
-        gpu_info["error"] = str(e)
-        gpu_info["test_passed"] = False
-        return False, gpu_info
-
-
-def get_available_vram() -> Dict[int, int]:
-    """
-    Get available VRAM for each GPU in MB.
-    
-    Returns:
-        Dictionary mapping GPU index to available VRAM in MB
-    """
-    vram_info = {}
-    try:
-        # This is a simplified approach - in production, you would use
-        # nvidia-ml-py3 (pynvml) for more accurate GPU memory information
-        gpus = tf.config.list_physical_devices('GPU')
-        
-        for i, gpu in enumerate(gpus):
-            # Create a test tensor to estimate available memory
-            # This is not precise but gives a rough estimate
-            with tf.device(f'/GPU:{i}'):
-                # Try to allocate a large tensor and see if it works
-                # Start with a small tensor and increase size
-                max_size = 0
-                test_sizes = [1024, 2048, 4096, 8192, 16384]
-                
-                for size in test_sizes:
-                    try:
-                        # Try to allocate a tensor of size (size, size)
-                        tensor = tf.random.normal([size, size])
-                        # Force execution
-                        tensor.numpy()
-                        # If successful, update max_size
-                        max_size = size
-                    except Exception:
-                        # If allocation fails, break the loop
-                        break
-                
-                # Rough estimate of available VRAM in MB
-                # Each float32 value is 4 bytes
-                vram_estimate = (max_size * max_size * 4) / (1024 * 1024)
-                vram_info[i] = int(vram_estimate)
-        
-        return vram_info
-    except Exception as e:
-        logger.error(f"Error getting available VRAM: {str(e)}")
-        return {}
-
-
-def verify_gpu_requirements() -> Tuple[bool, Dict[str, Any]]:
-    """
-    Verify that the available GPU(s) meet the minimum requirements for OCR processing.
-    
-    As specified in section 3.2.3 of the technical specification, TensorFlow OCR processing
-    requires CUDA-compatible GPU acceleration with at least 8GB VRAM for performance.
-    
-    Returns:
-        Tuple containing:
-            - Boolean indicating if requirements are met
-            - Dictionary with detailed verification results
-    """
-    verification_results = {
-        "gpu_available": False,
-        "cuda_available": False,
-        "sufficient_vram": False,
-        "tensorflow_gpu_enabled": False,
-        "requirements_met": False,
-        "details": {}
-    }
-    
-    try:
-        # Check if GPU is available
-        gpus = tf.config.list_physical_devices('GPU')
-        verification_results["gpu_available"] = len(gpus) > 0
-        verification_results["details"]["gpus"] = [str(gpu) for gpu in gpus]
-        
-        if not verification_results["gpu_available"]:
             logger.warning("No GPU found. OCR processing requires GPU acceleration.")
-            return False, verification_results
+            return False
         
-        # Check CUDA and cuDNN availability
-        verification_results["cuda_available"] = tf.test.is_built_with_cuda()
-        verification_results["details"]["cuda_version"] = tf.sysconfig.get_build_info()["cuda_version"]
-        verification_results["details"]["cudnn_version"] = tf.sysconfig.get_build_info()["cudnn_version"]
+        # Check CUDA availability
+        if not tf.test.is_built_with_cuda():
+            logger.warning("TensorFlow not built with CUDA support. OCR performance will be degraded.")
+            return False
         
-        if not verification_results["cuda_available"]:
-            logger.warning("TensorFlow not built with CUDA support.")
-            return False, verification_results
+        # Check available memory
+        memory_info = get_available_gpu_memory()
+        for gpu_name, memory_gb in memory_info.items():
+            if memory_gb == -1.0:
+                logger.warning(f"Could not determine memory for {gpu_name}. Assuming requirements are met.")
+                continue
+            
+            if memory_gb < min_vram_gb:
+                logger.warning(f"Insufficient VRAM on {gpu_name}: {memory_gb:.2f}GB available, {min_vram_gb}GB required")
+                return False
         
-        # Check available VRAM
-        vram_info = get_available_vram()
-        verification_results["details"]["vram_info"] = vram_info
-        
-        if not vram_info:
-            logger.warning("Could not determine available VRAM.")
-            return False, verification_results
-        
-        # Check if any GPU has sufficient VRAM
-        sufficient_vram = any(vram >= MIN_REQUIRED_VRAM_MB for vram in vram_info.values())
-        verification_results["sufficient_vram"] = sufficient_vram
-        verification_results["details"]["min_required_vram_mb"] = MIN_REQUIRED_VRAM_MB
-        verification_results["details"]["max_available_vram_mb"] = max(vram_info.values()) if vram_info else 0
-        
-        if not sufficient_vram:
-            logger.warning(f"Insufficient VRAM. OCR processing requires at least {MIN_REQUIRED_VRAM_MB}MB VRAM.")
-            return False, verification_results
-        
-        # Verify GPU is actually working with TensorFlow
-        is_compatible, compatibility_info = check_gpu_compatibility()
-        verification_results["tensorflow_gpu_enabled"] = is_compatible
-        verification_results["details"]["compatibility_check"] = compatibility_info
-        
-        if not is_compatible:
-            logger.warning("GPU compatibility check failed.")
-            return False, verification_results
-        
-        # Run a simple test to verify GPU acceleration works
-        with tf.device('/GPU:0'):
-            # Create and multiply two matrices
-            start_time = time.time()
-            a = tf.random.normal([2000, 2000])
-            b = tf.random.normal([2000, 2000])
-            c = tf.matmul(a, b)
-            # Force execution
-            result = c.numpy()
-            execution_time = time.time() - start_time
-        
-        verification_results["details"]["test_execution_time_ms"] = execution_time * 1000
-        
-        # All requirements met
-        verification_results["requirements_met"] = True
-        logger.info("GPU requirements verified successfully.")
-        logger.info(f"GPU details: {len(gpus)} GPU(s), CUDA {verification_results['details']['cuda_version']}, "
-                   f"cuDNN {verification_results['details']['cudnn_version']}, "
-                   f"Max VRAM: {verification_results['details']['max_available_vram_mb']}MB")
-        
-        return True, verification_results
-        
+        return True
     except Exception as e:
-        logger.error(f"Error verifying GPU requirements: {str(e)}")
-        verification_results["error"] = str(e)
-        return False, verification_results
+        logger.error(f"Error checking GPU requirements: {str(e)}")
+        return False
 
 
-def load_model(model_path: str, model_type: str, version: Optional[str] = None) -> tf.keras.Model:
+def get_model_version(model_dir: str) -> Dict[str, Any]:
     """
-    Load a TensorFlow model from the specified path with version validation.
-    
-    This function loads OCR models for different text types (typed, handwritten, hybrid)
-    and ensures they are properly validated and warmed up for inference. It supports
-    model versioning to ensure reproducibility and consistent results.
+    Get the version information for a model.
     
     Args:
-        model_path: Path to the model directory
-        model_type: Type of model (typed, handwritten, hybrid)
-        version: Optional specific model version to load
-    
+        model_dir: Directory containing the model
+        
     Returns:
-        Loaded TensorFlow model
-    
-    Raises:
-        ValueError: If model_type is not supported or model cannot be loaded
+        Dictionary with model version information
     """
-    if model_type not in SUPPORTED_MODEL_TYPES:
-        raise ValueError(f"Unsupported model type: {model_type}. Supported types: {SUPPORTED_MODEL_TYPES}")
+    version_file = os.path.join(model_dir, MODEL_VERSION_FILE)
+    try:
+        if os.path.exists(version_file):
+            with open(version_file, 'r') as f:
+                return json.load(f)
+        else:
+            logger.warning(f"No version file found at {version_file}")
+            return {
+                "version": "unknown",
+                "date_trained": "unknown",
+                "accuracy": "unknown",
+                "framework_version": "unknown"
+            }
+    except Exception as e:
+        logger.error(f"Error reading model version: {str(e)}")
+        return {
+            "version": "error",
+            "date_trained": "error",
+            "accuracy": "error",
+            "framework_version": "error",
+            "error": str(e)
+        }
+
+
+def validate_model_compatibility(model_dir: str) -> bool:
+    """
+    Validate that the model is compatible with the current TensorFlow version.
+    
+    Args:
+        model_dir: Directory containing the model
+        
+    Returns:
+        True if compatible, False otherwise
+    """
+    try:
+        version_info = get_model_version(model_dir)
+        
+        # Check if model was trained with a compatible TensorFlow version
+        if "framework_version" in version_info and version_info["framework_version"] != "unknown":
+            model_tf_version = version_info["framework_version"]
+            current_tf_version = tf.__version__
+            
+            # Parse versions for comparison
+            model_major, model_minor = map(int, model_tf_version.split('.')[:2])
+            current_major, current_minor = map(int, current_tf_version.split('.')[:2])
+            
+            # Check compatibility (same major version, current minor >= model minor)
+            if current_major != model_major or current_minor < model_minor:
+                logger.warning(f"Model trained with TensorFlow {model_tf_version}, current version is {current_tf_version}")
+                logger.warning("Model may not be compatible with current TensorFlow version")
+                return False
+        
+        return True
+    except Exception as e:
+        logger.error(f"Error validating model compatibility: {str(e)}")
+        return False
+
+
+def load_model(model_dir: str, model_type: str) -> Optional[tf.keras.Model]:
+    """
+    Load a TensorFlow model for OCR processing.
+    
+    Args:
+        model_dir: Base directory containing model subdirectories
+        model_type: Type of model to load (typed, handwritten, hybrid, structure)
+        
+    Returns:
+        Loaded TensorFlow model or None if loading fails
+    """
+    if model_type not in MODEL_TYPES:
+        logger.error(f"Invalid model type: {model_type}. Must be one of {MODEL_TYPES}")
+        return None
+    
+    full_model_path = os.path.join(model_dir, model_type)
     
     try:
         # Check if model exists
-        if not os.path.exists(model_path):
-            raise ValueError(f"Model path does not exist: {model_path}")
+        if not os.path.exists(full_model_path):
+            logger.error(f"Model not found at {full_model_path}")
+            return None
         
-        # Check for version if specified
-        if version is not None:
-            version_info = get_model_version(model_path)
-            if version_info["version"] != version:
-                raise ValueError(f"Model version mismatch. Requested: {version}, Found: {version_info['version']}")
+        # Validate model compatibility
+        if not validate_model_compatibility(full_model_path):
+            logger.warning(f"Model compatibility check failed for {model_type} model")
+            # Continue loading anyway, but with a warning
         
-        # Log model loading
-        logger.info(f"Loading {model_type} model from {model_path}")
+        # Log model version information
+        version_info = get_model_version(full_model_path)
+        logger.info(f"Loading {model_type} model version {version_info.get('version', 'unknown')}")
+        
+        # Load the model
         start_time = time.time()
-        
-        # Define custom objects if needed for the model
-        # This is important for models with custom layers or loss functions
-        custom_objects = {}
-        
-        # For typed text models, we might have custom layers
-        if model_type == "typed":
-            # Example of custom layer for typed text recognition
-            # custom_objects["CustomLayer"] = CustomLayer
-            pass
-        
-        # For handwritten text models, we might have different custom layers
-        elif model_type == "handwritten":
-            # Example of custom layer for handwritten text recognition
-            # custom_objects["HandwrittenAttention"] = HandwrittenAttention
-            pass
-        
-        # For hybrid models, we might need to combine custom objects
-        elif model_type == "hybrid":
-            # Example of custom layers for hybrid text recognition
-            # custom_objects.update({"CustomLayer": CustomLayer, "HandwrittenAttention": HandwrittenAttention})
-            pass
-        
-        # Load the model with appropriate custom objects
-        model = tf.keras.models.load_model(model_path, custom_objects=custom_objects)
-        
-        # Log loading time
+        model = tf.keras.models.load_model(full_model_path)
         load_time = time.time() - start_time
-        logger.info(f"Model loaded in {load_time:.2f} seconds")
         
-        # Verify model is valid
-        if not isinstance(model, tf.keras.Model):
-            raise ValueError(f"Loaded object is not a valid TensorFlow model: {type(model)}")
-        
-        # Validate model structure and compatibility
-        is_valid, validation_results = validate_model(model, model_type)
-        if not is_valid:
-            issues = ", ".join(validation_results["issues"])
-            raise ValueError(f"Model validation failed: {issues}")
-        
-        # Warm up the model with a sample input to ensure it's ready for inference
-        warmup_model(model, model_type)
-        
-        # Log model information
-        logger.info(f"Model type: {model_type}, Input shape: {model.input_shape}, Output shape: {model.output_shape}")
-        
-        # Check if GPU is being used
-        gpus = tf.config.list_physical_devices('GPU')
-        if gpus:
-            logger.info(f"Model will use GPU acceleration: {gpus}")
-        else:
-            logger.warning("No GPU available. Model will run on CPU which may be significantly slower.")
-        
+        logger.info(f"Successfully loaded {model_type} model in {load_time:.2f} seconds")
         return model
     
     except Exception as e:
-        logger.error(f"Error loading model: {str(e)}")
-        raise ValueError(f"Failed to load {model_type} model: {str(e)}")
+        logger.error(f"Error loading {model_type} model: {str(e)}")
+        return None
 
 
-def warmup_model(model: tf.keras.Model, model_type: str) -> None:
+def load_all_models(model_dir: str) -> Dict[str, tf.keras.Model]:
     """
-    Warm up the model with a sample input to ensure it's ready for inference.
+    Load all OCR models from the specified directory.
     
     Args:
-        model: TensorFlow model to warm up
-        model_type: Type of model (typed, handwritten, hybrid)
-    """
-    try:
-        logger.info(f"Warming up {model_type} model...")
+        model_dir: Base directory containing model subdirectories
         
-        # Create a sample input based on model type
-        # Assuming input shape is (batch_size, height, width, channels)
-        if model_type == "typed":
-            # Typical document image size for typed text
-            sample_input = tf.random.normal([1, 1024, 768, 3])
-        elif model_type == "handwritten":
-            # Typical document image size for handwritten text
-            sample_input = tf.random.normal([1, 1024, 768, 3])
-        elif model_type == "hybrid":
-            # Typical document image size for hybrid text
-            sample_input = tf.random.normal([1, 1024, 768, 3])
-        else:
-            logger.warning(f"Unknown model type for warmup: {model_type}")
-            return
-        
-        # Run inference on sample input
-        start_time = time.time()
-        _ = model(sample_input, training=False)
-        warmup_time = time.time() - start_time
-        
-        logger.info(f"Model warmed up in {warmup_time:.2f} seconds")
-    
-    except Exception as e:
-        logger.warning(f"Model warmup failed: {str(e)}")
-
-
-def get_model_version(model_path: str) -> Dict[str, Any]:
-    """
-    Get the version information for a model with detailed metadata.
-    
-    This function retrieves version information and metadata for a TensorFlow model,
-    which is essential for model versioning and validation as specified in the
-    technical requirements.
-    
-    Args:
-        model_path: Path to the model directory
-    
     Returns:
-        Dictionary containing version information and model metadata
+        Dictionary mapping model types to loaded models
     """
-    version_info = {
-        "version": "unknown",
-        "created_at": "unknown",
-        "framework_version": tf.__version__,
-        "model_type": "unknown",
-        "metadata": {},
-        "is_compatible": False
-    }
+    models = {}
+    for model_type in MODEL_TYPES:
+        model = load_model(model_dir, model_type)
+        if model is not None:
+            models[model_type] = model
     
-    try:
-        # Check if version file exists
-        version_file = os.path.join(model_path, MODEL_VERSION_FILE)
-        if os.path.exists(version_file):
-            with open(version_file, 'r') as f:
-                version_data = json.load(f)
-                version_info.update(version_data)
-                
-                # Extract model type if available
-                if "model_type" in version_data:
-                    version_info["model_type"] = version_data["model_type"]
-                
-                # Extract additional metadata if available
-                if "metadata" in version_data:
-                    version_info["metadata"] = version_data["metadata"]
-        else:
-            # Try to get version from saved_model.pb metadata
-            try:
-                # Load model without custom objects to just check metadata
-                model = tf.keras.models.load_model(model_path, compile=False)
-                
-                # Check for metadata in the model
-                if hasattr(model, 'metadata'):
-                    if isinstance(model.metadata, dict):
-                        if 'version' in model.metadata:
-                            version_info["version"] = model.metadata['version']
-                        if 'created_at' in model.metadata:
-                            version_info["created_at"] = model.metadata['created_at']
-                        if 'model_type' in model.metadata:
-                            version_info["model_type"] = model.metadata['model_type']
-                        
-                        # Include all metadata
-                        version_info["metadata"] = model.metadata
-                
-                # Get model architecture summary
-                model_summary = []
-                model.summary(print_fn=lambda x: model_summary.append(x))
-                version_info["architecture_summary"] = "\n".join(model_summary)
-                
-                # Get input and output shapes
-                version_info["input_shape"] = str(model.input_shape)
-                version_info["output_shape"] = str(model.output_shape)
-                
-            except Exception as model_error:
-                logger.debug(f"Could not extract metadata from model: {str(model_error)}")
-        
-        # Check if the model is compatible with current TensorFlow version
-        version_info["is_compatible"] = True  # Assume compatible by default
-        
-        # If we have a specific model version and TensorFlow version, check compatibility
-        if version_info["version"] != "unknown" and "min_tf_version" in version_info["metadata"]:
-            min_tf_version = version_info["metadata"]["min_tf_version"]
-            current_tf_version = tf.__version__
-            
-            # Simple version comparison (this could be more sophisticated)
-            version_info["is_compatible"] = current_tf_version >= min_tf_version
-            
-            if not version_info["is_compatible"]:
-                logger.warning(f"Model requires TensorFlow {min_tf_version} or higher, "
-                              f"but current version is {current_tf_version}")
-        
-        # Add timestamp for when this information was retrieved
-        version_info["retrieved_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    if not models:
+        logger.error("Failed to load any OCR models")
+    else:
+        logger.info(f"Successfully loaded {len(models)} OCR models")
     
-    except Exception as e:
-        logger.warning(f"Error getting model version: {str(e)}")
-        version_info["error"] = str(e)
-    
-    return version_info
+    return models
 
 
-def validate_model(model: tf.keras.Model, model_type: str) -> Tuple[bool, Dict[str, Any]]:
+def preprocess_image_for_ocr(image: np.ndarray, model_type: str) -> np.ndarray:
     """
-    Validate a model to ensure it meets the requirements for OCR processing.
+    Preprocess an image for OCR inference based on model type.
     
     Args:
-        model: TensorFlow model to validate
-        model_type: Type of model (typed, handwritten, hybrid)
-    
+        image: Input image as numpy array
+        model_type: Type of OCR model (typed, handwritten, hybrid, structure)
+        
     Returns:
-        Tuple containing:
-            - Boolean indicating if model is valid
-            - Dictionary with validation results
+        Preprocessed image ready for model inference
     """
-    validation_results = {
-        "model_type": model_type,
-        "is_valid": False,
-        "issues": []
-    }
+    if model_type not in MODEL_TYPES:
+        logger.error(f"Invalid model type for preprocessing: {model_type}")
+        return image
     
     try:
-        # Check model type
-        if model_type not in SUPPORTED_MODEL_TYPES:
-            validation_results["issues"].append(f"Unsupported model type: {model_type}")
-            return False, validation_results
+        # Common preprocessing steps
+        # Convert to float32 and normalize to [0, 1]
+        image = image.astype(np.float32) / 255.0
         
-        # Check if model is a valid TensorFlow model
-        if not isinstance(model, tf.keras.Model):
-            validation_results["issues"].append(f"Not a valid TensorFlow model: {type(model)}")
-            return False, validation_results
-        
-        # Check model inputs and outputs
-        input_shape = model.input_shape
-        output_shape = model.output_shape
-        
-        # Validate input shape based on model type
+        # Model-specific preprocessing
         if model_type == "typed":
-            # Typical input for typed text OCR: (batch_size, height, width, channels)
-            if len(input_shape) != 4 or input_shape[-1] not in [1, 3]:
-                validation_results["issues"].append(
-                    f"Invalid input shape for typed model: {input_shape}. Expected (batch_size, height, width, 1 or 3)")
-        
+            # For typed text models: enhance contrast, resize to model input size
+            # Assuming model input size is 1024x768 for typed text
+            image = tf.image.resize(image, [768, 1024])
+            image = tf.image.per_image_standardization(image)
+            
         elif model_type == "handwritten":
-            # Similar validation for handwritten model
-            if len(input_shape) != 4 or input_shape[-1] not in [1, 3]:
-                validation_results["issues"].append(
-                    f"Invalid input shape for handwritten model: {input_shape}. Expected (batch_size, height, width, 1 or 3)")
-        
+            # For handwritten text models: different preprocessing may be needed
+            # Assuming model input size is 1280x800 for handwritten text
+            image = tf.image.resize(image, [800, 1280])
+            # Apply specific preprocessing for handwritten text if needed
+            
         elif model_type == "hybrid":
-            # Similar validation for hybrid model
-            if len(input_shape) != 4 or input_shape[-1] not in [1, 3]:
-                validation_results["issues"].append(
-                    f"Invalid input shape for hybrid model: {input_shape}. Expected (batch_size, height, width, 1 or 3)")
+            # For hybrid models: general preprocessing that works for both types
+            # Assuming model input size is 1280x800 for hybrid model
+            image = tf.image.resize(image, [800, 1280])
+            image = tf.image.per_image_standardization(image)
+            
+        elif model_type == "structure":
+            # For structure recognition: preserve aspect ratio, pad if needed
+            # Assuming model input size is 1600x1600 for structure model
+            original_height, original_width = image.shape[:2]
+            target_size = 1600
+            
+            # Preserve aspect ratio
+            if original_height > original_width:
+                new_height = target_size
+                new_width = int(original_width * (target_size / original_height))
+            else:
+                new_width = target_size
+                new_height = int(original_height * (target_size / original_width))
+            
+            # Resize while preserving aspect ratio
+            image = tf.image.resize(image, [new_height, new_width])
+            
+            # Pad to square if needed
+            if new_height < target_size or new_width < target_size:
+                padded_image = np.zeros((target_size, target_size, image.shape[2]), dtype=np.float32)
+                padded_image[:new_height, :new_width, :] = image.numpy()
+                image = padded_image
         
-        # Check if there are any issues
-        if not validation_results["issues"]:
-            validation_results["is_valid"] = True
+        # Expand dimensions to create batch of size 1
+        image = np.expand_dims(image, axis=0)
         
-        # Add model information
-        validation_results["input_shape"] = input_shape
-        validation_results["output_shape"] = output_shape
-        
-        return validation_results["is_valid"], validation_results
+        return image
     
     except Exception as e:
-        validation_results["issues"].append(f"Validation error: {str(e)}")
-        return False, validation_results
+        logger.error(f"Error preprocessing image for {model_type} model: {str(e)}")
+        # Return original image expanded to batch dimension as fallback
+        return np.expand_dims(image.astype(np.float32) / 255.0, axis=0)
 
 
-def run_inference(model: tf.keras.Model, 
-                 image: np.ndarray, 
-                 model_type: str,
-                 batch_size: int = 1,
-                 confidence_threshold: float = 0.75) -> Tuple[np.ndarray, Dict[str, Any]]:
+def run_inference(model: tf.keras.Model, image: np.ndarray) -> Tuple[np.ndarray, float]:
     """
-    Run inference on an image using the specified model with GPU acceleration.
-    
-    As specified in section 4.1.8 of the technical specification, the OCR service must
-    apply the appropriate OCR model based on document type and text characteristics,
-    and must use GPU acceleration for performance (section 3.2.2).
+    Run inference on a preprocessed image using the specified model.
     
     Args:
         model: TensorFlow model to use for inference
-        image: Input image as numpy array
-        model_type: Type of model (typed, handwritten, hybrid)
-        batch_size: Batch size for inference
-        confidence_threshold: Threshold for confidence scoring
-    
+        image: Preprocessed image as numpy array with batch dimension
+        
     Returns:
-        Tuple containing:
-            - Model output as numpy array
-            - Dictionary with inference metadata (timing, confidence scores, etc.)
+        Tuple of (model output, inference time in seconds)
     """
-    metadata = {
-        "model_type": model_type,
-        "batch_size": batch_size,
-        "inference_time_ms": 0,
-        "preprocessing_time_ms": 0,
-        "postprocessing_time_ms": 0,
-        "total_time_ms": 0,
-        "gpu_utilized": False,
-        "confidence_scores": {},
-    }
-    
     try:
-        # Start timing
-        total_start_time = time.time()
-        
-        # Check if GPU is available and being used
-        gpus = tf.config.list_physical_devices('GPU')
-        metadata["gpu_available"] = len(gpus) > 0
-        
-        # Preprocess image based on model type
-        preprocess_start_time = time.time()
-        
-        # Ensure image has the right shape and type
-        if len(image.shape) == 3:  # Single image
-            # Add batch dimension
+        # Ensure image has batch dimension
+        if len(image.shape) == 3:
             image = np.expand_dims(image, axis=0)
         
-        # Ensure image has the right number of channels
-        input_channels = model.input_shape[-1]
-        if image.shape[-1] != input_channels:
-            if input_channels == 1 and image.shape[-1] == 3:
-                # Convert RGB to grayscale
-                image = np.mean(image, axis=-1, keepdims=True)
-            elif input_channels == 3 and image.shape[-1] == 1:
-                # Convert grayscale to RGB
-                image = np.repeat(image, 3, axis=-1)
-            else:
-                raise ValueError(f"Cannot convert image with {image.shape[-1]} channels to {input_channels} channels")
+        # Run inference with timing
+        start_time = time.time()
+        output = model.predict(image)
+        inference_time = time.time() - start_time
         
-        # Apply model-specific preprocessing
-        if model_type == "typed":
-            # Enhance contrast for typed text
-            image = tf.image.adjust_contrast(image, 1.5)
-        elif model_type == "handwritten":
-            # Apply specific preprocessing for handwritten text
-            # This might include different contrast/brightness adjustments
-            image = tf.image.adjust_brightness(image, 0.1)
-            image = tf.image.adjust_contrast(image, 1.2)
-        elif model_type == "hybrid":
-            # For hybrid text, use a balanced approach
-            image = tf.image.adjust_contrast(image, 1.3)
-        
-        # Normalize image to [0, 1] if not already
-        if isinstance(image, np.ndarray) and image.max() > 1.0:
-            image = image / 255.0
-        elif isinstance(image, tf.Tensor) and tf.reduce_max(image) > 1.0:
-            image = image / 255.0
-        
-        # Convert TensorFlow tensor back to numpy if needed
-        if isinstance(image, tf.Tensor):
-            image = image.numpy()
-        
-        # Record preprocessing time
-        metadata["preprocessing_time_ms"] = (time.time() - preprocess_start_time) * 1000
-        
-        # Run inference with GPU acceleration
-        inference_start_time = time.time()
-        
-        # Use GPU if available
-        if metadata["gpu_available"]:
-            with tf.device('/GPU:0'):
-                # Use TensorFlow's predict method with batching for efficiency
-                output = model.predict(image, batch_size=batch_size, verbose=0)
-                metadata["gpu_utilized"] = True
-        else:
-            # Fallback to CPU if GPU is not available
-            logger.warning("GPU not available. Running inference on CPU which may be slower.")
-            output = model.predict(image, batch_size=batch_size, verbose=0)
-        
-        # Record inference time
-        metadata["inference_time_ms"] = (time.time() - inference_start_time) * 1000
-        
-        # Post-processing and confidence scoring
-        postprocess_start_time = time.time()
-        
-        # Calculate confidence scores
-        confidence_scores = calculate_confidence_scores(output, model_type, confidence_threshold)
-        metadata["confidence_scores"] = confidence_scores
-        
-        # Flag for human review if needed
-        metadata["requires_human_review"] = confidence_scores.get("requires_human_review", False)
-        
-        # Record postprocessing time
-        metadata["postprocessing_time_ms"] = (time.time() - postprocess_start_time) * 1000
-        metadata["total_time_ms"] = (time.time() - total_start_time) * 1000
-        
-        # Add performance metrics
-        metadata["performance"] = {
-            "images_per_second": batch_size / (metadata["inference_time_ms"] / 1000),
-            "total_processing_time_ms": metadata["total_time_ms"],
-        }
-        
-        return output, metadata
+        return output, inference_time
     
     except Exception as e:
-        logger.error(f"Inference error: {str(e)}")
-        metadata["error"] = str(e)
-        metadata["requires_human_review"] = True  # Default to human review on error
-        return None, metadata
+        logger.error(f"Error during model inference: {str(e)}")
+        return None, 0.0
 
 
-def calculate_confidence_scores(output: np.ndarray, model_type: str, threshold: float = 0.75) -> Dict[str, Any]:
+def calculate_confidence_scores(model_output: np.ndarray, model_type: str) -> Dict[str, float]:
     """
-    Calculate confidence scores for the model output and flag low-confidence fields.
-    
-    As specified in section 4.1.8 of the technical specification, the OCR service must
-    implement confidence scoring for extracted fields and flag low-confidence fields
-    for human verification.
+    Calculate confidence scores for OCR results based on model output.
     
     Args:
-        output: Model output as numpy array
-        model_type: Type of model (typed, handwritten, hybrid)
-        threshold: Confidence threshold below which fields are flagged (default: 0.75)
-    
+        model_output: Raw output from the OCR model
+        model_type: Type of OCR model used
+        
     Returns:
-        Dictionary containing:
-            - Field-level confidence scores (0.0 to 1.0)
-            - Overall confidence score
-            - Flags for low-confidence fields
+        Dictionary mapping field names to confidence scores (0.0 to 1.0)
     """
-    confidence_scores = {
-        "fields": {},
-        "overall": 0.0,
-        "low_confidence_fields": [],
-        "requires_human_review": False
-    }
-    
     try:
-        # Different confidence calculation based on model type
+        # This is a simplified implementation - actual confidence scoring would depend on model architecture
+        # and output format, which would be specific to the trained models
+        
+        # For demonstration, we'll return a placeholder implementation
         if model_type == "typed":
-            # For typed text, confidence is typically higher
-            if isinstance(output, np.ndarray):
-                # Process character probabilities for typed text
-                char_confidences = np.max(output, axis=-1)  # Max probability for each character
-                
-                # Calculate field-level confidences (assuming output structure has field information)
-                # This is a simplified example - actual implementation would depend on model output format
-                field_confidences = {
-                    "text": float(np.mean(char_confidences)),
-                    "date": float(np.mean(char_confidences[:10])) if len(char_confidences) > 10 else 0.9,
-                    "amount": float(np.mean(char_confidences[-5:])) if len(char_confidences) > 5 else 0.85,
-                }
-                
-                # Store field confidences
-                confidence_scores["fields"] = field_confidences
-                
-                # Calculate overall confidence
-                confidence_scores["overall"] = float(np.mean(list(field_confidences.values())))
-                
-                # Flag low-confidence fields
-                for field, score in field_confidences.items():
-                    if score < threshold:
-                        confidence_scores["low_confidence_fields"].append(field)
-                        confidence_scores["requires_human_review"] = True
-        
+            # For typed text, confidence might be based on character recognition probabilities
+            # This is a placeholder - actual implementation would process model_output
+            return {
+                "overall": 0.95,  # Overall document confidence
+                "text_recognition": 0.97,  # Text recognition confidence
+                "field_extraction": 0.93,  # Field extraction confidence
+            }
+            
         elif model_type == "handwritten":
-            # For handwritten text, confidence calculation is typically more conservative
-            if isinstance(output, np.ndarray):
-                # Process character probabilities for handwritten text
-                char_confidences = np.max(output, axis=-1)  # Max probability for each character
-                
-                # Apply a slightly lower threshold for handwritten text due to inherent variability
-                adjusted_threshold = threshold * 0.9  # 10% lower threshold for handwritten text
-                
-                # Calculate field-level confidences
-                field_confidences = {
-                    "text": float(np.mean(char_confidences)),
-                    "signature": float(np.mean(char_confidences[:20])) if len(char_confidences) > 20 else 0.8,
-                    "name": float(np.mean(char_confidences[-10:])) if len(char_confidences) > 10 else 0.75,
-                }
-                
-                # Store field confidences
-                confidence_scores["fields"] = field_confidences
-                
-                # Calculate overall confidence
-                confidence_scores["overall"] = float(np.mean(list(field_confidences.values())))
-                
-                # Flag low-confidence fields
-                for field, score in field_confidences.items():
-                    if score < adjusted_threshold:
-                        confidence_scores["low_confidence_fields"].append(field)
-                        confidence_scores["requires_human_review"] = True
-        
+            # For handwritten text, confidence might be lower
+            # This is a placeholder - actual implementation would process model_output
+            return {
+                "overall": 0.85,  # Overall document confidence
+                "text_recognition": 0.82,  # Text recognition confidence
+                "field_extraction": 0.88,  # Field extraction confidence
+            }
+            
         elif model_type == "hybrid":
-            # For hybrid models, combine confidence calculations from both typed and handwritten
-            if isinstance(output, np.ndarray):
-                # This would depend on the specific hybrid model implementation
-                # Assuming the model outputs separate confidences for typed and handwritten portions
-                
-                # Simplified example - in practice, this would be more sophisticated
-                typed_portion = output[:len(output)//2]
-                handwritten_portion = output[len(output)//2:]
-                
-                typed_confidence = float(np.mean(np.max(typed_portion, axis=-1)))
-                handwritten_confidence = float(np.mean(np.max(handwritten_portion, axis=-1)))
-                
-                # Calculate field-level confidences
-                field_confidences = {
-                    "typed_text": typed_confidence,
-                    "handwritten_text": handwritten_confidence,
-                    "combined": (typed_confidence + handwritten_confidence) / 2
-                }
-                
-                # Store field confidences
-                confidence_scores["fields"] = field_confidences
-                
-                # Calculate overall confidence
-                confidence_scores["overall"] = field_confidences["combined"]
-                
-                # Flag low-confidence fields
-                for field, score in field_confidences.items():
-                    if score < threshold:
-                        confidence_scores["low_confidence_fields"].append(field)
-                        confidence_scores["requires_human_review"] = True
-        
-        # Add metadata about confidence calculation
-        confidence_scores["metadata"] = {
-            "model_type": model_type,
-            "threshold": threshold,
-            "calculation_time": time.time(),
-        }
+            # For hybrid text, confidence might be a weighted average
+            # This is a placeholder - actual implementation would process model_output
+            return {
+                "overall": 0.90,  # Overall document confidence
+                "text_recognition": 0.92,  # Text recognition confidence
+                "field_extraction": 0.89,  # Field extraction confidence
+            }
+            
+        elif model_type == "structure":
+            # For structure recognition, confidence might be based on layout detection
+            # This is a placeholder - actual implementation would process model_output
+            return {
+                "overall": 0.94,  # Overall document confidence
+                "layout_detection": 0.96,  # Layout detection confidence
+                "table_recognition": 0.92,  # Table recognition confidence
+                "form_field_detection": 0.93,  # Form field detection confidence
+            }
+            
+        else:
+            logger.warning(f"Unknown model type for confidence scoring: {model_type}")
+            return {"overall": 0.5}  # Default fallback
     
     except Exception as e:
         logger.error(f"Error calculating confidence scores: {str(e)}")
-        confidence_scores["error"] = str(e)
-        confidence_scores["overall"] = 0.0
-        confidence_scores["requires_human_review"] = True  # Default to human review on error
-    
-    return confidence_scores
+        return {"overall": 0.0, "error": str(e)}
 
 
-def get_optimal_batch_size(model: tf.keras.Model, 
-                          initial_batch_size: int = 1, 
-                          max_batch_size: int = 16) -> int:
+def get_field_confidence(field_name: str, field_value: str, model_output: np.ndarray, model_type: str) -> float:
     """
-    Determine the optimal batch size for inference based on available GPU memory.
+    Calculate confidence score for a specific extracted field.
     
     Args:
-        model: TensorFlow model
-        initial_batch_size: Starting batch size
-        max_batch_size: Maximum batch size to try
-    
+        field_name: Name of the extracted field
+        field_value: Extracted value for the field
+        model_output: Raw output from the OCR model
+        model_type: Type of OCR model used
+        
     Returns:
-        Optimal batch size for inference
+        Confidence score for the field (0.0 to 1.0)
     """
     try:
-        # Get input shape from model
-        input_shape = model.input_shape
-        if input_shape[0] is None:  # Batch dimension is None
-            # Create a sample shape with batch dimension
-            sample_shape = list(input_shape)
-            sample_shape[0] = 1  # Set batch dimension to 1
-        else:
-            sample_shape = input_shape
+        # This is a simplified implementation - actual field confidence scoring would be model-specific
+        # and would analyze the specific regions/tokens in the model output corresponding to this field
         
-        # Try increasing batch sizes until we run out of memory
-        optimal_batch_size = initial_batch_size
+        # For demonstration, we'll return values based on field characteristics
         
-        for batch_size in range(initial_batch_size, max_batch_size + 1):
-            try:
-                # Create a sample input with the current batch size
-                sample_shape_with_batch = list(sample_shape)
-                sample_shape_with_batch[0] = batch_size
-                sample_input = tf.random.normal(sample_shape_with_batch)
-                
-                # Try to run inference
-                with tf.device('/GPU:0'):
-                    _ = model(sample_input, training=False)
-                
-                # If successful, update optimal batch size
-                optimal_batch_size = batch_size
-                logger.debug(f"Batch size {batch_size} successful")
-            
-            except (tf.errors.ResourceExhaustedError, tf.errors.InternalError, tf.errors.UnknownError):
-                # Out of memory or other GPU error
-                logger.debug(f"Batch size {batch_size} failed due to resource constraints")
-                break
-            
-            except Exception as e:
-                logger.warning(f"Error testing batch size {batch_size}: {str(e)}")
-                break
+        # Base confidence starts high
+        base_confidence = 0.95
         
-        logger.info(f"Determined optimal batch size: {optimal_batch_size}")
-        return optimal_batch_size
+        # Adjust based on field value characteristics
+        if not field_value:  # Empty field
+            return 0.0
+        
+        # Longer values might have lower confidence
+        length_factor = max(0.0, 1.0 - (len(field_value) / 200))  # Penalize very long fields
+        
+        # Special characters might reduce confidence
+        special_chars = sum(1 for c in field_value if not c.isalnum() and not c.isspace())
+        special_char_factor = max(0.0, 1.0 - (special_chars / len(field_value) / 2))
+        
+        # Numeric fields might have higher confidence for typed text
+        numeric_factor = 1.05 if field_value.isdigit() and model_type == "typed" else 1.0
+        
+        # Handwritten text generally has lower confidence
+        model_factor = 0.9 if model_type == "handwritten" else 1.0
+        
+        # Calculate final confidence
+        confidence = base_confidence * length_factor * special_char_factor * numeric_factor * model_factor
+        
+        # Ensure confidence is in [0, 1] range
+        return max(0.0, min(1.0, confidence))
     
     except Exception as e:
-        logger.error(f"Error determining optimal batch size: {str(e)}")
-        return initial_batch_size
+        logger.error(f"Error calculating field confidence for {field_name}: {str(e)}")
+        return 0.5  # Default medium confidence on error
 
 
 def monitor_gpu_utilization() -> Dict[str, Any]:
     """
-    Monitor GPU utilization during model inference.
+    Monitor GPU utilization and memory usage.
     
     Returns:
         Dictionary with GPU utilization metrics
     """
-    # This is a placeholder - in a production environment, you would use
-    # nvidia-ml-py3 (pynvml) to get accurate GPU utilization metrics
-    metrics = {
-        "timestamp": time.time(),
-        "gpus": {}
-    }
-    
     try:
-        # Get list of GPUs
-        gpus = tf.config.list_physical_devices('GPU')
+        # This requires nvidia-smi and pynvml to be properly installed
+        # For a production system, you would use a more robust monitoring solution
         
-        for i, gpu in enumerate(gpus):
-            # In a real implementation, you would use pynvml to get:
-            # - GPU utilization percentage
-            # - Memory usage
-            # - Temperature
-            # - Power usage
-            metrics["gpus"][i] = {
-                "device": str(gpu),
-                "memory_usage": "N/A",  # Would be actual memory usage in MB
-                "utilization": "N/A",    # Would be utilization percentage
-            }
+        # Try to import pynvml for NVIDIA GPU monitoring
+        try:
+            import pynvml
+            pynvml.nvmlInit()
+            
+            metrics = {}
+            device_count = pynvml.nvmlDeviceGetCount()
+            
+            for i in range(device_count):
+                handle = pynvml.nvmlDeviceGetHandleByIndex(i)
+                name = pynvml.nvmlDeviceGetName(handle)
+                memory = pynvml.nvmlDeviceGetMemoryInfo(handle)
+                utilization = pynvml.nvmlDeviceGetUtilizationRates(handle)
+                
+                metrics[f"gpu_{i}"] = {
+                    "name": name,
+                    "memory_used_gb": memory.used / (1024**3),
+                    "memory_total_gb": memory.total / (1024**3),
+                    "memory_percent": memory.used / memory.total * 100,
+                    "gpu_utilization": utilization.gpu,
+                    "memory_utilization": utilization.memory
+                }
+            
+            pynvml.nvmlShutdown()
+            return metrics
+            
+        except ImportError:
+            # Fall back to TensorFlow memory info if pynvml is not available
+            memory_info = get_available_gpu_memory()
+            return {"memory_info": memory_info, "note": "Limited metrics available without pynvml"}
     
     except Exception as e:
         logger.error(f"Error monitoring GPU utilization: {str(e)}")
-        metrics["error"] = str(e)
-    
-    return metrics
+        return {"error": str(e)}
 
 
-def cleanup_gpu_memory() -> Dict[str, Any]:
+def optimize_model_for_inference(model: tf.keras.Model) -> tf.keras.Model:
     """
-    Clean up GPU memory after model inference to prevent memory leaks.
+    Optimize a TensorFlow model for inference performance.
     
-    This function releases GPU memory by clearing the TensorFlow session and
-    forcing garbage collection. It's important for long-running services to
-    prevent memory leaks and ensure consistent performance.
-    
+    Args:
+        model: TensorFlow model to optimize
+        
     Returns:
-        Dictionary with cleanup results and status
+        Optimized model for inference
     """
-    cleanup_results = {
-        "success": False,
-        "timestamp": time.time(),
-        "actions_performed": []
-    }
-    
     try:
-        # Get memory info before cleanup
-        before_cleanup = get_available_vram()
-        cleanup_results["before_cleanup_vram"] = before_cleanup
+        # Convert to TensorFlow Lite model for faster inference
+        # Note: This is a simplified example - actual optimization would depend on deployment requirements
         
-        # Clear TensorFlow session
-        tf.keras.backend.clear_session()
-        cleanup_results["actions_performed"].append("cleared_tf_session")
-        
-        # Reset GPU devices if possible
+        # For TF 2.x models, we can use the TF-TRT (TensorRT) integration for GPU acceleration
+        # This requires TensorRT to be installed
         try:
-            for device in tf.config.list_physical_devices('GPU'):
-                tf.config.experimental.reset_memory_stats(device)
-            cleanup_results["actions_performed"].append("reset_gpu_memory_stats")
-        except Exception as reset_error:
-            logger.debug(f"Could not reset GPU memory stats: {str(reset_error)}")
-        
-        # Force garbage collection
-        import gc
-        gc.collect()
-        cleanup_results["actions_performed"].append("forced_garbage_collection")
-        
-        # Get memory info after cleanup
-        time.sleep(0.5)  # Brief pause to allow memory to be reclaimed
-        after_cleanup = get_available_vram()
-        cleanup_results["after_cleanup_vram"] = after_cleanup
-        
-        # Calculate memory freed
-        if before_cleanup and after_cleanup:
-            memory_freed = {}
-            for gpu_id in before_cleanup:
-                if gpu_id in after_cleanup:
-                    memory_freed[gpu_id] = max(0, after_cleanup[gpu_id] - before_cleanup[gpu_id])
+            from tensorflow.python.compiler.tensorrt import trt_convert as trt
             
-            cleanup_results["memory_freed_mb"] = memory_freed
-            total_freed = sum(memory_freed.values())
-            cleanup_results["total_memory_freed_mb"] = total_freed
+            logger.info("Optimizing model with TensorRT...")
             
-            if total_freed > 0:
-                logger.info(f"GPU memory cleanup freed approximately {total_freed}MB")
-            else:
-                logger.debug("GPU memory cleanup completed, but no significant memory was freed")
-        else:
-            logger.debug("GPU memory cleanup completed, but could not measure memory impact")
-        
-        cleanup_results["success"] = True
-        return cleanup_results
+            # Save original model to temporary file
+            temp_model_dir = os.path.join(os.getcwd(), "temp_model")
+            os.makedirs(temp_model_dir, exist_ok=True)
+            model.save(temp_model_dir)
+            
+            # Convert with TensorRT
+            conversion_params = trt.TrtConversionParams(
+                precision_mode=trt.TrtPrecisionMode.FP16,  # Use FP16 for faster inference
+                max_workspace_size_bytes=8000000000,  # 8GB workspace
+                maximum_cached_engines=1
+            )
+            
+            converter = trt.TrtGraphConverterV2(
+                input_saved_model_dir=temp_model_dir,
+                conversion_params=conversion_params
+            )
+            
+            # Convert and save optimized model
+            converter.convert()
+            optimized_model_dir = os.path.join(os.getcwd(), "optimized_model")
+            os.makedirs(optimized_model_dir, exist_ok=True)
+            converter.save(optimized_model_dir)
+            
+            # Load optimized model
+            optimized_model = tf.saved_model.load(optimized_model_dir)
+            logger.info("Model successfully optimized with TensorRT")
+            
+            # Clean up temporary directories
+            import shutil
+            shutil.rmtree(temp_model_dir, ignore_errors=True)
+            
+            # Return a callable function that wraps the optimized model
+            # This maintains the same interface as the original model
+            class OptimizedModel(tf.keras.Model):
+                def __init__(self, trt_model):
+                    super(OptimizedModel, self).__init__()
+                    self.trt_model = trt_model
+                    
+                def call(self, inputs):
+                    return self.trt_model(inputs)
+                
+                def predict(self, inputs):
+                    return self.trt_model(inputs)
+            
+            return OptimizedModel(optimized_model)
+            
+        except (ImportError, tf.errors.NotFoundError) as e:
+            logger.warning(f"TensorRT optimization not available: {str(e)}")
+            logger.info("Falling back to standard TensorFlow optimization")
+            
+            # Standard TensorFlow optimization
+            # Convert variables to constants for faster inference
+            logger.info("Optimizing model with TensorFlow constant folding...")
+            optimized_model = tf.function(lambda x: model(x))
+            optimized_model = optimized_model.get_concrete_function(
+                tf.TensorSpec([1, None, None, 3], model.inputs[0].dtype)
+            )
+            
+            frozen_func = tf.python.framework.convert_to_constants.convert_variables_to_constants_v2(optimized_model)
+            logger.info(f"Frozen model inputs: {[input.name for input in frozen_func.inputs]}")
+            logger.info(f"Frozen model outputs: {[output.name for output in frozen_func.outputs]}")
+            
+            # Wrap the frozen graph in a callable class with the same interface
+            class OptimizedModel(tf.keras.Model):
+                def __init__(self, frozen_func):
+                    super(OptimizedModel, self).__init__()
+                    self.frozen_func = frozen_func
+                    
+                def call(self, inputs):
+                    return self.frozen_func(inputs)
+                
+                def predict(self, inputs):
+                    return self.frozen_func(inputs)[0]
+            
+            return OptimizedModel(frozen_func)
     
     except Exception as e:
-        logger.error(f"Error cleaning up GPU memory: {str(e)}")
-        cleanup_results["error"] = str(e)
-        return cleanup_results
+        logger.error(f"Error optimizing model: {str(e)}")
+        logger.warning("Returning original unoptimized model")
+        return model
+
+
+def get_model_metadata(model: tf.keras.Model) -> Dict[str, Any]:
+    """
+    Get metadata about a TensorFlow model.
+    
+    Args:
+        model: TensorFlow model
+        
+    Returns:
+        Dictionary with model metadata
+    """
+    try:
+        metadata = {
+            "input_shapes": [],
+            "output_shapes": [],
+            "parameter_count": 0,
+            "layers": []
+        }
+        
+        # Get input and output shapes
+        for input_tensor in model.inputs:
+            metadata["input_shapes"].append({
+                "name": input_tensor.name,
+                "shape": input_tensor.shape.as_list(),
+                "dtype": input_tensor.dtype.name
+            })
+        
+        for output_tensor in model.outputs:
+            metadata["output_shapes"].append({
+                "name": output_tensor.name,
+                "shape": output_tensor.shape.as_list(),
+                "dtype": output_tensor.dtype.name
+            })
+        
+        # Get parameter count
+        metadata["parameter_count"] = model.count_params()
+        
+        # Get layer information
+        for layer in model.layers:
+            layer_info = {
+                "name": layer.name,
+                "type": layer.__class__.__name__,
+                "parameters": layer.count_params(),
+                "output_shape": layer.output_shape if hasattr(layer, 'output_shape') else None
+            }
+            metadata["layers"].append(layer_info)
+        
+        return metadata
+    
+    except Exception as e:
+        logger.error(f"Error getting model metadata: {str(e)}")
+        return {"error": str(e)}
