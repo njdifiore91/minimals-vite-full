@@ -1,289 +1,323 @@
 # -------------------------------------------------------
 # TERRAFORM WORKSPACE CONFIGURATION
 # -------------------------------------------------------
-# This file defines workspace configurations for managing
-# separate state files for different environments
+# This file defines Terraform workspace configurations for
+# managing separate state files for different environments
 # (development, staging, production).
 #
-# The workspace configuration supports the GitOps-based workflow
-# described in section 8.2.2 of the technical specification,
-# enabling isolated infrastructure management while maintaining
-# consistent module structure across environments.
+# Workspaces enable isolated infrastructure management while
+# maintaining consistent module structure across environments.
+# This supports the GitOps-based workflow described in
+# section 8.2.2 of the technical specification.
 #
-# USAGE:
-# 1. Create a workspace: terraform workspace new <environment>
-#    Valid environments: development, staging, production
+# The configuration aligns with the environment promotion flow
+# (development -> staging -> production) and ensures that
+# environment-specific configurations are properly isolated.
 #
-# 2. Select a workspace: terraform workspace select <environment>
-#
-# 3. View current workspace: terraform workspace show
-#
-# 4. List all workspaces: terraform workspace list
-#
-# Each workspace maintains its own state file in a separate path
-# within the configured backend storage, ensuring complete isolation
-# between environments while using the same Terraform code.
+# This workspace configuration is a critical component of the
+# infrastructure validation and deployment process in the
+# GitOps workflow, where infrastructure changes are validated
+# through Terraform plan execution before being applied to
+# each environment.
 # -------------------------------------------------------
 
-# Local variables for workspace configuration
+# Define valid workspaces that correspond to our environments
 locals {
-  # Valid workspace names aligned with the environment promotion flow
-  # from section 8.2.2 of the technical specification
-  valid_workspace_names = [
-    "development", # Development environment for feature development
-    "staging",     # Pre-production environment for testing
-    "production"   # Production environment for live workloads
-  ]
-
-  # Ensure current workspace is valid
-  is_valid_workspace = contains(local.valid_workspace_names, terraform.workspace)
+  # List of valid workspace names
+  valid_workspaces = ["development", "staging", "production"]
   
-  # Workspace validation message
-  workspace_error_message = "Error: Workspace '${terraform.workspace}' is not valid. Must be one of: ${join(", ", local.valid_workspace_names)}"
-
-  # Workspace-specific state paths
-  state_path = {
-    development = "environments/development"
-    staging     = "environments/staging"
-    production  = "environments/production"
+  # Check if current workspace is valid
+  is_valid_workspace = contains(local.valid_workspaces, terraform.workspace)
+  
+  # Mapping of workspace names to environment names (for consistency)
+  workspace_to_environment = {
+    development = "development"
+    staging     = "staging"
+    production  = "production"
   }
-
-  # Workspace-specific backend configurations
-  backend_config = {
-    development = {
-      bucket         = "mca-terraform-state-dev"
-      key            = "${local.state_path[terraform.workspace]}/terraform.tfstate"
-      region         = "us-east-1"
-      encrypt        = true
-      dynamodb_table = "mca-terraform-locks-dev"
-    }
-    staging = {
-      bucket         = "mca-terraform-state-staging"
-      key            = "${local.state_path[terraform.workspace]}/terraform.tfstate"
-      region         = "us-east-1"
-      encrypt        = true
-      dynamodb_table = "mca-terraform-locks-staging"
-    }
-    production = {
-      bucket         = "mca-terraform-state-prod"
-      key            = "${local.state_path[terraform.workspace]}/terraform.tfstate"
-      region         = "us-east-1"
-      encrypt        = true
-      dynamodb_table = "mca-terraform-locks-prod"
-    }
+  
+  # Current environment based on workspace
+  current_environment = local.is_valid_workspace ? local.workspace_to_environment[terraform.workspace] : "unknown"
+  
+  # Environment-specific state file paths
+  state_file_paths = {
+    development = "env/development/terraform.tfstate"
+    staging     = "env/staging/terraform.tfstate"
+    production  = "env/production/terraform.tfstate"
   }
-
-  # Environment-specific resource configurations based on section 8.8.2 of the technical specification
-  # These configurations align with the multi-environment cost considerations
+  
+  # Current state file path based on workspace
+  current_state_path = local.is_valid_workspace ? local.state_file_paths[terraform.workspace] : "unknown"
+  
+  # Standard tags to apply to all resources based on workspace
+  current_tags = {
+    Environment = local.current_environment
+    ManagedBy   = "Terraform"
+    Workspace   = terraform.workspace
+    Project     = "MCA Application Processing System"
+  }
+  
+  # Environment-specific configuration defaults based on section 8.4 of the technical specification
   environment_config = {
     development = {
-      # Development environment has minimal viable resources
-      kubernetes_node_count = 2
-      kubernetes_node_type  = "t3.medium"  # Smallest viable instance size
-      db_instance_type      = "db.t3.medium"
-      db_replica_count      = 0            # No replicas for development
-      redis_node_type       = "cache.t3.small"
-      redis_replica_count   = 0            # No replicas for development
-      rabbitmq_instance_type = "mq.t3.micro"
-      rabbitmq_node_count   = 1            # Single node for development
-      s3_lifecycle_rules    = {
-        transition_days = 30
-        expiration_days = 90
-      }
-      # Auto-shutdown for cost savings as specified in section 8.8.2
-      auto_shutdown = true
-      auto_shutdown_hours = "nights-and-weekends" # 7PM-7AM weekdays, all weekend
-      # Resource quotas to prevent overconsumption
-      resource_quotas = {
-        cpu_limit     = "8"
-        memory_limit  = "16Gi"
-        storage_limit = "100Gi"
-      }
-      # Use spot instances for non-critical workloads
-      use_spot_instances = true
-    }
-    
+      # Region configuration
+      region                 = "us-east-1"
+      multi_az               = true
+      
+      # Compute resources
+      instance_type          = "t3.medium"
+      auto_scaling_min       = 1
+      auto_scaling_max       = 3
+      
+      # Database configuration (PostgreSQL 14)
+      db_instance_class      = "db.t3.medium"
+      db_replica_count       = 1  # 1 read replica for development
+      db_multi_az            = true
+      db_backup_retention    = 7  # 7 days backup retention
+      db_storage_type        = "gp2"
+      db_iops                = 1000
+      db_connection_timeout  = 30
+      
+      # Redis configuration (Redis 7.0)
+      redis_node_type        = "cache.t3.medium"
+      redis_num_shards       = 1
+      redis_replicas_per_shard = 1
+      redis_data_tiering     = false
+      
+      # Monitoring configuration
+      enable_detailed_monitoring = true
+      log_retention_days     = 7
+      metrics_interval       = 15  # 15-second metrics interval
+      
+      # S3 storage configuration
+      s3_storage_class       = "STANDARD"
+      s3_versioning          = true
+      s3_lifecycle_days      = 30
+    },
     staging = {
-      # Staging environment has moderate resources (50% of production)
-      # as recommended in section 8.8.2
-      kubernetes_node_count = 3
-      kubernetes_node_type  = "t3.large"
-      db_instance_type      = "db.t3.large"
-      db_replica_count      = 1            # Single replica for staging
-      redis_node_type       = "cache.t3.medium"
-      redis_replica_count   = 1            # Single replica for staging
-      rabbitmq_instance_type = "mq.t3.small"
-      rabbitmq_node_count   = 3            # 3-node cluster for staging
-      s3_lifecycle_rules    = {
-        transition_days = 60
-        expiration_days = 180
-      }
-      # No auto-shutdown for staging
-      auto_shutdown = false
-      auto_shutdown_hours = null
-      # Resource quotas for staging
-      resource_quotas = {
-        cpu_limit     = "16"
-        memory_limit  = "32Gi"
-        storage_limit = "250Gi"
-      }
-      # Use spot instances for some workloads
-      use_spot_instances = true
-    }
-    
+      # Region configuration
+      region                 = "us-east-1"
+      multi_az               = true
+      
+      # Compute resources
+      instance_type          = "t3.large"
+      auto_scaling_min       = 2
+      auto_scaling_max       = 4
+      
+      # Database configuration (PostgreSQL 14)
+      db_instance_class      = "db.t3.large"
+      db_replica_count       = 1  # 1 read replica for staging
+      db_multi_az            = true
+      db_backup_retention    = 14  # 14 days backup retention
+      db_storage_type        = "gp2"
+      db_iops                = 1000
+      db_connection_timeout  = 30
+      
+      # Redis configuration (Redis 7.0)
+      redis_node_type        = "cache.t3.large"
+      redis_num_shards       = 2
+      redis_replicas_per_shard = 1
+      redis_data_tiering     = false
+      
+      # Monitoring configuration
+      enable_detailed_monitoring = true
+      log_retention_days     = 14
+      metrics_interval       = 15  # 15-second metrics interval
+      
+      # S3 storage configuration
+      s3_storage_class       = "STANDARD"
+      s3_versioning          = true
+      s3_lifecycle_days      = 90
+    },
     production = {
-      # Production environment has full resources with redundancy
-      # as specified in section 8.8.2
-      kubernetes_node_count = 5
-      kubernetes_node_type  = "m5.large"
-      db_instance_type      = "db.m5.large"
-      db_replica_count      = 2            # Two read replicas for production
-      redis_node_type       = "cache.m5.large"
-      redis_replica_count   = 2            # Two replicas for production
-      rabbitmq_instance_type = "mq.m5.large"
-      rabbitmq_node_count   = 3            # 3-node cluster for production
-      s3_lifecycle_rules    = {
-        transition_days = 90
-        expiration_days = 365
-      }
-      # No auto-shutdown for production
-      auto_shutdown = false
-      auto_shutdown_hours = null
-      # Resource quotas for production
-      resource_quotas = {
-        cpu_limit     = "32"
-        memory_limit  = "64Gi"
-        storage_limit = "500Gi"
-      }
-      # Use reserved instances for baseline capacity
-      use_spot_instances = false
-      reserved_instance_term = "1-year"
+      # Region configuration
+      region                 = "us-east-1"
+      multi_az               = true
+      
+      # Compute resources
+      instance_type          = "m5.large"
+      auto_scaling_min       = 3
+      auto_scaling_max       = 6
+      
+      # Database configuration (PostgreSQL 14)
+      db_instance_class      = "db.m5.large"
+      db_replica_count       = 2  # 2 read replicas for production as specified in 8.4.3
+      db_multi_az            = true
+      db_backup_retention    = 30  # 30 days backup retention
+      db_storage_type        = "gp2"
+      db_iops                = 1000
+      db_connection_timeout  = 30
+      
+      # Redis configuration (Redis 7.0)
+      redis_node_type        = "cache.m5.large"
+      redis_num_shards       = 3  # Cluster mode with 3+ shards as specified in 8.4.5
+      redis_replicas_per_shard = 1  # At least 1 replica per shard
+      redis_data_tiering     = true  # Memory tiering with SSD persistence
+      
+      # Monitoring configuration
+      enable_detailed_monitoring = true
+      log_retention_days     = 30
+      metrics_interval       = 10  # 10-second metrics interval
+      
+      # S3 storage configuration
+      s3_storage_class       = "STANDARD"
+      s3_versioning          = true
+      s3_lifecycle_days      = 365  # 1 year lifecycle for production
     }
   }
-
+  
   # Current environment configuration based on workspace
-  current_environment = local.is_valid_workspace ? local.environment_config[terraform.workspace] : null
-  current_backend     = local.is_valid_workspace ? local.backend_config[terraform.workspace] : null
+  current_config = local.is_valid_workspace ? local.environment_config[terraform.workspace] : null
 }
 
-# Validate workspace name to ensure it matches one of the defined environments
-# This prevents accidental creation of environments outside the promotion flow
+# Backend configuration for S3 state storage
+# This is a partial configuration that will be completed
+# by environment-specific backend configurations
+terraform {
+  backend "s3" {
+    # Common backend configuration
+    encrypt        = true
+    # The bucket name will be provided in the backend configuration
+    # The key will be determined by the workspace
+    # The region will be provided in the backend configuration
+    # The dynamodb_table will be provided by the state-locking.tf configuration
+  }
+}
+
+# S3 backend configuration details
+# These are used in the CI/CD pipeline to generate the backend configuration
+locals {
+  # S3 bucket names for state storage
+  state_bucket_names = {
+    development = "mca-terraform-state-dev"
+    staging     = "mca-terraform-state-staging"
+    production  = "mca-terraform-state-prod"
+  }
+  
+  # Current state bucket name based on workspace
+  current_state_bucket = local.is_valid_workspace ? local.state_bucket_names[terraform.workspace] : null
+  
+  # State file key patterns
+  # These follow the GitOps workflow pattern described in section 8.2.2
+  state_key_patterns = {
+    development = "env/development/%s/terraform.tfstate"
+    staging     = "env/staging/%s/terraform.tfstate"
+    production  = "env/production/%s/terraform.tfstate"
+  }
+  
+  # DynamoDB table names for state locking (from state-locking.tf)
+  # This ensures consistency with the state locking configuration
+  lock_table_names = {
+    development = "mca-terraform-locks-dev"
+    staging     = "mca-terraform-locks-staging"
+    production  = "mca-terraform-locks-prod"
+  }
+  
+  # Current lock table name based on workspace
+  current_lock_table = local.is_valid_workspace ? local.lock_table_names[terraform.workspace] : null
+}
+
+# Workspace validation resource
+# This resource will fail if an invalid workspace is used
 resource "null_resource" "workspace_validator" {
+  # Only create this resource when the workspace is invalid
   count = local.is_valid_workspace ? 0 : 1
   
-  # Fail the Terraform run if an invalid workspace is detected
   provisioner "local-exec" {
-    command = "echo '${local.workspace_error_message}' && exit 1"
+    command = <<-EOT
+      echo "\nERROR: Invalid Terraform workspace: '${terraform.workspace}'\n"
+      echo "Valid workspaces are: ${join(", ", local.valid_workspaces)}"
+      echo "\nTo create and switch to a valid workspace, use:"
+      echo "  terraform workspace new <workspace_name>"
+      echo "  terraform workspace select <workspace_name>"
+      echo "\nCurrent workspaces:"
+      terraform workspace list
+      exit 1
+    EOT
   }
-
-  # This lifecycle block ensures the validation runs on every apply
-  lifecycle {
-    create_before_destroy = true
-  }
 }
 
-# Output current workspace information
-output "current_workspace" {
-  value = terraform.workspace
-  description = "The current Terraform workspace"
-}
-
-output "environment_config" {
-  value = local.current_environment
-  description = "Configuration for the current environment"
-  sensitive = true
-}
-
-# Workspace-specific tags to be applied to all resources
-# These tags support the cost allocation and monitoring requirements
-# specified in section 8.8.3 of the technical specification
-locals {
-  # Common tags applied to all resources across all environments
-  common_tags = {
-    Environment     = terraform.workspace
-    ManagedBy       = "Terraform"
-    Project         = "MCA-Application"
-    GitOpsWorkflow  = "true"
-    Application     = "MerchantCashAdvance"
-    Owner           = "DollarFunding-DevOps"
-  }
-  
-  # Additional environment-specific tags for cost allocation and governance
-  environment_tags = {
-    development = {
-      CostCenter     = "Development"
-      AutoShutdown   = "true"
-      DataSensitivity = "low"
-      BudgetCategory = "Development"
-      BudgetAlert    = "70,85,95"
-      ResourceTier   = "minimal"
-    }
-    staging = {
-      CostCenter     = "PreProduction"
-      AutoShutdown   = "false"
-      DataSensitivity = "medium"
-      BudgetCategory = "PreProduction"
-      BudgetAlert    = "70,85,95"
-      ResourceTier   = "standard"
-      BackupSchedule = "daily"
-      BackupRetention = "30-days"
-    }
-    production = {
-      CostCenter     = "Production"
-      AutoShutdown   = "false"
-      DataSensitivity = "high"
-      BudgetCategory = "Production"
-      BudgetAlert    = "70,85,95"
-      ResourceTier   = "premium"
-      BackupSchedule = "daily"
-      BackupRetention = "7-years"
-      ComplianceLevel = "high"
-      SLA            = "99.9"
-    }
-  }
-  
-  # Combined tags for the current environment
-  current_tags = local.is_valid_workspace ? merge(local.common_tags, local.environment_tags[terraform.workspace]) : local.common_tags
-}
-
-# Export tags for use in other modules
-output "resource_tags" {
-  value = local.current_tags
-  description = "Tags to be applied to resources in the current environment"
-}
-
-# Workspace-specific backend configuration
-# This is used by the backend.tf file to configure the appropriate
-# state storage location based on the current workspace
-output "backend_config" {
-  value = local.current_backend
-  description = "Backend configuration for the current workspace"
-}
-
-# Workspace-specific state path
-# This is used to determine where state files should be stored
-# for each environment
-output "state_path" {
-  value = local.is_valid_workspace ? local.state_path[terraform.workspace] : null
-  description = "State path for the current workspace"
-}
-
-# Terraform workspace initialization helper
-# This resource provides guidance on how to create and switch workspaces
+# Helper resource for workspace management
 resource "null_resource" "workspace_helper" {
   # Only create this resource when explicitly requested
   count = terraform.workspace == "default" ? 1 : 0
   
   provisioner "local-exec" {
     command = <<-EOT
-      echo "\nCurrent workspace: ${terraform.workspace}\n"
-      echo "To create a new workspace, run:"
+      echo "\nWorkspace Management Information:\n"
+      echo "Current workspace: ${terraform.workspace}"
+      echo "\nAvailable workspaces:"
+      terraform workspace list
+      echo "\nTo create a new workspace:"
       echo "  terraform workspace new <workspace_name>"
-      echo "\nTo switch to an existing workspace, run:"
+      echo "\nTo switch workspaces:"
       echo "  terraform workspace select <workspace_name>"
-      echo "\nValid workspaces are: ${join(", ", local.valid_workspace_names)}"
-      echo "\nNote: You are currently in the 'default' workspace, which is not a valid environment workspace."
-      echo "Please create or select one of the valid workspaces before applying changes.\n"
+      echo "\nValid workspaces for this project:"
+      echo "  ${join(", ", local.valid_workspaces)}"
+      echo "\nEnvironment Promotion Flow (GitOps Workflow):"
+      echo "  development -> staging -> production"
+      echo "\nWorkspace Usage in CI/CD Pipeline:"
+      echo "  1. Terraform init with workspace-specific backend config"
+      echo "  2. Terraform workspace select <environment>"
+      echo "  3. Terraform plan for infrastructure validation"
+      echo "  4. Terraform apply for infrastructure provisioning"
+      echo "  5. Helm deploy to the appropriate Kubernetes namespace"
+      echo "\nPlease select a valid workspace before proceeding."
     EOT
   }
+}
+
+# Output current workspace information
+output "current_workspace" {
+  value       = terraform.workspace
+  description = "The current Terraform workspace"
+}
+
+# Output current environment
+output "current_environment" {
+  value       = local.current_environment
+  description = "The current environment based on the Terraform workspace"
+}
+
+# Output current state file path
+output "current_state_path" {
+  value       = local.current_state_path
+  description = "The path to the current Terraform state file"
+}
+
+# Output workspace validation status
+output "workspace_validation" {
+  value       = local.is_valid_workspace ? "Valid workspace: ${terraform.workspace}" : "Invalid workspace: ${terraform.workspace}"
+  description = "Validation status of the current workspace"
+}
+
+# Output environment-specific configuration
+output "environment_config" {
+  value       = local.current_config
+  description = "Environment-specific configuration based on the current workspace"
+  sensitive   = true  # Mark as sensitive to avoid exposing in logs
+}
+
+# Output S3 backend configuration for use in CI/CD pipelines
+output "backend_config" {
+  value = {
+    bucket         = local.current_state_bucket
+    key_pattern    = local.is_valid_workspace ? local.state_key_patterns[terraform.workspace] : null
+    region         = local.is_valid_workspace ? local.current_config.region : null
+    dynamodb_table = local.current_lock_table
+    encrypt        = true
+  }
+  description = "S3 backend configuration for the current workspace"
+}
+
+# Output Kubernetes namespace for the current environment
+output "kubernetes_namespace" {
+  value       = "mca-${local.current_environment}"
+  description = "Kubernetes namespace for the current environment"
+}
+
+# Output resource naming prefix for the current environment
+output "resource_prefix" {
+  value       = "mca-${local.current_environment}"
+  description = "Resource naming prefix for the current environment"
 }
