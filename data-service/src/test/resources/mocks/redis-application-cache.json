@@ -2,473 +2,345 @@
   "cache_entries": [
     {
       "key": "app:1001",
+      "type": "string",
       "value": {
-        "id": "1001",
-        "status": "PENDING",
-        "reviewStatus": "IN_REVIEW",
+        "id": 1001,
+        "status": "PROCESSING",
+        "review_status": "IN_REVIEW",
         "metadata": {
           "source": "email",
           "priority": "high",
-          "assignedTo": "user123",
-          "tags": ["urgent", "follow-up"]
+          "assigned_to": "user123",
+          "confidence_score": 0.95
         },
-        "createdAt": "2023-05-15T10:30:45.123Z",
-        "updatedAt": "2023-05-15T14:22:18.456Z",
-        "merchantDetails": {
-          "id": "5001",
-          "applicationId": "1001",
-          "legalName": "Acme Corporation",
-          "dbaName": "Acme Business Solutions",
-          "ein": "12-3456789",
-          "address": {
-            "street": "123 Main Street",
-            "city": "Metropolis",
-            "state": "NY",
-            "zipCode": "10001",
-            "country": "USA"
-          },
-          "industry": "Technology",
-          "revenue": 1250000.00
-        },
-        "documents": [
-          {
-            "id": "9001",
-            "applicationId": "1001",
-            "type": "BANK_STATEMENT",
-            "storagePath": "mca-documents-staging/1001/bank-statement-2023-04.pdf",
-            "classification": "BANK_STATEMENT",
-            "uploadedAt": "2023-05-15T10:35:22.789Z",
-            "metadata": {
-              "confidenceScore": 0.95,
-              "pageCount": 5,
-              "fileSize": 1024567,
-              "mimeType": "application/pdf"
-            }
-          },
-          {
-            "id": "9002",
-            "applicationId": "1001",
-            "type": "TAX_RETURN",
-            "storagePath": "mca-documents-staging/1001/tax-return-2022.pdf",
-            "classification": "TAX_RETURN",
-            "uploadedAt": "2023-05-15T10:36:15.123Z",
-            "metadata": {
-              "confidenceScore": 0.92,
-              "pageCount": 12,
-              "fileSize": 3045678,
-              "mimeType": "application/pdf"
-            }
-          }
-        ]
+        "created_at": "2025-05-20T10:15:30Z",
+        "updated_at": "2025-05-20T10:30:45Z"
       },
       "ttl": 900,
-      "expiration": "2023-05-15T14:37:18.456Z",
-      "cache_hit": true
+      "ttl_remaining": 750
     },
     {
       "key": "app:1002",
+      "type": "string",
       "value": {
-        "id": "1002",
-        "status": "PROCESSING",
-        "reviewStatus": "NOT_REVIEWED",
+        "id": 1002,
+        "status": "APPROVED",
+        "review_status": "APPROVED",
         "metadata": {
           "source": "email",
           "priority": "medium",
-          "tags": ["new-customer"]
+          "assigned_to": "user456",
+          "confidence_score": 0.98
         },
-        "createdAt": "2023-05-15T11:45:30.789Z",
-        "updatedAt": "2023-05-15T11:45:30.789Z",
-        "merchantDetails": {
-          "id": "5002",
-          "applicationId": "1002",
-          "legalName": "XYZ Enterprises",
-          "dbaName": "XYZ Solutions",
-          "ein": "98-7654321",
-          "address": {
-            "street": "456 Oak Avenue",
-            "city": "Springfield",
-            "state": "IL",
-            "zipCode": "62701",
-            "country": "USA"
-          },
-          "industry": "Retail",
-          "revenue": 750000.00
-        },
-        "documents": [
-          {
-            "id": "9003",
-            "applicationId": "1002",
-            "type": "BUSINESS_LICENSE",
-            "storagePath": "mca-documents-staging/1002/business-license.pdf",
-            "classification": "BUSINESS_LICENSE",
-            "uploadedAt": "2023-05-15T11:47:12.456Z",
-            "metadata": {
-              "confidenceScore": 0.98,
-              "pageCount": 2,
-              "fileSize": 512345,
-              "mimeType": "application/pdf"
-            }
-          }
-        ]
+        "created_at": "2025-05-19T14:22:10Z",
+        "updated_at": "2025-05-20T09:15:22Z"
       },
       "ttl": 900,
-      "expiration": "2023-05-15T12:00:30.789Z",
-      "cache_hit": true
+      "ttl_remaining": 820
     },
     {
       "key": "app:1003",
+      "type": "string",
       "value": {
-        "id": "1003",
-        "status": "APPROVED",
-        "reviewStatus": "APPROVED",
-        "metadata": {
-          "source": "email",
-          "priority": "high",
-          "assignedTo": "user456",
-          "approvedBy": "manager789",
-          "approvalDate": "2023-05-15T13:30:00.000Z",
-          "fundingAmount": 75000.00,
-          "tags": ["approved", "funded"]
-        },
-        "createdAt": "2023-05-14T09:15:22.123Z",
-        "updatedAt": "2023-05-15T13:30:45.789Z",
-        "merchantDetails": {
-          "id": "5003",
-          "applicationId": "1003",
-          "legalName": "Global Innovations Inc",
-          "dbaName": "Global Tech",
-          "ein": "45-6789012",
-          "address": {
-            "street": "789 Pine Street",
-            "city": "San Francisco",
-            "state": "CA",
-            "zipCode": "94101",
-            "country": "USA"
-          },
-          "industry": "Software",
-          "revenue": 2500000.00
-        },
-        "documents": [
-          {
-            "id": "9004",
-            "applicationId": "1003",
-            "type": "BANK_STATEMENT",
-            "storagePath": "mca-documents-staging/1003/bank-statement-2023-04.pdf",
-            "classification": "BANK_STATEMENT",
-            "uploadedAt": "2023-05-14T09:20:15.456Z",
-            "metadata": {
-              "confidenceScore": 0.96,
-              "pageCount": 6,
-              "fileSize": 1548762,
-              "mimeType": "application/pdf"
-            }
-          },
-          {
-            "id": "9005",
-            "applicationId": "1003",
-            "type": "TAX_RETURN",
-            "storagePath": "mca-documents-staging/1003/tax-return-2022.pdf",
-            "classification": "TAX_RETURN",
-            "uploadedAt": "2023-05-14T09:22:30.789Z",
-            "metadata": {
-              "confidenceScore": 0.94,
-              "pageCount": 15,
-              "fileSize": 4125678,
-              "mimeType": "application/pdf"
-            }
-          },
-          {
-            "id": "9006",
-            "applicationId": "1003",
-            "type": "BUSINESS_LICENSE",
-            "storagePath": "mca-documents-staging/1003/business-license.pdf",
-            "classification": "BUSINESS_LICENSE",
-            "uploadedAt": "2023-05-14T09:25:45.123Z",
-            "metadata": {
-              "confidenceScore": 0.97,
-              "pageCount": 2,
-              "fileSize": 625431,
-              "mimeType": "application/pdf"
-            }
-          },
-          {
-            "id": "9007",
-            "applicationId": "1003",
-            "type": "ID_VERIFICATION",
-            "storagePath": "mca-documents-staging/1003/id-verification.pdf",
-            "classification": "ID_VERIFICATION",
-            "uploadedAt": "2023-05-14T09:28:10.456Z",
-            "metadata": {
-              "confidenceScore": 0.99,
-              "pageCount": 1,
-              "fileSize": 325678,
-              "mimeType": "application/pdf"
-            }
-          }
-        ]
-      },
-      "ttl": 900,
-      "expiration": "2023-05-15T13:45:45.789Z",
-      "cache_hit": true
-    },
-    {
-      "key": "app:1004",
-      "value": {
-        "id": "1004",
-        "status": "REJECTED",
-        "reviewStatus": "REJECTED",
-        "metadata": {
-          "source": "email",
-          "priority": "medium",
-          "assignedTo": "user789",
-          "rejectedBy": "manager456",
-          "rejectionDate": "2023-05-15T12:15:00.000Z",
-          "rejectionReason": "Insufficient documentation",
-          "tags": ["rejected", "incomplete"]
-        },
-        "createdAt": "2023-05-14T14:30:15.789Z",
-        "updatedAt": "2023-05-15T12:15:45.123Z",
-        "merchantDetails": {
-          "id": "5004",
-          "applicationId": "1004",
-          "legalName": "City Builders LLC",
-          "dbaName": "City Construction",
-          "ein": "78-9012345",
-          "address": {
-            "street": "321 Maple Road",
-            "city": "Chicago",
-            "state": "IL",
-            "zipCode": "60601",
-            "country": "USA"
-          },
-          "industry": "Construction",
-          "revenue": 950000.00
-        },
-        "documents": [
-          {
-            "id": "9008",
-            "applicationId": "1004",
-            "type": "BANK_STATEMENT",
-            "storagePath": "mca-documents-staging/1004/bank-statement-2023-03.pdf",
-            "classification": "BANK_STATEMENT",
-            "uploadedAt": "2023-05-14T14:35:22.456Z",
-            "metadata": {
-              "confidenceScore": 0.91,
-              "pageCount": 4,
-              "fileSize": 987654,
-              "mimeType": "application/pdf"
-            }
-          }
-        ]
-      },
-      "ttl": 900,
-      "expiration": "2023-05-15T12:30:45.123Z",
-      "cache_hit": true
-    },
-    {
-      "key": "app:1005",
-      "value": {
-        "id": "1005",
+        "id": 1003,
         "status": "NEW",
-        "reviewStatus": "NOT_REVIEWED",
+        "review_status": "NOT_REVIEWED",
         "metadata": {
           "source": "email",
           "priority": "low",
-          "tags": ["new"]
+          "confidence_score": 0.92
         },
-        "createdAt": "2023-05-15T13:45:30.456Z",
-        "updatedAt": "2023-05-15T13:45:30.456Z"
+        "created_at": "2025-05-20T11:05:15Z",
+        "updated_at": "2025-05-20T11:05:15Z"
       },
       "ttl": 900,
-      "expiration": "2023-05-15T14:00:30.456Z",
-      "cache_hit": true,
-      "comment": "Partial application data without merchant details or documents for testing partial cache scenarios"
+      "ttl_remaining": 890
     },
     {
-      "key": "col:applications:status:PENDING",
-      "value": ["1001", "1006", "1008"],
+      "key": "list:applications",
+      "type": "string",
+      "value": [1001, 1002, 1003, 1004, 1005],
       "ttl": 900,
-      "expiration": "2023-05-15T14:30:00.000Z",
-      "cache_hit": true,
-      "comment": "Collection of application IDs with PENDING status"
+      "ttl_remaining": 600
     },
     {
-      "key": "col:applications:status:PROCESSING",
-      "value": ["1002", "1007", "1009"],
+      "key": "count:app:",
+      "type": "string",
+      "value": 5,
       "ttl": 900,
-      "expiration": "2023-05-15T14:30:00.000Z",
-      "cache_hit": true,
-      "comment": "Collection of application IDs with PROCESSING status"
+      "ttl_remaining": 600
     },
     {
-      "key": "col:applications:status:APPROVED",
-      "value": ["1003", "1010", "1012"],
-      "ttl": 900,
-      "expiration": "2023-05-15T14:30:00.000Z",
-      "cache_hit": true,
-      "comment": "Collection of application IDs with APPROVED status"
-    },
-    {
-      "key": "col:applications:status:REJECTED",
-      "value": ["1004", "1011"],
-      "ttl": 900,
-      "expiration": "2023-05-15T14:30:00.000Z",
-      "cache_hit": true,
-      "comment": "Collection of application IDs with REJECTED status"
-    },
-    {
-      "key": "col:applications:status:NEW",
-      "value": ["1005", "1013", "1014", "1015"],
-      "ttl": 900,
-      "expiration": "2023-05-15T14:30:00.000Z",
-      "cache_hit": true,
-      "comment": "Collection of application IDs with NEW status"
-    },
-    {
-      "key": "count:applications:total",
-      "value": 15,
-      "ttl": 900,
-      "expiration": "2023-05-15T14:30:00.000Z",
-      "cache_hit": true,
-      "comment": "Total count of applications in the system"
-    },
-    {
-      "key": "count:applications:status:PENDING",
-      "value": 3,
-      "ttl": 900,
-      "expiration": "2023-05-15T14:30:00.000Z",
-      "cache_hit": true,
-      "comment": "Count of applications with PENDING status"
-    },
-    {
-      "key": "count:applications:status:PROCESSING",
-      "value": 3,
-      "ttl": 900,
-      "expiration": "2023-05-15T14:30:00.000Z",
-      "cache_hit": true,
-      "comment": "Count of applications with PROCESSING status"
-    },
-    {
-      "key": "count:applications:status:APPROVED",
-      "value": 3,
-      "ttl": 900,
-      "expiration": "2023-05-15T14:30:00.000Z",
-      "cache_hit": true,
-      "comment": "Count of applications with APPROVED status"
-    },
-    {
-      "key": "count:applications:status:REJECTED",
+      "key": "count:app:status=PROCESSING",
+      "type": "string",
       "value": 2,
       "ttl": 900,
-      "expiration": "2023-05-15T14:30:00.000Z",
-      "cache_hit": true,
-      "comment": "Count of applications with REJECTED status"
+      "ttl_remaining": 650
     },
     {
-      "key": "count:applications:status:NEW",
-      "value": 4,
+      "key": "collection:applications:status=APPROVED",
+      "type": "string",
+      "value": [1002, 1005],
       "ttl": 900,
-      "expiration": "2023-05-15T14:30:00.000Z",
-      "cache_hit": true,
-      "comment": "Count of applications with NEW status"
+      "ttl_remaining": 700
     },
     {
-      "key": "app:1006",
-      "value": null,
-      "ttl": 0,
-      "expiration": null,
-      "cache_hit": false,
-      "comment": "Simulated cache miss for application ID 1006"
-    },
-    {
-      "key": "app:1007",
-      "value": null,
-      "ttl": 0,
-      "expiration": null,
-      "cache_hit": false,
-      "comment": "Simulated cache miss for application ID 1007"
-    },
-    {
-      "key": "app:1008",
+      "key": "collection:applications:status=NEW",
+      "type": "string",
+      "value": [1003],
       "ttl": 900,
-      "expiration": "2023-05-15T14:15:00.000Z",
+      "ttl_remaining": 800
+    },
+    {
+      "key": "collection:applications:status=PROCESSING",
+      "type": "string",
+      "value": [1001, 1004],
+      "ttl": 900,
+      "ttl_remaining": 750
+    },
+    {
+      "key": "collection:applications:review_status=IN_REVIEW",
+      "type": "string",
+      "value": [1001, 1004],
+      "ttl": 900,
+      "ttl_remaining": 720
+    },
+    {
+      "key": "collection:applications:review_status=APPROVED",
+      "type": "string",
+      "value": [1002, 1005],
+      "ttl": 900,
+      "ttl_remaining": 680
+    },
+    {
+      "key": "collection:applications:review_status=NOT_REVIEWED",
+      "type": "string",
+      "value": [1003],
+      "ttl": 900,
+      "ttl_remaining": 830
+    },
+    {
+      "key": "merchant:1001",
+      "type": "hash",
+      "fields": {
+        "id": 1001,
+        "application_id": 1001,
+        "legal_name": "Acme Corporation",
+        "dba_name": "Acme Business Solutions",
+        "ein": "12-3456789",
+        "address": {
+          "street": "123 Main St",
+          "city": "Anytown",
+          "state": "CA",
+          "zip": "90210",
+          "country": "USA"
+        },
+        "industry": "Technology",
+        "revenue": 1250000
+      },
+      "ttl": 900,
+      "ttl_remaining": 750
+    },
+    {
+      "key": "merchant:1002",
+      "type": "hash",
+      "fields": {
+        "id": 1002,
+        "application_id": 1002,
+        "legal_name": "XYZ Enterprises, Inc.",
+        "dba_name": "XYZ Solutions",
+        "ein": "98-7654321",
+        "address": {
+          "street": "456 Oak Ave",
+          "city": "Somewhere",
+          "state": "NY",
+          "zip": "10001",
+          "country": "USA"
+        },
+        "industry": "Retail",
+        "revenue": 875000
+      },
+      "ttl": 900,
+      "ttl_remaining": 820
+    },
+    {
+      "key": "app:1004",
+      "type": "string",
       "value": {
-        "id": "1008",
-        "status": "PENDING",
-        "reviewStatus": "IN_REVIEW",
+        "id": 1004,
+        "status": "PROCESSING",
+        "review_status": "IN_REVIEW",
         "metadata": {
           "source": "email",
           "priority": "high",
-          "assignedTo": "user123",
-          "tags": ["urgent"]
+          "assigned_to": "user789",
+          "confidence_score": 0.91
         },
-        "createdAt": "2023-05-15T12:30:45.123Z",
-        "updatedAt": "2023-05-15T13:15:18.456Z"
+        "created_at": "2025-05-20T09:30:00Z",
+        "updated_at": "2025-05-20T10:45:12Z"
       },
-      "cache_hit": true,
-      "comment": "Partial application data without merchant details or documents for testing partial cache scenarios"
+      "ttl": 900,
+      "ttl_remaining": 680
     },
     {
-      "key": "meta:app:last_updated",
-      "value": "2023-05-15T14:00:00.000Z",
+      "key": "app:1005",
+      "type": "string",
+      "value": {
+        "id": 1005,
+        "status": "APPROVED",
+        "review_status": "APPROVED",
+        "metadata": {
+          "source": "email",
+          "priority": "medium",
+          "assigned_to": "user456",
+          "confidence_score": 0.97
+        },
+        "created_at": "2025-05-19T13:10:45Z",
+        "updated_at": "2025-05-20T08:22:30Z"
+      },
       "ttl": 900,
-      "expiration": "2023-05-15T14:15:00.000Z",
-      "cache_hit": true,
-      "comment": "Metadata for last update timestamp of application cache"
+      "ttl_remaining": 550
     },
     {
-      "key": "meta:app:cache_version",
-      "value": "1.2.0",
+      "key": "collection:applications:date_range=2025-05-19T00:00:00Z,2025-05-20T23:59:59Z",
+      "type": "string",
+      "value": [1001, 1002, 1003, 1004, 1005],
       "ttl": 900,
-      "expiration": "2023-05-15T14:15:00.000Z",
-      "cache_hit": true,
-      "comment": "Metadata for cache version"
+      "ttl_remaining": 780
+    },
+    {
+      "key": "collection:applications:assigned_to=user456",
+      "type": "string",
+      "value": [1002, 1005],
+      "ttl": 900,
+      "ttl_remaining": 720
+    },
+    {
+      "key": "collection:applications:priority=high",
+      "type": "string",
+      "value": [1001, 1004],
+      "ttl": 900,
+      "ttl_remaining": 690
+    },
+    {
+      "key": "doc:2001",
+      "type": "string",
+      "value": {
+        "id": 2001,
+        "application_id": 1001,
+        "type": "BANK_STATEMENT",
+        "storage_path": "mca-documents-production/1001/bank_statement_2025_04.pdf",
+        "classification": "BANK_STATEMENT",
+        "uploaded_at": "2025-05-20T10:15:30Z",
+        "metadata": {
+          "confidence_score": 0.98,
+          "page_count": 5,
+          "file_size": 1024567,
+          "mime_type": "application/pdf",
+          "extracted_data": {
+            "account_number": "XXXX1234",
+            "bank_name": "First National Bank",
+            "statement_period": "04/01/2025 - 04/30/2025",
+            "ending_balance": 45678.90
+          }
+        }
+      },
+      "ttl": 900,
+      "ttl_remaining": 750
+    },
+    {
+      "key": "doc:2002",
+      "type": "string",
+      "value": {
+        "id": 2002,
+        "application_id": 1001,
+        "type": "TAX_RETURN",
+        "storage_path": "mca-documents-production/1001/tax_return_2024.pdf",
+        "classification": "TAX_RETURN",
+        "uploaded_at": "2025-05-20T10:16:45Z",
+        "metadata": {
+          "confidence_score": 0.95,
+          "page_count": 12,
+          "file_size": 2345678,
+          "mime_type": "application/pdf",
+          "extracted_data": {
+            "tax_year": "2024",
+            "ein": "12-3456789",
+            "total_income": 1250000,
+            "net_profit": 320000
+          }
+        }
+      },
+      "ttl": 900,
+      "ttl_remaining": 750
+    },
+    {
+      "key": "collection:documents:application_id=1001",
+      "type": "string",
+      "value": [2001, 2002],
+      "ttl": 900,
+      "ttl_remaining": 750
+    },
+    {
+      "key": "collection:documents:type=BANK_STATEMENT",
+      "type": "string",
+      "value": [2001, 2003],
+      "ttl": 900,
+      "ttl_remaining": 720
+    },
+    {
+      "key": "collection:documents:type=TAX_RETURN",
+      "type": "string",
+      "value": [2002, 2004],
+      "ttl": 900,
+      "ttl_remaining": 710
+    },
+    {
+      "key": "metadata:app:1001:processing_history",
+      "type": "string",
+      "value": [
+        {
+          "timestamp": "2025-05-20T10:15:30Z",
+          "status": "NEW",
+          "action": "Application created from email",
+          "user": "system"
+        },
+        {
+          "timestamp": "2025-05-20T10:20:15Z",
+          "status": "PROCESSING",
+          "action": "Documents classified",
+          "user": "system"
+        },
+        {
+          "timestamp": "2025-05-20T10:25:30Z",
+          "status": "PROCESSING",
+          "action": "OCR extraction completed",
+          "user": "system"
+        },
+        {
+          "timestamp": "2025-05-20T10:30:45Z",
+          "status": "PROCESSING",
+          "review_status": "IN_REVIEW",
+          "action": "Assigned to reviewer",
+          "user": "system",
+          "assigned_to": "user123"
+        }
+      ],
+      "ttl": 900,
+      "ttl_remaining": 750
     }
   ],
-  "cache_statistics": {
-    "hit_rate": 0.85,
-    "miss_rate": 0.15,
-    "eviction_rate": 0.05,
-    "memory_usage": "45MB",
-    "key_count": 20,
-    "average_ttl": 900
-  },
-  "test_scenarios": [
-    {
-      "name": "Complete Application Cache Hit",
-      "description": "Test scenario for retrieving a complete application with all related data from cache",
-      "keys": ["app:1001", "app:1002", "app:1003", "app:1004"],
-      "expected_result": "cache_hit"
-    },
-    {
-      "name": "Partial Application Cache Hit",
-      "description": "Test scenario for retrieving a partial application without all related data from cache",
-      "keys": ["app:1005", "app:1008"],
-      "expected_result": "cache_hit"
-    },
-    {
-      "name": "Application Cache Miss",
-      "description": "Test scenario for application not found in cache",
-      "keys": ["app:1006", "app:1007"],
-      "expected_result": "cache_miss"
-    },
-    {
-      "name": "Collection Cache Hit",
-      "description": "Test scenario for retrieving collections of application IDs by status",
-      "keys": ["col:applications:status:PENDING", "col:applications:status:APPROVED"],
-      "expected_result": "cache_hit"
-    },
-    {
-      "name": "Count Cache Hit",
-      "description": "Test scenario for retrieving count of applications by status",
-      "keys": ["count:applications:total", "count:applications:status:NEW"],
-      "expected_result": "cache_hit"
-    },
-    {
-      "name": "Metadata Cache Hit",
-      "description": "Test scenario for retrieving cache metadata",
-      "keys": ["meta:app:last_updated", "meta:app:cache_version"],
-      "expected_result": "cache_hit"
-    }
-  ]
+  "cache_info": {
+    "version": "7.0.12",
+    "total_keys": 24,
+    "memory_used": "1.2MB",
+    "hit_rate": 0.92,
+    "miss_rate": 0.08,
+    "eviction_policy": "volatile-lru",
+    "max_memory": "2GB",
+    "max_memory_policy": "noeviction",
+    "persistence": "AOF",
+    "cluster_enabled": true,
+    "sentinel_enabled": true
+  }
 }
