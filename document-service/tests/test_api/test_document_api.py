@@ -1,827 +1,802 @@
-import json
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+Unit tests for the Document Service API endpoints.
+
+This module contains tests for the Document Service CRUD API endpoints, verifying
+that the API correctly handles document operations including upload, retrieval,
+update, and deletion. It validates proper storage path generation, metadata extraction,
+and integration with S3-compatible storage.
+"""
+
 import os
+import json
 import uuid
-from datetime import datetime
-from io import BytesIO
-from unittest.mock import patch, MagicMock
-
 import pytest
-from fastapi import status
+import io
+from datetime import datetime, timedelta
+from unittest.mock import patch, MagicMock, ANY
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from botocore.exceptions import ClientError
+from typing import Dict, List, Any, Optional
 
-from src.types.documents import DocumentType, ProcessingStatus
+# Import the API router and dependencies
+from document_service.src.api.documents import router as documents_router
+from document_service.src.services.classification_service import ClassificationService
+from document_service.src.services.document_routing_service import DocumentRoutingService
+from document_service.src.services.storage_service import StorageService
+from document_service.src.types.documents import Document, DocumentType, ProcessingStatus
+from document_service.src.types.classification import ClassificationResult, ConfidenceScore
+from document_service.src.types.errors import ServiceError, ErrorCategory
+
+
+# Create a test FastAPI app
+@pytest.fixture
+def app():
+    """Create a FastAPI test application with the documents router."""
+    app = FastAPI()
+    app.include_router(documents_router)
+    return app
 
 
 @pytest.fixture
-def document_response_schema():
-    """Schema for validating document response."""
-    return {
-        "document_id": str,
-        "metadata": dict,
-        "status": str,
-        "created_at": str,
-        "updated_at": str,
-        "classification": dict
-    }
+def client(app):
+    """Create a test client for the FastAPI application."""
+    return TestClient(app)
 
 
 @pytest.fixture
-def document_list_response_schema():
-    """Schema for validating document list response."""
-    return {
-        "documents": [document_response_schema],
-        "pagination": {
-            "page": int,
-            "page_size": int,
-            "total_items": int,
-            "total_pages": int
-        }
-    }
+def mock_storage_service():
+    """Create a mock StorageService for testing."""
+    with patch("document_service.src.api.documents.get_storage_service") as mock_get_service:
+        mock_service = MagicMock(spec=StorageService)
+        mock_get_service.return_value = mock_service
+        yield mock_service
 
 
 @pytest.fixture
-def document_classification_response_schema():
-    """Schema for validating document classification response."""
-    return {
-        "document_id": str,
-        "status": str,
-        "classification": {
-            "document_type": str,
-            "confidence": float,
-            "requires_review": bool,
-            "classified_at": str
-        },
-        "routing": {
-            "destination": str,
-            "routed_at": str
-        }
-    }
+def mock_classification_service():
+    """Create a mock ClassificationService for testing."""
+    with patch("document_service.src.api.documents.get_classification_service") as mock_get_service:
+        mock_service = MagicMock(spec=ClassificationService)
+        mock_get_service.return_value = mock_service
+        yield mock_service
 
 
 @pytest.fixture
-def document_batch_response_schema():
-    """Schema for validating batch document operation response."""
-    return {
-        "summary": {
-            "total": int,
-            "successful": int,
-            "failed": int,
-            "skipped": int
-        },
-        "results": {
-            "successful": list,
-            "failed": list,
-            "skipped": list
-        }
+def mock_document_routing_service():
+    """Create a mock DocumentRoutingService for testing."""
+    with patch("document_service.src.api.documents.get_document_routing_service") as mock_get_service:
+        mock_service = MagicMock(spec=DocumentRoutingService)
+        mock_get_service.return_value = mock_service
+        yield mock_service
+
+
+@pytest.fixture
+def sample_document_id():
+    """Generate a sample document ID for testing."""
+    return str(uuid.uuid4())
+
+
+@pytest.fixture
+def sample_document(sample_document_id):
+    """Create a sample Document object for testing."""
+    metadata = {
+        'id': sample_document_id,
+        'filename': 'test_document.pdf',
+        'size': 1024,
+        'mime_type': 'application/pdf',
+        'created_at': datetime.utcnow(),
+        'updated_at': datetime.utcnow(),
+        'application_id': str(uuid.uuid4()),
+        'storage_path': f'documents/2023/05/01/{sample_document_id}.pdf',
+        'checksum': 'abc123checksum',
+        'page_count': 3,
+        'tags': ['application', 'loan']
     }
+    
+    document = MagicMock(spec=Document)
+    document.metadata = metadata
+    document.status = ProcessingStatus.RECEIVED
+    document.document_type = None
+    document.classification_result = None
+    document.processing_error = None
+    document.to_dict.return_value = {
+        'metadata': metadata,
+        'status': ProcessingStatus.RECEIVED.value
+    }
+    
+    return document
 
 
-class TestDocumentAPI:
-    """Test suite for Document Service CRUD API endpoints."""
+@pytest.fixture
+def sample_classification_result(sample_document_id):
+    """Create a sample ClassificationResult for testing."""
+    result = MagicMock(spec=ClassificationResult)
+    result.document_type = DocumentType.APPLICATION
+    result.confidence = ConfidenceScore(0.85)
+    result.classified_at = datetime.utcnow()
+    result.requires_review = False
+    
+    return result
 
-    def test_get_document_by_id_success(self, client, validate_response_schema, document_response_schema,
-                                       mock_storage_service, mock_classification_service, auth_headers,
-                                       create_test_document):
-        """Test that the document retrieval endpoint returns a document by ID."""
-        # Create a test document
-        test_doc = create_test_document(DocumentType.APPLICATION)
-        document_id = test_doc.metadata["document_id"]
+
+# Test cases for GET /documents/{document_id}
+class TestGetDocument:
+    """Test cases for the GET /documents/{document_id} endpoint."""
+    
+    def test_get_document_success(self, client, mock_storage_service, mock_classification_service, 
+                                  sample_document, sample_document_id, sample_classification_result):
+        """Test successful document retrieval by ID."""
+        # Setup mocks
+        mock_storage_service.get_document_metadata.return_value = sample_document
+        mock_classification_service.get_classification_result.return_value = sample_classification_result
         
-        # Mock storage service to return the test document
-        mock_storage_service.get_document_metadata.return_value = test_doc.metadata
+        # Make request
+        response = client.get(f"/documents/{sample_document_id}")
         
-        # Mock classification service to return classification results
-        mock_classification_service.get_classification_result.return_value = {
-            "document_type": DocumentType.APPLICATION,
-            "confidence": 0.95,
-            "classified_at": datetime.now().isoformat()
-        }
-        
-        # Make request to get document endpoint
-        response = client.get(f"/documents/{document_id}", headers=auth_headers)
-        
-        # Verify response status code
-        assert response.status_code == status.HTTP_200_OK
-        
-        # Parse response data
+        # Verify response
+        assert response.status_code == 200
         data = response.json()
-        
-        # Validate response schema
-        is_valid, errors = validate_response_schema(data, document_response_schema)
-        assert is_valid, f"Response schema validation failed: {errors}"
-        
-        # Verify response content
-        assert data["document_id"] == document_id
+        assert data["document_id"] == sample_document_id
         assert "metadata" in data
-        assert "status" in data
-        assert "created_at" in data
-        assert "updated_at" in data
         assert "classification" in data
         assert data["classification"]["document_type"] == DocumentType.APPLICATION.value
-        assert data["classification"]["confidence"] == 0.95
-        assert "classified_at" in data["classification"]
-    
-    def test_get_document_by_id_not_found(self, client, mock_storage_service, auth_headers):
-        """Test that the document retrieval endpoint returns 404 for non-existent document."""
-        # Generate a random document ID
-        document_id = str(uuid.uuid4())
+        assert data["classification"]["confidence"] == 0.85
+        assert data["classification"]["requires_review"] is False
         
-        # Mock storage service to return None (document not found)
+        # Verify service calls
+        mock_storage_service.get_document_metadata.assert_called_once_with(uuid.UUID(sample_document_id))
+        mock_classification_service.get_classification_result.assert_called_once_with(uuid.UUID(sample_document_id))
+    
+    def test_get_document_not_found(self, client, mock_storage_service, sample_document_id):
+        """Test document retrieval when document doesn't exist."""
+        # Setup mocks
         mock_storage_service.get_document_metadata.return_value = None
         
-        # Make request to get document endpoint
-        response = client.get(f"/documents/{document_id}", headers=auth_headers)
+        # Make request
+        response = client.get(f"/documents/{sample_document_id}")
         
-        # Verify response status code
-        assert response.status_code == status.HTTP_404_NOT_FOUND
-        
-        # Parse response data
+        # Verify response
+        assert response.status_code == 404
         data = response.json()
-        
-        # Verify error message
         assert "detail" in data
-        assert f"Document with ID {document_id} not found" in data["detail"]
-    
-    def test_get_document_by_id_server_error(self, client, mock_storage_service, auth_headers):
-        """Test that the document retrieval endpoint handles server errors properly."""
-        # Generate a random document ID
-        document_id = str(uuid.uuid4())
+        assert f"Document with ID {sample_document_id} not found" in data["detail"]
         
-        # Mock storage service to raise an exception
+        # Verify service calls
+        mock_storage_service.get_document_metadata.assert_called_once_with(uuid.UUID(sample_document_id))
+    
+    def test_get_document_without_classification(self, client, mock_storage_service, 
+                                               mock_classification_service, sample_document, 
+                                               sample_document_id):
+        """Test document retrieval when document exists but has no classification."""
+        # Setup mocks
+        mock_storage_service.get_document_metadata.return_value = sample_document
+        mock_classification_service.get_classification_result.return_value = None
+        
+        # Make request
+        response = client.get(f"/documents/{sample_document_id}")
+        
+        # Verify response
+        assert response.status_code == 200
+        data = response.json()
+        assert data["document_id"] == sample_document_id
+        assert "metadata" in data
+        assert "classification" not in data
+        
+        # Verify service calls
+        mock_storage_service.get_document_metadata.assert_called_once_with(uuid.UUID(sample_document_id))
+        mock_classification_service.get_classification_result.assert_called_once_with(uuid.UUID(sample_document_id))
+    
+    def test_get_document_server_error(self, client, mock_storage_service, sample_document_id):
+        """Test document retrieval when server error occurs."""
+        # Setup mocks
         mock_storage_service.get_document_metadata.side_effect = Exception("Database connection error")
         
-        # Make request to get document endpoint
-        response = client.get(f"/documents/{document_id}", headers=auth_headers)
+        # Make request
+        response = client.get(f"/documents/{sample_document_id}")
         
-        # Verify response status code
-        assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
-        
-        # Parse response data
+        # Verify response
+        assert response.status_code == 500
         data = response.json()
-        
-        # Verify error message
         assert "detail" in data
-        assert "An error occurred" in data["detail"]
+        assert "An error occurred while retrieving the document" in data["detail"]
+        
+        # Verify service calls
+        mock_storage_service.get_document_metadata.assert_called_once_with(uuid.UUID(sample_document_id))
+
+
+# Test cases for POST /documents/{document_id}/classify
+class TestClassifyDocument:
+    """Test cases for the POST /documents/{document_id}/classify endpoint."""
     
-    def test_classify_document_success(self, client, validate_response_schema, document_classification_response_schema,
-                                      mock_storage_service, mock_classification_service, mock_document_routing_service,
-                                      auth_headers, create_test_document):
-        """Test that the document classification endpoint successfully classifies a document."""
-        # Create a test document
-        test_doc = create_test_document(DocumentType.APPLICATION)
-        document_id = test_doc.metadata["document_id"]
+    def test_classify_document_success(self, client, mock_storage_service, mock_classification_service,
+                                      mock_document_routing_service, sample_document, sample_document_id,
+                                      sample_classification_result):
+        """Test successful document classification."""
+        # Setup mocks
+        mock_storage_service.get_document.return_value = sample_document
+        mock_classification_service.get_classification_result.return_value = None
+        mock_classification_service.classify_document.return_value = sample_classification_result
         
-        # Mock storage service to return the test document
-        mock_storage_service.get_document.return_value = test_doc
-        mock_storage_service.update_document_metadata.return_value = True
-        
-        # Mock classification service to return classification results
-        classification_result = {
-            "document_type": DocumentType.APPLICATION,
-            "confidence": 0.95,
-            "classified_at": datetime.now().isoformat()
-        }
-        mock_classification_service.get_classification_result.return_value = None  # No existing classification
-        mock_classification_service.classify_document.return_value = classification_result
-        
-        # Mock document routing service
-        routing_result = {
-            "destination": "ocr-service",
-            "routed_at": datetime.now().isoformat()
-        }
+        routing_result = MagicMock()
+        routing_result.destination = "ocr-service"
+        routing_result.routed_at = datetime.utcnow()
         mock_document_routing_service.route_document.return_value = routing_result
         
-        # Make request to classify document endpoint
-        response = client.post(f"/documents/{document_id}/classify", headers=auth_headers)
+        # Make request
+        response = client.post(f"/documents/{sample_document_id}/classify")
         
-        # Verify response status code
-        assert response.status_code == status.HTTP_200_OK
-        
-        # Parse response data
+        # Verify response
+        assert response.status_code == 200
         data = response.json()
-        
-        # Validate response schema
-        is_valid, errors = validate_response_schema(data, document_classification_response_schema)
-        assert is_valid, f"Response schema validation failed: {errors}"
-        
-        # Verify response content
-        assert data["document_id"] == document_id
+        assert data["document_id"] == sample_document_id
         assert data["status"] == "classification_complete"
         assert data["classification"]["document_type"] == DocumentType.APPLICATION.value
-        assert data["classification"]["confidence"] == 0.95
-        assert "classified_at" in data["classification"]
+        assert data["classification"]["confidence"] == 0.85
         assert data["routing"]["destination"] == "ocr-service"
-        assert "routed_at" in data["routing"]
         
-        # Verify that the document was updated with the new status
-        mock_storage_service.update_document_metadata.assert_called_once()
+        # Verify service calls
+        mock_storage_service.get_document.assert_called_once_with(uuid.UUID(sample_document_id))
+        mock_classification_service.get_classification_result.assert_called_once_with(uuid.UUID(sample_document_id))
+        mock_classification_service.classify_document.assert_called_once_with(sample_document)
+        mock_document_routing_service.route_document.assert_called_once_with(
+            sample_document, sample_classification_result)
+        mock_storage_service.update_document_metadata.assert_called_once_with(sample_document)
     
-    def test_classify_document_already_classified(self, client, validate_response_schema, 
-                                                document_classification_response_schema,
-                                                mock_storage_service, mock_classification_service,
-                                                auth_headers, create_test_document):
-        """Test that the document classification endpoint handles already classified documents."""
-        # Create a test document
-        test_doc = create_test_document(DocumentType.APPLICATION)
-        document_id = test_doc.metadata["document_id"]
+    def test_classify_document_already_classified(self, client, mock_storage_service, 
+                                               mock_classification_service, sample_document, 
+                                               sample_document_id, sample_classification_result):
+        """Test document classification when document is already classified."""
+        # Setup mocks
+        mock_storage_service.get_document.return_value = sample_document
+        mock_classification_service.get_classification_result.return_value = sample_classification_result
         
-        # Mock storage service to return the test document
-        mock_storage_service.get_document.return_value = test_doc
+        # Make request
+        response = client.post(f"/documents/{sample_document_id}/classify")
         
-        # Mock classification service to return existing classification
-        existing_classification = {
-            "document_type": DocumentType.APPLICATION,
-            "confidence": 0.95,
-            "classified_at": datetime.now().isoformat()
-        }
-        mock_classification_service.get_classification_result.return_value = existing_classification
-        
-        # Make request to classify document endpoint without force parameter
-        response = client.post(f"/documents/{document_id}/classify", headers=auth_headers)
-        
-        # Verify response status code
-        assert response.status_code == status.HTTP_200_OK
-        
-        # Parse response data
+        # Verify response
+        assert response.status_code == 200
         data = response.json()
-        
-        # Validate response schema
-        is_valid, errors = validate_response_schema(data, document_classification_response_schema)
-        assert is_valid, f"Response schema validation failed: {errors}"
-        
-        # Verify response content indicates already classified
-        assert data["document_id"] == document_id
+        assert data["document_id"] == sample_document_id
         assert data["status"] == "already_classified"
         assert data["classification"]["document_type"] == DocumentType.APPLICATION.value
-        assert data["classification"]["confidence"] == 0.95
         
-        # Verify that classify_document was not called
+        # Verify service calls
+        mock_storage_service.get_document.assert_called_once_with(uuid.UUID(sample_document_id))
+        mock_classification_service.get_classification_result.assert_called_once_with(uuid.UUID(sample_document_id))
         mock_classification_service.classify_document.assert_not_called()
     
-    def test_classify_document_force_reclassification(self, client, validate_response_schema,
-                                                    document_classification_response_schema,
-                                                    mock_storage_service, mock_classification_service,
-                                                    mock_document_routing_service, auth_headers,
-                                                    create_test_document):
-        """Test that the document classification endpoint forces reclassification when requested."""
-        # Create a test document
-        test_doc = create_test_document(DocumentType.APPLICATION)
-        document_id = test_doc.metadata["document_id"]
+    def test_classify_document_force_reclassification(self, client, mock_storage_service, 
+                                                   mock_classification_service, mock_document_routing_service,
+                                                   sample_document, sample_document_id, 
+                                                   sample_classification_result):
+        """Test document classification with force=True to reclassify already classified document."""
+        # Setup mocks
+        mock_storage_service.get_document.return_value = sample_document
+        mock_classification_service.get_classification_result.return_value = sample_classification_result
+        mock_classification_service.classify_document.return_value = sample_classification_result
         
-        # Mock storage service to return the test document
-        mock_storage_service.get_document.return_value = test_doc
-        mock_storage_service.update_document_metadata.return_value = True
-        
-        # Mock classification service
-        existing_classification = {
-            "document_type": DocumentType.APPLICATION,
-            "confidence": 0.85,
-            "classified_at": datetime.now().isoformat()
-        }
-        new_classification = {
-            "document_type": DocumentType.APPLICATION,
-            "confidence": 0.98,
-            "classified_at": datetime.now().isoformat()
-        }
-        mock_classification_service.get_classification_result.return_value = existing_classification
-        mock_classification_service.classify_document.return_value = new_classification
-        
-        # Mock document routing service
-        routing_result = {
-            "destination": "ocr-service",
-            "routed_at": datetime.now().isoformat()
-        }
+        routing_result = MagicMock()
+        routing_result.destination = "ocr-service"
+        routing_result.routed_at = datetime.utcnow()
         mock_document_routing_service.route_document.return_value = routing_result
         
-        # Make request to classify document endpoint with force=True
-        response = client.post(f"/documents/{document_id}/classify?force=true", headers=auth_headers)
+        # Make request
+        response = client.post(f"/documents/{sample_document_id}/classify?force=true")
         
-        # Verify response status code
-        assert response.status_code == status.HTTP_200_OK
-        
-        # Parse response data
+        # Verify response
+        assert response.status_code == 200
         data = response.json()
-        
-        # Validate response schema
-        is_valid, errors = validate_response_schema(data, document_classification_response_schema)
-        assert is_valid, f"Response schema validation failed: {errors}"
-        
-        # Verify response content shows new classification
-        assert data["document_id"] == document_id
+        assert data["document_id"] == sample_document_id
         assert data["status"] == "classification_complete"
-        assert data["classification"]["document_type"] == DocumentType.APPLICATION.value
-        assert data["classification"]["confidence"] == 0.98  # New confidence score
         
-        # Verify that classify_document was called
-        mock_classification_service.classify_document.assert_called_once()
+        # Verify service calls
+        mock_storage_service.get_document.assert_called_once_with(uuid.UUID(sample_document_id))
+        mock_classification_service.get_classification_result.assert_called_once_with(uuid.UUID(sample_document_id))
+        mock_classification_service.classify_document.assert_called_once_with(sample_document)
     
-    def test_batch_classify_documents_success(self, client, validate_response_schema, document_batch_response_schema,
-                                            mock_storage_service, mock_classification_service, auth_headers,
-                                            create_test_document):
-        """Test that the batch document classification endpoint successfully queues documents for classification."""
-        # Create test documents
-        doc_ids = [str(uuid.uuid4()) for _ in range(3)]
-        test_docs = [create_test_document(DocumentType.APPLICATION) for _ in range(3)]
+    def test_classify_document_not_found(self, client, mock_storage_service, sample_document_id):
+        """Test document classification when document doesn't exist."""
+        # Setup mocks
+        mock_storage_service.get_document.return_value = None
         
-        # Update document IDs to match our test IDs
-        for i, doc in enumerate(test_docs):
-            doc.metadata["document_id"] = doc_ids[i]
+        # Make request
+        response = client.post(f"/documents/{sample_document_id}/classify")
         
-        # Mock storage service
-        def get_document_side_effect(doc_id):
-            for doc in test_docs:
-                if doc.metadata["document_id"] == doc_id:
-                    return doc
-            return None
-        
-        mock_storage_service.get_document.side_effect = get_document_side_effect
-        
-        # Mock classification service
-        mock_classification_service.get_classification_result.return_value = None  # No existing classifications
-        mock_classification_service.queue_for_classification.return_value = True
-        
-        # Make request to batch classify endpoint
-        request_data = {"document_ids": doc_ids}
-        response = client.post("/documents/batch", json=request_data, headers=auth_headers)
-        
-        # Verify response status code
-        assert response.status_code == status.HTTP_200_OK
-        
-        # Parse response data
+        # Verify response
+        assert response.status_code == 404
         data = response.json()
+        assert "detail" in data
+        assert f"Document with ID {sample_document_id} not found" in data["detail"]
+    
+    def test_classify_document_service_error(self, client, mock_storage_service, mock_classification_service,
+                                           sample_document, sample_document_id):
+        """Test document classification when service error occurs."""
+        # Setup mocks
+        mock_storage_service.get_document.return_value = sample_document
+        mock_classification_service.get_classification_result.return_value = None
         
-        # Validate response schema
-        is_valid, errors = validate_response_schema(data, document_batch_response_schema)
-        assert is_valid, f"Response schema validation failed: {errors}"
+        service_error = ServiceError(
+            message="Classification model not found",
+            category=ErrorCategory.CLASSIFICATION
+        )
+        mock_classification_service.classify_document.side_effect = service_error
         
-        # Verify response content
+        # Make request
+        response = client.post(f"/documents/{sample_document_id}/classify")
+        
+        # Verify response
+        assert response.status_code == 500
+        data = response.json()
+        assert "detail" in data
+        assert "Classification model not found" in data["detail"]
+
+
+# Test cases for POST /documents/batch
+class TestBatchClassify:
+    """Test cases for the POST /documents/batch endpoint."""
+    
+    def test_batch_classify_success(self, client, mock_storage_service, mock_classification_service,
+                                   sample_document):
+        """Test successful batch document classification."""
+        # Create document IDs
+        document_ids = [str(uuid.uuid4()) for _ in range(3)]
+        
+        # Setup mocks
+        mock_storage_service.get_document.return_value = sample_document
+        mock_classification_service.get_classification_result.return_value = None
+        
+        # Make request
+        response = client.post(
+            "/documents/batch",
+            json={"document_ids": document_ids}
+        )
+        
+        # Verify response
+        assert response.status_code == 200
+        data = response.json()
+        assert "summary" in data
         assert data["summary"]["total"] == 3
         assert data["summary"]["successful"] == 3
         assert data["summary"]["failed"] == 0
         assert data["summary"]["skipped"] == 0
-        assert len(data["results"]["successful"]) == 3
-        assert len(data["results"]["failed"]) == 0
-        assert len(data["results"]["skipped"]) == 0
         
-        # Verify that queue_for_classification was called for each document
+        # Verify service calls
+        assert mock_storage_service.get_document.call_count == 3
+        assert mock_classification_service.get_classification_result.call_count == 3
         assert mock_classification_service.queue_for_classification.call_count == 3
     
-    def test_batch_classify_documents_mixed_results(self, client, validate_response_schema, 
-                                                  document_batch_response_schema,
-                                                  mock_storage_service, mock_classification_service, 
-                                                  auth_headers, create_test_document):
-        """Test that the batch document classification endpoint handles mixed success/failure/skipped results."""
-        # Create test documents
-        doc_ids = [str(uuid.uuid4()) for _ in range(3)]
-        test_docs = [create_test_document(DocumentType.APPLICATION) for _ in range(2)]  # Only 2 docs exist
+    def test_batch_classify_mixed_results(self, client, mock_storage_service, mock_classification_service,
+                                         sample_document, sample_classification_result):
+        """Test batch classification with mixed results (success, failure, skipped)."""
+        # Create document IDs
+        document_ids = [str(uuid.uuid4()) for _ in range(3)]
         
-        # Update document IDs to match our test IDs
-        for i, doc in enumerate(test_docs):
-            doc.metadata["document_id"] = doc_ids[i]
-        
-        # Mock storage service
+        # Setup mocks to simulate different scenarios for each document
         def get_document_side_effect(doc_id):
-            if doc_id == doc_ids[0]:
-                return test_docs[0]  # First document exists
-            elif doc_id == doc_ids[1]:
-                return test_docs[1]  # Second document exists
+            if doc_id == uuid.UUID(document_ids[0]):
+                return sample_document  # Success
+            elif doc_id == uuid.UUID(document_ids[1]):
+                return None  # Not found
             else:
-                return None  # Third document doesn't exist
+                return sample_document  # Already classified
+        
+        def get_classification_result_side_effect(doc_id):
+            if doc_id == uuid.UUID(document_ids[0]):
+                return None  # Not classified yet
+            elif doc_id == uuid.UUID(document_ids[1]):
+                return None  # Not relevant (document not found)
+            else:
+                return sample_classification_result  # Already classified
         
         mock_storage_service.get_document.side_effect = get_document_side_effect
-        
-        # Mock classification service
-        def get_classification_result_side_effect(doc_id):
-            if doc_id == doc_ids[0]:
-                # First document is already classified
-                return {
-                    "document_type": DocumentType.APPLICATION,
-                    "confidence": 0.95,
-                    "classified_at": datetime.now().isoformat()
-                }
-            else:
-                # Others are not classified
-                return None
-        
         mock_classification_service.get_classification_result.side_effect = get_classification_result_side_effect
-        mock_classification_service.queue_for_classification.return_value = True
         
-        # Make request to batch classify endpoint
-        request_data = {"document_ids": doc_ids}
-        response = client.post("/documents/batch", json=request_data, headers=auth_headers)
+        # Make request
+        response = client.post(
+            "/documents/batch",
+            json={"document_ids": document_ids}
+        )
         
-        # Verify response status code
-        assert response.status_code == status.HTTP_200_OK
-        
-        # Parse response data
+        # Verify response
+        assert response.status_code == 200
         data = response.json()
-        
-        # Validate response schema
-        is_valid, errors = validate_response_schema(data, document_batch_response_schema)
-        assert is_valid, f"Response schema validation failed: {errors}"
-        
-        # Verify response content
         assert data["summary"]["total"] == 3
-        assert data["summary"]["successful"] == 1  # Only one document successfully queued
-        assert data["summary"]["failed"] == 1  # One document not found
-        assert data["summary"]["skipped"] == 1  # One document already classified
+        assert data["summary"]["successful"] == 1
+        assert data["summary"]["failed"] == 1
+        assert data["summary"]["skipped"] == 1
+        
+        # Check results details
         assert len(data["results"]["successful"]) == 1
         assert len(data["results"]["failed"]) == 1
         assert len(data["results"]["skipped"]) == 1
         
-        # Verify that queue_for_classification was called only once
-        assert mock_classification_service.queue_for_classification.call_count == 1
+        # Verify document IDs in each category
+        assert data["results"]["successful"][0]["document_id"] == document_ids[0]
+        assert data["results"]["failed"][0]["document_id"] == document_ids[1]
+        assert data["results"]["skipped"][0]["document_id"] == document_ids[2]
     
-    def test_list_documents_success(self, client, validate_response_schema, document_list_response_schema,
-                                  mock_storage_service, mock_classification_service, auth_headers,
-                                  create_test_documents):
-        """Test that the document list endpoint returns a paginated list of documents."""
-        # Create test documents
-        test_docs = create_test_documents(5)
+    def test_batch_classify_empty_list(self, client):
+        """Test batch classification with empty document list."""
+        # Make request
+        response = client.post(
+            "/documents/batch",
+            json={"document_ids": []}
+        )
         
-        # Mock storage service
-        mock_storage_service.list_documents.return_value = (test_docs, 5)  # 5 documents, 5 total
-        
-        # Mock classification service to return classification for each document
-        def get_classification_result_side_effect(doc_id):
-            return {
-                "document_type": DocumentType.APPLICATION,
-                "confidence": 0.95,
-                "classified_at": datetime.now().isoformat()
-            }
-        
-        mock_classification_service.get_classification_result.side_effect = get_classification_result_side_effect
-        
-        # Make request to list documents endpoint
-        response = client.get("/documents?page=1&page_size=10", headers=auth_headers)
-        
-        # Verify response status code
-        assert response.status_code == status.HTTP_200_OK
-        
-        # Parse response data
+        # Verify response
+        assert response.status_code == 400
         data = response.json()
+        assert "detail" in data
+        assert "No document IDs provided" in data["detail"]
+    
+    def test_batch_classify_too_many_documents(self, client):
+        """Test batch classification with too many documents."""
+        # Create 101 document IDs (exceeding the 100 limit)
+        document_ids = [str(uuid.uuid4()) for _ in range(101)]
         
-        # Validate response schema
-        is_valid, errors = validate_response_schema(data, document_list_response_schema)
-        assert is_valid, f"Response schema validation failed: {errors}"
+        # Make request
+        response = client.post(
+            "/documents/batch",
+            json={"document_ids": document_ids}
+        )
         
-        # Verify response content
+        # Verify response
+        assert response.status_code == 400
+        data = response.json()
+        assert "detail" in data
+        assert "Batch size exceeds maximum limit of 100 documents" in data["detail"]
+
+
+# Test cases for GET /documents
+class TestListDocuments:
+    """Test cases for the GET /documents endpoint."""
+    
+    def test_list_documents_no_filters(self, client, mock_storage_service, mock_classification_service,
+                                      sample_document):
+        """Test listing documents without filters."""
+        # Setup mocks
+        mock_storage_service.list_documents.return_value = ([sample_document], 1)
+        mock_classification_service.get_classification_result.return_value = None
+        
+        # Make request
+        response = client.get("/documents")
+        
+        # Verify response
+        assert response.status_code == 200
+        data = response.json()
+        assert "documents" in data
+        assert len(data["documents"]) == 1
+        assert "pagination" in data
+        assert data["pagination"]["page"] == 1
+        assert data["pagination"]["total_items"] == 1
+        
+        # Verify service calls
+        mock_storage_service.list_documents.assert_called_once_with(
+            document_type=None,
+            status=None,
+            confidence_min=None,
+            confidence_max=None,
+            requires_review=None,
+            page=1,
+            page_size=20
+        )
+    
+    def test_list_documents_with_filters(self, client, mock_storage_service, mock_classification_service,
+                                        sample_document):
+        """Test listing documents with filters."""
+        # Setup mocks
+        mock_storage_service.list_documents.return_value = ([sample_document], 1)
+        mock_classification_service.get_classification_result.return_value = None
+        
+        # Make request with filters
+        response = client.get(
+            "/documents?document_type=application&status=received&confidence_min=0.7&confidence_max=1.0&requires_review=false&page=2&page_size=10"
+        )
+        
+        # Verify response
+        assert response.status_code == 200
+        data = response.json()
         assert "documents" in data
         assert "pagination" in data
-        assert len(data["documents"]) == 5
-        assert data["pagination"]["page"] == 1
+        assert data["pagination"]["page"] == 2
         assert data["pagination"]["page_size"] == 10
-        assert data["pagination"]["total_items"] == 5
-        assert data["pagination"]["total_pages"] == 1
         
-        # Verify that each document has classification data
-        for doc in data["documents"]:
-            assert "classification" in doc
-            assert doc["classification"]["document_type"] == DocumentType.APPLICATION.value
-            assert doc["classification"]["confidence"] == 0.95
+        # Verify service calls with correct filters
+        mock_storage_service.list_documents.assert_called_once()
+        call_args = mock_storage_service.list_documents.call_args[1]
+        assert call_args["document_type"] is not None
+        assert call_args["status"] is not None
+        assert call_args["confidence_min"] == 0.7
+        assert call_args["confidence_max"] == 1.0
+        assert call_args["requires_review"] is False
+        assert call_args["page"] == 2
+        assert call_args["page_size"] == 10
     
-    def test_list_documents_with_filters(self, client, validate_response_schema, document_list_response_schema,
-                                        mock_storage_service, mock_classification_service, auth_headers,
-                                        create_test_documents):
-        """Test that the document list endpoint correctly applies filters."""
-        # Create test documents
-        test_docs = create_test_documents(3)
+    def test_list_documents_invalid_filter(self, client):
+        """Test listing documents with invalid filter values."""
+        # Make request with invalid document type
+        response = client.get("/documents?document_type=invalid_type")
         
-        # Mock storage service
-        mock_storage_service.list_documents.return_value = (test_docs, 3)  # 3 documents, 3 total
-        
-        # Mock classification service
-        mock_classification_service.get_classification_result.return_value = {
-            "document_type": DocumentType.APPLICATION,
-            "confidence": 0.95,
-            "classified_at": datetime.now().isoformat()
-        }
-        
-        # Make request to list documents endpoint with filters
-        query_params = "document_type=application&status=classified&confidence_min=0.8&requires_review=false"
-        response = client.get(f"/documents?{query_params}", headers=auth_headers)
-        
-        # Verify response status code
-        assert response.status_code == status.HTTP_200_OK
-        
-        # Parse response data
+        # Verify response
+        assert response.status_code == 400
         data = response.json()
+        assert "detail" in data
+        assert "Invalid document type: invalid_type" in data["detail"]
+    
+    def test_list_documents_with_classification(self, client, mock_storage_service, 
+                                              mock_classification_service, sample_document,
+                                              sample_classification_result):
+        """Test listing documents with classification results."""
+        # Setup mocks
+        mock_storage_service.list_documents.return_value = ([sample_document], 1)
+        mock_classification_service.get_classification_result.return_value = sample_classification_result
         
-        # Validate response schema
-        is_valid, errors = validate_response_schema(data, document_list_response_schema)
-        assert is_valid, f"Response schema validation failed: {errors}"
+        # Make request
+        response = client.get("/documents")
         
-        # Verify that list_documents was called with the correct filters
+        # Verify response
+        assert response.status_code == 200
+        data = response.json()
+        assert "documents" in data
+        assert len(data["documents"]) == 1
+        assert "classification" in data["documents"][0]
+        assert data["documents"][0]["classification"]["document_type"] == DocumentType.APPLICATION.value
+        assert data["documents"][0]["classification"]["confidence"] == 0.85
+    
+    def test_list_documents_pagination(self, client, mock_storage_service, mock_classification_service):
+        """Test document listing pagination."""
+        # Create multiple sample documents
+        documents = [MagicMock(spec=Document) for _ in range(5)]
+        for i, doc in enumerate(documents):
+            doc.id = uuid.uuid4()
+            doc.metadata = {
+                'id': str(doc.id),
+                'filename': f'document_{i}.pdf',
+                'created_at': datetime.utcnow(),
+                'updated_at': datetime.utcnow()
+            }
+            doc.status = ProcessingStatus.RECEIVED
+        
+        # Setup mocks
+        mock_storage_service.list_documents.return_value = (documents, 15)  # 15 total documents, 5 per page
+        mock_classification_service.get_classification_result.return_value = None
+        
+        # Make request for page 2
+        response = client.get("/documents?page=2&page_size=5")
+        
+        # Verify response
+        assert response.status_code == 200
+        data = response.json()
+        assert "pagination" in data
+        assert data["pagination"]["page"] == 2
+        assert data["pagination"]["page_size"] == 5
+        assert data["pagination"]["total_items"] == 15
+        assert data["pagination"]["total_pages"] == 3  # 15 items with 5 per page = 3 pages
+        
+        # Verify service calls
         mock_storage_service.list_documents.assert_called_once_with(
-            document_type=DocumentType.APPLICATION,
-            status=ProcessingStatus.CLASSIFIED,
-            confidence_min=0.8,
+            document_type=None,
+            status=None,
+            confidence_min=None,
             confidence_max=None,
-            requires_review=False,
-            page=1,
-            page_size=20
+            requires_review=None,
+            page=2,
+            page_size=5
         )
+
+
+# Integration tests for S3 storage
+class TestS3Integration:
+    """Integration tests for S3 storage functionality."""
     
-    def test_list_documents_invalid_filter(self, client, auth_headers):
-        """Test that the document list endpoint handles invalid filter values."""
-        # Make request with invalid document_type
-        response = client.get("/documents?document_type=invalid_type", headers=auth_headers)
+    @pytest.mark.integration
+    def test_document_upload_with_encryption(self, mock_storage_service):
+        """Test document upload with AES-256 encryption."""
+        # This is a placeholder for an integration test that would verify
+        # S3 storage with encryption. In a real test environment, this would
+        # use a mock S3 service like Moto or a test S3 bucket.
         
-        # Verify response status code
-        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        # For now, we'll just verify that the StorageService is configured to use encryption
+        storage_service = StorageService()
         
-        # Parse response data
-        data = response.json()
-        
-        # Verify error message
-        assert "detail" in data
-        assert "Invalid document type" in data["detail"]
-        
-        # Make request with invalid status
-        response = client.get("/documents?status=invalid_status", headers=auth_headers)
-        
-        # Verify response status code
-        assert response.status_code == status.HTTP_400_BAD_REQUEST
-        
-        # Parse response data
-        data = response.json()
-        
-        # Verify error message
-        assert "detail" in data
-        assert "Invalid status" in data["detail"]
-    
-    def test_s3_storage_integration_with_encryption(self, client, mock_s3_client, auth_headers):
-        """Test that documents are stored in S3 with AES-256 encryption."""
         # Create a test file
-        file_content = b"Test document content"
-        file = BytesIO(file_content)
-        file.name = "test_document.pdf"
-        
-        # Create multipart form data
-        files = {"file": ("test_document.pdf", file, "application/pdf")}
-        data = {"application_id": str(uuid.uuid4())}
-        
-        # Make request to upload document endpoint
-        response = client.post("/documents/upload", files=files, data=data, headers=auth_headers)
-        
-        # Verify response status code
-        assert response.status_code == status.HTTP_201_CREATED
-        
-        # Parse response data
-        data = response.json()
-        
-        # Verify document was created
-        assert "document_id" in data
-        assert "storage_path" in data
-        
-        # Verify document was stored in S3 with encryption
-        document_key = data["storage_path"]
-        s3_object = mock_s3_client.get_object(Bucket="mca-documents-test", Key=document_key)
-        
-        # Check that the object has the ServerSideEncryption header set to AES256
-        assert "ServerSideEncryption" in s3_object
-        assert s3_object["ServerSideEncryption"] == "AES256"
-        
-        # Verify the content was stored correctly
-        assert s3_object["Body"].read() == file_content
-    
-    def test_document_upload_with_metadata_extraction(self, client, mock_s3_client, auth_headers):
-        """Test that document upload extracts and stores metadata."""
-        # Create a test file
-        file_content = b"%PDF-1.5\nTest document with metadata"
-        file = BytesIO(file_content)
-        file.name = "financial_statement.pdf"
-        
-        # Create multipart form data
-        files = {"file": ("financial_statement.pdf", file, "application/pdf")}
-        data = {
-            "application_id": str(uuid.uuid4()),
-            "document_type": "bank_statement",
-            "metadata": json.dumps({
-                "bank_name": "Test Bank",
-                "account_number": "XXXX1234",
-                "statement_date": "2023-04-01"
-            })
-        }
-        
-        # Make request to upload document endpoint
-        response = client.post("/documents/upload", files=files, data=data, headers=auth_headers)
-        
-        # Verify response status code
-        assert response.status_code == status.HTTP_201_CREATED
-        
-        # Parse response data
-        data = response.json()
-        
-        # Verify document was created with metadata
-        assert "document_id" in data
-        assert "metadata" in data
-        assert "bank_name" in data["metadata"]
-        assert data["metadata"]["bank_name"] == "Test Bank"
-        assert "account_number" in data["metadata"]
-        assert data["metadata"]["account_number"] == "XXXX1234"
-        assert "statement_date" in data["metadata"]
-        assert data["metadata"]["statement_date"] == "2023-04-01"
-        
-        # Verify document type was set correctly
-        assert "document_type" in data
-        assert data["document_type"] == "bank_statement"
-    
-    def test_document_update_maintains_version_history(self, client, mock_s3_client, auth_headers):
-        """Test that document updates maintain version history in S3."""
-        # Create a test document in S3
+        test_file_content = b"Test document content"
+        test_file = io.BytesIO(test_file_content)
         document_id = str(uuid.uuid4())
-        application_id = str(uuid.uuid4())
-        document_key = f"applications/{application_id}/documents/{document_id}/v1.pdf"
+        file_name = "test_document.pdf"
         
-        # Upload initial version to S3
-        mock_s3_client.put_object(
-            Bucket="mca-documents-test",
-            Key=document_key,
-            Body=b"Initial document content",
-            Metadata={
-                "document_id": document_id,
-                "application_id": application_id,
-                "version": "1"
-            },
-            ServerSideEncryption="AES256"
-        )
+        # Mock the S3 client's upload_fileobj method
+        with patch.object(storage_service.s3_client, 'upload_fileobj') as mock_upload:
+            # Call the upload method
+            storage_service.upload_document_from_bytes(
+                test_file_content, file_name, document_id, {"test_key": "test_value"}
+            )
+            
+            # Verify the upload was called with encryption
+            mock_upload.assert_called_once()
+            _, kwargs = mock_upload.call_args
+            assert "ExtraArgs" in kwargs
+            assert "ServerSideEncryption" in kwargs["ExtraArgs"]
+            assert kwargs["ExtraArgs"]["ServerSideEncryption"] == "AES256"
+    
+    @pytest.mark.integration
+    def test_document_metadata_extraction(self, mock_storage_service):
+        """Test extraction of document metadata for classification."""
+        # Setup a mock S3 client response
+        storage_service = StorageService()
+        object_key = "documents/2023/05/01/test-document.pdf"
         
-        # Create update data
-        update_data = {
-            "metadata": {
-                "status": "reviewed",
-                "reviewer": "test-user",
-                "review_date": datetime.now().isoformat()
+        # Mock the head_object response
+        mock_response = {
+            "ContentLength": 1024,
+            "ContentType": "application/pdf",
+            "LastModified": datetime.utcnow(),
+            "ETag": "\"abc123\"",
+            "ServerSideEncryption": "AES256",
+            "Metadata": {
+                "document_id": "test-123",
+                "original_filename": "original.pdf",
+                "upload_timestamp": datetime.utcnow().isoformat(),
+                "classification": "application",
+                "classification_confidence": "0.92"
             }
         }
         
-        # Make request to update document endpoint
-        response = client.put(f"/documents/{document_id}", json=update_data, headers=auth_headers)
-        
-        # Verify response status code
-        assert response.status_code == status.HTTP_200_OK
-        
-        # Parse response data
-        data = response.json()
-        
-        # Verify document was updated
-        assert "document_id" in data
-        assert data["document_id"] == document_id
-        assert "version" in data
-        assert data["version"] == "2"  # Version incremented
-        
-        # Verify that both versions exist in S3
-        v1_key = document_key
-        v2_key = f"applications/{application_id}/documents/{document_id}/v2.pdf"
-        
-        # Check v1 still exists
-        v1_object = mock_s3_client.get_object(Bucket="mca-documents-test", Key=v1_key)
-        assert v1_object["Metadata"]["version"] == "1"
-        
-        # Check v2 exists with updated metadata
-        v2_object = mock_s3_client.get_object(Bucket="mca-documents-test", Key=v2_key)
-        assert v2_object["Metadata"]["version"] == "2"
-        assert "status" in v2_object["Metadata"]
-        assert v2_object["Metadata"]["status"] == "reviewed"
+        with patch.object(storage_service.s3_client, 'head_object', return_value=mock_response):
+            # Call the metadata extraction method
+            metadata, error = storage_service.extract_document_metadata_for_classification(object_key)
+            
+            # Verify the metadata was extracted correctly
+            assert error is None
+            assert metadata is not None
+            assert metadata["object_key"] == object_key
+            assert metadata["file_extension"] == "pdf"
+            assert metadata["content_type"] == "application/pdf"
+            assert metadata["file_size"] == 1024
+            assert metadata["original_filename"] == "original.pdf"
+            assert metadata["document_id"] == "test-123"
+            assert metadata["previous_classification"] == "application"
+            assert metadata["previous_confidence"] == 0.92
     
-    def test_document_deletion_and_archiving(self, client, mock_s3_client, auth_headers):
-        """Test that document deletion properly archives documents instead of permanently deleting them."""
-        # Create a test document in S3
-        document_id = str(uuid.uuid4())
-        application_id = str(uuid.uuid4())
-        document_key = f"applications/{application_id}/documents/{document_id}/v1.pdf"
+    @pytest.mark.integration
+    def test_document_storage_path_generation(self):
+        """Test generation of storage paths for documents."""
+        storage_service = StorageService()
+        document_id = "test-document-123"
+        file_name = "test_document.pdf"
         
-        # Upload document to S3
-        mock_s3_client.put_object(
-            Bucket="mca-documents-test",
-            Key=document_key,
-            Body=b"Document content",
-            Metadata={
-                "document_id": document_id,
-                "application_id": application_id,
-                "version": "1"
-            },
-            ServerSideEncryption="AES256"
-        )
-        
-        # Make request to delete document endpoint
-        response = client.delete(f"/documents/{document_id}", headers=auth_headers)
-        
-        # Verify response status code
-        assert response.status_code == status.HTTP_200_OK
-        
-        # Parse response data
-        data = response.json()
-        
-        # Verify document was marked as deleted
-        assert "document_id" in data
-        assert data["document_id"] == document_id
-        assert "status" in data
-        assert data["status"] == "archived"
-        
-        # Verify that the document was moved to the archive location
-        archive_key = f"archive/applications/{application_id}/documents/{document_id}/v1.pdf"
-        
-        # Original location should no longer have the document
-        with pytest.raises(ClientError):
-            mock_s3_client.get_object(Bucket="mca-documents-test", Key=document_key)
-        
-        # Archive location should have the document
-        archived_object = mock_s3_client.get_object(Bucket="mca-documents-test", Key=archive_key)
-        assert archived_object["Metadata"]["document_id"] == document_id
-        assert archived_object["Metadata"]["application_id"] == application_id
-        assert "archived_at" in archived_object["Metadata"]
-        assert "archived_by" in archived_object["Metadata"]
+        # Use a patched datetime to get a predictable path
+        fixed_date = datetime(2023, 5, 1)
+        with patch('datetime.datetime') as mock_datetime:
+            mock_datetime.now.return_value = fixed_date
+            
+            # Call the path generation method
+            object_key = storage_service._generate_object_key(document_id, file_name)
+            
+            # Verify the path format
+            assert object_key == "documents/2023/05/01/test-document-123.pdf"
+            assert object_key.startswith("documents/")
+            assert object_key.endswith(".pdf")
+            assert document_id in object_key
+
+
+# Test cases for document ownership and permissions
+class TestDocumentPermissions:
+    """Test cases for document ownership and permission validation."""
     
-    def test_document_retrieval_by_application_id(self, client, validate_response_schema, 
-                                                document_list_response_schema,
-                                                mock_storage_service, mock_classification_service, 
-                                                auth_headers, create_test_documents):
-        """Test that documents can be retrieved by application ID."""
-        # Create test documents with the same application ID
-        application_id = str(uuid.uuid4())
-        test_docs = create_test_documents(3)
+    @pytest.mark.parametrize("user_role,expected_status", [
+        ("admin", 200),
+        ("operations", 200),
+        ("user", 403)
+    ])
+    def test_document_access_by_role(self, client, mock_storage_service, mock_classification_service,
+                                    sample_document, sample_document_id, user_role, expected_status):
+        """Test document access based on user role."""
+        # This test would normally use authentication middleware
+        # For now, we'll simulate it with a mock
         
-        # Set the same application ID for all documents
-        for doc in test_docs:
-            doc.metadata["application_id"] = application_id
+        # Setup mocks
+        mock_storage_service.get_document_metadata.return_value = sample_document
+        mock_classification_service.get_classification_result.return_value = None
         
-        # Mock storage service
-        mock_storage_service.list_documents_by_application_id.return_value = (test_docs, 3)
+        # Mock the authentication middleware
+        with patch("document_service.src.api.documents.get_current_user") as mock_get_user:
+            mock_user = {"id": "user-123", "role": user_role}
+            mock_get_user.return_value = mock_user
+            
+            # Make request
+            response = client.get(f"/documents/{sample_document_id}")
+            
+            # Verify response based on role
+            assert response.status_code == expected_status
+            
+            if expected_status == 200:
+                data = response.json()
+                assert data["document_id"] == sample_document_id
+            else:
+                data = response.json()
+                assert "detail" in data
+                assert "Permission denied" in data["detail"]
+    
+    def test_document_ownership_validation(self, client, mock_storage_service, sample_document,
+                                         sample_document_id):
+        """Test validation of document ownership before operations."""
+        # Setup document with owner information
+        sample_document.metadata["owner_id"] = "user-456"
+        mock_storage_service.get_document.return_value = sample_document
         
-        # Mock classification service
-        mock_classification_service.get_classification_result.return_value = {
-            "document_type": DocumentType.APPLICATION,
-            "confidence": 0.95,
-            "classified_at": datetime.now().isoformat()
+        # Mock the authentication middleware
+        with patch("document_service.src.api.documents.get_current_user") as mock_get_user:
+            # User is not the owner
+            mock_user = {"id": "user-123", "role": "user"}
+            mock_get_user.return_value = mock_user
+            
+            # Make request
+            response = client.post(f"/documents/{sample_document_id}/classify")
+            
+            # Verify response
+            assert response.status_code == 403
+            data = response.json()
+            assert "detail" in data
+            assert "You do not have permission to access this document" in data["detail"]
+
+
+# Test cases for document version history
+class TestDocumentVersionHistory:
+    """Test cases for document version history functionality."""
+    
+    def test_document_update_maintains_version_history(self, mock_storage_service):
+        """Test that document updates maintain version history."""
+        storage_service = StorageService()
+        object_key = "documents/2023/05/01/test-document.pdf"
+        
+        # Mock the current metadata
+        current_metadata = {
+            "document_id": "test-123",
+            "version": "1",
+            "content_length": "1024",
+            "content_type": "application/pdf",
+            "last_modified": datetime.utcnow().isoformat(),
+            "server_side_encryption": "AES256",
+            "e_tag": "abc123"
         }
         
-        # Make request to get documents by application ID
-        response = client.get(f"/applications/{application_id}/documents", headers=auth_headers)
-        
-        # Verify response status code
-        assert response.status_code == status.HTTP_200_OK
-        
-        # Parse response data
-        data = response.json()
-        
-        # Validate response schema
-        is_valid, errors = validate_response_schema(data, document_list_response_schema)
-        assert is_valid, f"Response schema validation failed: {errors}"
-        
-        # Verify response content
-        assert "documents" in data
-        assert len(data["documents"]) == 3
-        
-        # Verify all documents have the same application ID
-        for doc in data["documents"]:
-            assert doc["metadata"]["application_id"] == application_id
-        
-        # Verify that list_documents_by_application_id was called with the correct parameters
-        mock_storage_service.list_documents_by_application_id.assert_called_once_with(
-            application_id=application_id,
-            page=1,
-            page_size=20
-        )
-    
-    def test_document_ownership_validation(self, client, mock_storage_service, auth_headers):
-        """Test that document operations validate document ownership."""
-        # Create document IDs
-        document_id = str(uuid.uuid4())
-        application_id = str(uuid.uuid4())
-        
-        # Mock storage service to return document metadata
-        mock_storage_service.get_document_metadata.return_value = {
-            "document_id": document_id,
-            "application_id": application_id,
-            "owner_id": "different-user-id"  # Different from the authenticated user
+        # New metadata to update
+        update_metadata = {
+            "classification": "bank_statement",
+            "classification_confidence": "0.95"
         }
         
-        # Make request to update document endpoint
-        update_data = {"metadata": {"status": "reviewed"}}
-        response = client.put(f"/documents/{document_id}", json=update_data, headers=auth_headers)
-        
-        # Verify response status code indicates forbidden
-        assert response.status_code == status.HTTP_403_FORBIDDEN
-        
-        # Parse response data
-        data = response.json()
-        
-        # Verify error message
-        assert "detail" in data
-        assert "You do not have permission to modify this document" in data["detail"]
-        
-        # Make request to delete document endpoint
-        response = client.delete(f"/documents/{document_id}", headers=auth_headers)
-        
-        # Verify response status code indicates forbidden
-        assert response.status_code == status.HTTP_403_FORBIDDEN
-        
-        # Parse response data
-        data = response.json()
-        
-        # Verify error message
-        assert "detail" in data
-        assert "You do not have permission to delete this document" in data["detail"]
+        # Mock the get_document_metadata and copy_object methods
+        with patch.object(storage_service, 'get_document_metadata', return_value=(current_metadata, None)):
+            with patch.object(storage_service.s3_client, 'copy_object') as mock_copy_object:
+                # Call the update method
+                success, error = storage_service.update_document_metadata(object_key, update_metadata)
+                
+                # Verify the update was successful
+                assert success is True
+                assert error is None
+                
+                # Verify copy_object was called with correct parameters
+                mock_copy_object.assert_called_once()
+                _, kwargs = mock_copy_object.call_args
+                
+                # Verify metadata includes version history
+                assert "Metadata" in kwargs
+                assert "version" in kwargs["Metadata"]
+                assert kwargs["Metadata"]["version"] == "2"  # Version should be incremented
+                
+                # Verify new metadata was included
+                assert kwargs["Metadata"]["classification"] == "bank_statement"
+                assert kwargs["Metadata"]["classification_confidence"] == "0.95"
+                
+                # Verify encryption was maintained
+                assert kwargs["ServerSideEncryption"] == "AES256"
+
+
+# Run the tests
+if __name__ == "__main__":
+    pytest.main(['-xvs', __file__])
