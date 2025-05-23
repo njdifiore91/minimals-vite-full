@@ -4,403 +4,536 @@
 """
 Unit tests for the BaseModel abstract class.
 
-This module contains tests for the abstract base class that defines the interface
-for all document classifiers in the Document Service. It verifies that the BaseModel
-interface correctly defines and enforces the required methods, validates input data
-formats, and provides common utility methods for all classifiers.
+This module contains tests that verify the BaseModel interface correctly defines and enforces
+the required methods for all document classifiers, including fit(), predict(), predict_proba(),
+and evaluate(). It also tests validation of input data formats and common utility methods.
 """
 
-import os
 import pytest
 import numpy as np
 from abc import ABC
-from typing import Dict, List, Optional, Any, cast
 from unittest.mock import MagicMock, patch
+from sklearn.base import BaseEstimator
 
-# Fix import paths for testing
-import sys
-import os
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../src')))
-
-# Import the modules after fixing the path
-from models.base_model import BaseModel, T
-from types.classification import (
-    ClassificationModel,
-    FeatureVector,
-    ClassificationResult,
-    ConfidenceScore,
-    ModelParameters,
-    ClassificationMetrics
-)
-from types.documents import DocumentType
-from types.config import ModelConfig
-from types.errors import Result
-
-# These imports are already handled above
-
-
-# Create a concrete implementation of BaseModel for testing
-class ConcreteModel(BaseModel):
-    """Concrete implementation of BaseModel for testing purposes."""
-    
-    def __init__(self, config: ModelConfig):
-        super().__init__(config)
-        self.model = MagicMock(spec=ClassificationModel)
-        self.classes_ = np.array([DocumentType.APPLICATION.value, DocumentType.TAX_RETURN.value, 
-                                 DocumentType.BANK_STATEMENT.value, DocumentType.OTHER.value])
-        self.feature_names = [f"feature_{i}" for i in range(10)]
-        
-    def fit(self, X: FeatureVector, y: np.ndarray) -> 'ConcreteModel':
-        """Train the model on the provided data."""
-        self._validate_input(X, y)
-        self.model.fit(X, y)
-        self.trained = True
-        return self
-    
-    def predict(self, X: FeatureVector) -> np.ndarray:
-        """Predict class labels for the provided data."""
-        self._validate_input(X, for_prediction=True)
-        return self.model.predict(X)
-    
-    def predict_proba(self, X: FeatureVector) -> np.ndarray:
-        """Predict class probabilities for the provided data."""
-        self._validate_input(X, for_prediction=True)
-        return self.model.predict_proba(X)
-    
-    def evaluate(self, X: FeatureVector, y: np.ndarray) -> ClassificationMetrics:
-        """Evaluate the model on the provided data."""
-        self._validate_input(X, y)
-        predictions = self.predict(X)
-        return {
-            'accuracy': 0.95,
-            'precision': {'application': 0.94, 'tax_return': 0.96},
-            'recall': {'application': 0.93, 'tax_return': 0.97},
-            'f1_score': {'application': 0.935, 'tax_return': 0.965},
-            'confusion_matrix': np.array([[45, 5], [3, 47]])
-        }
-
-
-# Create an incomplete implementation that doesn't implement all abstract methods
-class IncompleteModel(BaseModel):
-    """Incomplete implementation of BaseModel for testing abstract method enforcement."""
-    
-    def __init__(self, config: ModelConfig):
-        super().__init__(config)
-    
-    def fit(self, X: FeatureVector, y: np.ndarray) -> 'IncompleteModel':
-        """Train the model on the provided data."""
-        return self
-    
-    # Missing predict, predict_proba, and evaluate methods
+from src.models.base_model import BaseModel
 
 
 class TestBaseModel:
     """Test suite for the BaseModel abstract class."""
-    
-    @pytest.fixture
-    def model_config(self) -> ModelConfig:
-        """Create a model configuration for testing."""
-        return ModelConfig(
-            model_type="test_model",
-            parameters={"param1": 1, "param2": "value"},
-            confidence_threshold=0.75,
-            version="1.0.0",
-            description="Test model for unit tests"
-        )
-    
-    @pytest.fixture
-    def concrete_model(self, model_config) -> ConcreteModel:
-        """Create a concrete model instance for testing."""
-        model = ConcreteModel(model_config)
-        # Mock the model's predict and predict_proba methods
-        model.model.predict.return_value = np.array(["application", "tax_return", "bank_statement"])
-        model.model.predict_proba.return_value = np.array([
-            [0.8, 0.1, 0.05, 0.05],
-            [0.1, 0.75, 0.1, 0.05],
-            [0.05, 0.1, 0.8, 0.05]
-        ])
-        model.trained = True
-        return model
-    
-    @pytest.fixture
-    def feature_vector(self) -> FeatureVector:
-        """Create a feature vector for testing."""
-        return np.random.random((3, 10))
-    
-    @pytest.fixture
-    def target_labels(self) -> np.ndarray:
-        """Create target labels for testing."""
-        return np.array(["application", "tax_return", "bank_statement"])
-    
-    def test_abstract_class_cannot_be_instantiated(self, model_config):
-        """Test that BaseModel cannot be instantiated directly."""
+
+    def test_base_model_is_abstract(self):
+        """Test that BaseModel is an abstract class and cannot be instantiated directly."""
+        with pytest.raises(TypeError, match=r"Can't instantiate abstract class BaseModel"):
+            BaseModel()
+
+    def test_base_model_inheritance(self):
+        """Test that BaseModel inherits from ABC and BaseEstimator."""
+        assert issubclass(BaseModel, ABC)
+        assert issubclass(BaseModel, BaseEstimator)
+
+    def test_abstract_methods_defined(self):
+        """Test that all required abstract methods are defined in BaseModel."""
+        abstract_methods = [
+            "fit",
+            "predict",
+            "predict_proba",
+            "evaluate",
+            "save",
+            "load"
+        ]
+
+        for method in abstract_methods:
+            assert hasattr(BaseModel, method), f"BaseModel missing abstract method: {method}"
+
+    def test_concrete_methods_defined(self):
+        """Test that all concrete utility methods are defined in BaseModel."""
+        concrete_methods = [
+            "validate_input",
+            "get_feature_importance",
+            "cross_validate",
+            "calculate_metrics",
+            "get_params",
+            "set_params",
+            "get_confidence_scores",
+            "is_prediction_confident"
+        ]
+
+        for method in concrete_methods:
+            assert hasattr(BaseModel, method), f"BaseModel missing concrete method: {method}"
+
+    def test_subclass_must_implement_abstract_methods(self):
+        """Test that subclasses must implement all abstract methods."""
+        # Create a subclass that doesn't implement all abstract methods
+        class IncompleteModel(BaseModel):
+            pass
+
         with pytest.raises(TypeError):
-            BaseModel(model_config)
-    
-    def test_incomplete_implementation_raises_error(self):
-        """Test that an incomplete implementation raises TypeError."""
+            IncompleteModel()
+
+        # Create a subclass that implements only some abstract methods
+        class PartialModel(BaseModel):
+            def fit(self, X, y):
+                pass
+
+            def predict(self, X):
+                pass
+
         with pytest.raises(TypeError):
-            IncompleteModel(ModelConfig())
-    
-    def test_initialization(self, concrete_model, model_config):
-        """Test that the model is initialized correctly."""
-        assert concrete_model.config == model_config
-        assert concrete_model.model_name == "ConcreteModel"
-        assert concrete_model.model_version == "1.0.0"
-        assert concrete_model.trained is True  # We set this in the fixture
-        assert len(concrete_model.feature_names) == 10
-        assert concrete_model.classes_ is not None
-    
-    def test_fit_method(self, concrete_model, feature_vector, target_labels):
-        """Test the fit method."""
-        # Reset trained flag for this test
-        concrete_model.trained = False
-        
-        result = concrete_model.fit(feature_vector, target_labels)
-        
-        # Check that the model's fit method was called with the correct arguments
-        concrete_model.model.fit.assert_called_once_with(feature_vector, target_labels)
-        
-        # Check that the trained flag was set
-        assert concrete_model.trained is True
-        
-        # Check that the method returns self for method chaining
-        assert result is concrete_model
-    
-    def test_predict_method(self, concrete_model, feature_vector):
-        """Test the predict method."""
-        predictions = concrete_model.predict(feature_vector)
-        
-        # Check that the model's predict method was called with the correct arguments
-        concrete_model.model.predict.assert_called_once_with(feature_vector)
-        
-        # Check that the predictions have the expected shape
-        assert len(predictions) == 3
-        assert predictions[0] == "application"
-    
-    def test_predict_proba_method(self, concrete_model, feature_vector):
-        """Test the predict_proba method."""
-        probabilities = concrete_model.predict_proba(feature_vector)
-        
-        # Check that the model's predict_proba method was called with the correct arguments
-        concrete_model.model.predict_proba.assert_called_once_with(feature_vector)
-        
-        # Check that the probabilities have the expected shape
-        assert probabilities.shape == (3, 4)
-        assert np.isclose(probabilities[0, 0], 0.8)
-    
-    def test_evaluate_method(self, concrete_model, feature_vector, target_labels):
-        """Test the evaluate method."""
-        metrics = concrete_model.evaluate(feature_vector, target_labels)
-        
-        # Check that the metrics have the expected structure
-        assert 'accuracy' in metrics
-        assert 'precision' in metrics
-        assert 'recall' in metrics
-        assert 'f1_score' in metrics
-        assert 'confusion_matrix' in metrics
-        
-        # Check specific metric values
-        assert metrics['accuracy'] == 0.95
-        assert metrics['precision']['application'] == 0.94
-        assert metrics['recall']['tax_return'] == 0.97
-    
-    def test_predict_with_confidence(self, concrete_model, feature_vector):
-        """Test the predict_with_confidence method."""
-        results = concrete_model.predict_with_confidence(feature_vector)
-        
-        # Check that the results have the expected structure
-        assert len(results) == 3
-        assert isinstance(results[0], ClassificationResult)
-        assert hasattr(results[0], 'document_type')
-        assert hasattr(results[0], 'confidence')
-        assert hasattr(results[0], 'model_name')
-        assert hasattr(results[0], 'model_version')
-        assert hasattr(results[0], 'prediction_time')
-        assert hasattr(results[0], 'class_probabilities')
-        
-        # Check specific result values
-        assert results[0].document_type == DocumentType.APPLICATION
-        assert results[0].confidence.value == 0.8
-        assert results[0].confidence.threshold == 0.75
-        assert results[0].confidence.requires_review is False
-        assert results[0].model_name == "ConcreteModel"
-        assert results[0].model_version == "1.0.0"
-    
-    def test_predict_with_confidence_requires_review(self, concrete_model, feature_vector):
-        """Test that predict_with_confidence sets requires_review correctly."""
-        # Modify the probabilities to be below the threshold
-        concrete_model.model.predict_proba.return_value = np.array([
-            [0.7, 0.1, 0.1, 0.1],  # Below threshold
-            [0.8, 0.1, 0.05, 0.05],  # Above threshold
-            [0.6, 0.2, 0.1, 0.1]   # Below threshold
-        ])
-        
-        results = concrete_model.predict_with_confidence(feature_vector)
-        
-        # Check that requires_review is set correctly
-        assert results[0].confidence.requires_review is True
-        assert results[1].confidence.requires_review is False
-        assert results[2].confidence.requires_review is True
-    
-    def test_predict_with_confidence_untrained_model(self, model_config, feature_vector):
-        """Test that predict_with_confidence raises an error for untrained models."""
-        model = ConcreteModel(model_config)
-        model.trained = False
-        
-        with pytest.raises(RuntimeError, match="Model has not been trained"):
-            model.predict_with_confidence(feature_vector)
-    
-    def test_save_method(self, concrete_model, tmp_path):
-        """Test the save method."""
-        model_path = os.path.join(tmp_path, "test_model.pkl")
-        
-        with patch("pickle.dump") as mock_dump:
-            result = concrete_model.save(model_path)
-        
-        # Check that pickle.dump was called
-        mock_dump.assert_called_once()
-        
-        # Check that the result is a success
-        assert result.is_success
-        assert result.value == model_path
-    
-    def test_save_method_untrained_model(self, model_config, tmp_path):
-        """Test that save raises an error for untrained models."""
-        model = ConcreteModel(model_config)
-        model.trained = False
-        model_path = os.path.join(tmp_path, "test_model.pkl")
-        
-        result = model.save(model_path)
-        
-        # Check that the result is a failure
-        assert result.is_failure
-        assert "Model has not been trained" in str(result.error)
-    
-    def test_load_method(self, concrete_model, model_config, tmp_path):
-        """Test the load method."""
-        model_path = os.path.join(tmp_path, "test_model.pkl")
-        
-        # Mock data to be loaded
-        model_data = {
-            'model': MagicMock(),
-            'model_name': "ConcreteModel",
-            'model_version': "1.0.0",
-            'classes_': np.array(["application", "tax_return"]),
-            'feature_names': ["feature_1", "feature_2"],
-            'config': model_config,
-            'trained': True
-        }
-        
-        with patch("pickle.load", return_value=model_data):
-            with patch("builtins.open", create=True):
-                result = ConcreteModel.load(model_path)
-        
-        # Check that the result is a success
-        assert result.is_success
-        assert isinstance(result.value, ConcreteModel)
-        assert result.value.model_name == "ConcreteModel"
-        assert result.value.model_version == "1.0.0"
-        assert result.value.trained is True
-    
-    def test_load_method_error(self, tmp_path):
-        """Test that load handles errors correctly."""
-        model_path = os.path.join(tmp_path, "nonexistent_model.pkl")
-        
-        with patch("builtins.open", side_effect=FileNotFoundError("File not found")):
-            result = ConcreteModel.load(model_path)
-        
-        # Check that the result is a failure
-        assert result.is_failure
-        assert "Failed to load model" in str(result.error)
-    
-    def test_get_parameters(self, concrete_model):
-        """Test the get_parameters method."""
-        # Mock the model's get_params method
-        concrete_model.model.get_params.return_value = {"param1": 1, "param2": "value"}
-        
-        params = concrete_model.get_parameters()
-        
-        # Check that the parameters have the expected structure
-        assert "param1" in params
-        assert "param2" in params
-        assert "model_name" in params
-        assert "model_version" in params
-        assert "trained" in params
-        assert "n_features" in params
-        assert "n_classes" in params
-        
-        # Check specific parameter values
-        assert params["param1"] == 1
-        assert params["param2"] == "value"
-        assert params["model_name"] == "ConcreteModel"
-        assert params["model_version"] == "1.0.0"
-        assert params["trained"] is True
-        assert params["n_features"] == 10
-        assert params["n_classes"] == 4
-    
-    def test_validate_input_valid_data(self, concrete_model, feature_vector, target_labels):
-        """Test that _validate_input accepts valid data."""
-        # This should not raise an exception
-        concrete_model._validate_input(feature_vector, target_labels)
-    
-    def test_validate_input_none_features(self, concrete_model, target_labels):
-        """Test that _validate_input rejects None features."""
-        with pytest.raises(ValueError, match="Feature vectors \(X\) cannot be None"):
-            concrete_model._validate_input(None, target_labels)
-    
-    def test_validate_input_invalid_features_shape(self, concrete_model, target_labels):
-        """Test that _validate_input rejects features with invalid shape."""
+            PartialModel()
+
+        # Create a complete subclass implementing all abstract methods
+        class CompleteModel(BaseModel):
+            def fit(self, X, y):
+                return self
+
+            def predict(self, X):
+                return np.array([0])
+
+            def predict_proba(self, X):
+                return np.array([[0.9, 0.1]])
+
+            def evaluate(self, X, y):
+                return {"accuracy": 0.95}
+
+            def save(self, filepath):
+                pass
+
+            @classmethod
+            def load(cls, filepath):
+                return cls()
+
+        # This should not raise an error
+        model = CompleteModel()
+        assert isinstance(model, BaseModel)
+
+
+class TestBaseModelValidateInput:
+    """Test suite for the validate_input method of BaseModel."""
+
+    @pytest.fixture
+    def mock_model(self):
+        """Create a mock model that inherits from BaseModel for testing."""
+        class MockModel(BaseModel):
+            def fit(self, X, y):
+                return self
+
+            def predict(self, X):
+                return np.array([0])
+
+            def predict_proba(self, X):
+                return np.array([[0.9, 0.1]])
+
+            def evaluate(self, X, y):
+                return {"accuracy": 0.95}
+
+            def save(self, filepath):
+                pass
+
+            @classmethod
+            def load(cls, filepath):
+                return cls()
+
+        return MockModel()
+
+    def test_validate_input_valid_data(self, mock_model):
+        """Test validate_input with valid input data."""
+        X = np.array([[1, 2, 3], [4, 5, 6]])
+        y = np.array([0, 1])
+
+        X_validated, y_validated = mock_model.validate_input(X, y)
+
+        assert np.array_equal(X_validated, X)
+        assert np.array_equal(y_validated, y)
+
+    def test_validate_input_list_conversion(self, mock_model):
+        """Test validate_input converts lists to numpy arrays."""
+        X = [[1, 2, 3], [4, 5, 6]]
+        y = [0, 1]
+
+        X_validated, y_validated = mock_model.validate_input(X, y)
+
+        assert isinstance(X_validated, np.ndarray)
+        assert isinstance(y_validated, np.ndarray)
+        assert np.array_equal(X_validated, np.array(X))
+        assert np.array_equal(y_validated, np.array(y))
+
+    def test_validate_input_invalid_X_dimension(self, mock_model):
+        """Test validate_input raises error for X with invalid dimensions."""
         # 1D array instead of 2D
-        invalid_features = np.array([1, 2, 3])
+        X = np.array([1, 2, 3])
+        y = np.array([0])
+
+        with pytest.raises(ValueError, match=r"X must be a 2D array"):
+            mock_model.validate_input(X, y)
+
+        # 3D array instead of 2D
+        X = np.array([[[1, 2], [3, 4]], [[5, 6], [7, 8]]])
+        with pytest.raises(ValueError, match=r"X must be a 2D array"):
+            mock_model.validate_input(X, y)
+
+    def test_validate_input_invalid_y_dimension(self, mock_model):
+        """Test validate_input raises error for y with invalid dimensions."""
+        X = np.array([[1, 2, 3], [4, 5, 6]])
         
-        with pytest.raises(ValueError, match="Feature vectors \(X\) must be a 2D array-like object"):
-            concrete_model._validate_input(invalid_features, target_labels)
-    
-    def test_validate_input_none_labels(self, concrete_model, feature_vector):
-        """Test that _validate_input rejects None labels for training."""
-        with pytest.raises(ValueError, match="Target labels \(y\) cannot be None for training"):
-            concrete_model._validate_input(feature_vector, None)
-    
-    def test_validate_input_mismatched_samples(self, concrete_model, feature_vector):
-        """Test that _validate_input rejects mismatched sample counts."""
-        # 4 labels but only 3 feature vectors
-        mismatched_labels = np.array(["application", "tax_return", "bank_statement", "other"])
+        # 2D array instead of 1D
+        y = np.array([[0], [1]])
+
+        with pytest.raises(ValueError, match=r"y must be a 1D array"):
+            mock_model.validate_input(X, y)
+
+    def test_validate_input_mismatched_samples(self, mock_model):
+        """Test validate_input raises error when X and y have different sample counts."""
+        X = np.array([[1, 2, 3], [4, 5, 6]])
+        y = np.array([0, 1, 2])  # 3 samples instead of 2
+
+        with pytest.raises(ValueError, match=r"X and y must have the same number of samples"):
+            mock_model.validate_input(X, y)
+
+    def test_validate_input_X_only(self, mock_model):
+        """Test validate_input works with only X provided (no y)."""
+        X = np.array([[1, 2, 3], [4, 5, 6]])
+
+        X_validated, y_validated = mock_model.validate_input(X)
+
+        assert np.array_equal(X_validated, X)
+        assert y_validated is None
+
+    def test_validate_input_unconvertible_X(self, mock_model):
+        """Test validate_input raises error for X that can't be converted to numpy array."""
+        X = ["string1", "string2"]  # Can't be converted to numeric numpy array
+
+        with pytest.raises(ValueError, match=r"X must be convertible to a numpy array"):
+            mock_model.validate_input(X)
+
+    def test_validate_input_unconvertible_y(self, mock_model):
+        """Test validate_input raises error for y that can't be converted to numpy array."""
+        X = np.array([[1, 2, 3], [4, 5, 6]])
+        y = ["class1", "class2"]  # Can't be converted to numeric numpy array
+
+        with pytest.raises(ValueError, match=r"y must be convertible to a numpy array"):
+            mock_model.validate_input(X, y)
+
+
+class TestBaseModelUtilityMethods:
+    """Test suite for the utility methods of BaseModel."""
+
+    @pytest.fixture
+    def mock_model(self):
+        """Create a mock model that inherits from BaseModel for testing."""
+        class MockModel(BaseModel):
+            def __init__(self, **kwargs):
+                super().__init__(**kwargs)
+                self.is_fitted = True
+                self.classes_ = np.array(["class1", "class2"])
+                self.feature_names_ = ["feature1", "feature2", "feature3"]
+
+            def fit(self, X, y):
+                return self
+
+            def predict(self, X):
+                return np.array([0, 1])
+
+            def predict_proba(self, X):
+                return np.array([[0.8, 0.2], [0.3, 0.7]])
+
+            def evaluate(self, X, y):
+                return {"accuracy": 0.95}
+
+            def save(self, filepath):
+                pass
+
+            @classmethod
+            def load(cls, filepath):
+                return cls()
+
+        return MockModel(confidence_threshold=0.75)
+
+    def test_get_feature_importance_default(self, mock_model):
+        """Test that get_feature_importance returns None by default."""
+        assert mock_model.get_feature_importance() is None
+
+    def test_get_params(self, mock_model):
+        """Test that get_params returns the model parameters."""
+        params = mock_model.get_params()
+        assert isinstance(params, dict)
+        assert params["confidence_threshold"] == 0.75
+
+    def test_set_params(self, mock_model):
+        """Test that set_params updates the model parameters."""
+        mock_model.set_params(confidence_threshold=0.9, new_param="value")
+        params = mock_model.get_params()
         
-        with pytest.raises(ValueError, match="Number of samples in X \(3\) and y \(4\) do not match"):
-            concrete_model._validate_input(feature_vector, mismatched_labels)
-    
-    def test_validate_input_for_prediction_untrained_model(self, model_config, feature_vector):
-        """Test that _validate_input rejects prediction on untrained models."""
-        model = ConcreteModel(model_config)
-        model.trained = False
+        assert params["confidence_threshold"] == 0.9
+        assert params["new_param"] == "value"
+
+    def test_get_confidence_scores(self, mock_model):
+        """Test that get_confidence_scores returns the maximum probability for each sample."""
+        probabilities = np.array([[0.8, 0.2], [0.3, 0.7]])
+        confidence_scores = mock_model.get_confidence_scores(probabilities)
         
-        with pytest.raises(RuntimeError, match="Model has not been trained"):
-            model._validate_input(feature_vector, for_prediction=True)
-    
-    def test_convert_to_document_type_from_string(self, concrete_model):
-        """Test that _convert_to_document_type converts strings correctly."""
-        doc_type = concrete_model._convert_to_document_type("application")
-        assert doc_type == DocumentType.APPLICATION
+        assert np.array_equal(confidence_scores, np.array([0.8, 0.7]))
+
+    def test_is_prediction_confident(self, mock_model):
+        """Test that is_prediction_confident correctly applies the confidence threshold."""
+        # Should be confident (0.8 > 0.75)
+        assert mock_model.is_prediction_confident(0.8) is True
         
-        doc_type = concrete_model._convert_to_document_type("TAX_RETURN")
-        assert doc_type == DocumentType.TAX_RETURN
-    
-    def test_convert_to_document_type_from_int(self, concrete_model):
-        """Test that _convert_to_document_type converts integers correctly."""
-        # This assumes DocumentType enum values are integers
-        # If they're strings, this test would need to be adjusted
-        with patch.object(DocumentType, "__call__", return_value=DocumentType.APPLICATION):
-            doc_type = concrete_model._convert_to_document_type(1)
-            assert doc_type == DocumentType.APPLICATION
-    
-    def test_convert_to_document_type_from_enum(self, concrete_model):
-        """Test that _convert_to_document_type handles enum values correctly."""
-        doc_type = concrete_model._convert_to_document_type(DocumentType.APPLICATION)
-        assert doc_type == DocumentType.APPLICATION
-    
-    def test_convert_to_document_type_invalid(self, concrete_model):
-        """Test that _convert_to_document_type handles invalid values gracefully."""
-        # Should default to OTHER for invalid values
-        doc_type = concrete_model._convert_to_document_type("invalid_type")
-        assert doc_type == DocumentType.OTHER
+        # Should be confident (0.75 == 0.75)
+        assert mock_model.is_prediction_confident(0.75) is True
+        
+        # Should not be confident (0.7 < 0.75)
+        assert mock_model.is_prediction_confident(0.7) is False
+
+    @patch("document_service.src.models.base_model.cross_val_score")
+    def test_cross_validate(self, mock_cross_val_score, mock_model):
+        """Test that cross_validate correctly performs cross-validation."""
+        X = np.array([[1, 2, 3], [4, 5, 6], [7, 8, 9], [10, 11, 12]])
+        y = np.array([0, 1, 0, 1])
+        
+        # Mock the cross_val_score function to return predefined scores
+        mock_cross_val_score.return_value = np.array([0.95, 0.90, 0.85])
+        
+        cv_metrics = mock_model.cross_validate(X, y, cv=3)
+        
+        # Verify cross_val_score was called with correct parameters
+        mock_cross_val_score.assert_called_once_with(mock_model, X, y, cv=3, scoring="accuracy")
+        
+        # Verify the returned metrics
+        assert cv_metrics["cv_accuracy_mean"] == 0.9  # (0.95 + 0.90 + 0.85) / 3
+        assert cv_metrics["cv_accuracy_std"] == pytest.approx(0.05, abs=1e-6)  # std of [0.95, 0.90, 0.85]
+        assert cv_metrics["cv_accuracy_min"] == 0.85
+        assert cv_metrics["cv_accuracy_max"] == 0.95
+        assert cv_metrics["cv_folds"] == 3
+
+    @patch("src.models.base_model.cross_val_score")
+    def test_cross_validate_below_threshold(self, mock_cross_val_score, mock_model, caplog):
+        """Test that cross_validate logs a warning when accuracy is below 99%."""
+        X = np.array([[1, 2, 3], [4, 5, 6], [7, 8, 9], [10, 11, 12]])
+        y = np.array([0, 1, 0, 1])
+        
+        # Mock the cross_val_score function to return scores below 99%
+        mock_cross_val_score.return_value = np.array([0.95, 0.90, 0.85])
+        
+        cv_metrics = mock_model.cross_validate(X, y, cv=3)
+        
+        # Verify a warning was logged
+        assert any("below the required 99% threshold" in record.message for record in caplog.records)
+
+    @patch("src.models.base_model.accuracy_score")
+    @patch("src.models.base_model.precision_recall_fscore_support")
+    @patch("src.models.base_model.confusion_matrix")
+    @patch("src.models.base_model.roc_auc_score")
+    def test_calculate_metrics(self, mock_roc_auc, mock_cm, mock_prf, mock_accuracy, mock_model, caplog):
+        """Test that calculate_metrics correctly calculates classification metrics."""
+        y_true = np.array([0, 1, 0, 1])
+        y_pred = np.array([0, 1, 0, 0])  # One misclassification
+        y_prob = np.array([[0.8, 0.2], [0.3, 0.7], [0.9, 0.1], [0.6, 0.4]])  # Probabilities for binary classification
+        
+        # Mock the metric functions
+        mock_accuracy.return_value = 0.75  # 3/4 correct
+        mock_prf.return_value = (0.8, 0.7, 0.75, None)  # precision, recall, f1, support
+        mock_cm.return_value = np.array([[2, 0], [1, 1]])  # Confusion matrix
+        mock_roc_auc.return_value = 0.85  # AUC score
+        
+        metrics = mock_model.calculate_metrics(y_true, y_pred, y_prob)
+        
+        # Verify the metric functions were called correctly
+        mock_accuracy.assert_called_once_with(y_true, y_pred)
+        mock_prf.assert_called_once_with(y_true, y_pred, average="weighted")
+        mock_cm.assert_called_once_with(y_true, y_pred)
+        mock_roc_auc.assert_called_once_with(y_true, y_prob[:, 1])
+        
+        # Verify the returned metrics
+        assert metrics["accuracy"] == 0.75
+        assert metrics["precision"] == 0.8
+        assert metrics["recall"] == 0.7
+        assert metrics["f1_score"] == 0.75
+        assert metrics["confusion_matrix"] == [[2, 0], [1, 1]]
+        assert metrics["roc_auc"] == 0.85
+        
+        # Verify a warning was logged for accuracy below 99%
+        assert any("below the required 99% threshold" in record.message for record in caplog.records)
+
+    @patch("src.models.base_model.accuracy_score")
+    @patch("src.models.base_model.precision_recall_fscore_support")
+    @patch("src.models.base_model.confusion_matrix")
+    def test_calculate_metrics_without_probabilities(self, mock_cm, mock_prf, mock_accuracy, mock_model):
+        """Test that calculate_metrics works without probability scores."""
+        y_true = np.array([0, 1, 0, 1])
+        y_pred = np.array([0, 1, 0, 0])  # One misclassification
+        
+        # Mock the metric functions
+        mock_accuracy.return_value = 0.75  # 3/4 correct
+        mock_prf.return_value = (0.8, 0.7, 0.75, None)  # precision, recall, f1, support
+        mock_cm.return_value = np.array([[2, 0], [1, 1]])  # Confusion matrix
+        
+        metrics = mock_model.calculate_metrics(y_true, y_pred)  # No y_prob provided
+        
+        # Verify the returned metrics (should not include roc_auc)
+        assert "roc_auc" not in metrics
+        assert metrics["accuracy"] == 0.75
+        assert metrics["precision"] == 0.8
+        assert metrics["recall"] == 0.7
+        assert metrics["f1_score"] == 0.75
+
+    @patch("src.models.base_model.roc_auc_score")
+    def test_calculate_metrics_multiclass(self, mock_roc_auc, mock_model):
+        """Test that calculate_metrics correctly handles multiclass classification."""
+        y_true = np.array([0, 1, 2, 0])
+        y_pred = np.array([0, 1, 1, 0])  # One misclassification
+        y_prob = np.array([
+            [0.8, 0.1, 0.1],  # Class 0
+            [0.1, 0.8, 0.1],  # Class 1
+            [0.2, 0.6, 0.2],  # Misclassified as 1 instead of 2
+            [0.7, 0.2, 0.1]   # Class 0
+        ])
+        
+        # Mock the ROC AUC score for multiclass
+        mock_roc_auc.return_value = 0.82
+        
+        # Patch the other metric functions to return realistic values
+        with patch("src.models.base_model.accuracy_score", return_value=0.75), \
+             patch("src.models.base_model.precision_recall_fscore_support", 
+                   return_value=(np.array([0.8, 0.7, 0.0]), np.array([1.0, 0.5, 0.0]), np.array([0.89, 0.58, 0.0]), None)), \
+             patch("src.models.base_model.confusion_matrix", 
+                   return_value=np.array([[2, 0, 0], [0, 1, 1], [0, 0, 0]])):
+            
+            metrics = mock_model.calculate_metrics(y_true, y_pred, y_prob)
+        
+        # Verify ROC AUC was calculated correctly for multiclass
+        mock_roc_auc.assert_called_once_with(y_true, y_prob, multi_class="ovr", average="weighted")
+        assert metrics["roc_auc"] == 0.82
+
+    def test_repr(self, mock_model):
+        """Test the string representation of the model."""
+        repr_str = repr(mock_model)
+        
+        # The representation should include the class name, parameters, and fitted status
+        assert "MockModel" in repr_str
+        assert "confidence_threshold=0.75" in repr_str
+        assert "fitted" in repr_str  # The mock model has is_fitted=True
+
+
+class TestBaseModelImplementation:
+    """Test suite for a complete implementation of BaseModel."""
+
+    @pytest.fixture
+    def complete_model_class(self):
+        """Create a complete implementation of BaseModel for testing."""
+        class CompleteModel(BaseModel):
+            def __init__(self, **kwargs):
+                super().__init__(**kwargs)
+                self._model = MagicMock()
+                self.is_fitted = False
+                self.classes_ = None
+                self.feature_names_ = None
+
+            def fit(self, X, y):
+                X, y = self.validate_input(X, y)
+                self._model.fit(X, y)
+                self.is_fitted = True
+                self.classes_ = np.unique(y)
+                self.feature_names_ = [f"feature_{i}" for i in range(X.shape[1])]
+                return self
+
+            def predict(self, X):
+                X, _ = self.validate_input(X)
+                if not self.is_fitted:
+                    raise ValueError("Model is not fitted yet.")
+                return self._model.predict(X)
+
+            def predict_proba(self, X):
+                X, _ = self.validate_input(X)
+                if not self.is_fitted:
+                    raise ValueError("Model is not fitted yet.")
+                return self._model.predict_proba(X)
+
+            def evaluate(self, X, y):
+                X, y = self.validate_input(X, y)
+                if not self.is_fitted:
+                    raise ValueError("Model is not fitted yet.")
+                y_pred = self.predict(X)
+                y_prob = self.predict_proba(X)
+                return self.calculate_metrics(y, y_pred, y_prob)
+
+            def save(self, filepath):
+                # Mock implementation
+                pass
+
+            @classmethod
+            def load(cls, filepath):
+                # Mock implementation
+                return cls()
+
+            def get_feature_importance(self):
+                if not self.is_fitted:
+                    return None
+                # Mock feature importance
+                return {name: 1.0/len(self.feature_names_) for name in self.feature_names_}
+
+        return CompleteModel
+
+    def test_complete_implementation(self, complete_model_class):
+        """Test a complete implementation of BaseModel."""
+        model = complete_model_class()
+        
+        # Test that the model can be instantiated
+        assert isinstance(model, BaseModel)
+        
+        # Test that the model is not fitted initially
+        assert model.is_fitted is False
+        assert model.classes_ is None
+        assert model.feature_names_ is None
+        
+        # Test that the model can be fitted
+        X = np.array([[1, 2], [3, 4], [5, 6]])
+        y = np.array([0, 1, 0])
+        
+        # Mock the underlying model's predict and predict_proba methods
+        model._model.predict.return_value = np.array([0, 1, 0])
+        model._model.predict_proba.return_value = np.array([[0.8, 0.2], [0.3, 0.7], [0.9, 0.1]])
+        
+        # Fit the model
+        model.fit(X, y)
+        
+        # Test that the model is now fitted
+        assert model.is_fitted is True
+        assert np.array_equal(model.classes_, np.array([0, 1]))
+        assert model.feature_names_ == ["feature_0", "feature_1"]
+        
+        # Test prediction methods
+        y_pred = model.predict(X)
+        assert np.array_equal(y_pred, np.array([0, 1, 0]))
+        
+        y_prob = model.predict_proba(X)
+        assert np.array_equal(y_prob, np.array([[0.8, 0.2], [0.3, 0.7], [0.9, 0.1]]))
+        
+        # Test evaluation
+        with patch.object(model, "calculate_metrics", return_value={"accuracy": 1.0}):
+            metrics = model.evaluate(X, y)
+            assert metrics["accuracy"] == 1.0
+        
+        # Test feature importance
+        importance = model.get_feature_importance()
+        assert importance == {"feature_0": 0.5, "feature_1": 0.5}
+
+    def test_unfitted_model_behavior(self, complete_model_class):
+        """Test behavior of an unfitted model."""
+        model = complete_model_class()
+        X = np.array([[1, 2], [3, 4]])
+        y = np.array([0, 1])
+        
+        # Test that predict raises an error if the model is not fitted
+        with pytest.raises(ValueError, match=r"Model is not fitted yet"):
+            model.predict(X)
+        
+        # Test that predict_proba raises an error if the model is not fitted
+        with pytest.raises(ValueError, match=r"Model is not fitted yet"):
+            model.predict_proba(X)
+        
+        # Test that evaluate raises an error if the model is not fitted
+        with pytest.raises(ValueError, match=r"Model is not fitted yet"):
+            model.evaluate(X, y)
+        
+        # Test that get_feature_importance returns None if the model is not fitted
+        assert model.get_feature_importance() is None
