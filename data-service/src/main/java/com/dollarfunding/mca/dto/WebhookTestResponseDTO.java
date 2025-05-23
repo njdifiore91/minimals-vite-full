@@ -9,16 +9,16 @@ import java.time.LocalDateTime;
 /**
  * DTO class for returning webhook test results to clients.
  * This class provides comprehensive information about webhook test results
- * including delivery status, response details, and error information.
+ * with appropriate serialization for API responses.
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class WebhookTestResponseDTO {
 
     /**
-     * Indicates whether the webhook test was successful.
+     * Whether the webhook test was successful.
      */
     @JsonProperty("success")
-    private boolean success;
+    private Boolean success;
 
     /**
      * Timestamp when the webhook was delivered.
@@ -28,13 +28,13 @@ public class WebhookTestResponseDTO {
     private LocalDateTime deliveryTimestamp;
 
     /**
-     * HTTP response code received from the webhook endpoint.
+     * HTTP status code from the webhook delivery.
      */
     @JsonProperty("response_code")
     private Integer responseCode;
 
     /**
-     * Response body received from the webhook endpoint.
+     * Response body from the webhook delivery.
      */
     @JsonProperty("response_body")
     private String responseBody;
@@ -46,28 +46,10 @@ public class WebhookTestResponseDTO {
     private String errorMessage;
 
     /**
-     * Detailed error information if available.
-     */
-    @JsonProperty("error_details")
-    private String errorDetails;
-
-    /**
-     * Time taken to deliver the webhook in milliseconds.
-     */
-    @JsonProperty("delivery_time_ms")
-    private Long deliveryTimeMs;
-
-    /**
-     * Indicates whether the HMAC signature was verified successfully.
+     * Whether the HMAC signature was verified successfully.
      */
     @JsonProperty("signature_verified")
     private Boolean signatureVerified;
-
-    /**
-     * The HMAC signature that was generated for the test.
-     */
-    @JsonProperty("generated_signature")
-    private String generatedSignature;
 
     /**
      * The name of the signature header used (e.g., "X-Webhook-Signature").
@@ -76,151 +58,135 @@ public class WebhookTestResponseDTO {
     private String signatureHeader;
 
     /**
+     * The HMAC signature that was sent with the webhook.
+     */
+    @JsonProperty("signature_sent")
+    private String signatureSent;
+
+    /**
+     * The time it took to deliver the webhook in milliseconds.
+     */
+    @JsonProperty("delivery_time_ms")
+    private Long deliveryTimeMs;
+
+    /**
+     * The URL where the webhook was delivered.
+     */
+    @JsonProperty("endpoint_url")
+    private String endpointUrl;
+
+    /**
+     * The event type that triggered the webhook.
+     */
+    @JsonProperty("event_type")
+    private String eventType;
+
+    /**
      * Default constructor.
      */
     public WebhookTestResponseDTO() {
     }
 
     /**
-     * Constructor for successful webhook test.
+     * Constructor with all fields.
      *
-     * @param deliveryTimestamp The timestamp when the webhook was delivered
-     * @param responseCode      The HTTP response code received
-     * @param responseBody      The response body received
-     * @param deliveryTimeMs    The time taken to deliver the webhook in milliseconds
-     * @param signatureVerified Whether the signature was verified successfully
-     * @param generatedSignature The HMAC signature that was generated
+     * @param success           Whether the webhook test was successful
+     * @param deliveryTimestamp Timestamp when the webhook was delivered
+     * @param responseCode      HTTP status code from the webhook delivery
+     * @param responseBody      Response body from the webhook delivery
+     * @param errorMessage      Error message if the webhook delivery failed
+     * @param signatureVerified Whether the HMAC signature was verified successfully
      * @param signatureHeader   The name of the signature header used
+     * @param signatureSent     The HMAC signature that was sent with the webhook
+     * @param deliveryTimeMs    The time it took to deliver the webhook in milliseconds
+     * @param endpointUrl       The URL where the webhook was delivered
+     * @param eventType         The event type that triggered the webhook
      */
-    public WebhookTestResponseDTO(LocalDateTime deliveryTimestamp, Integer responseCode, String responseBody,
-                                 Long deliveryTimeMs, Boolean signatureVerified, String generatedSignature,
-                                 String signatureHeader) {
-        this.success = true;
+    public WebhookTestResponseDTO(Boolean success, LocalDateTime deliveryTimestamp, Integer responseCode,
+                                 String responseBody, String errorMessage, Boolean signatureVerified,
+                                 String signatureHeader, String signatureSent, Long deliveryTimeMs,
+                                 String endpointUrl, String eventType) {
+        this.success = success;
         this.deliveryTimestamp = deliveryTimestamp;
         this.responseCode = responseCode;
         this.responseBody = responseBody;
-        this.deliveryTimeMs = deliveryTimeMs;
-        this.signatureVerified = signatureVerified;
-        this.generatedSignature = generatedSignature;
-        this.signatureHeader = signatureHeader;
-    }
-
-    /**
-     * Constructor for failed webhook test.
-     *
-     * @param errorMessage The error message
-     * @param errorDetails Detailed error information
-     * @param signatureVerified Whether the signature was verified successfully
-     * @param generatedSignature The HMAC signature that was generated
-     * @param signatureHeader   The name of the signature header used
-     */
-    public WebhookTestResponseDTO(String errorMessage, String errorDetails, Boolean signatureVerified,
-                                 String generatedSignature, String signatureHeader) {
-        this.success = false;
-        this.deliveryTimestamp = LocalDateTime.now();
         this.errorMessage = errorMessage;
-        this.errorDetails = errorDetails;
         this.signatureVerified = signatureVerified;
-        this.generatedSignature = generatedSignature;
         this.signatureHeader = signatureHeader;
+        this.signatureSent = signatureSent;
+        this.deliveryTimeMs = deliveryTimeMs;
+        this.endpointUrl = endpointUrl;
+        this.eventType = eventType;
     }
 
     /**
      * @return Whether the webhook test was successful
      */
-    public boolean isSuccess() {
+    public Boolean getSuccess() {
         return success;
     }
 
     /**
      * @param success Whether the webhook test was successful
      */
-    public void setSuccess(boolean success) {
+    public void setSuccess(Boolean success) {
         this.success = success;
     }
 
     /**
-     * @return The timestamp when the webhook was delivered
+     * @return Timestamp when the webhook was delivered
      */
     public LocalDateTime getDeliveryTimestamp() {
         return deliveryTimestamp;
     }
 
     /**
-     * @param deliveryTimestamp The timestamp when the webhook was delivered
+     * @param deliveryTimestamp Timestamp when the webhook was delivered
      */
     public void setDeliveryTimestamp(LocalDateTime deliveryTimestamp) {
         this.deliveryTimestamp = deliveryTimestamp;
     }
 
     /**
-     * @return The HTTP response code received
+     * @return HTTP status code from the webhook delivery
      */
     public Integer getResponseCode() {
         return responseCode;
     }
 
     /**
-     * @param responseCode The HTTP response code received
+     * @param responseCode HTTP status code from the webhook delivery
      */
     public void setResponseCode(Integer responseCode) {
         this.responseCode = responseCode;
     }
 
     /**
-     * @return The response body received
+     * @return Response body from the webhook delivery
      */
     public String getResponseBody() {
         return responseBody;
     }
 
     /**
-     * @param responseBody The response body received
+     * @param responseBody Response body from the webhook delivery
      */
     public void setResponseBody(String responseBody) {
         this.responseBody = responseBody;
     }
 
     /**
-     * @return The error message if the webhook delivery failed
+     * @return Error message if the webhook delivery failed
      */
     public String getErrorMessage() {
         return errorMessage;
     }
 
     /**
-     * @param errorMessage The error message if the webhook delivery failed
+     * @param errorMessage Error message if the webhook delivery failed
      */
     public void setErrorMessage(String errorMessage) {
         this.errorMessage = errorMessage;
-    }
-
-    /**
-     * @return Detailed error information if available
-     */
-    public String getErrorDetails() {
-        return errorDetails;
-    }
-
-    /**
-     * @param errorDetails Detailed error information if available
-     */
-    public void setErrorDetails(String errorDetails) {
-        this.errorDetails = errorDetails;
-    }
-
-    /**
-     * @return The time taken to deliver the webhook in milliseconds
-     */
-    public Long getDeliveryTimeMs() {
-        return deliveryTimeMs;
-    }
-
-    /**
-     * @param deliveryTimeMs The time taken to deliver the webhook in milliseconds
-     */
-    public void setDeliveryTimeMs(Long deliveryTimeMs) {
-        this.deliveryTimeMs = deliveryTimeMs;
     }
 
     /**
@@ -238,20 +204,6 @@ public class WebhookTestResponseDTO {
     }
 
     /**
-     * @return The HMAC signature that was generated for the test
-     */
-    public String getGeneratedSignature() {
-        return generatedSignature;
-    }
-
-    /**
-     * @param generatedSignature The HMAC signature that was generated for the test
-     */
-    public void setGeneratedSignature(String generatedSignature) {
-        this.generatedSignature = generatedSignature;
-    }
-
-    /**
      * @return The name of the signature header used
      */
     public String getSignatureHeader() {
@@ -266,38 +218,94 @@ public class WebhookTestResponseDTO {
     }
 
     /**
+     * @return The HMAC signature that was sent with the webhook
+     */
+    public String getSignatureSent() {
+        return signatureSent;
+    }
+
+    /**
+     * @param signatureSent The HMAC signature that was sent with the webhook
+     */
+    public void setSignatureSent(String signatureSent) {
+        this.signatureSent = signatureSent;
+    }
+
+    /**
+     * @return The time it took to deliver the webhook in milliseconds
+     */
+    public Long getDeliveryTimeMs() {
+        return deliveryTimeMs;
+    }
+
+    /**
+     * @param deliveryTimeMs The time it took to deliver the webhook in milliseconds
+     */
+    public void setDeliveryTimeMs(Long deliveryTimeMs) {
+        this.deliveryTimeMs = deliveryTimeMs;
+    }
+
+    /**
+     * @return The URL where the webhook was delivered
+     */
+    public String getEndpointUrl() {
+        return endpointUrl;
+    }
+
+    /**
+     * @param endpointUrl The URL where the webhook was delivered
+     */
+    public void setEndpointUrl(String endpointUrl) {
+        this.endpointUrl = endpointUrl;
+    }
+
+    /**
+     * @return The event type that triggered the webhook
+     */
+    public String getEventType() {
+        return eventType;
+    }
+
+    /**
+     * @param eventType The event type that triggered the webhook
+     */
+    public void setEventType(String eventType) {
+        this.eventType = eventType;
+    }
+
+    /**
      * Builder class for creating WebhookTestResponseDTO instances.
      */
     public static class Builder {
-        private boolean success;
+        private Boolean success;
         private LocalDateTime deliveryTimestamp;
         private Integer responseCode;
         private String responseBody;
         private String errorMessage;
-        private String errorDetails;
-        private Long deliveryTimeMs;
         private Boolean signatureVerified;
-        private String generatedSignature;
         private String signatureHeader;
+        private String signatureSent;
+        private Long deliveryTimeMs;
+        private String endpointUrl;
+        private String eventType;
 
         /**
          * Default constructor.
          */
         public Builder() {
-            this.deliveryTimestamp = LocalDateTime.now();
         }
 
         /**
          * @param success Whether the webhook test was successful
          * @return The builder instance
          */
-        public Builder success(boolean success) {
+        public Builder success(Boolean success) {
             this.success = success;
             return this;
         }
 
         /**
-         * @param deliveryTimestamp The timestamp when the webhook was delivered
+         * @param deliveryTimestamp Timestamp when the webhook was delivered
          * @return The builder instance
          */
         public Builder deliveryTimestamp(LocalDateTime deliveryTimestamp) {
@@ -306,7 +314,7 @@ public class WebhookTestResponseDTO {
         }
 
         /**
-         * @param responseCode The HTTP response code received
+         * @param responseCode HTTP status code from the webhook delivery
          * @return The builder instance
          */
         public Builder responseCode(Integer responseCode) {
@@ -315,7 +323,7 @@ public class WebhookTestResponseDTO {
         }
 
         /**
-         * @param responseBody The response body received
+         * @param responseBody Response body from the webhook delivery
          * @return The builder instance
          */
         public Builder responseBody(String responseBody) {
@@ -324,29 +332,11 @@ public class WebhookTestResponseDTO {
         }
 
         /**
-         * @param errorMessage The error message if the webhook delivery failed
+         * @param errorMessage Error message if the webhook delivery failed
          * @return The builder instance
          */
         public Builder errorMessage(String errorMessage) {
             this.errorMessage = errorMessage;
-            return this;
-        }
-
-        /**
-         * @param errorDetails Detailed error information if available
-         * @return The builder instance
-         */
-        public Builder errorDetails(String errorDetails) {
-            this.errorDetails = errorDetails;
-            return this;
-        }
-
-        /**
-         * @param deliveryTimeMs The time taken to deliver the webhook in milliseconds
-         * @return The builder instance
-         */
-        public Builder deliveryTimeMs(Long deliveryTimeMs) {
-            this.deliveryTimeMs = deliveryTimeMs;
             return this;
         }
 
@@ -360,20 +350,47 @@ public class WebhookTestResponseDTO {
         }
 
         /**
-         * @param generatedSignature The HMAC signature that was generated for the test
-         * @return The builder instance
-         */
-        public Builder generatedSignature(String generatedSignature) {
-            this.generatedSignature = generatedSignature;
-            return this;
-        }
-
-        /**
          * @param signatureHeader The name of the signature header used
          * @return The builder instance
          */
         public Builder signatureHeader(String signatureHeader) {
             this.signatureHeader = signatureHeader;
+            return this;
+        }
+
+        /**
+         * @param signatureSent The HMAC signature that was sent with the webhook
+         * @return The builder instance
+         */
+        public Builder signatureSent(String signatureSent) {
+            this.signatureSent = signatureSent;
+            return this;
+        }
+
+        /**
+         * @param deliveryTimeMs The time it took to deliver the webhook in milliseconds
+         * @return The builder instance
+         */
+        public Builder deliveryTimeMs(Long deliveryTimeMs) {
+            this.deliveryTimeMs = deliveryTimeMs;
+            return this;
+        }
+
+        /**
+         * @param endpointUrl The URL where the webhook was delivered
+         * @return The builder instance
+         */
+        public Builder endpointUrl(String endpointUrl) {
+            this.endpointUrl = endpointUrl;
+            return this;
+        }
+
+        /**
+         * @param eventType The event type that triggered the webhook
+         * @return The builder instance
+         */
+        public Builder eventType(String eventType) {
+            this.eventType = eventType;
             return this;
         }
 
@@ -389,11 +406,12 @@ public class WebhookTestResponseDTO {
             dto.responseCode = this.responseCode;
             dto.responseBody = this.responseBody;
             dto.errorMessage = this.errorMessage;
-            dto.errorDetails = this.errorDetails;
-            dto.deliveryTimeMs = this.deliveryTimeMs;
             dto.signatureVerified = this.signatureVerified;
-            dto.generatedSignature = this.generatedSignature;
             dto.signatureHeader = this.signatureHeader;
+            dto.signatureSent = this.signatureSent;
+            dto.deliveryTimeMs = this.deliveryTimeMs;
+            dto.endpointUrl = this.endpointUrl;
+            dto.eventType = this.eventType;
             return dto;
         }
     }
@@ -408,49 +426,59 @@ public class WebhookTestResponseDTO {
     }
 
     /**
-     * Creates a successful response with the given parameters.
+     * Creates a successful test response.
      *
-     * @param responseCode The HTTP response code received
-     * @param responseBody The response body received
-     * @param deliveryTimeMs The time taken to deliver the webhook in milliseconds
-     * @param signatureVerified Whether the signature was verified successfully
-     * @param generatedSignature The HMAC signature that was generated
-     * @param signatureHeader The name of the signature header used
+     * @param endpointUrl       The URL where the webhook was delivered
+     * @param responseCode      HTTP status code from the webhook delivery
+     * @param responseBody      Response body from the webhook delivery
+     * @param deliveryTimeMs    The time it took to deliver the webhook in milliseconds
+     * @param signatureVerified Whether the HMAC signature was verified successfully
      * @return A new WebhookTestResponseDTO instance for a successful test
      */
-    public static WebhookTestResponseDTO success(Integer responseCode, String responseBody, Long deliveryTimeMs,
-                                               Boolean signatureVerified, String generatedSignature,
-                                               String signatureHeader) {
-        return builder()
+    public static WebhookTestResponseDTO createSuccessResponse(String endpointUrl, Integer responseCode,
+                                                             String responseBody, Long deliveryTimeMs,
+                                                             Boolean signatureVerified) {
+        return new Builder()
                 .success(true)
+                .deliveryTimestamp(LocalDateTime.now())
+                .endpointUrl(endpointUrl)
                 .responseCode(responseCode)
                 .responseBody(responseBody)
                 .deliveryTimeMs(deliveryTimeMs)
                 .signatureVerified(signatureVerified)
-                .generatedSignature(generatedSignature)
-                .signatureHeader(signatureHeader)
                 .build();
     }
 
     /**
-     * Creates a failed response with the given parameters.
+     * Creates a failed test response.
      *
-     * @param errorMessage The error message
-     * @param errorDetails Detailed error information
-     * @param signatureVerified Whether the signature was verified successfully
-     * @param generatedSignature The HMAC signature that was generated
-     * @param signatureHeader The name of the signature header used
+     * @param endpointUrl  The URL where the webhook was delivered
+     * @param errorMessage Error message if the webhook delivery failed
      * @return A new WebhookTestResponseDTO instance for a failed test
      */
-    public static WebhookTestResponseDTO failure(String errorMessage, String errorDetails, Boolean signatureVerified,
-                                               String generatedSignature, String signatureHeader) {
-        return builder()
+    public static WebhookTestResponseDTO createErrorResponse(String endpointUrl, String errorMessage) {
+        return new Builder()
                 .success(false)
+                .deliveryTimestamp(LocalDateTime.now())
+                .endpointUrl(endpointUrl)
                 .errorMessage(errorMessage)
-                .errorDetails(errorDetails)
-                .signatureVerified(signatureVerified)
-                .generatedSignature(generatedSignature)
-                .signatureHeader(signatureHeader)
                 .build();
+    }
+
+    @Override
+    public String toString() {
+        return "WebhookTestResponseDTO{" +
+                "success=" + success +
+                ", deliveryTimestamp=" + deliveryTimestamp +
+                ", responseCode=" + responseCode +
+                ", responseBody='" + responseBody + '\'' +
+                ", errorMessage='" + errorMessage + '\'' +
+                ", signatureVerified=" + signatureVerified +
+                ", signatureHeader='" + signatureHeader + '\'' +
+                ", signatureSent='" + signatureSent + '\'' +
+                ", deliveryTimeMs=" + deliveryTimeMs +
+                ", endpointUrl='" + endpointUrl + '\'' +
+                ", eventType='" + eventType + '\'' +
+                '}';
     }
 }
