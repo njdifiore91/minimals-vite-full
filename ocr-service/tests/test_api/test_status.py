@@ -2,537 +2,435 @@
 # -*- coding: utf-8 -*-
 
 """
-Tests for the OCR Service status endpoints.
+Tests for the status endpoints in the OCR Service API.
 
-This module tests the status endpoints that provide monitoring information
-about the OCR Service, including:
-- Overall service status
-- Prometheus-compatible metrics
-- OCR processing statistics
-- Queue depth monitoring
-- Resource usage metrics (CPU, GPU, memory)
-
-These endpoints are used by monitoring systems like Datadog to track service
-performance, accuracy metrics, and processing throughput over time.
+This module contains tests for the status endpoints that provide service status,
+metrics, and OCR processing statistics. It verifies that the endpoints correctly
+report service performance, accuracy metrics, and processing throughput for
+monitoring systems like Datadog.
 """
 
 import json
-import time
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch, MagicMock
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from prometheus_client import Counter, Gauge, Histogram
+from prometheus_client import REGISTRY, Counter, Gauge, Histogram
 
-# Import the status router for testing
-from src.api.status import status_router, update_resource_metrics, update_queue_metrics
-from src.config import app_config
+# Import the status router to test
+from src.api.status import status_router, OCR_PROCESSING_TOTAL, OCR_ACCURACY, QUEUE_DEPTH
 
 
-# ===== Test Fixtures =====
-
+# Create a test FastAPI app with the status router
 @pytest.fixture
 def test_app():
-    """Create a test FastAPI application with the status router."""
+    """Create a test FastAPI app with the status router."""
     app = FastAPI()
     app.include_router(status_router)
     return app
 
 
 @pytest.fixture
-def test_client(test_app, mock_ocr_service, mock_queue_service):
-    """Create a TestClient with mocked services."""
-    # Set up app state with mocked services
-    test_app.state.ocr_service = mock_ocr_service
-    test_app.state.queue_service = mock_queue_service
-    
-    # Configure mock OCR service to return statistics
-    mock_ocr_service.get_statistics.return_value = {
-        "total_processed": 1000,
-        "successful": 980,
-        "failed": 20,
-        "average_processing_time": 1.5,
-        "average_confidence": 0.92,
-        "by_document_type": {
-            "application": {
-                "processed": 500,
-                "successful": 490,
-                "failed": 10,
-                "accuracy": 0.98,
-                "average_processing_time": 1.2,
-                "confidence_distribution": {
-                    "0.0-0.5": 5,
-                    "0.5-0.7": 15,
-                    "0.7-0.9": 80,
-                    "0.9-1.0": 400
-                }
-            },
-            "bank_statement": {
-                "processed": 300,
-                "successful": 294,
-                "failed": 6,
-                "accuracy": 0.99,
-                "average_processing_time": 1.8,
-                "confidence_distribution": {
-                    "0.0-0.5": 2,
-                    "0.5-0.7": 8,
-                    "0.7-0.9": 40,
-                    "0.9-1.0": 250
-                }
-            },
-            "identity_document": {
-                "processed": 200,
-                "successful": 196,
-                "failed": 4,
-                "accuracy": 0.97,
-                "average_processing_time": 1.6,
-                "confidence_distribution": {
-                    "0.0-0.5": 3,
-                    "0.5-0.7": 7,
-                    "0.7-0.9": 30,
-                    "0.9-1.0": 160
-                }
-            }
-        }
-    }
-    
-    # Configure mock queue service to return queue information
-    mock_queue_service.get_queue_info.return_value = {
-        "document-processing": {
-            "message_count": 15,
-            "consumer_count": 3,
-            "processing_rate": 42.5
-        },
-        "data-extraction": {
-            "message_count": 8,
-            "consumer_count": 5,
-            "processing_rate": 38.2
-        },
-        "notification": {
-            "message_count": 3,
-            "consumer_count": 2,
-            "processing_rate": 25.7
-        }
-    }
-    
+def test_client(test_app):
+    """Create a TestClient for the test app."""
     return TestClient(test_app)
 
 
-@pytest.fixture
-def api_key_header():
-    """Provide a valid API key header for authenticated endpoints."""
-    # Store the original API key
-    original_key = app_config.METRICS_API_KEY
-    
-    # Set a test API key
-    app_config.METRICS_API_KEY = "test-api-key"
-    
-    # Return the header
-    yield {"X-API-Key": "test-api-key"}
-    
-    # Restore the original API key
-    app_config.METRICS_API_KEY = original_key
+# Tests for the main status endpoint
+class TestStatusEndpoint:
+    """Tests for the /status endpoint."""
+
+    def test_status_success(self, test_client):
+        """Test that the status endpoint returns 200 OK with service status information."""
+        # Mock the necessary services and utilities
+        with patch("src.api.status.ocr_service.get_metrics", return_value={"accuracy": {"all": {"percentage": 99.0}}}):
+            with patch("src.api.status.queue_service.get_queue_depths", return_value={"data-extraction": 5}):
+                with patch("src.api.status.get_gpu_utilization", return_value={"0": {"utilization": 75.5, "memory_used": 4096}}):
+                    # Make a request to the status endpoint
+                    response = test_client.get("/")
+                    
+                    # Check the response
+                    assert response.status_code == 200
+                    data = response.json()
+                    assert "service" in data
+                    assert "version" in data
+                    assert "environment" in data
+                    assert "status" in data
+                    assert "uptime_seconds" in data
+                    assert "ocr_stats" in data
+                    assert "queue_stats" in data
+                    assert "resource_usage" in data
+                    
+                    # Check OCR stats
+                    assert "processed_total" in data["ocr_stats"]
+                    assert "average_accuracy" in data["ocr_stats"]
+                    assert "average_processing_time" in data["ocr_stats"]
+                    
+                    # Check queue stats
+                    assert "queue_depth" in data["queue_stats"]
+                    assert "messages_processed" in data["queue_stats"]
+                    
+                    # Check resource usage
+                    assert "cpu_percent" in data["resource_usage"]
+                    assert "memory_bytes" in data["resource_usage"]
+                    assert "gpu" in data["resource_usage"]
+                    
+                    # Verify the service is healthy
+                    assert data["status"] == "healthy"
+                    
+                    # Verify OCR accuracy is at least 99% as specified in section 0.1.1
+                    assert data["ocr_stats"]["average_accuracy"] >= 99.0
+
+    def test_status_error_handling(self, test_client):
+        """Test that the status endpoint handles errors appropriately."""
+        # Mock an exception during the status check
+        with patch("src.api.status.ocr_service.get_metrics", side_effect=Exception("Test error")):
+            response = test_client.get("/")
+            
+            # Check the response
+            assert response.status_code == 500
+            data = response.json()
+            assert "detail" in data
+            assert "Error getting service status" in data["detail"]
 
 
-# ===== Test Helper Functions =====
+# Tests for the health check endpoint
+class TestHealthCheckEndpoint:
+    """Tests for the /status/health endpoint."""
 
-def test_update_resource_metrics():
-    """Test that update_resource_metrics updates the resource metrics correctly."""
-    with patch('psutil.cpu_percent') as mock_cpu, \
-         patch('psutil.Process') as mock_process, \
-         patch('GPUtil.getGPUs') as mock_gpus:
+    def test_health_check_success(self, test_client):
+        """Test that the health check endpoint returns 200 OK with healthy status."""
+        # Make a request to the health check endpoint
+        response = test_client.get("/health")
         
-        # Configure mocks
-        mock_cpu.return_value = 45.2
-        mock_process_instance = MagicMock()
-        mock_process_instance.memory_info.return_value.rss = 1024 * 1024 * 256  # 256 MB
-        mock_process.return_value = mock_process_instance
-        
-        # Mock GPU information
-        mock_gpu = MagicMock()
-        mock_gpu.load = 0.75  # 75% utilization
-        mock_gpu.memoryUsed = 2048  # 2 GB
-        mock_gpus.return_value = [mock_gpu]
-        
-        # Call the function
-        update_resource_metrics()
-        
-        # Verify CPU and memory metrics were updated
-        mock_cpu.assert_called_once()
-        mock_process.assert_called_once()
-        mock_process_instance.memory_info.assert_called_once()
-        
-        # Verify GPU metrics were updated
-        mock_gpus.assert_called_once()
-
-
-def test_update_queue_metrics():
-    """Test that update_queue_metrics updates the queue metrics correctly."""
-    # Create a mock queue service
-    mock_queue_service = MagicMock()
-    mock_queue_service.get_queue_info.return_value = {
-        "test-queue": {
-            "message_count": 10,
-            "processing_rate": 30.5
-        }
-    }
-    
-    # Call the function
-    update_queue_metrics(mock_queue_service)
-    
-    # Verify queue service was called
-    mock_queue_service.get_queue_info.assert_called_once()
-
-
-# ===== Test Status Endpoints =====
-
-def test_get_status_endpoint(test_client, api_key_header):
-    """Test the /status endpoint returns the correct service status."""
-    # Make request with API key
-    response = test_client.get("/", headers=api_key_header)
-    
-    # Verify response
-    assert response.status_code == 200
-    data = response.json()
-    
-    # Check required fields
-    assert "status" in data
-    assert data["status"] == "healthy"
-    assert "version" in data
-    assert "environment" in data
-    assert "uptime_seconds" in data
-    assert "resource_usage" in data
-    assert "queue_info" in data
-    assert "ocr_statistics" in data
-    
-    # Check resource usage fields
-    resource_usage = data["resource_usage"]
-    assert "cpu_percent" in resource_usage
-    assert "memory_bytes" in resource_usage
-    assert "gpu" in resource_usage
-    
-    # Check queue info
-    queue_info = data["queue_info"]
-    assert "document-processing" in queue_info
-    assert "data-extraction" in queue_info
-    assert "notification" in queue_info
-    
-    # Check OCR statistics
-    ocr_stats = data["ocr_statistics"]
-    assert "total_processed" in ocr_stats
-    assert "successful" in ocr_stats
-    assert "failed" in ocr_stats
-    assert "average_processing_time" in ocr_stats
-    assert "average_confidence" in ocr_stats
-    assert "by_document_type" in ocr_stats
-
-
-def test_get_status_unauthorized(test_client):
-    """Test the /status endpoint requires authentication when API key is configured."""
-    # Set a test API key
-    original_key = app_config.METRICS_API_KEY
-    app_config.METRICS_API_KEY = "test-api-key"
-    
-    try:
-        # Make request without API key
-        response = test_client.get("/")
-        
-        # Verify unauthorized response
-        assert response.status_code == 401
-        assert "Invalid or missing API key" in response.json()["detail"]
-    finally:
-        # Restore original API key
-        app_config.METRICS_API_KEY = original_key
-
-
-def test_get_status_no_auth_required(test_client):
-    """Test the /status endpoint doesn't require authentication when no API key is configured."""
-    # Set API key to None
-    original_key = app_config.METRICS_API_KEY
-    app_config.METRICS_API_KEY = None
-    
-    try:
-        # Make request without API key
-        response = test_client.get("/")
-        
-        # Verify successful response
+        # Check the response
         assert response.status_code == 200
-        assert response.json()["status"] == "healthy"
-    finally:
-        # Restore original API key
-        app_config.METRICS_API_KEY = original_key
+        data = response.json()
+        assert data["status"] == "healthy"
 
 
-def test_metrics_endpoint(test_client, api_key_header):
-    """Test the /metrics endpoint returns Prometheus-compatible metrics."""
-    # Make request with API key
-    response = test_client.get("/metrics", headers=api_key_header)
-    
-    # Verify response
-    assert response.status_code == 200
-    assert response.headers["content-type"] == "text/plain; version=0.0.4; charset=utf-8"
-    
-    # Check that the response contains expected metric names
-    metrics_text = response.text
-    assert "ocr_requests_total" in metrics_text
-    assert "ocr_processing_time_seconds" in metrics_text
-    assert "ocr_accuracy_percent" in metrics_text
-    assert "ocr_confidence_scores" in metrics_text
-    assert "rabbitmq_queue_depth" in metrics_text
-    assert "rabbitmq_processing_rate" in metrics_text
-    assert "cpu_usage_percent" in metrics_text
-    assert "memory_usage_bytes" in metrics_text
-    assert "gpu_usage_percent" in metrics_text
-    assert "gpu_memory_usage_bytes" in metrics_text
-    assert "service_uptime_seconds" in metrics_text
-    assert "service_info" in metrics_text
+# Tests for the metrics endpoint
+class TestMetricsEndpoint:
+    """Tests for the /status/metrics endpoint."""
+
+    def test_metrics_success(self, test_client):
+        """Test that the metrics endpoint returns 200 OK with Prometheus metrics."""
+        # Mock the queue service
+        with patch("src.api.status.queue_service.get_queue_depths", return_value={"data-extraction": 5}):
+            # Make a request to the metrics endpoint
+            response = test_client.get("/metrics")
+            
+            # Check the response
+            assert response.status_code == 200
+            assert response.headers["Content-Type"] == "application/openmetrics-text; version=1.0.0; charset=utf-8"
+            
+            # Check that the response contains Prometheus metrics
+            content = response.content.decode("utf-8")
+            assert "ocr_processing_total" in content
+            assert "ocr_accuracy_percentage" in content
+            assert "rabbitmq_queue_depth" in content
+            assert "cpu_usage_percentage" in content
+            assert "memory_usage_bytes" in content
+            assert "gpu_usage_percentage" in content
+
+    def test_metrics_queue_error_handling(self, test_client):
+        """Test that the metrics endpoint handles queue service errors gracefully."""
+        # Mock an exception in the queue service
+        with patch("src.api.status.queue_service.get_queue_depths", side_effect=Exception("Test error")):
+            # Make a request to the metrics endpoint
+            response = test_client.get("/metrics")
+            
+            # Check that the response is still successful despite the error
+            assert response.status_code == 200
+            assert response.headers["Content-Type"] == "application/openmetrics-text; version=1.0.0; charset=utf-8"
 
 
-def test_metrics_unauthorized(test_client):
-    """Test the /metrics endpoint requires authentication when API key is configured."""
-    # Set a test API key
-    original_key = app_config.METRICS_API_KEY
-    app_config.METRICS_API_KEY = "test-api-key"
-    
-    try:
-        # Make request without API key
-        response = test_client.get("/metrics")
+# Tests for the OCR metrics endpoint
+class TestOcrMetricsEndpoint:
+    """Tests for the /status/metrics/ocr endpoint."""
+
+    def test_ocr_metrics_success(self, test_client, auth_token):
+        """Test that the OCR metrics endpoint returns 200 OK with OCR metrics."""
+        # Mock the OCR service
+        mock_ocr_metrics = {
+            "accuracy": {
+                "all": {"percentage": 99.0, "sample_size": 1000},
+                "APPLICATION": {"percentage": 99.5, "sample_size": 500},
+                "TAX_RETURN": {"percentage": 98.5, "sample_size": 300},
+                "BANK_STATEMENT": {"percentage": 97.8, "sample_size": 200},
+            },
+            "processing_time": {
+                "average": 1.5,
+                "p50": 1.2,
+                "p90": 2.5,
+                "p99": 4.0,
+            },
+            "confidence_scores": {
+                "average": 0.92,
+                "by_field_type": {
+                    "business_name": 0.98,
+                    "tax_id": 0.95,
+                    "address": 0.92,
+                    "signature": 0.85,
+                },
+            },
+            "throughput": {
+                "documents_per_minute": 60,
+                "pages_per_minute": 180,
+            },
+            "error_rate": {
+                "percentage": 1.0,
+                "by_document_type": {
+                    "APPLICATION": 0.5,
+                    "TAX_RETURN": 1.5,
+                    "BANK_STATEMENT": 2.2,
+                },
+            },
+        }
         
-        # Verify unauthorized response
-        assert response.status_code == 401
-        assert "Invalid or missing API key" in response.json()["detail"]
-    finally:
-        # Restore original API key
-        app_config.METRICS_API_KEY = original_key
+        with patch("src.api.status.ocr_service.get_metrics", return_value=mock_ocr_metrics):
+            # Make a request to the OCR metrics endpoint with authentication
+            response = test_client.get("/metrics/ocr", headers={"Authorization": f"Bearer {auth_token}"})
+            
+            # Check the response
+            assert response.status_code == 200
+            data = response.json()
+            
+            # Check that the response contains the expected OCR metrics
+            assert "accuracy" in data
+            assert "processing_time" in data
+            assert "confidence_scores" in data
+            assert "throughput" in data
+            assert "error_rate" in data
+            
+            # Verify OCR accuracy is at least 99% as specified in section 0.1.1
+            assert data["accuracy"]["all"]["percentage"] >= 99.0
 
-
-def test_health_check_endpoint(test_client):
-    """Test the /health endpoint returns a healthy status without requiring authentication."""
-    # Make request without API key
-    response = test_client.get("/health")
-    
-    # Verify response
-    assert response.status_code == 200
-    assert response.json()["status"] == "healthy"
-
-
-def test_statistics_endpoint(test_client, api_key_header):
-    """Test the /statistics endpoint returns detailed OCR statistics."""
-    # Make request with API key
-    response = test_client.get("/statistics", headers=api_key_header)
-    
-    # Verify response
-    assert response.status_code == 200
-    data = response.json()
-    
-    # Check required fields
-    assert "total_processed" in data
-    assert "successful" in data
-    assert "failed" in data
-    assert "average_processing_time" in data
-    assert "average_confidence" in data
-    assert "by_document_type" in data
-    
-    # Check document type statistics
-    by_document_type = data["by_document_type"]
-    assert "application" in by_document_type
-    assert "bank_statement" in by_document_type
-    assert "identity_document" in by_document_type
-    
-    # Check specific document type statistics
-    application_stats = by_document_type["application"]
-    assert "processed" in application_stats
-    assert "successful" in application_stats
-    assert "failed" in application_stats
-    assert "accuracy" in application_stats
-    assert "average_processing_time" in application_stats
-    assert "confidence_distribution" in application_stats
-    
-    # Verify accuracy meets the 99% requirement from section 0.1.1
-    # Note: We're checking the mock data here, which should be configured to meet requirements
-    assert application_stats["accuracy"] >= 0.95  # 95% is a reasonable threshold for testing
-    
-    # Check confidence distribution
-    confidence_dist = application_stats["confidence_distribution"]
-    assert "0.9-1.0" in confidence_dist  # High confidence bucket
-    assert confidence_dist["0.9-1.0"] > 0  # Should have some high confidence results
-
-
-def test_statistics_unauthorized(test_client):
-    """Test the /statistics endpoint requires authentication when API key is configured."""
-    # Set a test API key
-    original_key = app_config.METRICS_API_KEY
-    app_config.METRICS_API_KEY = "test-api-key"
-    
-    try:
-        # Make request without API key
-        response = test_client.get("/statistics")
+    def test_ocr_metrics_unauthorized(self, test_client):
+        """Test that the OCR metrics endpoint requires authentication."""
+        # Make a request to the OCR metrics endpoint without authentication
+        response = test_client.get("/metrics/ocr")
         
-        # Verify unauthorized response
-        assert response.status_code == 401
-        assert "Invalid or missing API key" in response.json()["detail"]
-    finally:
-        # Restore original API key
-        app_config.METRICS_API_KEY = original_key
+        # Check that the response requires authentication
+        assert response.status_code == 401 or response.status_code == 403
+
+    def test_ocr_metrics_error_handling(self, test_client, auth_token):
+        """Test that the OCR metrics endpoint handles errors appropriately."""
+        # Mock an exception in the OCR service
+        with patch("src.api.status.ocr_service.get_metrics", side_effect=Exception("Test error")):
+            # Make a request to the OCR metrics endpoint with authentication
+            response = test_client.get("/metrics/ocr", headers={"Authorization": f"Bearer {auth_token}"})
+            
+            # Check the response
+            assert response.status_code == 500
+            data = response.json()
+            assert "detail" in data
+            assert "Error getting OCR metrics" in data["detail"]
 
 
-def test_status_endpoint_error_handling(test_client, api_key_header):
-    """Test error handling in the /status endpoint."""
-    # Configure OCR service to raise an exception
-    test_client.app.state.ocr_service.get_statistics.side_effect = Exception("Test error")
-    
-    # Make request with API key
-    response = test_client.get("/", headers=api_key_header)
-    
-    # Verify error response
-    assert response.status_code == 500
-    assert "Error getting service status" in response.json()["detail"]
+# Tests for the queue metrics endpoint
+class TestQueueMetricsEndpoint:
+    """Tests for the /status/metrics/queue endpoint."""
+
+    def test_queue_metrics_success(self, test_client, auth_token):
+        """Test that the queue metrics endpoint returns 200 OK with queue metrics."""
+        # Mock the queue service
+        mock_queue_metrics = {
+            "queue_depths": {
+                "data-extraction": 5,
+                "document-processing": 3,
+                "notification": 2,
+            },
+            "processing_times": {
+                "average": 0.5,
+                "p50": 0.3,
+                "p90": 0.8,
+                "p99": 1.5,
+            },
+            "error_rates": {
+                "percentage": 0.5,
+                "by_queue": {
+                    "data-extraction": 0.3,
+                    "document-processing": 0.7,
+                    "notification": 0.2,
+                },
+            },
+            "throughput": {
+                "messages_per_second": 10,
+                "by_queue": {
+                    "data-extraction": 5,
+                    "document-processing": 3,
+                    "notification": 2,
+                },
+            },
+        }
+        
+        with patch("src.api.status.queue_service.get_metrics", return_value=mock_queue_metrics):
+            # Make a request to the queue metrics endpoint with authentication
+            response = test_client.get("/metrics/queue", headers={"Authorization": f"Bearer {auth_token}"})
+            
+            # Check the response
+            assert response.status_code == 200
+            data = response.json()
+            
+            # Check that the response contains the expected queue metrics
+            assert "queue_depths" in data
+            assert "processing_times" in data
+            assert "error_rates" in data
+            assert "throughput" in data
+            
+            # Verify queue depths are being tracked as specified in section 0.2.5
+            assert "data-extraction" in data["queue_depths"]
+            assert isinstance(data["queue_depths"]["data-extraction"], int)
+
+    def test_queue_metrics_unauthorized(self, test_client):
+        """Test that the queue metrics endpoint requires authentication."""
+        # Make a request to the queue metrics endpoint without authentication
+        response = test_client.get("/metrics/queue")
+        
+        # Check that the response requires authentication
+        assert response.status_code == 401 or response.status_code == 403
+
+    def test_queue_metrics_error_handling(self, test_client, auth_token):
+        """Test that the queue metrics endpoint handles errors appropriately."""
+        # Mock an exception in the queue service
+        with patch("src.api.status.queue_service.get_metrics", side_effect=Exception("Test error")):
+            # Make a request to the queue metrics endpoint with authentication
+            response = test_client.get("/metrics/queue", headers={"Authorization": f"Bearer {auth_token}"})
+            
+            # Check the response
+            assert response.status_code == 500
+            data = response.json()
+            assert "detail" in data
+            assert "Error getting queue metrics" in data["detail"]
 
 
-def test_metrics_endpoint_error_handling(test_client, api_key_header):
-    """Test error handling in the /metrics endpoint."""
-    # Configure OCR service to raise an exception
-    test_client.app.state.ocr_service.get_statistics.side_effect = Exception("Test error")
-    
-    # Make request with API key
-    response = test_client.get("/metrics", headers=api_key_header)
-    
-    # Verify error response
-    assert response.status_code == 500
-    assert "Error generating metrics" in response.json()["detail"]
+# Tests for the resource metrics endpoint
+class TestResourceMetricsEndpoint:
+    """Tests for the /status/metrics/resource endpoint."""
+
+    def test_resource_metrics_success(self, test_client, auth_token):
+        """Test that the resource metrics endpoint returns 200 OK with resource metrics."""
+        # Mock the GPU utilization
+        mock_gpu_stats = {
+            "0": {
+                "utilization": 75.5,
+                "memory_used": 4096,
+                "memory_total": 8192,
+                "temperature": 65,
+            }
+        }
+        
+        with patch("src.api.status.get_gpu_utilization", return_value=mock_gpu_stats):
+            # Make a request to the resource metrics endpoint with authentication
+            response = test_client.get("/metrics/resource", headers={"Authorization": f"Bearer {auth_token}"})
+            
+            # Check the response
+            assert response.status_code == 200
+            data = response.json()
+            
+            # Check that the response contains the expected resource metrics
+            assert "cpu" in data
+            assert "memory" in data
+            assert "gpu" in data
+            
+            # Check CPU metrics
+            assert "usage_percent" in data["cpu"]
+            assert "core_count" in data["cpu"]
+            assert "load_average" in data["cpu"]
+            
+            # Check memory metrics
+            assert "total_bytes" in data["memory"]
+            assert "available_bytes" in data["memory"]
+            assert "used_bytes" in data["memory"]
+            assert "percent" in data["memory"]
+            
+            # Check GPU metrics
+            assert "0" in data["gpu"]
+            assert "utilization" in data["gpu"]["0"]
+            assert "memory_used" in data["gpu"]["0"]
+            assert "memory_total" in data["gpu"]["0"]
+            assert "temperature" in data["gpu"]["0"]
+
+    def test_resource_metrics_unauthorized(self, test_client):
+        """Test that the resource metrics endpoint requires authentication."""
+        # Make a request to the resource metrics endpoint without authentication
+        response = test_client.get("/metrics/resource")
+        
+        # Check that the response requires authentication
+        assert response.status_code == 401 or response.status_code == 403
+
+    def test_resource_metrics_error_handling(self, test_client, auth_token):
+        """Test that the resource metrics endpoint handles errors appropriately."""
+        # Mock an exception during resource metrics collection
+        with patch("src.api.status.psutil.cpu_percent", side_effect=Exception("Test error")):
+            # Make a request to the resource metrics endpoint with authentication
+            response = test_client.get("/metrics/resource", headers={"Authorization": f"Bearer {auth_token}"})
+            
+            # Check the response
+            assert response.status_code == 500
+            data = response.json()
+            assert "detail" in data
+            assert "Error getting resource metrics" in data["detail"]
 
 
-def test_statistics_endpoint_error_handling(test_client, api_key_header):
-    """Test error handling in the /statistics endpoint."""
-    # Configure OCR service to raise an exception
-    test_client.app.state.ocr_service.get_statistics.side_effect = Exception("Test error")
-    
-    # Make request with API key
-    response = test_client.get("/statistics", headers=api_key_header)
-    
-    # Verify error response
-    assert response.status_code == 500
-    assert "Error getting OCR statistics" in response.json()["detail"]
+# Tests for the Prometheus metrics
+class TestPrometheusMetrics:
+    """Tests for the Prometheus metrics defined in the status module."""
 
+    def test_ocr_processing_total_counter(self):
+        """Test that the OCR_PROCESSING_TOTAL counter works correctly."""
+        # Reset the counter
+        OCR_PROCESSING_TOTAL._metrics.clear()
+        
+        # Increment the counter for different document types and statuses
+        OCR_PROCESSING_TOTAL.labels(document_type="APPLICATION", status="COMPLETED").inc()
+        OCR_PROCESSING_TOTAL.labels(document_type="TAX_RETURN", status="COMPLETED").inc(2)
+        OCR_PROCESSING_TOTAL.labels(document_type="BANK_STATEMENT", status="FAILED").inc()
+        
+        # Check the counter values
+        for sample in OCR_PROCESSING_TOTAL.collect()[0].samples:
+            if sample.labels["document_type"] == "APPLICATION" and sample.labels["status"] == "COMPLETED":
+                assert sample.value == 1
+            elif sample.labels["document_type"] == "TAX_RETURN" and sample.labels["status"] == "COMPLETED":
+                assert sample.value == 2
+            elif sample.labels["document_type"] == "BANK_STATEMENT" and sample.labels["status"] == "FAILED":
+                assert sample.value == 1
 
-# ===== Test Prometheus Metrics =====
+    def test_ocr_accuracy_gauge(self):
+        """Test that the OCR_ACCURACY gauge works correctly."""
+        # Reset the gauge
+        OCR_ACCURACY._metrics.clear()
+        
+        # Set accuracy values for different document types
+        OCR_ACCURACY.labels(document_type="all").set(99.0)
+        OCR_ACCURACY.labels(document_type="APPLICATION").set(99.5)
+        OCR_ACCURACY.labels(document_type="TAX_RETURN").set(98.5)
+        
+        # Check the gauge values
+        for sample in OCR_ACCURACY.collect()[0].samples:
+            if sample.labels["document_type"] == "all":
+                assert sample.value == 99.0
+            elif sample.labels["document_type"] == "APPLICATION":
+                assert sample.value == 99.5
+            elif sample.labels["document_type"] == "TAX_RETURN":
+                assert sample.value == 98.5
 
-def test_prometheus_metrics_registration():
-    """Test that Prometheus metrics are properly registered."""
-    # Import the metrics from the status module
-    from src.api.status import (
-        OCR_REQUESTS_TOTAL, OCR_PROCESSING_TIME, OCR_ACCURACY,
-        OCR_CONFIDENCE_SCORES, QUEUE_DEPTH, QUEUE_PROCESSING_RATE,
-        CPU_USAGE, MEMORY_USAGE, GPU_USAGE, GPU_MEMORY_USAGE,
-        SERVICE_UPTIME, SERVICE_INFO
-    )
-    
-    # Verify metrics are of the correct type
-    assert isinstance(OCR_REQUESTS_TOTAL, Counter)
-    assert isinstance(OCR_PROCESSING_TIME, Histogram)
-    assert isinstance(OCR_ACCURACY, Gauge)
-    assert isinstance(OCR_CONFIDENCE_SCORES, Histogram)
-    assert isinstance(QUEUE_DEPTH, Gauge)
-    assert isinstance(QUEUE_PROCESSING_RATE, Gauge)
-    assert isinstance(CPU_USAGE, Gauge)
-    assert isinstance(MEMORY_USAGE, Gauge)
-    assert isinstance(GPU_USAGE, Gauge)
-    assert isinstance(GPU_MEMORY_USAGE, Gauge)
-    assert isinstance(SERVICE_UPTIME, Gauge)
-    assert isinstance(SERVICE_INFO, Gauge)
-
-
-def test_prometheus_metrics_labels():
-    """Test that Prometheus metrics have the correct labels."""
-    # Import the metrics from the status module
-    from src.api.status import (
-        OCR_REQUESTS_TOTAL, OCR_PROCESSING_TIME, OCR_ACCURACY,
-        OCR_CONFIDENCE_SCORES, QUEUE_DEPTH, QUEUE_PROCESSING_RATE,
-        GPU_USAGE, GPU_MEMORY_USAGE, SERVICE_INFO
-    )
-    
-    # Check labels for metrics that have them
-    assert OCR_REQUESTS_TOTAL._labelnames == ("document_type", "status")
-    assert OCR_PROCESSING_TIME._labelnames == ("document_type",)
-    assert OCR_ACCURACY._labelnames == ("document_type",)
-    assert OCR_CONFIDENCE_SCORES._labelnames == ("document_type",)
-    assert QUEUE_DEPTH._labelnames == ("queue_name",)
-    assert QUEUE_PROCESSING_RATE._labelnames == ("queue_name",)
-    assert GPU_USAGE._labelnames == ("gpu_id",)
-    assert GPU_MEMORY_USAGE._labelnames == ("gpu_id",)
-    assert SERVICE_INFO._labelnames == ("version", "environment")
-
-
-# ===== Test Service Uptime =====
-
-def test_service_uptime_calculation():
-    """Test that service uptime is calculated correctly."""
-    # Import the START_TIME and SERVICE_UPTIME from the status module
-    from src.api.status import START_TIME, SERVICE_UPTIME
-    
-    # Get the current value
-    current_value = SERVICE_UPTIME._value.get()
-    
-    # Calculate expected uptime
-    expected_uptime = time.time() - START_TIME
-    
-    # Verify uptime is reasonable (within 5 seconds of expected)
-    assert abs(current_value - expected_uptime) < 5, "Uptime calculation is incorrect"
-
-
-# ===== Test Queue Monitoring =====
-
-def test_queue_depth_monitoring(test_client, api_key_header):
-    """Test that queue depth monitoring is working correctly."""
-    # Make request to status endpoint
-    response = test_client.get("/", headers=api_key_header)
-    
-    # Verify queue info is included
-    data = response.json()
-    assert "queue_info" in data
-    
-    # Check queue depths
-    queue_info = data["queue_info"]
-    assert "document-processing" in queue_info
-    assert "message_count" in queue_info["document-processing"]
-    assert queue_info["document-processing"]["message_count"] == 15
-    
-    # Check processing rates
-    assert "processing_rate" in queue_info["document-processing"]
-    assert queue_info["document-processing"]["processing_rate"] == 42.5
-
-
-# ===== Test OCR Accuracy Metrics =====
-
-def test_ocr_accuracy_metrics(test_client, api_key_header):
-    """Test that OCR accuracy metrics are reported correctly."""
-    # Make request to statistics endpoint
-    response = test_client.get("/statistics", headers=api_key_header)
-    
-    # Verify OCR accuracy is included
-    data = response.json()
-    assert "by_document_type" in data
-    
-    # Check accuracy for each document type
-    by_document_type = data["by_document_type"]
-    
-    # Application documents
-    assert "application" in by_document_type
-    assert "accuracy" in by_document_type["application"]
-    assert by_document_type["application"]["accuracy"] == 0.98
-    
-    # Bank statements
-    assert "bank_statement" in by_document_type
-    assert "accuracy" in by_document_type["bank_statement"]
-    assert by_document_type["bank_statement"]["accuracy"] == 0.99
-    
-    # Identity documents
-    assert "identity_document" in by_document_type
-    assert "accuracy" in by_document_type["identity_document"]
-    assert by_document_type["identity_document"]["accuracy"] == 0.97
-    
-    # Overall accuracy should meet the 99% requirement from section 0.1.1
-    # We can calculate this from the mock data
-    total_processed = sum(doc_type["processed"] for doc_type in by_document_type.values())
-    weighted_accuracy = sum(doc_type["accuracy"] * doc_type["processed"] for doc_type in by_document_type.values()) / total_processed
-    assert weighted_accuracy >= 0.95, "Overall OCR accuracy does not meet requirements"
+    def test_queue_depth_gauge(self):
+        """Test that the QUEUE_DEPTH gauge works correctly."""
+        # Reset the gauge
+        QUEUE_DEPTH._metrics.clear()
+        
+        # Set queue depth values for different queues
+        QUEUE_DEPTH.labels(queue_name="data-extraction").set(5)
+        QUEUE_DEPTH.labels(queue_name="document-processing").set(3)
+        QUEUE_DEPTH.labels(queue_name="notification").set(2)
+        
+        # Check the gauge values
+        for sample in QUEUE_DEPTH.collect()[0].samples:
+            if sample.labels["queue_name"] == "data-extraction":
+                assert sample.value == 5
+            elif sample.labels["queue_name"] == "document-processing":
+                assert sample.value == 3
+            elif sample.labels["queue_name"] == "notification":
+                assert sample.value == 2
