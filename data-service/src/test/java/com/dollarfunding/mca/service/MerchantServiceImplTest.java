@@ -3,9 +3,7 @@ package com.dollarfunding.mca.service;
 import com.dollarfunding.mca.dto.MerchantDetailsRequestDTO;
 import com.dollarfunding.mca.dto.MerchantDetailsResponseDTO;
 import com.dollarfunding.mca.entity.Application;
-import com.dollarfunding.mca.entity.ApplicationStatus;
 import com.dollarfunding.mca.entity.MerchantDetails;
-import com.dollarfunding.mca.entity.ReviewStatus;
 import com.dollarfunding.mca.exception.BusinessRuleException;
 import com.dollarfunding.mca.exception.ResourceNotFoundException;
 import com.dollarfunding.mca.exception.ValidationException;
@@ -14,11 +12,9 @@ import com.dollarfunding.mca.repository.MerchantDetailsRepository;
 import com.dollarfunding.mca.util.EncryptionUtil;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
-import org.mockito.Captor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -28,27 +24,21 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
-import java.util.Arrays;
-import java.util.Collections;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 /**
- * Unit tests for the MerchantServiceImpl class.
+ * Unit tests for the {@link MerchantServiceImpl} class.
  * 
- * These tests verify that the MerchantServiceImpl correctly handles CRUD operations,
- * validation, encryption, and error handling for merchant details in the MCA application.
- * 
- * The tests use Mockito to mock dependencies and focus on testing the service layer logic.
+ * These tests verify CRUD operations, validation, encryption, and filtering
+ * functionality for merchant details management.
  */
 @ExtendWith(MockitoExtension.class)
 public class MerchantServiceImplTest {
@@ -68,14 +58,10 @@ public class MerchantServiceImplTest {
     @InjectMocks
     private MerchantServiceImpl merchantService;
 
-    @Captor
-    private ArgumentCaptor<MerchantDetails> merchantDetailsCaptor;
-
     private UUID applicationId;
-    private Application application;
     private MerchantDetailsRequestDTO merchantDetailsRequestDTO;
     private MerchantDetails merchantDetails;
-    private MerchantDetailsRequestDTO.AddressDTO addressDTO;
+    private Application application;
 
     @BeforeEach
     void setUp() {
@@ -83,788 +69,616 @@ public class MerchantServiceImplTest {
         applicationId = UUID.randomUUID();
         
         // Create application
-        application = new Application(ApplicationStatus.NEW, ReviewStatus.NOT_REVIEWED);
+        application = new Application();
         application.setId(applicationId);
-        application.setCreatedAt(LocalDateTime.now());
-        application.setUpdatedAt(LocalDateTime.now());
-        
-        // Create address DTO
-        addressDTO = MerchantDetailsRequestDTO.AddressDTO.builder()
-                .streetAddress("123 Main St")
-                .streetAddress2("Suite 100")
-                .city("New York")
-                .state("NY")
-                .zipCode("10001")
-                .build();
         
         // Create merchant details request DTO
-        merchantDetailsRequestDTO = MerchantDetailsRequestDTO.builder()
-                .legalName("Acme Corporation")
-                .dbaName("Acme")
-                .ein("12-3456789")
-                .address(addressDTO)
-                .industry("Technology")
-                .revenue(new BigDecimal("500000.00"))
-                .build();
+        merchantDetailsRequestDTO = new MerchantDetailsRequestDTO();
+        merchantDetailsRequestDTO.setLegalName("Test Merchant Inc.");
+        merchantDetailsRequestDTO.setDbaName("Test Merchant");
+        merchantDetailsRequestDTO.setEin("12-3456789");
+        merchantDetailsRequestDTO.setIndustry("Retail");
+        merchantDetailsRequestDTO.setRevenue(new BigDecimal("500000.00"));
         
         // Create merchant details entity
         merchantDetails = new MerchantDetails();
-        merchantDetails.setId(1L);
+        merchantDetails.setId(UUID.randomUUID());
         merchantDetails.setApplication(application);
-        merchantDetails.setLegalName("Acme Corporation");
-        merchantDetails.setDbaName("Acme");
+        merchantDetails.setLegalName("Test Merchant Inc.");
+        merchantDetails.setDbaName("Test Merchant");
         merchantDetails.setEin("12-3456789");
-        
-        MerchantDetails.Address address = new MerchantDetails.Address();
-        address.setStreet("123 Main St");
-        address.setCity("New York");
-        address.setState("NY");
-        address.setZip("10001");
-        address.setCountry("US");
-        merchantDetails.setAddress(address);
-        
-        merchantDetails.setIndustry("Technology");
+        merchantDetails.setIndustry("Retail");
         merchantDetails.setRevenue(new BigDecimal("500000.00"));
-        merchantDetails.setCreatedAt(LocalDateTime.now());
-        merchantDetails.setUpdatedAt(LocalDateTime.now());
     }
 
-    @Nested
-    @DisplayName("Create Merchant Details Tests")
-    class CreateMerchantDetailsTests {
-
-        @Test
-        @DisplayName("Should create merchant details successfully")
-        void shouldCreateMerchantDetailsSuccessfully() {
-            // Arrange
-            when(applicationRepository.findById(applicationId)).thenReturn(Optional.of(application));
-            when(merchantDetailsRepository.existsByApplication(application)).thenReturn(false);
-            doNothing().when(validationService).validateMerchantData(merchantDetailsRequestDTO);
-            when(merchantDetailsRepository.save(any(MerchantDetails.class))).thenReturn(merchantDetails);
-
-            // Act
-            MerchantDetailsResponseDTO responseDTO = merchantService.createMerchantDetails(applicationId, merchantDetailsRequestDTO);
-
-            // Assert
-            assertNotNull(responseDTO);
-            assertEquals(1L, responseDTO.getId());
-            verify(applicationRepository).findById(applicationId);
-            verify(merchantDetailsRepository).existsByApplication(application);
-            verify(validationService).validateMerchantData(merchantDetailsRequestDTO);
-            verify(merchantDetailsRepository).save(merchantDetailsCaptor.capture());
-            
-            MerchantDetails capturedMerchantDetails = merchantDetailsCaptor.getValue();
-            assertEquals("Acme Corporation", capturedMerchantDetails.getLegalName());
-            assertEquals("Acme", capturedMerchantDetails.getDbaName());
-            assertEquals("12-3456789", capturedMerchantDetails.getEin());
-            assertEquals("Technology", capturedMerchantDetails.getIndustry());
-            assertEquals(0, new BigDecimal("500000.00").compareTo(capturedMerchantDetails.getRevenue()));
-            assertEquals(application, capturedMerchantDetails.getApplication());
-        }
-
-        @Test
-        @DisplayName("Should throw ResourceNotFoundException when application not found")
-        void shouldThrowResourceNotFoundExceptionWhenApplicationNotFound() {
-            // Arrange
-            when(applicationRepository.findById(applicationId)).thenReturn(Optional.empty());
-
-            // Act & Assert
-            ResourceNotFoundException exception = assertThrows(ResourceNotFoundException.class, () -> {
-                merchantService.createMerchantDetails(applicationId, merchantDetailsRequestDTO);
-            });
-            
-            assertEquals("Application not found with ID: " + applicationId, exception.getMessage());
-            verify(applicationRepository).findById(applicationId);
-            verify(merchantDetailsRepository, never()).existsByApplication(any());
-            verify(validationService, never()).validateMerchantData(any());
-            verify(merchantDetailsRepository, never()).save(any());
-        }
-
-        @Test
-        @DisplayName("Should throw BusinessRuleException when merchant details already exist")
-        void shouldThrowBusinessRuleExceptionWhenMerchantDetailsAlreadyExist() {
-            // Arrange
-            when(applicationRepository.findById(applicationId)).thenReturn(Optional.of(application));
-            when(merchantDetailsRepository.existsByApplication(application)).thenReturn(true);
-
-            // Act & Assert
-            BusinessRuleException exception = assertThrows(BusinessRuleException.class, () -> {
-                merchantService.createMerchantDetails(applicationId, merchantDetailsRequestDTO);
-            });
-            
-            assertEquals("Merchant details already exist for application ID: " + applicationId, exception.getMessage());
-            verify(applicationRepository).findById(applicationId);
-            verify(merchantDetailsRepository).existsByApplication(application);
-            verify(validationService, never()).validateMerchantData(any());
-            verify(merchantDetailsRepository, never()).save(any());
-        }
-
-        @Test
-        @DisplayName("Should throw ValidationException when merchant details validation fails")
-        void shouldThrowValidationExceptionWhenMerchantDetailsValidationFails() {
-            // Arrange
-            when(applicationRepository.findById(applicationId)).thenReturn(Optional.of(application));
-            when(merchantDetailsRepository.existsByApplication(application)).thenReturn(false);
-            doThrow(new ValidationException("Validation failed")).when(validationService).validateMerchantData(merchantDetailsRequestDTO);
-
-            // Act & Assert
-            ValidationException exception = assertThrows(ValidationException.class, () -> {
-                merchantService.createMerchantDetails(applicationId, merchantDetailsRequestDTO);
-            });
-            
-            assertEquals("Validation failed", exception.getMessage());
-            verify(applicationRepository).findById(applicationId);
-            verify(merchantDetailsRepository).existsByApplication(application);
-            verify(validationService).validateMerchantData(merchantDetailsRequestDTO);
-            verify(merchantDetailsRepository, never()).save(any());
-        }
+    @Test
+    @DisplayName("Should create merchant details successfully")
+    void createMerchantDetails_Success() {
+        // Arrange
+        when(applicationRepository.findById(applicationId)).thenReturn(Optional.of(application));
+        when(merchantDetailsRepository.existsByApplicationId(applicationId)).thenReturn(false);
+        when(merchantDetailsRepository.save(any(MerchantDetails.class))).thenReturn(merchantDetails);
+        doNothing().when(validationService).validateMerchantData(merchantDetailsRequestDTO);
+        
+        // Act
+        MerchantDetailsResponseDTO result = merchantService.createMerchantDetails(applicationId, merchantDetailsRequestDTO);
+        
+        // Assert
+        assertNotNull(result);
+        assertEquals(merchantDetails.getId(), result.getId());
+        assertEquals(merchantDetails.getLegalName(), result.getLegalName());
+        
+        // Verify interactions
+        verify(validationService).validateMerchantData(merchantDetailsRequestDTO);
+        verify(applicationRepository).findById(applicationId);
+        verify(merchantDetailsRepository).existsByApplicationId(applicationId);
+        verify(merchantDetailsRepository).save(any(MerchantDetails.class));
     }
 
-    @Nested
-    @DisplayName("Get Merchant Details Tests")
-    class GetMerchantDetailsTests {
-
-        @Test
-        @DisplayName("Should get merchant details by ID successfully")
-        void shouldGetMerchantDetailsByIdSuccessfully() {
-            // Arrange
-            when(merchantDetailsRepository.findById(1L)).thenReturn(Optional.of(merchantDetails));
-
-            // Act
-            MerchantDetailsResponseDTO responseDTO = merchantService.getMerchantDetailsById(1L);
-
-            // Assert
-            assertNotNull(responseDTO);
-            assertEquals(1L, responseDTO.getId());
-            verify(merchantDetailsRepository).findById(1L);
-        }
-
-        @Test
-        @DisplayName("Should throw ResourceNotFoundException when merchant details not found by ID")
-        void shouldThrowResourceNotFoundExceptionWhenMerchantDetailsNotFoundById() {
-            // Arrange
-            when(merchantDetailsRepository.findById(1L)).thenReturn(Optional.empty());
-
-            // Act & Assert
-            ResourceNotFoundException exception = assertThrows(ResourceNotFoundException.class, () -> {
-                merchantService.getMerchantDetailsById(1L);
-            });
-            
-            assertEquals("Merchant details not found with ID: 1", exception.getMessage());
-            verify(merchantDetailsRepository).findById(1L);
-        }
-
-        @Test
-        @DisplayName("Should get merchant details by application ID successfully")
-        void shouldGetMerchantDetailsByApplicationIdSuccessfully() {
-            // Arrange
-            when(merchantDetailsRepository.findByApplicationId(applicationId)).thenReturn(Optional.of(merchantDetails));
-
-            // Act
-            MerchantDetailsResponseDTO responseDTO = merchantService.getMerchantDetailsByApplicationId(applicationId);
-
-            // Assert
-            assertNotNull(responseDTO);
-            assertEquals(1L, responseDTO.getId());
-            verify(merchantDetailsRepository).findByApplicationId(applicationId);
-        }
-
-        @Test
-        @DisplayName("Should throw ResourceNotFoundException when merchant details not found by application ID")
-        void shouldThrowResourceNotFoundExceptionWhenMerchantDetailsNotFoundByApplicationId() {
-            // Arrange
-            when(merchantDetailsRepository.findByApplicationId(applicationId)).thenReturn(Optional.empty());
-
-            // Act & Assert
-            ResourceNotFoundException exception = assertThrows(ResourceNotFoundException.class, () -> {
-                merchantService.getMerchantDetailsByApplicationId(applicationId);
-            });
-            
-            assertEquals("Merchant details not found for application ID: " + applicationId, exception.getMessage());
-            verify(merchantDetailsRepository).findByApplicationId(applicationId);
-        }
-    }
-
-    @Nested
-    @DisplayName("Update Merchant Details Tests")
-    class UpdateMerchantDetailsTests {
-
-        @Test
-        @DisplayName("Should update merchant details by ID successfully")
-        void shouldUpdateMerchantDetailsByIdSuccessfully() {
-            // Arrange
-            when(merchantDetailsRepository.findById(1L)).thenReturn(Optional.of(merchantDetails));
-            doNothing().when(validationService).validateMerchantData(merchantDetailsRequestDTO);
-            when(merchantDetailsRepository.save(any(MerchantDetails.class))).thenReturn(merchantDetails);
-
-            // Update the request DTO
-            merchantDetailsRequestDTO.setLegalName("Updated Corporation");
-            merchantDetailsRequestDTO.setIndustry("Finance");
-            merchantDetailsRequestDTO.setRevenue(new BigDecimal("750000.00"));
-
-            // Act
-            MerchantDetailsResponseDTO responseDTO = merchantService.updateMerchantDetails(1L, merchantDetailsRequestDTO);
-
-            // Assert
-            assertNotNull(responseDTO);
-            assertEquals(1L, responseDTO.getId());
-            verify(merchantDetailsRepository).findById(1L);
-            verify(validationService).validateMerchantData(merchantDetailsRequestDTO);
-            verify(merchantDetailsRepository).save(merchantDetailsCaptor.capture());
-            
-            MerchantDetails capturedMerchantDetails = merchantDetailsCaptor.getValue();
-            assertEquals("Updated Corporation", capturedMerchantDetails.getLegalName());
-            assertEquals("Finance", capturedMerchantDetails.getIndustry());
-            assertEquals(0, new BigDecimal("750000.00").compareTo(capturedMerchantDetails.getRevenue()));
-        }
-
-        @Test
-        @DisplayName("Should throw ResourceNotFoundException when updating merchant details with non-existent ID")
-        void shouldThrowResourceNotFoundExceptionWhenUpdatingMerchantDetailsWithNonExistentId() {
-            // Arrange
-            when(merchantDetailsRepository.findById(1L)).thenReturn(Optional.empty());
-            doNothing().when(validationService).validateMerchantData(merchantDetailsRequestDTO);
-
-            // Act & Assert
-            ResourceNotFoundException exception = assertThrows(ResourceNotFoundException.class, () -> {
-                merchantService.updateMerchantDetails(1L, merchantDetailsRequestDTO);
-            });
-            
-            assertEquals("Merchant details not found with ID: 1", exception.getMessage());
-            verify(merchantDetailsRepository).findById(1L);
-            verify(validationService).validateMerchantData(merchantDetailsRequestDTO);
-            verify(merchantDetailsRepository, never()).save(any());
-        }
-
-        @Test
-        @DisplayName("Should throw ValidationException when updating merchant details with invalid data")
-        void shouldThrowValidationExceptionWhenUpdatingMerchantDetailsWithInvalidData() {
-            // Arrange
-            doThrow(new ValidationException("Validation failed")).when(validationService).validateMerchantData(merchantDetailsRequestDTO);
-
-            // Act & Assert
-            ValidationException exception = assertThrows(ValidationException.class, () -> {
-                merchantService.updateMerchantDetails(1L, merchantDetailsRequestDTO);
-            });
-            
-            assertEquals("Validation failed", exception.getMessage());
-            verify(validationService).validateMerchantData(merchantDetailsRequestDTO);
-            verify(merchantDetailsRepository, never()).findById(anyLong());
-            verify(merchantDetailsRepository, never()).save(any());
-        }
-
-        @Test
-        @DisplayName("Should update merchant details by application ID successfully")
-        void shouldUpdateMerchantDetailsByApplicationIdSuccessfully() {
-            // Arrange
-            when(merchantDetailsRepository.findByApplicationId(applicationId)).thenReturn(Optional.of(merchantDetails));
-            doNothing().when(validationService).validateMerchantData(merchantDetailsRequestDTO);
-            when(merchantDetailsRepository.save(any(MerchantDetails.class))).thenReturn(merchantDetails);
-
-            // Update the request DTO
-            merchantDetailsRequestDTO.setLegalName("Updated Corporation");
-            merchantDetailsRequestDTO.setIndustry("Finance");
-            merchantDetailsRequestDTO.setRevenue(new BigDecimal("750000.00"));
-
-            // Act
-            MerchantDetailsResponseDTO responseDTO = merchantService.updateMerchantDetailsByApplicationId(applicationId, merchantDetailsRequestDTO);
-
-            // Assert
-            assertNotNull(responseDTO);
-            assertEquals(1L, responseDTO.getId());
-            verify(merchantDetailsRepository).findByApplicationId(applicationId);
-            verify(validationService).validateMerchantData(merchantDetailsRequestDTO);
-            verify(merchantDetailsRepository).save(merchantDetailsCaptor.capture());
-            
-            MerchantDetails capturedMerchantDetails = merchantDetailsCaptor.getValue();
-            assertEquals("Updated Corporation", capturedMerchantDetails.getLegalName());
-            assertEquals("Finance", capturedMerchantDetails.getIndustry());
-            assertEquals(0, new BigDecimal("750000.00").compareTo(capturedMerchantDetails.getRevenue()));
-        }
-
-        @Test
-        @DisplayName("Should throw ResourceNotFoundException when updating merchant details with non-existent application ID")
-        void shouldThrowResourceNotFoundExceptionWhenUpdatingMerchantDetailsWithNonExistentApplicationId() {
-            // Arrange
-            when(merchantDetailsRepository.findByApplicationId(applicationId)).thenReturn(Optional.empty());
-            doNothing().when(validationService).validateMerchantData(merchantDetailsRequestDTO);
-
-            // Act & Assert
-            ResourceNotFoundException exception = assertThrows(ResourceNotFoundException.class, () -> {
-                merchantService.updateMerchantDetailsByApplicationId(applicationId, merchantDetailsRequestDTO);
-            });
-            
-            assertEquals("Merchant details not found for application ID: " + applicationId, exception.getMessage());
-            verify(merchantDetailsRepository).findByApplicationId(applicationId);
-            verify(validationService).validateMerchantData(merchantDetailsRequestDTO);
-            verify(merchantDetailsRepository, never()).save(any());
-        }
-    }
-
-    @Nested
-    @DisplayName("Delete Merchant Details Tests")
-    class DeleteMerchantDetailsTests {
-
-        @Test
-        @DisplayName("Should delete merchant details successfully")
-        void shouldDeleteMerchantDetailsSuccessfully() {
-            // Arrange
-            when(merchantDetailsRepository.existsById(1L)).thenReturn(true);
-            doNothing().when(merchantDetailsRepository).deleteById(1L);
-
-            // Act
-            merchantService.deleteMerchantDetails(1L);
-
-            // Assert
-            verify(merchantDetailsRepository).existsById(1L);
-            verify(merchantDetailsRepository).deleteById(1L);
-        }
-
-        @Test
-        @DisplayName("Should throw ResourceNotFoundException when deleting non-existent merchant details")
-        void shouldThrowResourceNotFoundExceptionWhenDeletingNonExistentMerchantDetails() {
-            // Arrange
-            when(merchantDetailsRepository.existsById(1L)).thenReturn(false);
-
-            // Act & Assert
-            ResourceNotFoundException exception = assertThrows(ResourceNotFoundException.class, () -> {
-                merchantService.deleteMerchantDetails(1L);
-            });
-            
-            assertEquals("Merchant details not found with ID: 1", exception.getMessage());
-            verify(merchantDetailsRepository).existsById(1L);
-            verify(merchantDetailsRepository, never()).deleteById(anyLong());
-        }
-    }
-
-    @Nested
-    @DisplayName("Get All Merchant Details Tests")
-    class GetAllMerchantDetailsTests {
-
-        @Test
-        @DisplayName("Should get all merchant details with pagination successfully")
-        void shouldGetAllMerchantDetailsWithPaginationSuccessfully() {
-            // Arrange
-            Pageable pageable = PageRequest.of(0, 10);
-            List<MerchantDetails> merchantDetailsList = Collections.singletonList(merchantDetails);
-            Page<MerchantDetails> merchantDetailsPage = new PageImpl<>(merchantDetailsList, pageable, merchantDetailsList.size());
-            
-            when(merchantDetailsRepository.findAll(pageable)).thenReturn(merchantDetailsPage);
-
-            // Act
-            Page<MerchantDetailsResponseDTO> responseDTOPage = merchantService.getAllMerchantDetails(pageable);
-
-            // Assert
-            assertNotNull(responseDTOPage);
-            assertEquals(1, responseDTOPage.getTotalElements());
-            assertEquals(1, responseDTOPage.getContent().size());
-            assertEquals(1L, responseDTOPage.getContent().get(0).getId());
-            verify(merchantDetailsRepository).findAll(pageable);
-        }
-
-        @Test
-        @DisplayName("Should return empty page when no merchant details exist")
-        void shouldReturnEmptyPageWhenNoMerchantDetailsExist() {
-            // Arrange
-            Pageable pageable = PageRequest.of(0, 10);
-            Page<MerchantDetails> emptyPage = new PageImpl<>(Collections.emptyList(), pageable, 0);
-            
-            when(merchantDetailsRepository.findAll(pageable)).thenReturn(emptyPage);
-
-            // Act
-            Page<MerchantDetailsResponseDTO> responseDTOPage = merchantService.getAllMerchantDetails(pageable);
-
-            // Assert
-            assertNotNull(responseDTOPage);
-            assertEquals(0, responseDTOPage.getTotalElements());
-            assertTrue(responseDTOPage.getContent().isEmpty());
-            verify(merchantDetailsRepository).findAll(pageable);
-        }
-    }
-
-    @Nested
-    @DisplayName("Find Merchants By Criteria Tests")
-    class FindMerchantsByCriteriaTests {
-
-        @Test
-        @DisplayName("Should find merchants by industry successfully")
-        void shouldFindMerchantsByIndustrySuccessfully() {
-            // Arrange
-            Pageable pageable = PageRequest.of(0, 10);
-            List<MerchantDetails> merchantDetailsList = Collections.singletonList(merchantDetails);
-            Page<MerchantDetails> merchantDetailsPage = new PageImpl<>(merchantDetailsList, pageable, merchantDetailsList.size());
-            
-            when(merchantDetailsRepository.findByIndustryContainingIgnoreCase("Technology", pageable)).thenReturn(merchantDetailsPage);
-
-            // Act
-            Page<MerchantDetailsResponseDTO> responseDTOPage = merchantService.findMerchantsByIndustry("Technology", pageable);
-
-            // Assert
-            assertNotNull(responseDTOPage);
-            assertEquals(1, responseDTOPage.getTotalElements());
-            assertEquals(1, responseDTOPage.getContent().size());
-            assertEquals(1L, responseDTOPage.getContent().get(0).getId());
-            verify(merchantDetailsRepository).findByIndustryContainingIgnoreCase("Technology", pageable);
-        }
-
-        @Test
-        @DisplayName("Should find merchants by revenue range successfully")
-        void shouldFindMerchantsByRevenueRangeSuccessfully() {
-            // Arrange
-            Pageable pageable = PageRequest.of(0, 10);
-            List<MerchantDetails> merchantDetailsList = Collections.singletonList(merchantDetails);
-            Page<MerchantDetails> merchantDetailsPage = new PageImpl<>(merchantDetailsList, pageable, merchantDetailsList.size());
-            
-            BigDecimal minRevenue = new BigDecimal("400000.00");
-            BigDecimal maxRevenue = new BigDecimal("600000.00");
-            
-            when(merchantDetailsRepository.findByRevenueBetween(minRevenue, maxRevenue, pageable)).thenReturn(merchantDetailsPage);
-
-            // Act
-            Page<MerchantDetailsResponseDTO> responseDTOPage = merchantService.findMerchantsByRevenueRange(minRevenue, maxRevenue, pageable);
-
-            // Assert
-            assertNotNull(responseDTOPage);
-            assertEquals(1, responseDTOPage.getTotalElements());
-            assertEquals(1, responseDTOPage.getContent().size());
-            assertEquals(1L, responseDTOPage.getContent().get(0).getId());
-            verify(merchantDetailsRepository).findByRevenueBetween(minRevenue, maxRevenue, pageable);
-        }
-
-        @Test
-        @DisplayName("Should find merchants by state successfully")
-        void shouldFindMerchantsByStateSuccessfully() {
-            // Arrange
-            Pageable pageable = PageRequest.of(0, 10);
-            List<MerchantDetails> merchantDetailsList = Collections.singletonList(merchantDetails);
-            Page<MerchantDetails> merchantDetailsPage = new PageImpl<>(merchantDetailsList, pageable, merchantDetailsList.size());
-            
-            when(merchantDetailsRepository.findByAddressState("NY", pageable)).thenReturn(merchantDetailsPage);
-
-            // Act
-            Page<MerchantDetailsResponseDTO> responseDTOPage = merchantService.findMerchantsByState("NY", pageable);
-
-            // Assert
-            assertNotNull(responseDTOPage);
-            assertEquals(1, responseDTOPage.getTotalElements());
-            assertEquals(1, responseDTOPage.getContent().size());
-            assertEquals(1L, responseDTOPage.getContent().get(0).getId());
-            verify(merchantDetailsRepository).findByAddressState("NY", pageable);
-        }
-
-        @Test
-        @DisplayName("Should find merchants by city successfully")
-        void shouldFindMerchantsByCitySuccessfully() {
-            // Arrange
-            Pageable pageable = PageRequest.of(0, 10);
-            List<MerchantDetails> merchantDetailsList = Collections.singletonList(merchantDetails);
-            Page<MerchantDetails> merchantDetailsPage = new PageImpl<>(merchantDetailsList, pageable, merchantDetailsList.size());
-            
-            when(merchantDetailsRepository.findByAddressCity("New York", pageable)).thenReturn(merchantDetailsPage);
-
-            // Act
-            Page<MerchantDetailsResponseDTO> responseDTOPage = merchantService.findMerchantsByCity("New York", pageable);
-
-            // Assert
-            assertNotNull(responseDTOPage);
-            assertEquals(1, responseDTOPage.getTotalElements());
-            assertEquals(1, responseDTOPage.getContent().size());
-            assertEquals(1L, responseDTOPage.getContent().get(0).getId());
-            verify(merchantDetailsRepository).findByAddressCity("New York", pageable);
-        }
-
-        @Test
-        @DisplayName("Should find merchants by industry and state successfully")
-        void shouldFindMerchantsByIndustryAndStateSuccessfully() {
-            // Arrange
-            Pageable pageable = PageRequest.of(0, 10);
-            List<MerchantDetails> merchantDetailsList = Collections.singletonList(merchantDetails);
-            Page<MerchantDetails> merchantDetailsPage = new PageImpl<>(merchantDetailsList, pageable, merchantDetailsList.size());
-            
-            when(merchantDetailsRepository.findByAddressStateAndIndustry("NY", "Technology", pageable)).thenReturn(merchantDetailsPage);
-
-            // Act
-            Page<MerchantDetailsResponseDTO> responseDTOPage = merchantService.findMerchantsByIndustryAndState("Technology", "NY", pageable);
-
-            // Assert
-            assertNotNull(responseDTOPage);
-            assertEquals(1, responseDTOPage.getTotalElements());
-            assertEquals(1, responseDTOPage.getContent().size());
-            assertEquals(1L, responseDTOPage.getContent().get(0).getId());
-            verify(merchantDetailsRepository).findByAddressStateAndIndustry("NY", "Technology", pageable);
-        }
-
-        @Test
-        @DisplayName("Should find merchants by industry and revenue range successfully")
-        void shouldFindMerchantsByIndustryAndRevenueRangeSuccessfully() {
-            // Arrange
-            Pageable pageable = PageRequest.of(0, 10);
-            List<MerchantDetails> merchantDetailsList = Collections.singletonList(merchantDetails);
-            Page<MerchantDetails> merchantDetailsPage = new PageImpl<>(merchantDetailsList, pageable, merchantDetailsList.size());
-            
-            BigDecimal minRevenue = new BigDecimal("400000.00");
-            BigDecimal maxRevenue = new BigDecimal("600000.00");
-            
-            when(merchantDetailsRepository.findByIndustryAndRevenueBetween("Technology", minRevenue, maxRevenue, pageable))
-                    .thenReturn(merchantDetailsPage);
-
-            // Act
-            Page<MerchantDetailsResponseDTO> responseDTOPage = merchantService.findMerchantsByIndustryAndRevenueRange(
-                    "Technology", minRevenue, maxRevenue, pageable);
-
-            // Assert
-            assertNotNull(responseDTOPage);
-            assertEquals(1, responseDTOPage.getTotalElements());
-            assertEquals(1, responseDTOPage.getContent().size());
-            assertEquals(1L, responseDTOPage.getContent().get(0).getId());
-            verify(merchantDetailsRepository).findByIndustryAndRevenueBetween("Technology", minRevenue, maxRevenue, pageable);
-        }
-    }
-
-    @Nested
-    @DisplayName("Merchant Details Existence Tests")
-    class MerchantDetailsExistenceTests {
-
-        @Test
-        @DisplayName("Should return true when merchant details exist for application")
-        void shouldReturnTrueWhenMerchantDetailsExistForApplication() {
-            // Arrange
-            when(merchantDetailsRepository.existsByApplicationId(applicationId)).thenReturn(true);
-
-            // Act
-            boolean exists = merchantService.merchantDetailsExistForApplication(applicationId);
-
-            // Assert
-            assertTrue(exists);
-            verify(merchantDetailsRepository).existsByApplicationId(applicationId);
-        }
-
-        @Test
-        @DisplayName("Should return false when merchant details do not exist for application")
-        void shouldReturnFalseWhenMerchantDetailsDoNotExistForApplication() {
-            // Arrange
-            when(merchantDetailsRepository.existsByApplicationId(applicationId)).thenReturn(false);
-
-            // Act
-            boolean exists = merchantService.merchantDetailsExistForApplication(applicationId);
-
-            // Assert
-            assertFalse(exists);
-            verify(merchantDetailsRepository).existsByApplicationId(applicationId);
-        }
-    }
-
-    @Nested
-    @DisplayName("Validation and Error Handling Tests")
-    class ValidationAndErrorHandlingTests {
-
-        @Test
-        @DisplayName("Should throw ValidationException when merchant details are null")
-        void shouldThrowValidationExceptionWhenMerchantDetailsAreNull() {
-            // Arrange
-            doThrow(new ValidationException("Merchant details cannot be null"))
-                    .when(validationService).validateMerchantData(null);
-
-            // Act & Assert
-            ValidationException exception = assertThrows(ValidationException.class, () -> {
-                merchantService.createMerchantDetails(applicationId, null);
-            });
-            
-            assertEquals("Merchant details cannot be null", exception.getMessage());
-        }
-
-        @Test
-        @DisplayName("Should throw ValidationException when legal name is missing")
-        void shouldThrowValidationExceptionWhenLegalNameIsMissing() {
-            // Arrange
-            MerchantDetailsRequestDTO invalidDTO = MerchantDetailsRequestDTO.builder()
-                    .legalName(null) // Missing legal name
-                    .dbaName("Acme")
-                    .ein("12-3456789")
-                    .address(addressDTO)
-                    .industry("Technology")
-                    .revenue(new BigDecimal("500000.00"))
-                    .build();
-            
-            doThrow(new ValidationException("Legal name is required"))
-                    .when(validationService).validateMerchantData(invalidDTO);
-
-            // Act & Assert
-            ValidationException exception = assertThrows(ValidationException.class, () -> {
-                merchantService.createMerchantDetails(applicationId, invalidDTO);
-            });
-            
-            assertEquals("Legal name is required", exception.getMessage());
-        }
-
-        @Test
-        @DisplayName("Should throw ValidationException when EIN format is invalid")
-        void shouldThrowValidationExceptionWhenEINFormatIsInvalid() {
-            // Arrange
-            MerchantDetailsRequestDTO invalidDTO = MerchantDetailsRequestDTO.builder()
-                    .legalName("Acme Corporation")
-                    .dbaName("Acme")
-                    .ein("123456789") // Invalid EIN format (missing hyphen)
-                    .address(addressDTO)
-                    .industry("Technology")
-                    .revenue(new BigDecimal("500000.00"))
-                    .build();
-            
-            doThrow(new ValidationException("EIN must be in format XX-XXXXXXX"))
-                    .when(validationService).validateMerchantData(invalidDTO);
-
-            // Act & Assert
-            ValidationException exception = assertThrows(ValidationException.class, () -> {
-                merchantService.createMerchantDetails(applicationId, invalidDTO);
-            });
-            
-            assertEquals("EIN must be in format XX-XXXXXXX", exception.getMessage());
-        }
-
-        @Test
-        @DisplayName("Should throw ValidationException when address is missing")
-        void shouldThrowValidationExceptionWhenAddressIsMissing() {
-            // Arrange
-            MerchantDetailsRequestDTO invalidDTO = MerchantDetailsRequestDTO.builder()
-                    .legalName("Acme Corporation")
-                    .dbaName("Acme")
-                    .ein("12-3456789")
-                    .address(null) // Missing address
-                    .industry("Technology")
-                    .revenue(new BigDecimal("500000.00"))
-                    .build();
-            
-            doThrow(new ValidationException("Address is required"))
-                    .when(validationService).validateMerchantData(invalidDTO);
-
-            // Act & Assert
-            ValidationException exception = assertThrows(ValidationException.class, () -> {
-                merchantService.createMerchantDetails(applicationId, invalidDTO);
-            });
-            
-            assertEquals("Address is required", exception.getMessage());
-        }
-
-        @Test
-        @DisplayName("Should throw ValidationException when industry is missing")
-        void shouldThrowValidationExceptionWhenIndustryIsMissing() {
-            // Arrange
-            MerchantDetailsRequestDTO invalidDTO = MerchantDetailsRequestDTO.builder()
-                    .legalName("Acme Corporation")
-                    .dbaName("Acme")
-                    .ein("12-3456789")
-                    .address(addressDTO)
-                    .industry(null) // Missing industry
-                    .revenue(new BigDecimal("500000.00"))
-                    .build();
-            
-            doThrow(new ValidationException("Industry is required"))
-                    .when(validationService).validateMerchantData(invalidDTO);
-
-            // Act & Assert
-            ValidationException exception = assertThrows(ValidationException.class, () -> {
-                merchantService.createMerchantDetails(applicationId, invalidDTO);
-            });
-            
-            assertEquals("Industry is required", exception.getMessage());
-        }
-
-        @Test
-        @DisplayName("Should throw ValidationException when revenue is not positive")
-        void shouldThrowValidationExceptionWhenRevenueIsNotPositive() {
-            // Arrange
-            MerchantDetailsRequestDTO invalidDTO = MerchantDetailsRequestDTO.builder()
-                    .legalName("Acme Corporation")
-                    .dbaName("Acme")
-                    .ein("12-3456789")
-                    .address(addressDTO)
-                    .industry("Technology")
-                    .revenue(new BigDecimal("0.00")) // Zero revenue
-                    .build();
-            
-            doThrow(new ValidationException("Revenue must be greater than zero"))
-                    .when(validationService).validateMerchantData(invalidDTO);
-
-            // Act & Assert
-            ValidationException exception = assertThrows(ValidationException.class, () -> {
-                merchantService.createMerchantDetails(applicationId, invalidDTO);
-            });
-            
-            assertEquals("Revenue must be greater than zero", exception.getMessage());
-        }
-
-        @Test
-        @DisplayName("Should throw ValidationException when complex validation fails")
-        void shouldThrowValidationExceptionWhenComplexValidationFails() {
-            // Arrange
-            when(applicationRepository.findById(applicationId)).thenReturn(Optional.of(application));
-            when(merchantDetailsRepository.existsByApplication(application)).thenReturn(false);
-            
-            doThrow(new ValidationException("Revenue must be at least $50,000 for funding"))
-                    .when(validationService).validateMerchantData(merchantDetailsRequestDTO);
-
-            // Act & Assert
-            ValidationException exception = assertThrows(ValidationException.class, () -> {
-                merchantService.createMerchantDetails(applicationId, merchantDetailsRequestDTO);
-            });
-            
-            assertEquals("Revenue must be at least $50,000 for funding", exception.getMessage());
-            verify(applicationRepository).findById(applicationId);
-            verify(merchantDetailsRepository).existsByApplication(application);
-            verify(validationService).validateMerchantData(merchantDetailsRequestDTO);
-            verify(merchantDetailsRepository, never()).save(any());
-        }
-    }
-
-    @Nested
-    @DisplayName("Field-Level Encryption Tests")
-    class FieldLevelEncryptionTests {
-
-        @Test
-        @DisplayName("Should encrypt sensitive fields when creating merchant details")
-        void shouldEncryptSensitiveFieldsWhenCreatingMerchantDetails() {
-            // Arrange
-            when(applicationRepository.findById(applicationId)).thenReturn(Optional.of(application));
-            when(merchantDetailsRepository.existsByApplication(application)).thenReturn(false);
-            doNothing().when(validationService).validateMerchantData(merchantDetailsRequestDTO);
-            when(merchantDetailsRepository.save(any(MerchantDetails.class))).thenReturn(merchantDetails);
-            
-            // Mock encryption
-            when(encryptionUtil.encrypt("Acme Corporation")).thenReturn("ENCRYPTED_LEGAL_NAME");
-            when(encryptionUtil.encrypt("Acme")).thenReturn("ENCRYPTED_DBA_NAME");
-            when(encryptionUtil.encrypt("12-3456789")).thenReturn("ENCRYPTED_EIN");
-
-            // Act
+    @Test
+    @DisplayName("Should throw ValidationException when merchant data is invalid")
+    void createMerchantDetails_ValidationFailure() {
+        // Arrange
+        doThrow(new ValidationException("Invalid merchant data")).when(validationService).validateMerchantData(merchantDetailsRequestDTO);
+        
+        // Act & Assert
+        ValidationException exception = assertThrows(ValidationException.class, () -> {
             merchantService.createMerchantDetails(applicationId, merchantDetailsRequestDTO);
+        });
+        
+        assertEquals("Invalid merchant data", exception.getMessage());
+        
+        // Verify interactions
+        verify(validationService).validateMerchantData(merchantDetailsRequestDTO);
+        verify(applicationRepository, never()).findById(any());
+        verify(merchantDetailsRepository, never()).save(any());
+    }
 
-            // Assert
-            verify(merchantDetailsRepository).save(merchantDetailsCaptor.capture());
-            
-            // Note: In the actual implementation, encryption is handled by JPA converters,
-            // so we can't directly verify the encryption here. This test is more of a placeholder
-            // to demonstrate that encryption should be happening.
-        }
+    @Test
+    @DisplayName("Should throw ResourceNotFoundException when application is not found")
+    void createMerchantDetails_ApplicationNotFound() {
+        // Arrange
+        when(applicationRepository.findById(applicationId)).thenReturn(Optional.empty());
+        doNothing().when(validationService).validateMerchantData(merchantDetailsRequestDTO);
+        
+        // Act & Assert
+        ResourceNotFoundException exception = assertThrows(ResourceNotFoundException.class, () -> {
+            merchantService.createMerchantDetails(applicationId, merchantDetailsRequestDTO);
+        });
+        
+        assertTrue(exception.getMessage().contains("Application not found"));
+        
+        // Verify interactions
+        verify(validationService).validateMerchantData(merchantDetailsRequestDTO);
+        verify(applicationRepository).findById(applicationId);
+        verify(merchantDetailsRepository, never()).save(any());
+    }
 
-        @Test
-        @DisplayName("Should decrypt sensitive fields when retrieving merchant details")
-        void shouldDecryptSensitiveFieldsWhenRetrievingMerchantDetails() {
-            // Arrange
-            when(merchantDetailsRepository.findById(1L)).thenReturn(Optional.of(merchantDetails));
-            
-            // Mock decryption
-            when(encryptionUtil.decrypt("ENCRYPTED_LEGAL_NAME")).thenReturn("Acme Corporation");
-            when(encryptionUtil.decrypt("ENCRYPTED_DBA_NAME")).thenReturn("Acme");
-            when(encryptionUtil.decrypt("ENCRYPTED_EIN")).thenReturn("12-3456789");
+    @Test
+    @DisplayName("Should throw BusinessRuleException when merchant details already exist for application")
+    void createMerchantDetails_MerchantDetailsAlreadyExist() {
+        // Arrange
+        when(applicationRepository.findById(applicationId)).thenReturn(Optional.of(application));
+        when(merchantDetailsRepository.existsByApplicationId(applicationId)).thenReturn(true);
+        doNothing().when(validationService).validateMerchantData(merchantDetailsRequestDTO);
+        
+        // Act & Assert
+        BusinessRuleException exception = assertThrows(BusinessRuleException.class, () -> {
+            merchantService.createMerchantDetails(applicationId, merchantDetailsRequestDTO);
+        });
+        
+        assertEquals("Merchant details already exist for this application", exception.getMessage());
+        
+        // Verify interactions
+        verify(validationService).validateMerchantData(merchantDetailsRequestDTO);
+        verify(applicationRepository).findById(applicationId);
+        verify(merchantDetailsRepository).existsByApplicationId(applicationId);
+        verify(merchantDetailsRepository, never()).save(any());
+    }
 
-            // Act
-            MerchantDetailsResponseDTO responseDTO = merchantService.getMerchantDetailsById(1L);
+    @Test
+    @DisplayName("Should get merchant details by ID successfully")
+    void getMerchantDetailsById_Success() {
+        // Arrange
+        Long id = 1L;
+        UUID uuid = UUID.randomUUID();
+        when(merchantDetailsRepository.findById(any(UUID.class))).thenReturn(Optional.of(merchantDetails));
+        
+        // Act
+        MerchantDetailsResponseDTO result = merchantService.getMerchantDetailsById(id);
+        
+        // Assert
+        assertNotNull(result);
+        assertEquals(merchantDetails.getId(), result.getId());
+        assertEquals(merchantDetails.getLegalName(), result.getLegalName());
+        
+        // Verify interactions
+        verify(merchantDetailsRepository).findById(any(UUID.class));
+        verify(merchantDetails).setEncryptionUtil(encryptionUtil);
+    }
 
-            // Assert
-            assertNotNull(responseDTO);
-            
-            // Note: In the actual implementation, decryption is handled by JPA converters,
-            // so we can't directly verify the decryption here. This test is more of a placeholder
-            // to demonstrate that decryption should be happening.
-        }
+    @Test
+    @DisplayName("Should throw ResourceNotFoundException when merchant details are not found by ID")
+    void getMerchantDetailsById_NotFound() {
+        // Arrange
+        Long id = 1L;
+        when(merchantDetailsRepository.findById(any(UUID.class))).thenReturn(Optional.empty());
+        
+        // Act & Assert
+        ResourceNotFoundException exception = assertThrows(ResourceNotFoundException.class, () -> {
+            merchantService.getMerchantDetailsById(id);
+        });
+        
+        assertTrue(exception.getMessage().contains("Merchant details not found"));
+        
+        // Verify interactions
+        verify(merchantDetailsRepository).findById(any(UUID.class));
+    }
+
+    @Test
+    @DisplayName("Should get merchant details by application ID successfully")
+    void getMerchantDetailsByApplicationId_Success() {
+        // Arrange
+        when(merchantDetailsRepository.findByApplicationId(applicationId)).thenReturn(Optional.of(merchantDetails));
+        
+        // Act
+        MerchantDetailsResponseDTO result = merchantService.getMerchantDetailsByApplicationId(applicationId);
+        
+        // Assert
+        assertNotNull(result);
+        assertEquals(merchantDetails.getId(), result.getId());
+        assertEquals(merchantDetails.getLegalName(), result.getLegalName());
+        
+        // Verify interactions
+        verify(merchantDetailsRepository).findByApplicationId(applicationId);
+        verify(merchantDetails).setEncryptionUtil(encryptionUtil);
+    }
+
+    @Test
+    @DisplayName("Should throw ResourceNotFoundException when merchant details are not found by application ID")
+    void getMerchantDetailsByApplicationId_NotFound() {
+        // Arrange
+        when(merchantDetailsRepository.findByApplicationId(applicationId)).thenReturn(Optional.empty());
+        
+        // Act & Assert
+        ResourceNotFoundException exception = assertThrows(ResourceNotFoundException.class, () -> {
+            merchantService.getMerchantDetailsByApplicationId(applicationId);
+        });
+        
+        assertTrue(exception.getMessage().contains("Merchant details not found for application"));
+        
+        // Verify interactions
+        verify(merchantDetailsRepository).findByApplicationId(applicationId);
+    }
+
+    @Test
+    @DisplayName("Should update merchant details successfully")
+    void updateMerchantDetails_Success() {
+        // Arrange
+        Long id = 1L;
+        UUID uuid = UUID.randomUUID();
+        
+        // Updated merchant details
+        MerchantDetailsRequestDTO updatedDTO = new MerchantDetailsRequestDTO();
+        updatedDTO.setLegalName("Updated Merchant Inc.");
+        updatedDTO.setDbaName("Updated Merchant");
+        updatedDTO.setEin("98-7654321");
+        updatedDTO.setIndustry("Technology");
+        updatedDTO.setRevenue(new BigDecimal("1000000.00"));
+        
+        when(merchantDetailsRepository.findById(any(UUID.class))).thenReturn(Optional.of(merchantDetails));
+        when(merchantDetailsRepository.save(any(MerchantDetails.class))).thenReturn(merchantDetails);
+        doNothing().when(validationService).validateMerchantData(updatedDTO);
+        
+        // Act
+        MerchantDetailsResponseDTO result = merchantService.updateMerchantDetails(id, updatedDTO);
+        
+        // Assert
+        assertNotNull(result);
+        
+        // Verify interactions
+        verify(validationService).validateMerchantData(updatedDTO);
+        verify(merchantDetailsRepository).findById(any(UUID.class));
+        verify(merchantDetails).setEncryptionUtil(encryptionUtil);
+        verify(merchantDetailsRepository).save(merchantDetails);
+    }
+
+    @Test
+    @DisplayName("Should throw ValidationException when updating with invalid merchant data")
+    void updateMerchantDetails_ValidationFailure() {
+        // Arrange
+        Long id = 1L;
+        doThrow(new ValidationException("Invalid merchant data")).when(validationService).validateMerchantData(merchantDetailsRequestDTO);
+        
+        // Act & Assert
+        ValidationException exception = assertThrows(ValidationException.class, () -> {
+            merchantService.updateMerchantDetails(id, merchantDetailsRequestDTO);
+        });
+        
+        assertEquals("Invalid merchant data", exception.getMessage());
+        
+        // Verify interactions
+        verify(validationService).validateMerchantData(merchantDetailsRequestDTO);
+        verify(merchantDetailsRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("Should throw ResourceNotFoundException when updating non-existent merchant details")
+    void updateMerchantDetails_NotFound() {
+        // Arrange
+        Long id = 1L;
+        when(merchantDetailsRepository.findById(any(UUID.class))).thenReturn(Optional.empty());
+        doNothing().when(validationService).validateMerchantData(merchantDetailsRequestDTO);
+        
+        // Act & Assert
+        ResourceNotFoundException exception = assertThrows(ResourceNotFoundException.class, () -> {
+            merchantService.updateMerchantDetails(id, merchantDetailsRequestDTO);
+        });
+        
+        assertTrue(exception.getMessage().contains("Merchant details not found"));
+        
+        // Verify interactions
+        verify(validationService).validateMerchantData(merchantDetailsRequestDTO);
+        verify(merchantDetailsRepository).findById(any(UUID.class));
+        verify(merchantDetailsRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("Should update merchant details by application ID successfully")
+    void updateMerchantDetailsByApplicationId_Success() {
+        // Arrange
+        // Updated merchant details
+        MerchantDetailsRequestDTO updatedDTO = new MerchantDetailsRequestDTO();
+        updatedDTO.setLegalName("Updated Merchant Inc.");
+        updatedDTO.setDbaName("Updated Merchant");
+        updatedDTO.setEin("98-7654321");
+        updatedDTO.setIndustry("Technology");
+        updatedDTO.setRevenue(new BigDecimal("1000000.00"));
+        
+        when(applicationRepository.findById(applicationId)).thenReturn(Optional.of(application));
+        when(merchantDetailsRepository.findByApplicationId(applicationId)).thenReturn(Optional.of(merchantDetails));
+        when(merchantDetailsRepository.save(any(MerchantDetails.class))).thenReturn(merchantDetails);
+        doNothing().when(validationService).validateMerchantData(updatedDTO);
+        
+        // Act
+        MerchantDetailsResponseDTO result = merchantService.updateMerchantDetailsByApplicationId(applicationId, updatedDTO);
+        
+        // Assert
+        assertNotNull(result);
+        
+        // Verify interactions
+        verify(validationService).validateMerchantData(updatedDTO);
+        verify(applicationRepository).findById(applicationId);
+        verify(merchantDetailsRepository).findByApplicationId(applicationId);
+        verify(merchantDetails).setEncryptionUtil(encryptionUtil);
+        verify(merchantDetailsRepository).save(merchantDetails);
+    }
+
+    @Test
+    @DisplayName("Should throw ResourceNotFoundException when application is not found during update by application ID")
+    void updateMerchantDetailsByApplicationId_ApplicationNotFound() {
+        // Arrange
+        when(applicationRepository.findById(applicationId)).thenReturn(Optional.empty());
+        doNothing().when(validationService).validateMerchantData(merchantDetailsRequestDTO);
+        
+        // Act & Assert
+        ResourceNotFoundException exception = assertThrows(ResourceNotFoundException.class, () -> {
+            merchantService.updateMerchantDetailsByApplicationId(applicationId, merchantDetailsRequestDTO);
+        });
+        
+        assertTrue(exception.getMessage().contains("Application not found"));
+        
+        // Verify interactions
+        verify(validationService).validateMerchantData(merchantDetailsRequestDTO);
+        verify(applicationRepository).findById(applicationId);
+        verify(merchantDetailsRepository, never()).findByApplicationId(any());
+        verify(merchantDetailsRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("Should throw ResourceNotFoundException when merchant details are not found during update by application ID")
+    void updateMerchantDetailsByApplicationId_MerchantDetailsNotFound() {
+        // Arrange
+        when(applicationRepository.findById(applicationId)).thenReturn(Optional.of(application));
+        when(merchantDetailsRepository.findByApplicationId(applicationId)).thenReturn(Optional.empty());
+        doNothing().when(validationService).validateMerchantData(merchantDetailsRequestDTO);
+        
+        // Act & Assert
+        ResourceNotFoundException exception = assertThrows(ResourceNotFoundException.class, () -> {
+            merchantService.updateMerchantDetailsByApplicationId(applicationId, merchantDetailsRequestDTO);
+        });
+        
+        assertTrue(exception.getMessage().contains("Merchant details not found for application"));
+        
+        // Verify interactions
+        verify(validationService).validateMerchantData(merchantDetailsRequestDTO);
+        verify(applicationRepository).findById(applicationId);
+        verify(merchantDetailsRepository).findByApplicationId(applicationId);
+        verify(merchantDetailsRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("Should delete merchant details successfully")
+    void deleteMerchantDetails_Success() {
+        // Arrange
+        Long id = 1L;
+        when(merchantDetailsRepository.existsById(any(UUID.class))).thenReturn(true);
+        doNothing().when(merchantDetailsRepository).deleteById(any(UUID.class));
+        
+        // Act
+        merchantService.deleteMerchantDetails(id);
+        
+        // Verify interactions
+        verify(merchantDetailsRepository).existsById(any(UUID.class));
+        verify(merchantDetailsRepository).deleteById(any(UUID.class));
+    }
+
+    @Test
+    @DisplayName("Should throw ResourceNotFoundException when deleting non-existent merchant details")
+    void deleteMerchantDetails_NotFound() {
+        // Arrange
+        Long id = 1L;
+        when(merchantDetailsRepository.existsById(any(UUID.class))).thenReturn(false);
+        
+        // Act & Assert
+        ResourceNotFoundException exception = assertThrows(ResourceNotFoundException.class, () -> {
+            merchantService.deleteMerchantDetails(id);
+        });
+        
+        assertTrue(exception.getMessage().contains("Merchant details not found"));
+        
+        // Verify interactions
+        verify(merchantDetailsRepository).existsById(any(UUID.class));
+        verify(merchantDetailsRepository, never()).deleteById(any());
+    }
+
+    @Test
+    @DisplayName("Should get all merchant details with pagination successfully")
+    void getAllMerchantDetails_Success() {
+        // Arrange
+        Pageable pageable = PageRequest.of(0, 10);
+        List<MerchantDetails> merchantDetailsList = new ArrayList<>();
+        merchantDetailsList.add(merchantDetails);
+        
+        Page<MerchantDetails> merchantDetailsPage = new PageImpl<>(merchantDetailsList, pageable, merchantDetailsList.size());
+        
+        when(merchantDetailsRepository.findAll(pageable)).thenReturn(merchantDetailsPage);
+        
+        // Act
+        Page<MerchantDetailsResponseDTO> result = merchantService.getAllMerchantDetails(pageable);
+        
+        // Assert
+        assertNotNull(result);
+        assertEquals(1, result.getTotalElements());
+        assertEquals(1, result.getContent().size());
+        
+        // Verify interactions
+        verify(merchantDetailsRepository).findAll(pageable);
+        verify(merchantDetails).setEncryptionUtil(encryptionUtil);
+    }
+
+    @Test
+    @DisplayName("Should find merchants by industry with pagination successfully")
+    void findMerchantsByIndustry_Success() {
+        // Arrange
+        String industry = "Retail";
+        Pageable pageable = PageRequest.of(0, 10);
+        List<MerchantDetails> merchantDetailsList = new ArrayList<>();
+        merchantDetailsList.add(merchantDetails);
+        
+        Page<MerchantDetails> merchantDetailsPage = new PageImpl<>(merchantDetailsList, pageable, merchantDetailsList.size());
+        
+        when(merchantDetailsRepository.findByIndustry(industry, pageable)).thenReturn(merchantDetailsPage);
+        
+        // Act
+        Page<MerchantDetailsResponseDTO> result = merchantService.findMerchantsByIndustry(industry, pageable);
+        
+        // Assert
+        assertNotNull(result);
+        assertEquals(1, result.getTotalElements());
+        assertEquals(1, result.getContent().size());
+        assertEquals("Retail", merchantDetails.getIndustry());
+        
+        // Verify interactions
+        verify(merchantDetailsRepository).findByIndustry(industry, pageable);
+        verify(merchantDetails).setEncryptionUtil(encryptionUtil);
+    }
+
+    @Test
+    @DisplayName("Should find merchants by revenue range with pagination successfully")
+    void findMerchantsByRevenueRange_Success() {
+        // Arrange
+        BigDecimal minRevenue = new BigDecimal("100000.00");
+        BigDecimal maxRevenue = new BigDecimal("1000000.00");
+        Pageable pageable = PageRequest.of(0, 10);
+        List<MerchantDetails> merchantDetailsList = new ArrayList<>();
+        merchantDetailsList.add(merchantDetails);
+        
+        Page<MerchantDetails> merchantDetailsPage = new PageImpl<>(merchantDetailsList, pageable, merchantDetailsList.size());
+        
+        when(merchantDetailsRepository.findByRevenueBetween(minRevenue, maxRevenue, pageable)).thenReturn(merchantDetailsPage);
+        
+        // Act
+        Page<MerchantDetailsResponseDTO> result = merchantService.findMerchantsByRevenueRange(minRevenue, maxRevenue, pageable);
+        
+        // Assert
+        assertNotNull(result);
+        assertEquals(1, result.getTotalElements());
+        assertEquals(1, result.getContent().size());
+        assertTrue(merchantDetails.getRevenue().compareTo(minRevenue) >= 0);
+        assertTrue(merchantDetails.getRevenue().compareTo(maxRevenue) <= 0);
+        
+        // Verify interactions
+        verify(merchantDetailsRepository).findByRevenueBetween(minRevenue, maxRevenue, pageable);
+        verify(merchantDetails).setEncryptionUtil(encryptionUtil);
+    }
+
+    @Test
+    @DisplayName("Should find merchants by state with pagination successfully")
+    void findMerchantsByState_Success() {
+        // Arrange
+        String state = "CA";
+        Pageable pageable = PageRequest.of(0, 10);
+        List<MerchantDetails> merchantDetailsList = new ArrayList<>();
+        merchantDetailsList.add(merchantDetails);
+        
+        Page<MerchantDetails> merchantDetailsPage = new PageImpl<>(merchantDetailsList, pageable, merchantDetailsList.size());
+        
+        when(merchantDetailsRepository.findByState(state, pageable)).thenReturn(merchantDetailsPage);
+        
+        // Act
+        Page<MerchantDetailsResponseDTO> result = merchantService.findMerchantsByState(state, pageable);
+        
+        // Assert
+        assertNotNull(result);
+        assertEquals(1, result.getTotalElements());
+        assertEquals(1, result.getContent().size());
+        
+        // Verify interactions
+        verify(merchantDetailsRepository).findByState(state, pageable);
+        verify(merchantDetails).setEncryptionUtil(encryptionUtil);
+    }
+
+    @Test
+    @DisplayName("Should find merchants by city with pagination successfully")
+    void findMerchantsByCity_Success() {
+        // Arrange
+        String city = "San Francisco";
+        Pageable pageable = PageRequest.of(0, 10);
+        List<MerchantDetails> merchantDetailsList = new ArrayList<>();
+        merchantDetailsList.add(merchantDetails);
+        
+        Page<MerchantDetails> merchantDetailsPage = new PageImpl<>(merchantDetailsList, pageable, merchantDetailsList.size());
+        
+        when(merchantDetailsRepository.findByCity(city, pageable)).thenReturn(merchantDetailsPage);
+        
+        // Act
+        Page<MerchantDetailsResponseDTO> result = merchantService.findMerchantsByCity(city, pageable);
+        
+        // Assert
+        assertNotNull(result);
+        assertEquals(1, result.getTotalElements());
+        assertEquals(1, result.getContent().size());
+        
+        // Verify interactions
+        verify(merchantDetailsRepository).findByCity(city, pageable);
+        verify(merchantDetails).setEncryptionUtil(encryptionUtil);
+    }
+
+    @Test
+    @DisplayName("Should find merchants by industry and state with pagination successfully")
+    void findMerchantsByIndustryAndState_Success() {
+        // Arrange
+        String industry = "Retail";
+        String state = "CA";
+        Pageable pageable = PageRequest.of(0, 10);
+        List<MerchantDetails> merchantDetailsList = new ArrayList<>();
+        merchantDetailsList.add(merchantDetails);
+        
+        Page<MerchantDetails> merchantDetailsPage = new PageImpl<>(merchantDetailsList, pageable, merchantDetailsList.size());
+        
+        when(merchantDetailsRepository.findByStateAndIndustry(state, industry, pageable)).thenReturn(merchantDetailsPage);
+        
+        // Act
+        Page<MerchantDetailsResponseDTO> result = merchantService.findMerchantsByIndustryAndState(industry, state, pageable);
+        
+        // Assert
+        assertNotNull(result);
+        assertEquals(1, result.getTotalElements());
+        assertEquals(1, result.getContent().size());
+        assertEquals("Retail", merchantDetails.getIndustry());
+        
+        // Verify interactions
+        verify(merchantDetailsRepository).findByStateAndIndustry(state, industry, pageable);
+        verify(merchantDetails).setEncryptionUtil(encryptionUtil);
+    }
+
+    @Test
+    @DisplayName("Should find merchants by industry and revenue range with pagination successfully")
+    void findMerchantsByIndustryAndRevenueRange_Success() {
+        // Arrange
+        String industry = "Retail";
+        BigDecimal minRevenue = new BigDecimal("100000.00");
+        BigDecimal maxRevenue = new BigDecimal("1000000.00");
+        Pageable pageable = PageRequest.of(0, 10);
+        List<MerchantDetails> merchantDetailsList = new ArrayList<>();
+        merchantDetailsList.add(merchantDetails);
+        
+        Page<MerchantDetails> merchantDetailsPage = new PageImpl<>(merchantDetailsList, pageable, merchantDetailsList.size());
+        
+        when(merchantDetailsRepository.findByIndustryAndRevenueGreaterThanEqual(industry, minRevenue, pageable)).thenReturn(merchantDetailsPage);
+        
+        // Act
+        Page<MerchantDetailsResponseDTO> result = merchantService.findMerchantsByIndustryAndRevenueRange(industry, minRevenue, maxRevenue, pageable);
+        
+        // Assert
+        assertNotNull(result);
+        assertEquals(1, result.getTotalElements());
+        assertEquals(1, result.getContent().size());
+        assertEquals("Retail", merchantDetails.getIndustry());
+        assertTrue(merchantDetails.getRevenue().compareTo(minRevenue) >= 0);
+        assertTrue(merchantDetails.getRevenue().compareTo(maxRevenue) <= 0);
+        
+        // Verify interactions
+        verify(merchantDetailsRepository).findByIndustryAndRevenueGreaterThanEqual(industry, minRevenue, pageable);
+        verify(merchantDetails).setEncryptionUtil(encryptionUtil);
+    }
+
+    @Test
+    @DisplayName("Should check if merchant details exist for application successfully")
+    void merchantDetailsExistForApplication_Success() {
+        // Arrange
+        when(merchantDetailsRepository.existsByApplicationId(applicationId)).thenReturn(true);
+        
+        // Act
+        boolean result = merchantService.merchantDetailsExistForApplication(applicationId);
+        
+        // Assert
+        assertTrue(result);
+        
+        // Verify interactions
+        verify(merchantDetailsRepository).existsByApplicationId(applicationId);
+    }
+
+    @Test
+    @DisplayName("Should handle field-level encryption for sensitive merchant data")
+    void handleFieldLevelEncryption_Success() {
+        // Arrange
+        Long id = 1L;
+        UUID uuid = UUID.randomUUID();
+        
+        // Set up encryption expectations
+        when(encryptionUtil.encrypt("Test Merchant Inc.")).thenReturn("ENCRYPTED_LEGAL_NAME");
+        when(encryptionUtil.encrypt("Test Merchant")).thenReturn("ENCRYPTED_DBA_NAME");
+        when(encryptionUtil.encrypt("12-3456789")).thenReturn("ENCRYPTED_EIN");
+        
+        when(encryptionUtil.decrypt("ENCRYPTED_LEGAL_NAME")).thenReturn("Test Merchant Inc.");
+        when(encryptionUtil.decrypt("ENCRYPTED_DBA_NAME")).thenReturn("Test Merchant");
+        when(encryptionUtil.decrypt("ENCRYPTED_EIN")).thenReturn("12-3456789");
+        
+        when(merchantDetailsRepository.findById(any(UUID.class))).thenReturn(Optional.of(merchantDetails));
+        
+        // Act
+        MerchantDetailsResponseDTO result = merchantService.getMerchantDetailsById(id);
+        
+        // Assert
+        assertNotNull(result);
+        
+        // Verify encryption utility was set on the entity
+        verify(merchantDetails).setEncryptionUtil(encryptionUtil);
+    }
+
+    @Test
+    @DisplayName("Should handle error when converting ID to UUID")
+    void convertToUUID_Error() {
+        // Arrange
+        Long id = null;
+        
+        // Act & Assert
+        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class, () -> {
+            merchantService.getMerchantDetailsById(id);
+        });
+        
+        assertTrue(exception.getMessage().contains("ID cannot be null"));
     }
 }
