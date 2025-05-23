@@ -1,205 +1,190 @@
 /**
- * Health Check Routes
+ * Health check routes for the Notification Service
  * 
- * This file defines Express routes for health checks and service status in the Notification Service.
- * It implements endpoints for basic and detailed health checks, enabling Kubernetes and monitoring
- * systems to verify service health. It's critical for ensuring service availability and proper operation
- * in a containerized environment.
- *
- * @module routes/health-routes
+ * These routes provide endpoints for monitoring the health and status of the service.
+ * They are used by Kubernetes for liveness and readiness probes, as well as by monitoring
+ * systems to track service health and dependencies.
  */
 
 import { Router } from 'express';
-import { IServiceStatus } from '../types/common';
-
-// Import service dependencies for health checks
 import { config } from '../config';
+import { logger } from '../config/logger';
+import { redisClient } from '../config/redis';
+import { rabbitMQConnection } from '../config/rabbitmq';
 
 const router = Router();
 
 /**
+ * Health check status enum
+ */
+enum HealthStatus {
+  UP = 'UP',
+  DOWN = 'DOWN',
+  DEGRADED = 'DEGRADED'
+}
+
+/**
+ * Standard health check response format
+ */
+interface HealthResponse {
+  status: HealthStatus;
+  version: string;
+  timestamp: string;
+  service: string;
+  details?: {
+    [key: string]: {
+      status: HealthStatus;
+      details?: any;
+      error?: string;
+    };
+  };
+}
+
+/**
  * Basic health check endpoint (liveness probe)
- * Used by Kubernetes to determine if the service is running
- * Returns a simple 200 OK response if the service is up
+ * 
+ * This endpoint provides a simple health check that returns 200 OK if the service
+ * is running. It is used by Kubernetes for liveness probes to determine if the
+ * container should be restarted.
  * 
  * @route GET /health
- * @returns {Object} 200 - Service status information
- * @returns {Object} 503 - Service unavailable
+ * @returns {HealthResponse} 200 - Basic health status
  */
 router.get('/', async (req, res) => {
-  const healthCheck: IServiceStatus = {
-    service: 'notification-service',
-    status: 'up',
-    version: process.env.npm_package_version || '1.0.0',
-    uptime: process.uptime(),
-    timestamp: new Date().toISOString()
+  const healthResponse: HealthResponse = {
+    status: HealthStatus.UP,
+    version: config.version,
+    timestamp: new Date().toISOString(),
+    service: config.serviceName
   };
 
-  try {
-    res.status(200).json(healthCheck);
-  } catch (error) {
-    console.error('Health check failed:', error);
-    res.status(503).json({
-      service: 'notification-service',
-      status: 'down',
-      version: process.env.npm_package_version || '1.0.0',
-      uptime: process.uptime(),
-      timestamp: new Date().toISOString()
-    });
-  }
+  logger.info('Health check performed', { result: 'success' });
+  return res.status(200).json(healthResponse);
 });
 
 /**
  * Detailed health check endpoint (readiness probe)
- * Used by Kubernetes to determine if the service is ready to accept traffic
- * Checks connectivity to dependent services (RabbitMQ, Redis) and reports service metrics
+ * 
+ * This endpoint provides a comprehensive health check that verifies connectivity
+ * to all dependencies (RabbitMQ, Redis). It is used by Kubernetes for readiness
+ * probes to determine if the service should receive traffic.
  * 
  * @route GET /health/detailed
- * @returns {Object} 200 - Detailed service status information with dependency checks
- * @returns {Object} 503 - Service unavailable or dependencies unhealthy
+ * @returns {HealthResponse} 200 - Detailed health status with dependency checks
  */
 router.get('/detailed', async (req, res) => {
-  const healthCheck: IServiceStatus = {
-    service: 'notification-service',
-    status: 'up',
-    version: process.env.npm_package_version || '1.0.0',
-    uptime: process.uptime(),
-    timestamp: new Date().toISOString(),
+  const details: HealthResponse['details'] = {};
+  let overallStatus = HealthStatus.UP;
+
+  // Check RabbitMQ connection
+  try {
+    const rabbitMQStatus = rabbitMQConnection.isConnected() 
+      ? HealthStatus.UP 
+      : HealthStatus.DOWN;
+    
+    details.rabbitmq = {
+      status: rabbitMQStatus,
+      details: {
+        connected: rabbitMQConnection.isConnected(),
+        queue: config.rabbitmq.queue
+      }
+    };
+
+    if (rabbitMQStatus === HealthStatus.DOWN) {
+      overallStatus = HealthStatus.DEGRADED;
+    }
+  } catch (error) {
+    details.rabbitmq = {
+      status: HealthStatus.DOWN,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    };
+    overallStatus = HealthStatus.DEGRADED;
+    logger.error('RabbitMQ health check failed', { error });
+  }
+
+  // Check Redis connection
+  try {
+    const pingResult = await redisClient.ping();
+    const redisStatus = pingResult === 'PONG' ? HealthStatus.UP : HealthStatus.DOWN;
+    
+    details.redis = {
+      status: redisStatus,
+      details: {
+        connected: pingResult === 'PONG',
+        host: config.redis.host
+      }
+    };
+
+    if (redisStatus === HealthStatus.DOWN) {
+      overallStatus = HealthStatus.DEGRADED;
+    }
+  } catch (error) {
+    details.redis = {
+      status: HealthStatus.DOWN,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    };
+    overallStatus = HealthStatus.DEGRADED;
+    logger.error('Redis health check failed', { error });
+  }
+
+  // Add service metrics
+  details.metrics = {
+    status: HealthStatus.UP,
     details: {
-      messageQueue: 'up',
-      cache: 'up'
+      memory: process.memoryUsage(),
+      uptime: process.uptime(),
+      webhookDeliveryRate: await getWebhookDeliveryRate()
     }
   };
 
-  try {
-    // Check RabbitMQ connection
-    // This would typically be injected or imported from a service
-    const rabbitMQStatus = await checkRabbitMQConnection();
-    healthCheck.details!.messageQueue = rabbitMQStatus ? 'up' : 'down';
+  const healthResponse: HealthResponse = {
+    status: overallStatus,
+    version: config.version,
+    timestamp: new Date().toISOString(),
+    service: config.serviceName,
+    details
+  };
 
-    // Check Redis connection
-    // This would typically be injected or imported from a service
-    const redisStatus = await checkRedisConnection();
-    healthCheck.details!.cache = redisStatus ? 'up' : 'down';
-
-    // Determine overall status based on dependencies
-    if (healthCheck.details!.messageQueue === 'down' || healthCheck.details!.cache === 'down') {
-      healthCheck.status = 'degraded';
+  // Log health check results
+  logger.info('Detailed health check performed', { 
+    status: overallStatus,
+    dependencies: {
+      rabbitmq: details.rabbitmq?.status,
+      redis: details.redis?.status
     }
+  });
 
-    // Add service metrics
-    healthCheck.details!.metrics = {
-      pendingWebhooks: await getPendingWebhooksCount(),
-      failedWebhooks: await getFailedWebhooksCount(),
-      messageProcessingRate: await getMessageProcessingRate()
-    };
-
-    const statusCode = healthCheck.status === 'up' ? 200 : 503;
-    res.status(statusCode).json(healthCheck);
-  } catch (error) {
-    console.error('Detailed health check failed:', error);
-    res.status(503).json({
-      service: 'notification-service',
-      status: 'down',
-      version: process.env.npm_package_version || '1.0.0',
-      uptime: process.uptime(),
-      timestamp: new Date().toISOString(),
-      details: {
-        error: (error as Error).message
-      }
-    });
-  }
+  // Return appropriate status code based on health
+  const statusCode = overallStatus === HealthStatus.UP ? 200 : 503;
+  return res.status(statusCode).json(healthResponse);
 });
 
 /**
- * Check RabbitMQ connection status
- * Verifies that the service can connect to RabbitMQ message queue
+ * Get webhook delivery rate from Redis
  * 
- * @returns Promise<boolean> True if connection is healthy, false otherwise
+ * This function retrieves the current webhook delivery rate from Redis cache.
+ * It's used to provide metrics in the detailed health check.
+ * 
+ * @returns {Promise<number>} The current webhook delivery rate
  */
-async function checkRabbitMQConnection(): Promise<boolean> {
+async function getWebhookDeliveryRate(): Promise<number> {
   try {
-    // This would be replaced with actual RabbitMQ connection check
-    // For example: rabbitmqService.checkConnection()
-    // In a real implementation, we would use the RabbitMQ client to check the connection
-    // For example:
-    // const connection = await amqp.connect(config.rabbitmq.url);
-    // await connection.close();
-    // return true;
+    const deliveryCount = await redisClient.get('metrics:webhook:delivery:count');
+    const errorCount = await redisClient.get('metrics:webhook:error:count');
     
-    // Simulating a connection check for now
-    return true;
-  } catch (error) {
-    console.error('RabbitMQ connection check failed:', error);
-    return false;
-  }
-}
-
-/**
- * Check Redis connection status
- * Verifies that the service can connect to Redis cache
- * 
- * @returns Promise<boolean> True if connection is healthy, false otherwise
- */
-async function checkRedisConnection(): Promise<boolean> {
-  try {
-    // This would be replaced with actual Redis connection check
-    // For example: redisService.checkConnection()
-    // In a real implementation, we would use the Redis client to check the connection
-    // For example:
-    // const client = createRedisClient(config.redis);
-    // await client.ping();
-    // await client.quit();
-    // return true;
+    if (!deliveryCount) return 100; // Default to 100% if no data
     
-    // Simulating a connection check for now
-    return true;
+    const totalCount = parseInt(deliveryCount, 10);
+    const totalErrors = errorCount ? parseInt(errorCount, 10) : 0;
+    
+    if (totalCount === 0) return 100; // Avoid division by zero
+    
+    const successRate = ((totalCount - totalErrors) / totalCount) * 100;
+    return Math.round(successRate * 100) / 100; // Round to 2 decimal places
   } catch (error) {
-    console.error('Redis connection check failed:', error);
-    return false;
+    logger.warn('Failed to retrieve webhook delivery rate', { error });
+    return 100; // Default to 100% on error
   }
-}
-
-/**
- * Get count of pending webhooks
- * Retrieves the current count of webhooks waiting to be delivered
- * 
- * @returns Promise<number> Count of pending webhooks
- */
-async function getPendingWebhooksCount(): Promise<number> {
-  // This would be replaced with actual metrics collection
-  // For example: metricsService.getPendingWebhooksCount()
-  // In a real implementation, we would query the database or in-memory store
-  // to get the count of pending webhooks
-  return 0;
-}
-
-/**
- * Get count of failed webhooks
- * Retrieves the current count of webhooks that failed delivery and are in retry queue
- * 
- * @returns Promise<number> Count of failed webhooks
- */
-async function getFailedWebhooksCount(): Promise<number> {
-  // This would be replaced with actual metrics collection
-  // For example: metricsService.getFailedWebhooksCount()
-  // In a real implementation, we would query the database or in-memory store
-  // to get the count of failed webhooks
-  return 0;
-}
-
-/**
- * Get message processing rate (messages per second)
- * Calculates the average number of messages processed per second over the last minute
- * 
- * @returns Promise<number> Message processing rate
- */
-async function getMessageProcessingRate(): Promise<number> {
-  // This would be replaced with actual metrics collection
-  // For example: metricsService.getMessageProcessingRate()
-  // In a real implementation, we would calculate this based on metrics collected
-  // over time, possibly using a time-series database or in-memory counters
-  return 0;
 }
 
 export default router;
