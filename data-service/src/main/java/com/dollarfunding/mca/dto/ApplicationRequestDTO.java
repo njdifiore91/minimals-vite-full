@@ -3,198 +3,235 @@ package com.dollarfunding.mca.dto;
 import com.dollarfunding.mca.entity.Application;
 import com.dollarfunding.mca.entity.ApplicationStatus;
 import com.dollarfunding.mca.entity.ReviewStatus;
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import jakarta.validation.constraints.NotNull;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
 
-import javax.validation.constraints.NotNull;
-import javax.validation.constraints.Size;
+import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.Map;
 
 /**
  * Data Transfer Object for creating or updating MCA applications.
- * Defines the structure for incoming application data with validation annotations for required fields.
- * This class includes fields for application status, metadata, and review status,
- * with appropriate JSON serialization annotations.
- * It serves as the contract for application creation and update operations in the REST API.
+ * This class defines the structure for incoming application data with
+ * validation annotations for required fields. It serves as the contract
+ * for application creation and update operations in the REST API.
+ * <p>
+ * Fields include application status, metadata, and review status with
+ * appropriate JSON serialization annotations.
+ * </p>
+ *
+ * @author MCA Application Team
  */
-@JsonIgnoreProperties(ignoreUnknown = true)
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+@JsonInclude(JsonInclude.Include.NON_NULL)
 public class ApplicationRequestDTO {
 
+    /**
+     * Current status of the application in its lifecycle.
+     * This field is required and must be a valid ApplicationStatus value.
+     */
     @NotNull(message = "Application status is required")
     @JsonProperty("status")
-    private ApplicationStatus status;
+    private String status;
 
+    /**
+     * Current review status of the application.
+     * This field is required and must be a valid ReviewStatus value.
+     */
+    @NotNull(message = "Review status is required")
     @JsonProperty("review_status")
-    private ReviewStatus reviewStatus;
+    private String reviewStatus;
 
-    @Size(max = 10000, message = "Metadata size exceeds maximum allowed")
+    /**
+     * Application metadata including processing details, confidence scores, etc.
+     * This field is optional and will be stored as a JSON object in the database.
+     */
     @JsonProperty("metadata")
-    private Map<String, Object> metadata = new HashMap<>();
+    private Map<String, Object> metadata;
 
     /**
-     * Default constructor
-     */
-    public ApplicationRequestDTO() {
-    }
-
-    /**
-     * Constructor with all fields
+     * Converts this DTO to an Application entity.
+     * This method handles the conversion of all fields, including proper
+     * parsing of status enums and metadata formatting.
      *
-     * @param status       The application status
-     * @param reviewStatus The review status
-     * @param metadata     Additional metadata for the application
-     */
-    public ApplicationRequestDTO(ApplicationStatus status, ReviewStatus reviewStatus, Map<String, Object> metadata) {
-        this.status = status;
-        this.reviewStatus = reviewStatus;
-        this.metadata = metadata != null ? metadata : new HashMap<>();
-    }
-
-    /**
-     * Converts this DTO to an Application entity
-     * Note: This method creates a new entity and does not set id, createdAt, or updatedAt fields
-     * which are typically managed by the persistence layer
-     *
-     * @return A new Application entity with fields populated from this DTO
+     * @return A new Application entity with data from this DTO
+     * @throws IllegalArgumentException if status or reviewStatus is invalid
      */
     public Application toEntity() {
-        Application application = new Application();
-        application.setStatus(this.status);
-        application.setReviewStatus(this.reviewStatus);
-        application.setMetadata(this.metadata);
-        return application;
+        // Parse status enum
+        ApplicationStatus applicationStatus;
+        try {
+            applicationStatus = ApplicationStatus.valueOf(this.status);
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("Invalid application status: " + this.status);
+        }
+
+        // Parse review status enum
+        ReviewStatus appReviewStatus;
+        try {
+            appReviewStatus = ReviewStatus.valueOf(this.reviewStatus);
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("Invalid review status: " + this.reviewStatus);
+        }
+
+        // Create and return the entity
+        return new Application.Builder()
+                .withStatus(applicationStatus)
+                .withReviewStatus(appReviewStatus)
+                .withMetadata(this.metadata != null ? this.metadata : new HashMap<>())
+                .withCreatedAt(LocalDateTime.now())
+                .withUpdatedAt(LocalDateTime.now())
+                .build();
     }
 
     /**
-     * Updates an existing Application entity with values from this DTO
-     * Note: This method does not update id, createdAt, or updatedAt fields
-     * which are typically managed by the persistence layer
+     * Updates an existing Application entity with data from this DTO.
+     * This method updates status, review status, and metadata fields in the entity
+     * with values from this DTO, preserving the entity's ID, creation timestamp,
+     * and relationships.
      *
-     * @param application The Application entity to update
+     * @param entity The existing Application entity to update
      * @return The updated Application entity
+     * @throws IllegalArgumentException if entity is null or status/reviewStatus is invalid
      */
-    public Application updateEntity(Application application) {
-        if (application == null) {
-            return toEntity();
+    public Application updateEntity(Application entity) {
+        if (entity == null) {
+            throw new IllegalArgumentException("Entity cannot be null");
         }
 
-        application.setStatus(this.status);
-        
-        // Only update review status if it's provided
+        // Update status if provided
+        if (this.status != null) {
+            try {
+                ApplicationStatus applicationStatus = ApplicationStatus.valueOf(this.status);
+                // Check if the status transition is valid
+                if (!entity.getStatus().canTransitionTo(applicationStatus)) {
+                    throw new IllegalArgumentException(
+                            "Invalid status transition from " + entity.getStatus() + " to " + applicationStatus);
+                }
+                entity.setStatus(applicationStatus);
+            } catch (IllegalArgumentException e) {
+                if (e.getMessage().contains("Invalid status transition")) {
+                    throw e;
+                }
+                throw new IllegalArgumentException("Invalid application status: " + this.status);
+            }
+        }
+
+        // Update review status if provided
         if (this.reviewStatus != null) {
-            application.setReviewStatus(this.reviewStatus);
+            try {
+                ReviewStatus appReviewStatus = ReviewStatus.valueOf(this.reviewStatus);
+                // Check if the review status transition is valid
+                if (!ReviewStatus.isValidTransition(entity.getReviewStatus(), appReviewStatus)) {
+                    throw new IllegalArgumentException(
+                            "Invalid review status transition from " + entity.getReviewStatus() + " to " + appReviewStatus);
+                }
+                entity.setReviewStatus(appReviewStatus);
+            } catch (IllegalArgumentException e) {
+                if (e.getMessage().contains("Invalid review status transition")) {
+                    throw e;
+                }
+                throw new IllegalArgumentException("Invalid review status: " + this.reviewStatus);
+            }
         }
-        
-        // Only update metadata if it's provided
+
+        // Update metadata if provided
         if (this.metadata != null) {
-            application.setMetadata(this.metadata);
+            entity.setMetadata(this.metadata);
         }
-        
-        return application;
+
+        // Update the timestamp
+        entity.setUpdatedAt(LocalDateTime.now());
+
+        return entity;
     }
 
     /**
-     * Creates a DTO from an Application entity
+     * Creates a new ApplicationRequestDTO from an Application entity.
+     * This method extracts status, review status, and metadata from the entity.
      *
-     * @param application The Application entity to convert
-     * @return A new ApplicationRequestDTO
+     * @param application The Application entity
+     * @return A new ApplicationRequestDTO with data from the entity
      */
     public static ApplicationRequestDTO fromEntity(Application application) {
         if (application == null) {
             return null;
         }
 
-        return new ApplicationRequestDTO(
-                application.getStatus(),
-                application.getReviewStatus(),
-                application.getMetadata()
-        );
+        return ApplicationRequestDTO.builder()
+                .status(application.getStatus().name())
+                .reviewStatus(application.getReviewStatus().name())
+                .metadata(application.getMetadata())
+                .build();
     }
 
     /**
-     * Validates that the application status transition is valid
-     * This method can be used to enforce business rules for status transitions
+     * Validates that the status value is a valid ApplicationStatus enum value.
      *
-     * @param currentStatus The current application status
-     * @return true if the transition is valid, false otherwise
+     * @return true if valid, false otherwise
      */
-    public boolean isValidStatusTransition(ApplicationStatus currentStatus) {
-        // If current status is null (new application), any status is valid
-        if (currentStatus == null) {
+    public boolean isValidStatus() {
+        if (this.status == null) {
+            return false;
+        }
+        try {
+            ApplicationStatus.valueOf(this.status);
             return true;
-        }
-
-        // Implement business rules for status transitions
-        // For example, an application can't go from REJECTED back to PROCESSING
-        switch (currentStatus) {
-            case NEW:
-                // NEW can transition to PENDING or REJECTED
-                return this.status == ApplicationStatus.PENDING || 
-                       this.status == ApplicationStatus.REJECTED;
-                
-            case PENDING:
-                // PENDING can transition to PROCESSING, REJECTED, or back to NEW
-                return this.status == ApplicationStatus.PROCESSING || 
-                       this.status == ApplicationStatus.REJECTED || 
-                       this.status == ApplicationStatus.NEW;
-                
-            case PROCESSING:
-                // PROCESSING can transition to APPROVED, REJECTED, or back to PENDING
-                return this.status == ApplicationStatus.APPROVED || 
-                       this.status == ApplicationStatus.REJECTED || 
-                       this.status == ApplicationStatus.PENDING;
-                
-            case APPROVED:
-                // APPROVED can transition to COMPLETED or back to PROCESSING
-                return this.status == ApplicationStatus.COMPLETED || 
-                       this.status == ApplicationStatus.PROCESSING;
-                
-            case REJECTED:
-                // REJECTED is a terminal state, but can go back to NEW if resubmitted
-                return this.status == ApplicationStatus.NEW;
-                
-            case COMPLETED:
-                // COMPLETED is a terminal state and cannot transition
-                return false;
-                
-            default:
-                return false;
+        } catch (IllegalArgumentException e) {
+            return false;
         }
     }
 
-    // Getters and Setters
-
-    public ApplicationStatus getStatus() {
-        return status;
+    /**
+     * Validates that the review status value is a valid ReviewStatus enum value.
+     *
+     * @return true if valid, false otherwise
+     */
+    public boolean isValidReviewStatus() {
+        if (this.reviewStatus == null) {
+            return false;
+        }
+        try {
+            ReviewStatus.valueOf(this.reviewStatus);
+            return true;
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
     }
 
-    public void setStatus(ApplicationStatus status) {
-        this.status = status;
+    /**
+     * Gets a specific metadata value.
+     *
+     * @param key the metadata key
+     * @param <T> the expected type of the metadata value
+     * @return the metadata value, or null if not available
+     */
+    @SuppressWarnings("unchecked")
+    public <T> T getMetadataValue(String key) {
+        if (metadata == null) {
+            return null;
+        }
+        return (T) metadata.get(key);
     }
 
-    public ReviewStatus getReviewStatus() {
-        return reviewStatus;
-    }
-
-    public void setReviewStatus(ReviewStatus reviewStatus) {
-        this.reviewStatus = reviewStatus;
-    }
-
-    public Map<String, Object> getMetadata() {
-        return metadata;
-    }
-
-    public void setMetadata(Map<String, Object> metadata) {
-        this.metadata = metadata != null ? metadata : new HashMap<>();
-    }
-
-    @Override
-    public String toString() {
-        return "ApplicationRequestDTO{" +
-                "status=" + status +
-                ", reviewStatus=" + reviewStatus +
-                ", metadata=" + metadata +
-                '}';
+    /**
+     * Adds a metadata key-value pair.
+     *
+     * @param key   the metadata key
+     * @param value the metadata value
+     */
+    public void addMetadata(String key, Object value) {
+        if (metadata == null) {
+            metadata = new HashMap<>();
+        }
+        metadata.put(key, value);
     }
 }
