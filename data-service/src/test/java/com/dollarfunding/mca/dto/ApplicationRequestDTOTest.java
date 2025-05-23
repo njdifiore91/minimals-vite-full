@@ -1,26 +1,28 @@
 package com.dollarfunding.mca.dto;
 
+import com.dollarfunding.mca.TestUtils;
 import com.dollarfunding.mca.entity.Application;
 import com.dollarfunding.mca.entity.ApplicationStatus;
 import com.dollarfunding.mca.entity.ReviewStatus;
-import com.dollarfunding.mca.util.JsonUtil;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.validation.ConstraintViolation;
+import jakarta.validation.Validation;
+import jakarta.validation.Validator;
+import jakarta.validation.ValidatorFactory;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.NullAndEmptySource;
 import org.junit.jupiter.params.provider.ValueSource;
 
-import javax.validation.ConstraintViolation;
-import javax.validation.Validation;
-import javax.validation.Validator;
-import javax.validation.ValidatorFactory;
+import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -32,397 +34,430 @@ import static org.junit.jupiter.api.Assertions.*;
  * handles validation annotations correctly, and converts between DTO and entity
  * objects appropriately.
  */
-@DisplayName("ApplicationRequestDTO Tests")
-class ApplicationRequestDTOTest {
+@DisplayName("Application Request DTO Tests")
+public class ApplicationRequestDTOTest {
 
     private Validator validator;
     private ObjectMapper objectMapper;
-    private ApplicationRequestDTO validDto;
-    private Map<String, Object> testMetadata;
-
+    
     @BeforeEach
     void setUp() {
-        // Initialize validator
         ValidatorFactory factory = Validation.buildDefaultValidatorFactory();
         validator = factory.getValidator();
-        
-        // Initialize ObjectMapper
-        objectMapper = JsonUtil.getObjectMapper();
-        
-        // Create test metadata
-        testMetadata = new HashMap<>();
-        testMetadata.put("businessType", "LLC");
-        testMetadata.put("yearEstablished", 2018);
-        testMetadata.put("monthlyRevenue", 45000.00);
-        
-        // Create a valid DTO for testing
-        validDto = new ApplicationRequestDTO(
-                ApplicationStatus.NEW,
-                ReviewStatus.NOT_REVIEWED,
-                testMetadata
+        objectMapper = new ObjectMapper();
+    }
+    
+    /**
+     * Test data provider for invalid status values.
+     */
+    static Stream<Arguments> invalidStatusProvider() {
+        return Stream.of(
+            Arguments.of(null, "status", "Application status is required"),
+            Arguments.of("", "status", "Application status is required"),
+            Arguments.of("INVALID_STATUS", "status", null) // Will be caught by isValidStatus() method
+        );
+    }
+    
+    /**
+     * Test data provider for invalid review status values.
+     */
+    static Stream<Arguments> invalidReviewStatusProvider() {
+        return Stream.of(
+            Arguments.of(null, "reviewStatus", "Review status is required"),
+            Arguments.of("", "reviewStatus", "Review status is required"),
+            Arguments.of("INVALID_REVIEW_STATUS", "reviewStatus", null) // Will be caught by isValidReviewStatus() method
         );
     }
 
-    @Nested
-    @DisplayName("Validation Tests")
-    class ValidationTests {
-
-        @Test
-        @DisplayName("Valid DTO should pass validation")
-        void validDtoShouldPassValidation() {
-            // When
-            Set<ConstraintViolation<ApplicationRequestDTO>> violations = validator.validate(validDto);
-            
-            // Then
-            assertTrue(violations.isEmpty(), "Valid DTO should not have validation violations");
-        }
-
-        @Test
-        @DisplayName("DTO with null status should fail validation")
-        void dtoWithNullStatusShouldFailValidation() {
-            // Given
-            ApplicationRequestDTO dto = new ApplicationRequestDTO(null, ReviewStatus.NOT_REVIEWED, testMetadata);
-            
-            // When
-            Set<ConstraintViolation<ApplicationRequestDTO>> violations = validator.validate(dto);
-            
-            // Then
-            assertFalse(violations.isEmpty(), "DTO with null status should have validation violations");
-            assertEquals(1, violations.size(), "Should have exactly one violation");
-            
-            ConstraintViolation<ApplicationRequestDTO> violation = violations.iterator().next();
-            assertEquals("status", violation.getPropertyPath().toString(), "Violation should be on status field");
-            assertEquals("Application status is required", violation.getMessage(), "Violation message should match annotation");
-        }
-
-        @Test
-        @DisplayName("DTO with oversized metadata should fail validation")
-        void dtoWithOversizedMetadataShouldFailValidation() {
-            // Given
-            Map<String, Object> largeMetadata = new HashMap<>();
-            // Create a very large metadata map that exceeds the size limit
-            StringBuilder largeValue = new StringBuilder();
-            for (int i = 0; i < 10001; i++) {
-                largeValue.append("a");
-            }
-            largeMetadata.put("largeField", largeValue.toString());
-            
-            ApplicationRequestDTO dto = new ApplicationRequestDTO(
-                    ApplicationStatus.NEW,
-                    ReviewStatus.NOT_REVIEWED,
-                    largeMetadata
-            );
-            
-            // When
-            Set<ConstraintViolation<ApplicationRequestDTO>> violations = validator.validate(dto);
-            
-            // Then
-            assertFalse(violations.isEmpty(), "DTO with oversized metadata should have validation violations");
-            
-            boolean hasMetadataSizeViolation = violations.stream()
-                    .anyMatch(v -> v.getPropertyPath().toString().equals("metadata") && 
-                              v.getMessage().contains("exceeds maximum"));
-            
-            assertTrue(hasMetadataSizeViolation, "Should have a size violation on metadata field");
-        }
+    @Test
+    @DisplayName("Should create a valid DTO with all required fields")
+    void shouldCreateValidDTO() {
+        // Given
+        ApplicationRequestDTO dto = ApplicationRequestDTO.builder()
+                .status(ApplicationStatus.NEW.name())
+                .reviewStatus(ReviewStatus.NOT_REVIEWED.name())
+                .build();
         
-        @Test
-        @DisplayName("DTO with null metadata should be initialized with empty map")
-        void dtoWithNullMetadataShouldBeInitializedWithEmptyMap() {
-            // Given
-            ApplicationRequestDTO dto = new ApplicationRequestDTO(
-                    ApplicationStatus.NEW,
-                    ReviewStatus.NOT_REVIEWED,
-                    null
-            );
-            
-            // Then
-            assertNotNull(dto.getMetadata(), "Metadata should not be null");
-            assertTrue(dto.getMetadata().isEmpty(), "Metadata should be empty");
+        // When
+        Set<ConstraintViolation<ApplicationRequestDTO>> violations = validator.validate(dto);
+        
+        // Then
+        assertTrue(violations.isEmpty(), "No validation violations should be present");
+    }
+    
+    @ParameterizedTest
+    @DisplayName("Should validate required status field")
+    @MethodSource("invalidStatusProvider")
+    void shouldValidateRequiredStatusField(String status, String fieldName, String expectedMessage) {
+        // Given
+        ApplicationRequestDTO dto = ApplicationRequestDTO.builder()
+                .status(status)
+                .reviewStatus(ReviewStatus.NOT_REVIEWED.name())
+                .build();
+        
+        // When
+        Set<ConstraintViolation<ApplicationRequestDTO>> violations = validator.validate(dto);
+        
+        // Then
+        if (expectedMessage != null) {
+            assertFalse(violations.isEmpty(), "Validation violations should be present");
+            ConstraintViolation<ApplicationRequestDTO> violation = violations.iterator().next();
+            assertEquals(fieldName, violation.getPropertyPath().toString(), "Violation should be for the correct field");
+            assertEquals(expectedMessage, violation.getMessage(), "Violation message should match expected");
+        } else {
+            // For INVALID_STATUS, the validation annotation passes but isValidStatus() should fail
+            assertTrue(violations.isEmpty(), "No validation violations should be present from annotations");
+            assertFalse(dto.isValidStatus(), "isValidStatus() should return false for invalid status");
         }
     }
-
-    @Nested
-    @DisplayName("JSON Serialization/Deserialization Tests")
-    class JsonTests {
-
-        @Test
-        @DisplayName("DTO should serialize to JSON correctly")
-        void dtoShouldSerializeToJsonCorrectly() throws Exception {
-            // When
-            String json = objectMapper.writeValueAsString(validDto);
-            
-            // Then
-            assertNotNull(json, "JSON should not be null");
-            assertTrue(json.contains("\"status\":\"NEW\""), "JSON should contain status field");
-            assertTrue(json.contains("\"review_status\":\"NOT_REVIEWED\""), "JSON should contain review_status field");
-            assertTrue(json.contains("\"metadata\":"), "JSON should contain metadata field");
-            assertTrue(json.contains("\"businessType\":\"LLC\""), "JSON should contain metadata values");
-        }
-
-        @Test
-        @DisplayName("JSON should deserialize to DTO correctly")
-        void jsonShouldDeserializeToDtoCorrectly() throws Exception {
-            // Given
-            String json = "{\"status\":\"PENDING\",\"review_status\":\"IN_REVIEW\",\"metadata\":{\"priority\":\"high\",\"notes\":\"Urgent application\"}}";
-            
-            // When
-            ApplicationRequestDTO dto = objectMapper.readValue(json, ApplicationRequestDTO.class);
-            
-            // Then
-            assertNotNull(dto, "DTO should not be null");
-            assertEquals(ApplicationStatus.PENDING, dto.getStatus(), "Status should match");
-            assertEquals(ReviewStatus.IN_REVIEW, dto.getReviewStatus(), "Review status should match");
-            assertNotNull(dto.getMetadata(), "Metadata should not be null");
-            assertEquals(2, dto.getMetadata().size(), "Metadata should have correct number of entries");
-            assertEquals("high", dto.getMetadata().get("priority"), "Metadata values should match");
-        }
-
-        @Test
-        @DisplayName("DTO should ignore unknown JSON properties")
-        void dtoShouldIgnoreUnknownJsonProperties() throws Exception {
-            // Given
-            String json = "{\"status\":\"APPROVED\",\"review_status\":\"APPROVED\",\"unknown_field\":\"value\",\"metadata\":{\"approved_by\":\"John Doe\"}}";
-            
-            // When
-            ApplicationRequestDTO dto = objectMapper.readValue(json, ApplicationRequestDTO.class);
-            
-            // Then
-            assertNotNull(dto, "DTO should not be null");
-            assertEquals(ApplicationStatus.APPROVED, dto.getStatus(), "Status should match");
-            assertEquals(ReviewStatus.APPROVED, dto.getReviewStatus(), "Review status should match");
-            // Unknown field should be ignored without exception
+    
+    @ParameterizedTest
+    @DisplayName("Should validate required review status field")
+    @MethodSource("invalidReviewStatusProvider")
+    void shouldValidateRequiredReviewStatusField(String reviewStatus, String fieldName, String expectedMessage) {
+        // Given
+        ApplicationRequestDTO dto = ApplicationRequestDTO.builder()
+                .status(ApplicationStatus.NEW.name())
+                .reviewStatus(reviewStatus)
+                .build();
+        
+        // When
+        Set<ConstraintViolation<ApplicationRequestDTO>> violations = validator.validate(dto);
+        
+        // Then
+        if (expectedMessage != null) {
+            assertFalse(violations.isEmpty(), "Validation violations should be present");
+            ConstraintViolation<ApplicationRequestDTO> violation = violations.iterator().next();
+            assertEquals(fieldName, violation.getPropertyPath().toString(), "Violation should be for the correct field");
+            assertEquals(expectedMessage, violation.getMessage(), "Violation message should match expected");
+        } else {
+            // For INVALID_REVIEW_STATUS, the validation annotation passes but isValidReviewStatus() should fail
+            assertTrue(violations.isEmpty(), "No validation violations should be present from annotations");
+            assertFalse(dto.isValidReviewStatus(), "isValidReviewStatus() should return false for invalid review status");
         }
     }
-
-    @Nested
-    @DisplayName("Entity Conversion Tests")
-    class EntityConversionTests {
-
-        @Test
-        @DisplayName("DTO should convert to entity correctly")
-        void dtoShouldConvertToEntityCorrectly() {
-            // When
-            Application entity = validDto.toEntity();
-            
-            // Then
-            assertNotNull(entity, "Entity should not be null");
-            assertEquals(validDto.getStatus(), entity.getStatus(), "Status should match");
-            assertEquals(validDto.getReviewStatus(), entity.getReviewStatus(), "Review status should match");
-            assertEquals(validDto.getMetadata(), entity.getMetadata(), "Metadata should match");
-        }
-
-        @Test
-        @DisplayName("DTO should update existing entity correctly")
-        void dtoShouldUpdateExistingEntityCorrectly() {
-            // Given
-            Application existingEntity = new Application();
-            existingEntity.setStatus(ApplicationStatus.PENDING);
-            existingEntity.setReviewStatus(ReviewStatus.IN_REVIEW);
-            Map<String, Object> existingMetadata = new HashMap<>();
-            existingMetadata.put("originalField", "originalValue");
-            existingEntity.setMetadata(existingMetadata);
-            
-            // When
-            Application updatedEntity = validDto.updateEntity(existingEntity);
-            
-            // Then
-            assertNotNull(updatedEntity, "Updated entity should not be null");
-            assertSame(existingEntity, updatedEntity, "Should return the same entity instance");
-            assertEquals(validDto.getStatus(), updatedEntity.getStatus(), "Status should be updated");
-            assertEquals(validDto.getReviewStatus(), updatedEntity.getReviewStatus(), "Review status should be updated");
-            assertEquals(validDto.getMetadata(), updatedEntity.getMetadata(), "Metadata should be updated");
-        }
-
-        @Test
-        @DisplayName("DTO should create new entity when updating null entity")
-        void dtoShouldCreateNewEntityWhenUpdatingNullEntity() {
-            // When
-            Application entity = validDto.updateEntity(null);
-            
-            // Then
-            assertNotNull(entity, "Entity should not be null");
-            assertEquals(validDto.getStatus(), entity.getStatus(), "Status should match");
-            assertEquals(validDto.getReviewStatus(), entity.getReviewStatus(), "Review status should match");
-            assertEquals(validDto.getMetadata(), entity.getMetadata(), "Metadata should match");
-        }
-
-        @Test
-        @DisplayName("Entity should convert to DTO correctly")
-        void entityShouldConvertToDtoCorrectly() {
-            // Given
-            Application entity = new Application();
-            entity.setStatus(ApplicationStatus.PROCESSING);
-            entity.setReviewStatus(ReviewStatus.IN_REVIEW);
-            Map<String, Object> entityMetadata = new HashMap<>();
-            entityMetadata.put("processingAgent", "Jane Smith");
-            entity.setMetadata(entityMetadata);
-            
-            // When
-            ApplicationRequestDTO dto = ApplicationRequestDTO.fromEntity(entity);
-            
-            // Then
-            assertNotNull(dto, "DTO should not be null");
-            assertEquals(entity.getStatus(), dto.getStatus(), "Status should match");
-            assertEquals(entity.getReviewStatus(), dto.getReviewStatus(), "Review status should match");
-            assertEquals(entity.getMetadata(), dto.getMetadata(), "Metadata should match");
-        }
-
-        @Test
-        @DisplayName("Null entity should convert to null DTO")
-        void nullEntityShouldConvertToNullDto() {
-            // When
-            ApplicationRequestDTO dto = ApplicationRequestDTO.fromEntity(null);
-            
-            // Then
-            assertNull(dto, "DTO should be null when entity is null");
-        }
+    
+    @Test
+    @DisplayName("Should serialize to JSON correctly")
+    void shouldSerializeToJsonCorrectly() throws Exception {
+        // Given
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("source", "email");
+        metadata.put("confidence", 95.5);
+        
+        ApplicationRequestDTO dto = ApplicationRequestDTO.builder()
+                .status(ApplicationStatus.PROCESSING.name())
+                .reviewStatus(ReviewStatus.IN_REVIEW.name())
+                .metadata(metadata)
+                .build();
+        
+        // When
+        String json = objectMapper.writeValueAsString(dto);
+        
+        // Then
+        assertTrue(json.contains("\"status\":\"PROCESSING\""), "JSON should contain status field");
+        assertTrue(json.contains("\"review_status\":\"IN_REVIEW\""), "JSON should contain review_status field");
+        assertTrue(json.contains("\"metadata\":"), "JSON should contain metadata field");
+        assertTrue(json.contains("\"source\":\"email\""), "JSON should contain metadata source field");
+        assertTrue(json.contains("\"confidence\":95.5"), "JSON should contain metadata confidence field");
     }
-
-    @Nested
-    @DisplayName("Status Transition Validation Tests")
-    class StatusTransitionTests {
-
-        @Test
-        @DisplayName("New application should accept any status")
-        void newApplicationShouldAcceptAnyStatus() {
-            // Given - null current status represents a new application
-            ApplicationStatus currentStatus = null;
-            
-            // Then - all status transitions should be valid for new applications
-            for (ApplicationStatus newStatus : ApplicationStatus.values()) {
-                validDto.setStatus(newStatus);
-                assertTrue(validDto.isValidStatusTransition(currentStatus), 
-                        "New application should accept " + newStatus + " status");
-            }
-        }
-
-        @ParameterizedTest
-        @EnumSource(value = ApplicationStatus.class, names = {"PENDING", "REJECTED"})
-        @DisplayName("NEW status should transition to PENDING or REJECTED")
-        void newStatusShouldTransitionToPendingOrRejected(ApplicationStatus newStatus) {
-            // Given
-            ApplicationStatus currentStatus = ApplicationStatus.NEW;
-            validDto.setStatus(newStatus);
-            
-            // Then
-            assertTrue(validDto.isValidStatusTransition(currentStatus), 
-                    "NEW should transition to " + newStatus);
-        }
-
-        @ParameterizedTest
-        @EnumSource(value = ApplicationStatus.class, names = {"PROCESSING", "APPROVED", "COMPLETED"})
-        @DisplayName("NEW status should not transition to PROCESSING, APPROVED, or COMPLETED")
-        void newStatusShouldNotTransitionToProcessingApprovedOrCompleted(ApplicationStatus newStatus) {
-            // Given
-            ApplicationStatus currentStatus = ApplicationStatus.NEW;
-            validDto.setStatus(newStatus);
-            
-            // Then
-            assertFalse(validDto.isValidStatusTransition(currentStatus), 
-                    "NEW should not transition to " + newStatus);
-        }
-
-        @ParameterizedTest
-        @EnumSource(value = ApplicationStatus.class, names = {"PROCESSING", "REJECTED", "NEW"})
-        @DisplayName("PENDING status should transition to PROCESSING, REJECTED, or NEW")
-        void pendingStatusShouldTransitionToProcessingRejectedOrNew(ApplicationStatus newStatus) {
-            // Given
-            ApplicationStatus currentStatus = ApplicationStatus.PENDING;
-            validDto.setStatus(newStatus);
-            
-            // Then
-            assertTrue(validDto.isValidStatusTransition(currentStatus), 
-                    "PENDING should transition to " + newStatus);
-        }
-
-        @ParameterizedTest
-        @EnumSource(value = ApplicationStatus.class, names = {"APPROVED", "REJECTED", "PENDING"})
-        @DisplayName("PROCESSING status should transition to APPROVED, REJECTED, or PENDING")
-        void processingStatusShouldTransitionToApprovedRejectedOrPending(ApplicationStatus newStatus) {
-            // Given
-            ApplicationStatus currentStatus = ApplicationStatus.PROCESSING;
-            validDto.setStatus(newStatus);
-            
-            // Then
-            assertTrue(validDto.isValidStatusTransition(currentStatus), 
-                    "PROCESSING should transition to " + newStatus);
-        }
-
-        @ParameterizedTest
-        @EnumSource(value = ApplicationStatus.class, names = {"COMPLETED", "PROCESSING"})
-        @DisplayName("APPROVED status should transition to COMPLETED or PROCESSING")
-        void approvedStatusShouldTransitionToCompletedOrProcessing(ApplicationStatus newStatus) {
-            // Given
-            ApplicationStatus currentStatus = ApplicationStatus.APPROVED;
-            validDto.setStatus(newStatus);
-            
-            // Then
-            assertTrue(validDto.isValidStatusTransition(currentStatus), 
-                    "APPROVED should transition to " + newStatus);
-        }
-
-        @Test
-        @DisplayName("REJECTED status should only transition to NEW")
-        void rejectedStatusShouldOnlyTransitionToNew() {
-            // Given
-            ApplicationStatus currentStatus = ApplicationStatus.REJECTED;
-            
-            // Then
-            for (ApplicationStatus newStatus : ApplicationStatus.values()) {
-                validDto.setStatus(newStatus);
-                assertEquals(newStatus == ApplicationStatus.NEW, 
-                        validDto.isValidStatusTransition(currentStatus),
-                        "REJECTED should only transition to NEW, not " + newStatus);
-            }
-        }
-
-        @Test
-        @DisplayName("COMPLETED status should not transition to any other status")
-        void completedStatusShouldNotTransitionToAnyOtherStatus() {
-            // Given
-            ApplicationStatus currentStatus = ApplicationStatus.COMPLETED;
-            
-            // Then
-            for (ApplicationStatus newStatus : ApplicationStatus.values()) {
-                validDto.setStatus(newStatus);
-                assertFalse(validDto.isValidStatusTransition(currentStatus), 
-                        "COMPLETED should not transition to " + newStatus);
-            }
-        }
+    
+    @Test
+    @DisplayName("Should deserialize from JSON correctly")
+    void shouldDeserializeFromJsonCorrectly() throws Exception {
+        // Given
+        String json = "{\"status\":\"APPROVED\",\"review_status\":\"APPROVED\",\"metadata\":{\"source\":\"email\",\"confidence\":95.5}}";
+        
+        // When
+        ApplicationRequestDTO dto = objectMapper.readValue(json, ApplicationRequestDTO.class);
+        
+        // Then
+        assertEquals("APPROVED", dto.getStatus(), "Status should be deserialized correctly");
+        assertEquals("APPROVED", dto.getReviewStatus(), "Review status should be deserialized correctly");
+        assertNotNull(dto.getMetadata(), "Metadata should not be null");
+        assertEquals("email", dto.getMetadataValue("source"), "Metadata source should be deserialized correctly");
+        assertEquals(95.5, dto.getMetadataValue("confidence"), "Metadata confidence should be deserialized correctly");
     }
-
-    @Nested
-    @DisplayName("Documentation Tests")
-    class DocumentationTests {
-
-        @Test
-        @DisplayName("Class should have proper JavaDoc")
-        void classShouldHaveProperJavaDoc() throws Exception {
-            // Given
-            Class<?> clazz = ApplicationRequestDTO.class;
-            
-            // When
-            String javadoc = clazz.getAnnotation(java.lang.annotation.Documented.class) != null ? 
-                    "Documented" : "";
-            
-            // Then - This is a simple check that the class has some form of documentation
-            // In a real environment, you might use a tool like Javadoc or reflection to check this more thoroughly
-            assertNotNull(clazz.getAnnotations(), "Class should have annotations");
-            assertTrue(clazz.toString().contains("ApplicationRequestDTO"), 
-                    "Class name should be in the toString output");
-        }
-
-        @Test
-        @DisplayName("toString method should include all fields")
-        void toStringMethodShouldIncludeAllFields() {
-            // When
-            String toString = validDto.toString();
-            
-            // Then
-            assertTrue(toString.contains("status="), "toString should include status field");
-            assertTrue(toString.contains("reviewStatus="), "toString should include reviewStatus field");
-            assertTrue(toString.contains("metadata="), "toString should include metadata field");
-        }
+    
+    @Test
+    @DisplayName("Should convert to entity correctly")
+    void shouldConvertToEntityCorrectly() {
+        // Given
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("source", "email");
+        metadata.put("confidence", 95.5);
+        
+        ApplicationRequestDTO dto = ApplicationRequestDTO.builder()
+                .status(ApplicationStatus.PROCESSING.name())
+                .reviewStatus(ReviewStatus.IN_REVIEW.name())
+                .metadata(metadata)
+                .build();
+        
+        // When
+        Application entity = dto.toEntity();
+        
+        // Then
+        assertEquals(ApplicationStatus.PROCESSING, entity.getStatus(), "Entity status should match DTO status");
+        assertEquals(ReviewStatus.IN_REVIEW, entity.getReviewStatus(), "Entity review status should match DTO review status");
+        assertNotNull(entity.getMetadata(), "Entity metadata should not be null");
+        assertEquals("email", entity.getMetadataValue("source"), "Entity metadata source should match DTO");
+        assertEquals(95.5, entity.getMetadataValue("confidence"), "Entity metadata confidence should match DTO");
+        assertNotNull(entity.getCreatedAt(), "Entity created at should not be null");
+        assertNotNull(entity.getUpdatedAt(), "Entity updated at should not be null");
+    }
+    
+    @Test
+    @DisplayName("Should throw exception when converting with invalid status")
+    void shouldThrowExceptionWhenConvertingWithInvalidStatus() {
+        // Given
+        ApplicationRequestDTO dto = ApplicationRequestDTO.builder()
+                .status("INVALID_STATUS")
+                .reviewStatus(ReviewStatus.NOT_REVIEWED.name())
+                .build();
+        
+        // When/Then
+        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class, dto::toEntity);
+        assertEquals("Invalid application status: INVALID_STATUS", exception.getMessage());
+    }
+    
+    @Test
+    @DisplayName("Should throw exception when converting with invalid review status")
+    void shouldThrowExceptionWhenConvertingWithInvalidReviewStatus() {
+        // Given
+        ApplicationRequestDTO dto = ApplicationRequestDTO.builder()
+                .status(ApplicationStatus.NEW.name())
+                .reviewStatus("INVALID_REVIEW_STATUS")
+                .build();
+        
+        // When/Then
+        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class, dto::toEntity);
+        assertEquals("Invalid review status: INVALID_REVIEW_STATUS", exception.getMessage());
+    }
+    
+    @Test
+    @DisplayName("Should update entity correctly")
+    void shouldUpdateEntityCorrectly() {
+        // Given
+        Application entity = new Application(ApplicationStatus.NEW);
+        entity.setReviewStatus(ReviewStatus.NOT_REVIEWED);
+        LocalDateTime originalCreatedAt = entity.getCreatedAt();
+        LocalDateTime originalUpdatedAt = entity.getUpdatedAt();
+        
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("source", "email");
+        metadata.put("confidence", 95.5);
+        
+        ApplicationRequestDTO dto = ApplicationRequestDTO.builder()
+                .status(ApplicationStatus.PROCESSING.name())
+                .reviewStatus(ReviewStatus.IN_REVIEW.name())
+                .metadata(metadata)
+                .build();
+        
+        // When
+        Application updatedEntity = dto.updateEntity(entity);
+        
+        // Then
+        assertEquals(ApplicationStatus.PROCESSING, updatedEntity.getStatus(), "Entity status should be updated");
+        assertEquals(ReviewStatus.IN_REVIEW, updatedEntity.getReviewStatus(), "Entity review status should be updated");
+        assertNotNull(updatedEntity.getMetadata(), "Entity metadata should not be null");
+        assertEquals("email", updatedEntity.getMetadataValue("source"), "Entity metadata source should be updated");
+        assertEquals(95.5, updatedEntity.getMetadataValue("confidence"), "Entity metadata confidence should be updated");
+        assertEquals(originalCreatedAt, updatedEntity.getCreatedAt(), "Entity created at should not change");
+        assertNotEquals(originalUpdatedAt, updatedEntity.getUpdatedAt(), "Entity updated at should change");
+    }
+    
+    @Test
+    @DisplayName("Should throw exception when updating with invalid status transition")
+    void shouldThrowExceptionWhenUpdatingWithInvalidStatusTransition() {
+        // Given
+        Application entity = new Application(ApplicationStatus.NEW);
+        entity.setReviewStatus(ReviewStatus.NOT_REVIEWED);
+        
+        // Try to transition directly from NEW to COMPLETED (invalid transition)
+        ApplicationRequestDTO dto = ApplicationRequestDTO.builder()
+                .status(ApplicationStatus.COMPLETED.name())
+                .reviewStatus(ReviewStatus.NOT_REVIEWED.name())
+                .build();
+        
+        // When/Then
+        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class, () -> dto.updateEntity(entity));
+        assertTrue(exception.getMessage().contains("Invalid status transition"), 
+                "Exception message should mention invalid status transition");
+    }
+    
+    @Test
+    @DisplayName("Should throw exception when updating with null entity")
+    void shouldThrowExceptionWhenUpdatingWithNullEntity() {
+        // Given
+        ApplicationRequestDTO dto = ApplicationRequestDTO.builder()
+                .status(ApplicationStatus.PROCESSING.name())
+                .reviewStatus(ReviewStatus.IN_REVIEW.name())
+                .build();
+        
+        // When/Then
+        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class, () -> dto.updateEntity(null));
+        assertEquals("Entity cannot be null", exception.getMessage());
+    }
+    
+    @Test
+    @DisplayName("Should create DTO from entity correctly")
+    void shouldCreateDtoFromEntityCorrectly() {
+        // Given
+        Application entity = new Application(ApplicationStatus.APPROVED);
+        entity.setReviewStatus(ReviewStatus.APPROVED);
+        
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("source", "email");
+        metadata.put("confidence", 95.5);
+        entity.setMetadata(metadata);
+        
+        // When
+        ApplicationRequestDTO dto = ApplicationRequestDTO.fromEntity(entity);
+        
+        // Then
+        assertEquals(ApplicationStatus.APPROVED.name(), dto.getStatus(), "DTO status should match entity status");
+        assertEquals(ReviewStatus.APPROVED.name(), dto.getReviewStatus(), "DTO review status should match entity review status");
+        assertNotNull(dto.getMetadata(), "DTO metadata should not be null");
+        assertEquals("email", dto.getMetadataValue("source"), "DTO metadata source should match entity");
+        assertEquals(95.5, dto.getMetadataValue("confidence"), "DTO metadata confidence should match entity");
+    }
+    
+    @Test
+    @DisplayName("Should return null when creating DTO from null entity")
+    void shouldReturnNullWhenCreatingDtoFromNullEntity() {
+        // When
+        ApplicationRequestDTO dto = ApplicationRequestDTO.fromEntity(null);
+        
+        // Then
+        assertNull(dto, "DTO should be null when entity is null");
+    }
+    
+    @Test
+    @DisplayName("Should validate status correctly")
+    void shouldValidateStatusCorrectly() {
+        // Given
+        ApplicationRequestDTO validDto = ApplicationRequestDTO.builder()
+                .status(ApplicationStatus.NEW.name())
+                .reviewStatus(ReviewStatus.NOT_REVIEWED.name())
+                .build();
+        
+        ApplicationRequestDTO invalidDto = ApplicationRequestDTO.builder()
+                .status("INVALID_STATUS")
+                .reviewStatus(ReviewStatus.NOT_REVIEWED.name())
+                .build();
+        
+        ApplicationRequestDTO nullStatusDto = ApplicationRequestDTO.builder()
+                .status(null)
+                .reviewStatus(ReviewStatus.NOT_REVIEWED.name())
+                .build();
+        
+        // When/Then
+        assertTrue(validDto.isValidStatus(), "Valid status should be validated as true");
+        assertFalse(invalidDto.isValidStatus(), "Invalid status should be validated as false");
+        assertFalse(nullStatusDto.isValidStatus(), "Null status should be validated as false");
+    }
+    
+    @Test
+    @DisplayName("Should validate review status correctly")
+    void shouldValidateReviewStatusCorrectly() {
+        // Given
+        ApplicationRequestDTO validDto = ApplicationRequestDTO.builder()
+                .status(ApplicationStatus.NEW.name())
+                .reviewStatus(ReviewStatus.NOT_REVIEWED.name())
+                .build();
+        
+        ApplicationRequestDTO invalidDto = ApplicationRequestDTO.builder()
+                .status(ApplicationStatus.NEW.name())
+                .reviewStatus("INVALID_REVIEW_STATUS")
+                .build();
+        
+        ApplicationRequestDTO nullReviewStatusDto = ApplicationRequestDTO.builder()
+                .status(ApplicationStatus.NEW.name())
+                .reviewStatus(null)
+                .build();
+        
+        // When/Then
+        assertTrue(validDto.isValidReviewStatus(), "Valid review status should be validated as true");
+        assertFalse(invalidDto.isValidReviewStatus(), "Invalid review status should be validated as false");
+        assertFalse(nullReviewStatusDto.isValidReviewStatus(), "Null review status should be validated as false");
+    }
+    
+    @Test
+    @DisplayName("Should get and add metadata correctly")
+    void shouldGetAndAddMetadataCorrectly() {
+        // Given
+        ApplicationRequestDTO dto = ApplicationRequestDTO.builder()
+                .status(ApplicationStatus.NEW.name())
+                .reviewStatus(ReviewStatus.NOT_REVIEWED.name())
+                .build();
+        
+        // When
+        dto.addMetadata("key1", "value1");
+        dto.addMetadata("key2", 123);
+        
+        // Then
+        assertEquals("value1", dto.getMetadataValue("key1"), "Should get string metadata correctly");
+        assertEquals(123, dto.getMetadataValue("key2"), "Should get integer metadata correctly");
+        assertNull(dto.getMetadataValue("nonexistent"), "Should return null for nonexistent metadata");
+        
+        // When metadata is null
+        ApplicationRequestDTO nullMetadataDto = new ApplicationRequestDTO();
+        
+        // Then
+        assertNull(nullMetadataDto.getMetadataValue("key"), "Should return null when metadata is null");
+        
+        // When adding to null metadata
+        nullMetadataDto.addMetadata("key", "value");
+        
+        // Then
+        assertEquals("value", nullMetadataDto.getMetadataValue("key"), "Should initialize metadata when adding to null");
+    }
+    
+    @Test
+    @DisplayName("Should handle builder pattern correctly")
+    void shouldHandleBuilderPatternCorrectly() {
+        // Given/When
+        ApplicationRequestDTO dto = ApplicationRequestDTO.builder()
+                .status(ApplicationStatus.NEW.name())
+                .reviewStatus(ReviewStatus.NOT_REVIEWED.name())
+                .metadata(Map.of("key", "value"))
+                .build();
+        
+        // Then
+        assertEquals(ApplicationStatus.NEW.name(), dto.getStatus(), "Builder should set status correctly");
+        assertEquals(ReviewStatus.NOT_REVIEWED.name(), dto.getReviewStatus(), "Builder should set review status correctly");
+        assertEquals("value", dto.getMetadataValue("key"), "Builder should set metadata correctly");
+    }
+    
+    @Test
+    @DisplayName("Should handle lombok annotations correctly")
+    void shouldHandleLombokAnnotationsCorrectly() {
+        // Given
+        ApplicationRequestDTO dto1 = new ApplicationRequestDTO();
+        dto1.setStatus(ApplicationStatus.NEW.name());
+        dto1.setReviewStatus(ReviewStatus.NOT_REVIEWED.name());
+        dto1.setMetadata(Map.of("key", "value"));
+        
+        ApplicationRequestDTO dto2 = new ApplicationRequestDTO();
+        dto2.setStatus(ApplicationStatus.NEW.name());
+        dto2.setReviewStatus(ReviewStatus.NOT_REVIEWED.name());
+        dto2.setMetadata(Map.of("key", "value"));
+        
+        ApplicationRequestDTO dto3 = new ApplicationRequestDTO();
+        dto3.setStatus(ApplicationStatus.PROCESSING.name());
+        dto3.setReviewStatus(ReviewStatus.NOT_REVIEWED.name());
+        dto3.setMetadata(Map.of("key", "value"));
+        
+        // Then
+        assertEquals(dto1, dto2, "Equal DTOs should be equal according to equals()");
+        assertEquals(dto1.hashCode(), dto2.hashCode(), "Equal DTOs should have same hashCode()");
+        assertNotEquals(dto1, dto3, "Different DTOs should not be equal");
+        assertNotEquals(dto1.hashCode(), dto3.hashCode(), "Different DTOs should have different hashCodes()");
+        
+        // Test toString()
+        String toString = dto1.toString();
+        assertTrue(toString.contains("status=NEW"), "toString() should include status");
+        assertTrue(toString.contains("reviewStatus=NOT_REVIEWED"), "toString() should include reviewStatus");
+        assertTrue(toString.contains("metadata="), "toString() should include metadata");
     }
 }
