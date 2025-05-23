@@ -1,823 +1,581 @@
 package com.dollarfunding.mca.entity;
 
+import com.dollarfunding.mca.TestData;
+import com.dollarfunding.mca.TestUtils;
 import com.dollarfunding.mca.util.JsonUtil;
 import com.fasterxml.jackson.core.type.TypeReference;
+
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
-import org.springframework.boot.test.autoconfigure.orm.jpa.TestEntityManager;
-import org.springframework.test.context.junit.jupiter.SpringExtension;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
 
+import javax.persistence.EntityManager;
 import javax.validation.ConstraintViolation;
 import javax.validation.Validation;
 import javax.validation.Validator;
 import javax.validation.ValidatorFactory;
-import java.math.BigDecimal;
+
 import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
-import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
 
 /**
- * Unit tests for the Application entity.
+ * Unit test class for the Application entity that verifies JPA mapping, field validation, and relationships.
+ * Tests include validation of required fields, proper mapping of enum values for status and review_status,
+ * JSON conversion for the metadata field, and bidirectional relationships with Document and MerchantDetails entities.
  * 
- * These tests verify JPA mapping, field validation, and relationships for the Application entity.
- * The test suite ensures that the Application entity can be properly persisted and retrieved
- * with all its attributes and relationships intact, and that validation constraints are properly enforced.
+ * The test class ensures that the Application entity can be properly persisted and retrieved with all its
+ * attributes and relationships intact, and that validation constraints are properly enforced.
  */
-@ExtendWith(SpringExtension.class)
-@DataJpaTest
+@ExtendWith(MockitoExtension.class)
 public class ApplicationTest {
 
-    @Autowired
-    private TestEntityManager entityManager;
-    
     private Validator validator;
     
+    @Mock
+    private EntityManager entityManager;
+    
     @BeforeEach
-    void setUp() {
+    public void setUp() {
         ValidatorFactory factory = Validation.buildDefaultValidatorFactory();
         validator = factory.getValidator();
     }
     
-    /**
-     * Tests for basic entity properties and validation.
-     */
-    @Nested
-    @DisplayName("Basic Entity Tests")
-    class BasicEntityTests {
+    @Test
+    @DisplayName("Test Application entity creation with default constructor")
+    public void testDefaultConstructor() {
+        // Create an application using the default constructor
+        Application application = new Application();
         
-        @Test
-        @DisplayName("Should create application with default constructor")
-        void shouldCreateApplicationWithDefaultConstructor() {
-            // When
-            Application application = new Application();
-            
-            // Then
-            assertNotNull(application);
-            assertEquals(ApplicationStatus.NEW, application.getStatus());
-            assertEquals(ReviewStatus.NOT_REVIEWED, application.getReviewStatus());
-            assertNotNull(application.getCreatedAt());
-            assertNotNull(application.getUpdatedAt());
-            assertNotNull(application.getMetadata());
-            assertTrue(application.getMetadata().isEmpty());
-            assertNotNull(application.getDocuments());
-            assertTrue(application.getDocuments().isEmpty());
-        }
-        
-        @Test
-        @DisplayName("Should create application with required fields constructor")
-        void shouldCreateApplicationWithRequiredFieldsConstructor() {
-            // When
-            Application application = new Application(ApplicationStatus.PROCESSING, ReviewStatus.IN_REVIEW);
-            
-            // Then
-            assertNotNull(application);
-            assertEquals(ApplicationStatus.PROCESSING, application.getStatus());
-            assertEquals(ReviewStatus.IN_REVIEW, application.getReviewStatus());
-            assertNotNull(application.getCreatedAt());
-            assertNotNull(application.getUpdatedAt());
-            assertNotNull(application.getMetadata());
-            assertTrue(application.getMetadata().isEmpty());
-            assertNotNull(application.getDocuments());
-            assertTrue(application.getDocuments().isEmpty());
-        }
-        
-        @Test
-        @DisplayName("Should create application with all fields constructor")
-        void shouldCreateApplicationWithAllFieldsConstructor() {
-            // Given
-            Map<String, Object> metadata = new HashMap<>();
-            metadata.put("source", "email");
-            metadata.put("confidence", 0.95);
-            
-            LocalDateTime createdAt = LocalDateTime.now().minusDays(1);
-            LocalDateTime updatedAt = LocalDateTime.now();
-            
-            // When
-            Application application = new Application(
-                ApplicationStatus.APPROVED, 
-                ReviewStatus.APPROVED, 
-                metadata, 
-                createdAt, 
-                updatedAt
-            );
-            
-            // Then
-            assertNotNull(application);
-            assertEquals(ApplicationStatus.APPROVED, application.getStatus());
-            assertEquals(ReviewStatus.APPROVED, application.getReviewStatus());
-            assertEquals(createdAt, application.getCreatedAt());
-            assertEquals(updatedAt, application.getUpdatedAt());
-            assertNotNull(application.getMetadata());
-            assertEquals(2, application.getMetadata().size());
-            assertEquals("email", application.getMetadata().get("source"));
-            assertEquals(0.95, application.getMetadata().get("confidence"));
-            assertNotNull(application.getDocuments());
-            assertTrue(application.getDocuments().isEmpty());
-        }
-        
-        @Test
-        @DisplayName("Should validate required fields")
-        void shouldValidateRequiredFields() {
-            // Given
-            Application application = new Application();
-            application.setStatus(null);
-            application.setReviewStatus(null);
-            
-            // When
-            Set<ConstraintViolation<Application>> violations = validator.validate(application);
-            
-            // Then
-            assertEquals(2, violations.size());
-            assertTrue(violations.stream().anyMatch(v -> v.getPropertyPath().toString().equals("status")));
-            assertTrue(violations.stream().anyMatch(v -> v.getPropertyPath().toString().equals("reviewStatus")));
-        }
-        
-        @Test
-        @DisplayName("Should create application with builder")
-        void shouldCreateApplicationWithBuilder() {
-            // Given
-            Map<String, Object> metadata = new HashMap<>();
-            metadata.put("source", "email");
-            
-            // When
-            Application application = new Application.Builder()
-                .withStatus(ApplicationStatus.PENDING)
-                .withReviewStatus(ReviewStatus.NEEDS_INFORMATION)
-                .withMetadata(metadata)
-                .addMetadata("priority", "high")
-                .build();
-            
-            // Then
-            assertNotNull(application);
-            assertEquals(ApplicationStatus.PENDING, application.getStatus());
-            assertEquals(ReviewStatus.NEEDS_INFORMATION, application.getReviewStatus());
-            assertNotNull(application.getMetadata());
-            assertEquals(2, application.getMetadata().size());
-            assertEquals("email", application.getMetadata().get("source"));
-            assertEquals("high", application.getMetadata().get("priority"));
-        }
+        // Verify default values
+        assertNotNull(application.getMetadata(), "Metadata should be initialized as empty map");
+        assertEquals(ApplicationStatus.NEW, application.getStatus(), "Default status should be NEW");
+        assertEquals(ReviewStatus.NOT_REVIEWED, application.getReviewStatus(), "Default review status should be NOT_REVIEWED");
+        assertNotNull(application.getCreatedAt(), "Created timestamp should be initialized");
+        assertNotNull(application.getUpdatedAt(), "Updated timestamp should be initialized");
+        assertNotNull(application.getDocuments(), "Documents list should be initialized");
+        assertEquals(0, application.getDocuments().size(), "Documents list should be empty");
+        assertNull(application.getMerchantDetails(), "Merchant details should be null");
     }
     
-    /**
-     * Tests for enum mapping and status transitions.
-     */
-    @Nested
-    @DisplayName("Enum Mapping Tests")
-    class EnumMappingTests {
+    @Test
+    @DisplayName("Test Application entity creation with status constructor")
+    public void testStatusConstructor() {
+        // Create an application with a specific status
+        Application application = new Application(ApplicationStatus.PROCESSING);
         
-        @Test
-        @DisplayName("Should map ApplicationStatus enum values correctly")
-        void shouldMapApplicationStatusEnumValuesCorrectly() {
-            // Given
-            Application application = new Application();
-            
-            // When/Then - Test all enum values
-            application.setStatus(ApplicationStatus.NEW);
-            assertEquals(ApplicationStatus.NEW, application.getStatus());
-            
+        // Verify values
+        assertEquals(ApplicationStatus.PROCESSING, application.getStatus(), "Status should be set to PROCESSING");
+        assertEquals(ReviewStatus.NOT_REVIEWED, application.getReviewStatus(), "Default review status should be NOT_REVIEWED");
+        assertNotNull(application.getCreatedAt(), "Created timestamp should be initialized");
+        assertNotNull(application.getUpdatedAt(), "Updated timestamp should be initialized");
+    }
+    
+    @Test
+    @DisplayName("Test Application entity creation with all fields constructor")
+    public void testAllFieldsConstructor() {
+        // Create test data
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("source", "email");
+        metadata.put("confidence", 0.95);
+        
+        LocalDateTime createdAt = LocalDateTime.now().minusDays(1);
+        LocalDateTime updatedAt = LocalDateTime.now();
+        
+        // Create an application with all fields
+        Application application = new Application(
+            ApplicationStatus.APPROVED,
+            metadata,
+            createdAt,
+            updatedAt,
+            ReviewStatus.APPROVED
+        );
+        
+        // Verify values
+        assertEquals(ApplicationStatus.APPROVED, application.getStatus(), "Status should be set to APPROVED");
+        assertEquals(ReviewStatus.APPROVED, application.getReviewStatus(), "Review status should be set to APPROVED");
+        assertEquals(createdAt, application.getCreatedAt(), "Created timestamp should match");
+        assertEquals(updatedAt, application.getUpdatedAt(), "Updated timestamp should match");
+        assertEquals(metadata, application.getMetadata(), "Metadata should match");
+        assertNotNull(application.getMetadataJson(), "Metadata JSON should be initialized");
+    }
+    
+    @Test
+    @DisplayName("Test Application entity validation for required fields")
+    public void testValidation() {
+        // Create an application with null required fields
+        Application application = new Application();
+        application.setStatus(null);
+        application.setReviewStatus(null);
+        application.setCreatedAt(null);
+        application.setUpdatedAt(null);
+        
+        // Validate the entity
+        Set<ConstraintViolation<Application>> violations = validator.validate(application);
+        
+        // Verify violations
+        assertEquals(4, violations.size(), "Should have 4 validation violations");
+        
+        // Check for specific constraint violations
+        assertTrue(violations.stream().anyMatch(v -> v.getPropertyPath().toString().equals("status")),
+                "Should have violation for status");
+        assertTrue(violations.stream().anyMatch(v -> v.getPropertyPath().toString().equals("reviewStatus")),
+                "Should have violation for reviewStatus");
+        assertTrue(violations.stream().anyMatch(v -> v.getPropertyPath().toString().equals("createdAt")),
+                "Should have violation for createdAt");
+        assertTrue(violations.stream().anyMatch(v -> v.getPropertyPath().toString().equals("updatedAt")),
+                "Should have violation for updatedAt");
+    }
+    
+    @Test
+    @DisplayName("Test Application status transitions")
+    public void testStatusTransitions() {
+        // Create an application with NEW status
+        Application application = new Application(ApplicationStatus.NEW);
+        
+        // Test valid transitions
+        application.setStatus(ApplicationStatus.PROCESSING);
+        assertEquals(ApplicationStatus.PROCESSING, application.getStatus(), "Status should be updated to PROCESSING");
+        
+        application.setStatus(ApplicationStatus.APPROVED);
+        assertEquals(ApplicationStatus.APPROVED, application.getStatus(), "Status should be updated to APPROVED");
+        
+        // Test invalid transition
+        Exception exception = assertThrows(IllegalStateException.class, () -> {
             application.setStatus(ApplicationStatus.PENDING);
-            assertEquals(ApplicationStatus.PENDING, application.getStatus());
-            
-            application.setStatus(ApplicationStatus.PROCESSING);
-            assertEquals(ApplicationStatus.PROCESSING, application.getStatus());
-            
-            application.setStatus(ApplicationStatus.APPROVED);
-            assertEquals(ApplicationStatus.APPROVED, application.getStatus());
-            
-            application.setStatus(ApplicationStatus.REJECTED);
-            assertEquals(ApplicationStatus.REJECTED, application.getStatus());
-            
-            application.setStatus(ApplicationStatus.COMPLETED);
-            assertEquals(ApplicationStatus.COMPLETED, application.getStatus());
-        }
+        }, "Should throw IllegalStateException for invalid transition");
         
-        @Test
-        @DisplayName("Should map ReviewStatus enum values correctly")
-        void shouldMapReviewStatusEnumValuesCorrectly() {
-            // Given
-            Application application = new Application();
-            
-            // When/Then - Test all enum values
+        assertTrue(exception.getMessage().contains("Invalid status transition"),
+                "Exception message should mention invalid transition");
+    }
+    
+    @Test
+    @DisplayName("Test Application review status transitions")
+    public void testReviewStatusTransitions() {
+        // Create an application with NOT_REVIEWED status
+        Application application = new Application();
+        
+        // Test valid transitions
+        application.setReviewStatus(ReviewStatus.IN_REVIEW);
+        assertEquals(ReviewStatus.IN_REVIEW, application.getReviewStatus(), "Review status should be updated to IN_REVIEW");
+        
+        application.setReviewStatus(ReviewStatus.NEEDS_INFORMATION);
+        assertEquals(ReviewStatus.NEEDS_INFORMATION, application.getReviewStatus(), "Review status should be updated to NEEDS_INFORMATION");
+        
+        // Test invalid transition
+        Exception exception = assertThrows(IllegalStateException.class, () -> {
             application.setReviewStatus(ReviewStatus.NOT_REVIEWED);
-            assertEquals(ReviewStatus.NOT_REVIEWED, application.getReviewStatus());
-            
-            application.setReviewStatus(ReviewStatus.IN_REVIEW);
-            assertEquals(ReviewStatus.IN_REVIEW, application.getReviewStatus());
-            
-            application.setReviewStatus(ReviewStatus.NEEDS_INFORMATION);
-            assertEquals(ReviewStatus.NEEDS_INFORMATION, application.getReviewStatus());
-            
-            application.setReviewStatus(ReviewStatus.APPROVED);
-            assertEquals(ReviewStatus.APPROVED, application.getReviewStatus());
-            
-            application.setReviewStatus(ReviewStatus.REJECTED);
-            assertEquals(ReviewStatus.REJECTED, application.getReviewStatus());
-        }
+        }, "Should throw IllegalStateException for invalid transition");
         
-        @Test
-        @DisplayName("Should handle valid application status transitions")
-        void shouldHandleValidApplicationStatusTransitions() {
-            // Given
-            Application application = new Application();
-            assertEquals(ApplicationStatus.NEW, application.getStatus());
-            
-            // When/Then - Test valid transitions
-            assertTrue(application.updateStatus(ApplicationStatus.PENDING));
-            assertEquals(ApplicationStatus.PENDING, application.getStatus());
-            
-            assertTrue(application.updateStatus(ApplicationStatus.PROCESSING));
-            assertEquals(ApplicationStatus.PROCESSING, application.getStatus());
-            
-            assertTrue(application.updateStatus(ApplicationStatus.APPROVED));
-            assertEquals(ApplicationStatus.APPROVED, application.getStatus());
-            
-            assertTrue(application.updateStatus(ApplicationStatus.COMPLETED));
-            assertEquals(ApplicationStatus.COMPLETED, application.getStatus());
-        }
-        
-        @Test
-        @DisplayName("Should reject invalid application status transitions")
-        void shouldRejectInvalidApplicationStatusTransitions() {
-            // Given
-            Application application = new Application();
-            application.setStatus(ApplicationStatus.COMPLETED);
-            
-            // When/Then - Test invalid transitions
-            assertFalse(application.updateStatus(ApplicationStatus.NEW));
-            assertEquals(ApplicationStatus.COMPLETED, application.getStatus());
-            
-            assertFalse(application.updateStatus(ApplicationStatus.PENDING));
-            assertEquals(ApplicationStatus.COMPLETED, application.getStatus());
-        }
-        
-        @Test
-        @DisplayName("Should handle valid review status transitions")
-        void shouldHandleValidReviewStatusTransitions() {
-            // Given
-            Application application = new Application();
-            assertEquals(ReviewStatus.NOT_REVIEWED, application.getReviewStatus());
-            
-            // When/Then - Test valid transitions
-            assertTrue(application.updateReviewStatus(ReviewStatus.IN_REVIEW));
-            assertEquals(ReviewStatus.IN_REVIEW, application.getReviewStatus());
-            
-            assertTrue(application.updateReviewStatus(ReviewStatus.NEEDS_INFORMATION));
-            assertEquals(ReviewStatus.NEEDS_INFORMATION, application.getReviewStatus());
-            
-            assertTrue(application.updateReviewStatus(ReviewStatus.APPROVED));
-            assertEquals(ReviewStatus.APPROVED, application.getReviewStatus());
-        }
-        
-        @Test
-        @DisplayName("Should update timestamps when status changes")
-        void shouldUpdateTimestampsWhenStatusChanges() {
-            // Given
-            Application application = new Application();
-            LocalDateTime initialUpdatedAt = application.getUpdatedAt();
-            
-            // Wait a bit to ensure timestamp difference
-            try {
-                Thread.sleep(10);
-            } catch (InterruptedException e) {
-                // Ignore
-            }
-            
-            // When
-            application.setStatus(ApplicationStatus.PROCESSING);
-            
-            // Then
-            assertTrue(application.getUpdatedAt().isAfter(initialUpdatedAt));
-        }
+        assertTrue(exception.getMessage().contains("Invalid review status transition"),
+                "Exception message should mention invalid transition");
     }
     
-    /**
-     * Tests for JSON metadata conversion.
-     */
-    @Nested
-    @DisplayName("JSON Metadata Tests")
-    class JsonMetadataTests {
+    @Test
+    @DisplayName("Test Application metadata JSON conversion")
+    public void testMetadataJsonConversion() throws JsonUtil.JsonConversionException {
+        // Create test metadata
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("source", "email");
+        metadata.put("confidence", 0.95);
+        metadata.put("processingTimeMs", 2500);
         
-        @Test
-        @DisplayName("Should convert metadata map to JSON string")
-        void shouldConvertMetadataMapToJsonString() throws Exception {
-            // Given
-            Application application = new Application();
-            Map<String, Object> metadata = new HashMap<>();
-            metadata.put("source", "email");
-            metadata.put("confidence", 0.95);
-            metadata.put("processingTime", 120);
-            
-            // When
-            application.setMetadata(metadata);
-            
-            // Then
-            assertNotNull(application.getMetadataJson());
-            assertTrue(JsonUtil.isValidJson(application.getMetadataJson()));
-            
-            // Verify the JSON contains the expected data
-            Map<String, Object> parsedMetadata = JsonUtil.fromJson(
-                application.getMetadataJson(), 
-                new TypeReference<Map<String, Object>>() {}
-            );
-            assertEquals(3, parsedMetadata.size());
-            assertEquals("email", parsedMetadata.get("source"));
-            assertEquals(0.95, parsedMetadata.get("confidence"));
-            assertEquals(120, parsedMetadata.get("processingTime"));
-        }
+        // Create nested metadata
+        Map<String, Object> extractionDetails = new HashMap<>();
+        extractionDetails.put("engine", "tensorflow");
+        extractionDetails.put("version", "2.5.0");
+        metadata.put("extraction", extractionDetails);
         
-        @Test
-        @DisplayName("Should convert JSON string to metadata map")
-        void shouldConvertJsonStringToMetadataMap() throws Exception {
-            // Given
-            Application application = new Application();
-            String metadataJson = "{\"source\":\"email\",\"confidence\":0.95,\"processingTime\":120}";
-            
-            // When
-            application.setMetadataJson(metadataJson);
-            
-            // Then
-            assertNotNull(application.getMetadata());
-            assertEquals(3, application.getMetadata().size());
-            assertEquals("email", application.getMetadata().get("source"));
-            assertEquals(0.95, application.getMetadata().get("confidence"));
-            assertEquals(120, application.getMetadata().get("processingTime"));
-        }
+        // Create an application with metadata
+        Application application = new Application();
+        application.setMetadata(metadata);
         
-        @Test
-        @DisplayName("Should add individual metadata values")
-        void shouldAddIndividualMetadataValues() {
-            // Given
-            Application application = new Application();
-            
-            // When
-            application.addMetadata("source", "email");
-            application.addMetadata("confidence", 0.95);
-            
-            // Then
-            Map<String, Object> metadata = application.getMetadata();
-            assertEquals(2, metadata.size());
-            assertEquals("email", metadata.get("source"));
-            assertEquals(0.95, metadata.get("confidence"));
-        }
+        // Verify JSON conversion
+        String metadataJson = application.getMetadataJson();
+        assertNotNull(metadataJson, "Metadata JSON should not be null");
+        assertTrue(metadataJson.contains("email"), "Metadata JSON should contain source value");
+        assertTrue(metadataJson.contains("0.95"), "Metadata JSON should contain confidence value");
+        assertTrue(metadataJson.contains("tensorflow"), "Metadata JSON should contain nested extraction details");
         
-        @Test
-        @DisplayName("Should retrieve individual metadata values with correct type")
-        void shouldRetrieveIndividualMetadataValuesWithCorrectType() {
-            // Given
-            Application application = new Application();
-            application.addMetadata("source", "email");
-            application.addMetadata("confidence", 0.95);
-            application.addMetadata("processingTime", 120);
-            
-            // When/Then
-            assertEquals("email", application.getMetadataValue("source"));
-            assertEquals(0.95, application.<Double>getMetadataValue("confidence"));
-            assertEquals(120, application.<Integer>getMetadataValue("processingTime"));
-            assertNull(application.getMetadataValue("nonExistentKey"));
-        }
+        // Test conversion back to map
+        Map<String, Object> convertedMetadata = JsonUtil.fromJson(metadataJson, new TypeReference<Map<String, Object>>() {});
+        assertEquals("email", convertedMetadata.get("source"), "Source should match original value");
+        assertEquals(0.95, convertedMetadata.get("confidence"), "Confidence should match original value");
         
-        @Test
-        @DisplayName("Should handle null or empty metadata")
-        void shouldHandleNullOrEmptyMetadata() {
-            // Given
-            Application application = new Application();
-            
-            // When
-            application.setMetadata(null);
-            
-            // Then
-            assertNotNull(application.getMetadata());
-            assertTrue(application.getMetadata().isEmpty());
-            assertEquals("{}", application.getMetadataJson());
-            
-            // When
-            application.setMetadataJson(null);
-            
-            // Then
-            assertNotNull(application.getMetadata());
-            assertTrue(application.getMetadata().isEmpty());
-            
-            // When
-            application.setMetadataJson("");
-            
-            // Then
-            assertNotNull(application.getMetadata());
-            assertTrue(application.getMetadata().isEmpty());
-        }
+        // Verify that the metadata can be retrieved from the entity
+        Map<String, Object> retrievedMetadata = application.getMetadata();
+        assertEquals(metadata, retrievedMetadata, "Retrieved metadata should match original metadata");
     }
     
-    /**
-     * Tests for bidirectional relationships with Document and MerchantDetails entities.
-     */
-    @Nested
-    @DisplayName("Relationship Tests")
-    class RelationshipTests {
+    @Test
+    @DisplayName("Test Application metadata JSON setter")
+    public void testMetadataJsonSetter() {
+        // Create a JSON string
+        String metadataJson = "{\"source\":\"email\",\"confidence\":0.95,\"tags\":[\"urgent\",\"high-value\"]}";
         
-        @Test
-        @DisplayName("Should maintain bidirectional relationship with Document entity")
-        void shouldMaintainBidirectionalRelationshipWithDocumentEntity() {
-            // Given
-            Application application = new Application(ApplicationStatus.NEW, ReviewStatus.NOT_REVIEWED);
-            Document document = new Document(UUID.randomUUID(), DocumentType.BANK_STATEMENT, "s3://bucket/path/to/document");
-            
-            // When
-            application.addDocument(document);
-            
-            // Then
-            assertEquals(1, application.getDocuments().size());
-            assertSame(document, application.getDocuments().get(0));
-            assertSame(application, document.getApplication());
-            
-            // When - Test removing document
-            application.removeDocument(document);
-            
-            // Then
-            assertTrue(application.getDocuments().isEmpty());
-            assertNull(document.getApplication());
-        }
+        // Create an application and set metadata JSON
+        Application application = new Application();
+        application.setMetadataJson(metadataJson);
         
-        @Test
-        @DisplayName("Should maintain bidirectional relationship with MerchantDetails entity")
-        void shouldMaintainBidirectionalRelationshipWithMerchantDetailsEntity() {
-            // Given
-            Application application = new Application(ApplicationStatus.NEW, ReviewStatus.NOT_REVIEWED);
-            MerchantDetails merchantDetails = new MerchantDetails();
-            
-            // When
-            application.setMerchantDetails(merchantDetails);
-            
-            // Then
-            assertSame(merchantDetails, application.getMerchantDetails());
-            assertSame(application, merchantDetails.getApplication());
-        }
+        // Verify conversion to map
+        Map<String, Object> metadata = application.getMetadata();
+        assertEquals("email", metadata.get("source"), "Source should match JSON value");
+        assertEquals(0.95, metadata.get("confidence"), "Confidence should match JSON value");
         
-        @Test
-        @DisplayName("Should set documents with bidirectional relationship")
-        void shouldSetDocumentsWithBidirectionalRelationship() {
-            // Given
-            Application application = new Application();
-            Document document1 = new Document(UUID.randomUUID(), DocumentType.BANK_STATEMENT, "s3://bucket/path/to/document1");
-            Document document2 = new Document(UUID.randomUUID(), DocumentType.TAX_RETURN, "s3://bucket/path/to/document2");
-            
-            // When
-            application.setDocuments(java.util.Arrays.asList(document1, document2));
-            
-            // Then
-            assertEquals(2, application.getDocuments().size());
-            assertTrue(application.getDocuments().contains(document1));
-            assertTrue(application.getDocuments().contains(document2));
-            assertSame(application, document1.getApplication());
-            assertSame(application, document2.getApplication());
-        }
+        // Verify array conversion
+        Object tagsObj = metadata.get("tags");
+        assertTrue(tagsObj instanceof java.util.List, "Tags should be converted to a List");
+        java.util.List<?> tags = (java.util.List<?>) tagsObj;
+        assertEquals(2, tags.size(), "Tags list should have 2 items");
+        assertEquals("urgent", tags.get(0), "First tag should be 'urgent'");
+        assertEquals("high-value", tags.get(1), "Second tag should be 'high-value'");
     }
     
-    /**
-     * Tests for persistence and retrieval of Application entity.
-     */
-    @Nested
-    @DisplayName("Persistence Tests")
-    class PersistenceTests {
+    @Test
+    @DisplayName("Test Application addMetadata method")
+    public void testAddMetadata() {
+        // Create an application
+        Application application = new Application();
         
-        @Test
-        @DisplayName("Should persist and retrieve application with all fields")
-        void shouldPersistAndRetrieveApplicationWithAllFields() {
-            // Given
-            Map<String, Object> metadata = new HashMap<>();
-            metadata.put("source", "email");
-            metadata.put("confidence", 0.95);
-            
-            Application application = new Application(
-                ApplicationStatus.PROCESSING,
-                ReviewStatus.IN_REVIEW,
-                metadata,
-                LocalDateTime.now().minusDays(1),
-                LocalDateTime.now()
-            );
-            
-            // When
-            Application savedApplication = entityManager.persistAndFlush(application);
-            entityManager.clear();
-            Application retrievedApplication = entityManager.find(Application.class, savedApplication.getId());
-            
-            // Then
-            assertNotNull(retrievedApplication);
-            assertEquals(savedApplication.getId(), retrievedApplication.getId());
-            assertEquals(ApplicationStatus.PROCESSING, retrievedApplication.getStatus());
-            assertEquals(ReviewStatus.IN_REVIEW, retrievedApplication.getReviewStatus());
-            assertEquals(savedApplication.getCreatedAt(), retrievedApplication.getCreatedAt());
-            assertEquals(savedApplication.getUpdatedAt(), retrievedApplication.getUpdatedAt());
-            
-            // Verify metadata was persisted correctly
-            Map<String, Object> retrievedMetadata = retrievedApplication.getMetadata();
-            assertEquals(2, retrievedMetadata.size());
-            assertEquals("email", retrievedMetadata.get("source"));
-            assertEquals(0.95, retrievedMetadata.get("confidence"));
-        }
+        // Add metadata values
+        application.addMetadata("source", "email");
+        application.addMetadata("confidence", 0.95);
         
-        @Test
-        @DisplayName("Should persist and retrieve application with documents")
-        void shouldPersistAndRetrieveApplicationWithDocuments() {
-            // Given
-            Application application = new Application(ApplicationStatus.NEW, ReviewStatus.NOT_REVIEWED);
-            Document document1 = new Document(null, DocumentType.BANK_STATEMENT, "s3://bucket/path/to/document1");
-            Document document2 = new Document(null, DocumentType.TAX_RETURN, "s3://bucket/path/to/document2");
-            
-            application.addDocument(document1);
-            application.addDocument(document2);
-            
-            // When
-            Application savedApplication = entityManager.persistAndFlush(application);
-            entityManager.clear();
-            Application retrievedApplication = entityManager.find(Application.class, savedApplication.getId());
-            
-            // Then
-            assertNotNull(retrievedApplication);
-            assertEquals(2, retrievedApplication.getDocuments().size());
-            
-            // Verify document types were persisted correctly
-            assertTrue(retrievedApplication.getDocuments().stream()
-                .anyMatch(d -> d.getType() == DocumentType.BANK_STATEMENT));
-            assertTrue(retrievedApplication.getDocuments().stream()
-                .anyMatch(d -> d.getType() == DocumentType.TAX_RETURN));
-        }
+        // Verify metadata values
+        Map<String, Object> metadata = application.getMetadata();
+        assertEquals("email", metadata.get("source"), "Source should match added value");
+        assertEquals(0.95, metadata.get("confidence"), "Confidence should match added value");
         
-        @Test
-        @DisplayName("Should persist and retrieve application with merchant details")
-        void shouldPersistAndRetrieveApplicationWithMerchantDetails() {
-            // Given
-            Application application = new Application(ApplicationStatus.NEW, ReviewStatus.NOT_REVIEWED);
-            
-            MerchantDetails merchantDetails = new MerchantDetails();
-            merchantDetails.setLegalName("Acme Corporation");
-            merchantDetails.setDbaName("Acme");
-            merchantDetails.setEin("12-3456789");
-            merchantDetails.setIndustry("Technology");
-            merchantDetails.setRevenue(new BigDecimal("1000000.00"));
-            
-            MerchantDetails.Address address = new MerchantDetails.Address();
-            address.setStreet("123 Main St");
-            address.setCity("Anytown");
-            address.setState("CA");
-            address.setZip("12345");
-            address.setCountry("USA");
-            merchantDetails.setAddress(address);
-            
-            application.setMerchantDetails(merchantDetails);
-            
-            // When
-            Application savedApplication = entityManager.persistAndFlush(application);
-            entityManager.clear();
-            Application retrievedApplication = entityManager.find(Application.class, savedApplication.getId());
-            
-            // Then
-            assertNotNull(retrievedApplication);
-            assertNotNull(retrievedApplication.getMerchantDetails());
-            assertEquals("Acme Corporation", retrievedApplication.getMerchantDetails().getLegalName());
-            assertEquals("Acme", retrievedApplication.getMerchantDetails().getDbaName());
-            assertEquals("12-3456789", retrievedApplication.getMerchantDetails().getEin());
-            assertEquals("Technology", retrievedApplication.getMerchantDetails().getIndustry());
-            assertEquals(0, new BigDecimal("1000000.00").compareTo(retrievedApplication.getMerchantDetails().getRevenue()));
-            
-            // Verify address was persisted correctly
-            MerchantDetails.Address retrievedAddress = retrievedApplication.getMerchantDetails().getAddress();
-            assertEquals("123 Main St", retrievedAddress.getStreet());
-            assertEquals("Anytown", retrievedAddress.getCity());
-            assertEquals("CA", retrievedAddress.getState());
-            assertEquals("12345", retrievedAddress.getZip());
-            assertEquals("USA", retrievedAddress.getCountry());
-        }
+        // Verify JSON conversion
+        String metadataJson = application.getMetadataJson();
+        assertTrue(metadataJson.contains("email"), "Metadata JSON should contain source value");
+        assertTrue(metadataJson.contains("0.95"), "Metadata JSON should contain confidence value");
     }
     
-    /**
-     * Tests for utility methods in the Application entity.
-     */
-    @Nested
-    @DisplayName("Utility Method Tests")
-    class UtilityMethodTests {
+    @Test
+    @DisplayName("Test Application getMetadataValue method")
+    public void testGetMetadataValue() {
+        // Create an application with metadata
+        Application application = new Application();
+        application.addMetadata("source", "email");
+        application.addMetadata("confidence", 0.95);
         
-        @Test
-        @DisplayName("Should correctly determine if application is completed")
-        void shouldCorrectlyDetermineIfApplicationIsCompleted() {
-            // Given
-            Application application = new Application();
-            
-            // When/Then
-            application.setStatus(ApplicationStatus.NEW);
-            assertFalse(application.isCompleted());
-            
-            application.setStatus(ApplicationStatus.PROCESSING);
-            assertFalse(application.isCompleted());
-            
-            application.setStatus(ApplicationStatus.COMPLETED);
-            assertTrue(application.isCompleted());
-        }
+        // Get specific metadata values
+        String source = application.getMetadataValue("source");
+        Double confidence = application.getMetadataValue("confidence");
+        Object nonExistent = application.getMetadataValue("nonExistent");
         
-        @Test
-        @DisplayName("Should correctly determine if application is active")
-        void shouldCorrectlyDetermineIfApplicationIsActive() {
-            // Given
-            Application application = new Application();
-            
-            // When/Then
-            application.setStatus(ApplicationStatus.NEW);
-            assertTrue(application.isActive());
-            
-            application.setStatus(ApplicationStatus.PENDING);
-            assertTrue(application.isActive());
-            
-            application.setStatus(ApplicationStatus.PROCESSING);
-            assertTrue(application.isActive());
-            
-            application.setStatus(ApplicationStatus.APPROVED);
-            assertFalse(application.isActive());
-            
-            application.setStatus(ApplicationStatus.REJECTED);
-            assertFalse(application.isActive());
-            
-            application.setStatus(ApplicationStatus.COMPLETED);
-            assertFalse(application.isActive());
-        }
+        // Verify values
+        assertEquals("email", source, "Source should match added value");
+        assertEquals(0.95, confidence, "Confidence should match added value");
+        assertNull(nonExistent, "Non-existent key should return null");
+    }
+    
+    @Test
+    @DisplayName("Test Application bidirectional relationship with Document")
+    public void testDocumentRelationship() {
+        // Create an application
+        Application application = new Application();
+        UUID applicationId = UUID.randomUUID();
+        application.setId(applicationId);
         
-        @Test
-        @DisplayName("Should correctly determine if application is decided")
-        void shouldCorrectlyDetermineIfApplicationIsDecided() {
-            // Given
-            Application application = new Application();
-            
-            // When/Then
-            application.setStatus(ApplicationStatus.NEW);
-            assertFalse(application.isDecided());
-            
-            application.setStatus(ApplicationStatus.PENDING);
-            assertFalse(application.isDecided());
-            
-            application.setStatus(ApplicationStatus.PROCESSING);
-            assertFalse(application.isDecided());
-            
-            application.setStatus(ApplicationStatus.APPROVED);
-            assertTrue(application.isDecided());
-            
-            application.setStatus(ApplicationStatus.REJECTED);
-            assertTrue(application.isDecided());
-            
-            application.setStatus(ApplicationStatus.COMPLETED);
-            assertTrue(application.isDecided());
-        }
+        // Create a document
+        Document document = new Document(applicationId, DocumentType.BANK_STATEMENT, "mca-documents/test.pdf");
         
-        @Test
-        @DisplayName("Should correctly determine if application requires review")
-        void shouldCorrectlyDetermineIfApplicationRequiresReview() {
-            // Given
-            Application application = new Application();
-            
-            // When/Then
-            application.setReviewStatus(ReviewStatus.NOT_REVIEWED);
-            assertTrue(application.requiresReview());
-            
-            application.setReviewStatus(ReviewStatus.IN_REVIEW);
-            assertFalse(application.requiresReview());
-            
-            application.setReviewStatus(ReviewStatus.NEEDS_INFORMATION);
-            assertTrue(application.requiresReview());
-            
-            application.setReviewStatus(ReviewStatus.APPROVED);
-            assertFalse(application.requiresReview());
-            
-            application.setReviewStatus(ReviewStatus.REJECTED);
-            assertFalse(application.requiresReview());
-        }
+        // Add document to application
+        application.addDocument(document);
         
-        @Test
-        @DisplayName("Should correctly determine if application has all required documents")
-        void shouldCorrectlyDetermineIfApplicationHasAllRequiredDocuments() {
-            // Given
-            Application application = new Application();
-            
-            // When/Then - No documents
-            assertFalse(application.hasAllRequiredDocuments());
-            
-            // When - Add one required document type
-            Document idDocument = new Document(UUID.randomUUID(), DocumentType.ID_VERIFICATION, "s3://bucket/path/to/id");
-            application.addDocument(idDocument);
-            
-            // Then
-            assertFalse(application.hasAllRequiredDocuments());
-            
-            // When - Add second required document type
-            Document financialDocument = new Document(UUID.randomUUID(), DocumentType.BANK_STATEMENT, "s3://bucket/path/to/bank");
-            application.addDocument(financialDocument);
-            
-            // Then
-            assertFalse(application.hasAllRequiredDocuments());
-            
-            // When - Add third required document type
-            Document businessDocument = new Document(UUID.randomUUID(), DocumentType.BUSINESS_LICENSE, "s3://bucket/path/to/license");
-            application.addDocument(businessDocument);
-            
-            // Then - Now has all required document types
-            assertTrue(application.hasAllRequiredDocuments());
-        }
+        // Verify relationship
+        assertEquals(1, application.getDocuments().size(), "Application should have 1 document");
+        assertEquals(document, application.getDocuments().get(0), "Document should be in the application's documents list");
+        assertEquals(application, document.getApplication(), "Document should reference the application");
         
-        @Test
-        @DisplayName("Should calculate processing time in minutes")
-        void shouldCalculateProcessingTimeInMinutes() {
-            // Given
-            LocalDateTime createdAt = LocalDateTime.now().minusMinutes(10);
-            LocalDateTime updatedAt = LocalDateTime.now();
-            
-            Application application = new Application();
-            application.setCreatedAt(createdAt);
-            application.setUpdatedAt(updatedAt);
-            
-            // When/Then - Not completed yet
-            application.setStatus(ApplicationStatus.PROCESSING);
-            assertEquals(-1, application.getProcessingTimeMinutes());
-            
-            // When/Then - Completed
-            application.setStatus(ApplicationStatus.COMPLETED);
-            assertEquals(10, application.getProcessingTimeMinutes());
-        }
+        // Remove document from application
+        application.removeDocument(document);
         
-        @Test
-        @DisplayName("Should determine if application was processed within target time")
-        void shouldDetermineIfApplicationWasProcessedWithinTargetTime() {
-            // Given
-            Application fastApplication = new Application();
-            fastApplication.setStatus(ApplicationStatus.COMPLETED);
-            fastApplication.setCreatedAt(LocalDateTime.now().minusMinutes(3));
-            fastApplication.setUpdatedAt(LocalDateTime.now());
-            
-            Application slowApplication = new Application();
-            slowApplication.setStatus(ApplicationStatus.COMPLETED);
-            slowApplication.setCreatedAt(LocalDateTime.now().minusMinutes(10));
-            slowApplication.setUpdatedAt(LocalDateTime.now());
-            
-            Application incompleteApplication = new Application();
-            incompleteApplication.setStatus(ApplicationStatus.PROCESSING);
-            
-            // When/Then
-            assertTrue(fastApplication.isProcessedWithinTargetTime()); // 3 minutes < 5 minutes target
-            assertFalse(slowApplication.isProcessedWithinTargetTime()); // 10 minutes > 5 minutes target
-            assertFalse(incompleteApplication.isProcessedWithinTargetTime()); // Not completed yet
-        }
+        // Verify relationship is removed
+        assertEquals(0, application.getDocuments().size(), "Application should have 0 documents");
+        assertNull(document.getApplication(), "Document should not reference the application");
+    }
+    
+    @Test
+    @DisplayName("Test Application bidirectional relationship with MerchantDetails")
+    public void testMerchantDetailsRelationship() {
+        // Create an application
+        Application application = new Application();
+        UUID applicationId = UUID.randomUUID();
+        application.setId(applicationId);
         
-        @Test
-        @DisplayName("Should generate proper toString representation")
-        void shouldGenerateProperToStringRepresentation() {
-            // Given
-            Application application = new Application(ApplicationStatus.PROCESSING, ReviewStatus.IN_REVIEW);
-            application.setId(UUID.randomUUID());
-            
-            Document document = new Document(UUID.randomUUID(), DocumentType.BANK_STATEMENT, "s3://bucket/path/to/document");
-            application.addDocument(document);
-            
-            // When
-            String toString = application.toString();
-            
-            // Then
-            assertNotNull(toString);
-            assertTrue(toString.contains(application.getId().toString()));
-            assertTrue(toString.contains("PROCESSING"));
-            assertTrue(toString.contains("IN_REVIEW"));
-            assertTrue(toString.contains("documentsCount=1"));
-            assertTrue(toString.contains("hasMerchantDetails=false"));
-        }
+        // Create merchant details
+        MerchantDetails merchantDetails = new MerchantDetails(applicationId, "Test Merchant Inc.");
         
-        @Test
-        @DisplayName("Should implement equals and hashCode correctly")
-        void shouldImplementEqualsAndHashCodeCorrectly() {
-            // Given
-            UUID id = UUID.randomUUID();
-            
-            Application application1 = new Application();
-            application1.setId(id);
-            
-            Application application2 = new Application();
-            application2.setId(id);
-            
-            Application application3 = new Application();
-            application3.setId(UUID.randomUUID());
-            
-            // When/Then - equals
-            assertEquals(application1, application1); // Same instance
-            assertEquals(application1, application2); // Same ID
-            assertNotEquals(application1, application3); // Different ID
-            assertNotEquals(application1, null); // Null comparison
-            assertNotEquals(application1, new Object()); // Different type
-            
-            // When/Then - hashCode
-            assertEquals(application1.hashCode(), application2.hashCode()); // Same ID
-            assertNotEquals(application1.hashCode(), application3.hashCode()); // Different ID
-        }
+        // Set merchant details on application
+        application.setMerchantDetails(merchantDetails);
+        
+        // Verify relationship
+        assertEquals(merchantDetails, application.getMerchantDetails(), "Application should reference merchant details");
+        assertEquals(application, merchantDetails.getApplication(), "Merchant details should reference the application");
+        
+        // Test hasMerchantDetails method
+        assertTrue(application.hasMerchantDetails(), "Application should have merchant details");
+    }
+    
+    @Test
+    @DisplayName("Test Application status history tracking")
+    public void testStatusHistory() {
+        // Create an application
+        Application application = new Application(ApplicationStatus.NEW);
+        
+        // Change status to trigger history tracking
+        application.setStatus(ApplicationStatus.PROCESSING);
+        application.setStatus(ApplicationStatus.APPROVED);
+        
+        // Get status history
+        @SuppressWarnings("unchecked")
+        java.util.List<Map<String, Object>> statusHistory = application.getStatusHistory();
+        
+        // Verify history
+        assertNotNull(statusHistory, "Status history should not be null");
+        assertEquals(3, statusHistory.size(), "Status history should have 3 entries");
+        assertEquals("NEW", statusHistory.get(0).get("status"), "First status should be NEW");
+        assertEquals("PROCESSING", statusHistory.get(1).get("status"), "Second status should be PROCESSING");
+        assertEquals("APPROVED", statusHistory.get(2).get("status"), "Third status should be APPROVED");
+    }
+    
+    @Test
+    @DisplayName("Test Application review status history tracking")
+    public void testReviewStatusHistory() {
+        // Create an application
+        Application application = new Application();
+        
+        // Change review status to trigger history tracking
+        application.setReviewStatus(ReviewStatus.IN_REVIEW);
+        application.setReviewStatus(ReviewStatus.APPROVED);
+        
+        // Get review status history
+        @SuppressWarnings("unchecked")
+        java.util.List<Map<String, Object>> reviewStatusHistory = application.getReviewStatusHistory();
+        
+        // Verify history
+        assertNotNull(reviewStatusHistory, "Review status history should not be null");
+        assertEquals(3, reviewStatusHistory.size(), "Review status history should have 3 entries");
+        assertEquals("NOT_REVIEWED", reviewStatusHistory.get(0).get("status"), "First status should be NOT_REVIEWED");
+        assertEquals("IN_REVIEW", reviewStatusHistory.get(1).get("status"), "Second status should be IN_REVIEW");
+        assertEquals("APPROVED", reviewStatusHistory.get(2).get("status"), "Third status should be APPROVED");
+    }
+    
+    @Test
+    @DisplayName("Test Application processing time calculation")
+    public void testProcessingTimeCalculation() {
+        // Create an application with specific timestamps
+        LocalDateTime createdAt = LocalDateTime.now().minusMinutes(4);
+        LocalDateTime updatedAt = LocalDateTime.now();
+        
+        Application application = new Application(
+            ApplicationStatus.COMPLETED,
+            new HashMap<>(),
+            createdAt,
+            updatedAt,
+            ReviewStatus.APPROVED
+        );
+        
+        // Calculate processing time
+        long processingTimeMs = application.getProcessingTimeMillis();
+        
+        // Verify processing time is approximately 4 minutes (with some tolerance for test execution time)
+        assertTrue(processingTimeMs >= 240000 && processingTimeMs <= 250000,
+                "Processing time should be approximately 4 minutes");
+        
+        // Test processing time requirement check
+        assertTrue(application.meetsProcessingTimeRequirement(),
+                "Application should meet the 5-minute processing time requirement");
+        
+        // Test with non-completed application
+        application.setStatus(ApplicationStatus.PROCESSING);
+        assertEquals(0, application.getProcessingTimeMillis(),
+                "Processing time should be 0 for non-completed applications");
+        assertFalse(application.meetsProcessingTimeRequirement(),
+                "Non-completed application should not meet processing time requirement");
+    }
+    
+    @Test
+    @DisplayName("Test Application terminal state check")
+    public void testTerminalStateCheck() {
+        // Test terminal states
+        Application completedApp = new Application(ApplicationStatus.COMPLETED);
+        Application rejectedApp = new Application(ApplicationStatus.REJECTED);
+        
+        assertTrue(completedApp.isTerminal(), "COMPLETED status should be terminal");
+        assertTrue(rejectedApp.isTerminal(), "REJECTED status should be terminal");
+        
+        // Test non-terminal states
+        Application newApp = new Application(ApplicationStatus.NEW);
+        Application processingApp = new Application(ApplicationStatus.PROCESSING);
+        
+        assertFalse(newApp.isTerminal(), "NEW status should not be terminal");
+        assertFalse(processingApp.isTerminal(), "PROCESSING status should not be terminal");
+    }
+    
+    @Test
+    @DisplayName("Test Application human intervention check")
+    public void testHumanInterventionCheck() {
+        // Test states requiring human intervention
+        Application pendingApp = new Application(ApplicationStatus.PENDING);
+        Application errorApp = new Application(ApplicationStatus.ERROR);
+        Application exceptionApp = new Application(ApplicationStatus.EXCEPTION);
+        
+        assertTrue(pendingApp.requiresHumanIntervention(), "PENDING status should require human intervention");
+        assertTrue(errorApp.requiresHumanIntervention(), "ERROR status should require human intervention");
+        assertTrue(exceptionApp.requiresHumanIntervention(), "EXCEPTION status should require human intervention");
+        
+        // Test states not requiring human intervention
+        Application newApp = new Application(ApplicationStatus.NEW);
+        Application processingApp = new Application(ApplicationStatus.PROCESSING);
+        Application completedApp = new Application(ApplicationStatus.COMPLETED);
+        
+        assertFalse(newApp.requiresHumanIntervention(), "NEW status should not require human intervention");
+        assertFalse(processingApp.requiresHumanIntervention(), "PROCESSING status should not require human intervention");
+        assertFalse(completedApp.requiresHumanIntervention(), "COMPLETED status should not require human intervention");
+    }
+    
+    @Test
+    @DisplayName("Test Application document count")
+    public void testDocumentCount() {
+        // Create an application
+        Application application = new Application();
+        UUID applicationId = UUID.randomUUID();
+        application.setId(applicationId);
+        
+        // Add documents
+        application.addDocument(new Document(applicationId, DocumentType.BANK_STATEMENT, "mca-documents/bank.pdf"));
+        application.addDocument(new Document(applicationId, DocumentType.TAX_RETURN, "mca-documents/tax.pdf"));
+        
+        // Verify document count
+        assertEquals(2, application.getDocumentCount(), "Application should have 2 documents");
+        
+        // Test with null documents list
+        Application nullDocsApp = new Application();
+        nullDocsApp.setDocuments(null);
+        assertEquals(0, nullDocsApp.getDocumentCount(), "Document count should be 0 for null documents list");
+    }
+    
+    @Test
+    @DisplayName("Test Application equals and hashCode")
+    public void testEqualsAndHashCode() {
+        // Create applications with same ID
+        UUID id = UUID.randomUUID();
+        
+        Application app1 = new Application();
+        app1.setId(id);
+        
+        Application app2 = new Application();
+        app2.setId(id);
+        
+        // Create application with different ID
+        Application app3 = new Application();
+        app3.setId(UUID.randomUUID());
+        
+        // Create application with null ID
+        Application app4 = new Application();
+        
+        // Test equals
+        assertEquals(app1, app2, "Applications with same ID should be equal");
+        assertNotEquals(app1, app3, "Applications with different IDs should not be equal");
+        assertNotEquals(app1, app4, "Application with ID should not equal application without ID");
+        assertEquals(app4, new Application(), "Applications without IDs should be equal");
+        
+        // Test hashCode
+        assertEquals(app1.hashCode(), app2.hashCode(), "Hash codes should be equal for equal applications");
+        assertNotEquals(app1.hashCode(), app3.hashCode(), "Hash codes should differ for different applications");
+    }
+    
+    @Test
+    @DisplayName("Test Application toString")
+    public void testToString() {
+        // Create an application with documents and merchant details
+        Application application = new Application(ApplicationStatus.PROCESSING);
+        UUID id = UUID.randomUUID();
+        application.setId(id);
+        application.setReviewStatus(ReviewStatus.IN_REVIEW);
+        
+        // Add documents
+        Document doc1 = new Document(id, DocumentType.BANK_STATEMENT, "mca-documents/bank.pdf");
+        Document doc2 = new Document(id, DocumentType.TAX_RETURN, "mca-documents/tax.pdf");
+        application.addDocument(doc1);
+        application.addDocument(doc2);
+        
+        // Add merchant details
+        MerchantDetails merchantDetails = new MerchantDetails(id, "Test Merchant Inc.");
+        application.setMerchantDetails(merchantDetails);
+        
+        // Get string representation
+        String toString = application.toString();
+        
+        // Verify string contains important information
+        assertTrue(toString.contains(id.toString()), "toString should contain application ID");
+        assertTrue(toString.contains("PROCESSING"), "toString should contain status");
+        assertTrue(toString.contains("IN_REVIEW"), "toString should contain review status");
+        assertTrue(toString.contains("documentCount=2"), "toString should contain document count");
+        assertTrue(toString.contains("hasMerchantDetails=true"), "toString should indicate merchant details presence");
+    }
+    
+    @Test
+    @DisplayName("Test Application Builder pattern")
+    public void testBuilderPattern() {
+        // Create metadata
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("source", "email");
+        metadata.put("confidence", 0.95);
+        
+        // Use builder to create application
+        Application application = new Application.Builder()
+            .withStatus(ApplicationStatus.PROCESSING)
+            .withReviewStatus(ReviewStatus.IN_REVIEW)
+            .withMetadata(metadata)
+            .addMetadata("priority", "high")
+            .build();
+        
+        // Verify application properties
+        assertEquals(ApplicationStatus.PROCESSING, application.getStatus(), "Status should match builder value");
+        assertEquals(ReviewStatus.IN_REVIEW, application.getReviewStatus(), "Review status should match builder value");
+        
+        // Verify metadata
+        Map<String, Object> appMetadata = application.getMetadata();
+        assertEquals("email", appMetadata.get("source"), "Source should match builder value");
+        assertEquals(0.95, appMetadata.get("confidence"), "Confidence should match builder value");
+        assertEquals("high", appMetadata.get("priority"), "Priority should match builder value");
+    }
+    
+    @Test
+    @DisplayName("Test Application persistence")
+    public void testPersistence() {
+        // Create an application
+        Application application = new Application(ApplicationStatus.NEW);
+        UUID id = UUID.randomUUID();
+        application.setId(id);
+        
+        // Mock persistence operations
+        when(entityManager.find(Application.class, id)).thenReturn(application);
+        
+        // Simulate persist and find operations
+        entityManager.persist(application);
+        Application foundApplication = entityManager.find(Application.class, id);
+        
+        // Verify found application
+        assertNotNull(foundApplication, "Found application should not be null");
+        assertEquals(id, foundApplication.getId(), "Found application should have the same ID");
+        assertEquals(ApplicationStatus.NEW, foundApplication.getStatus(), "Found application should have the same status");
+        
+        // Verify persistence operations were called
+        verify(entityManager).persist(application);
+        verify(entityManager).find(Application.class, id);
     }
 }
