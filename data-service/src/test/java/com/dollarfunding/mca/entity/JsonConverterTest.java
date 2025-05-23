@@ -1,491 +1,472 @@
 package com.dollarfunding.mca.entity;
 
 import com.dollarfunding.mca.util.JsonUtil;
-import com.dollarfunding.mca.util.JsonUtil.JsonConversionException;
 import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
+import org.junit.jupiter.api.Nested;
 
-import javax.persistence.AttributeConverter;
-import java.io.IOException;
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
+import java.util.Arrays;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.Mockito.when;
 
 /**
- * Unit tests for custom JPA converters that handle JSON serialization and deserialization for entity fields.
- * Tests include validation of conversion between Java objects and JSON strings, handling of null values,
- * error cases, and integration with entity classes.
+ * Unit tests for JSON conversion functionality in entity classes.
+ * 
+ * Tests the conversion between Java objects and JSON strings for entity fields,
+ * handling of null values, error cases, and integration with entity classes.
  */
-@ExtendWith(MockitoExtension.class)
+@DisplayName("JSON Converter Tests")
 public class JsonConverterTest {
 
-    private ObjectMapper objectMapper;
-    
-    @Mock
-    private Application application;
-    
-    @Mock
-    private Document document;
-    
-    @Mock
-    private MerchantDetails merchantDetails;
-    
-    // Test data
     private Map<String, Object> testMetadata;
     private Map<String, Object> testAddress;
+    private Application application;
+    private Document document;
+    private MerchantDetails merchantDetails;
+    private UUID testId;
     
     @BeforeEach
     void setUp() {
-        objectMapper = JsonUtil.getObjectMapper();
+        testId = UUID.randomUUID();
         
-        // Initialize test metadata for Application and Document entities
+        // Set up test metadata for Application and Document
         testMetadata = new HashMap<>();
         testMetadata.put("source", "email");
-        testMetadata.put("processingTime", 120);
-        testMetadata.put("automationScore", 0.95);
-        testMetadata.put("confidenceScore", 0.98);
+        testMetadata.put("priority", 1);
+        testMetadata.put("tags", Arrays.asList("urgent", "new-customer"));
+        Map<String, Object> processingDetails = new HashMap<>();
+        processingDetails.put("processingTime", 2500);
+        processingDetails.put("automationScore", 0.95);
+        testMetadata.put("processingDetails", processingDetails);
         
-        // Initialize test address for MerchantDetails entity
+        // Set up test address for MerchantDetails
         testAddress = new HashMap<>();
         testAddress.put("street", "123 Main St");
         testAddress.put("city", "New York");
         testAddress.put("state", "NY");
-        testAddress.put("zipCode", "10001");
+        testAddress.put("zip", "10001");
         testAddress.put("country", "USA");
+        
+        // Create test entities
+        application = new Application(ApplicationStatus.NEW, testMetadata, 
+                LocalDateTime.now(), LocalDateTime.now(), ReviewStatus.NOT_REVIEWED);
+        
+        document = new Document(testId, DocumentType.BANK_STATEMENT, "mca-documents-production/test.pdf",
+                DocumentClassification.VERIFIED, LocalDateTime.now(), testMetadata);
+        
+        merchantDetails = new MerchantDetails(testId, "Test Company LLC", "Test Co", "12-3456789",
+                testAddress, "Retail", new BigDecimal("1000000.00"));
     }
     
-    /**
-     * Test class for the JSON converter used in the Application entity for the metadata field.
-     */
-    public static class ApplicationMetadataConverter implements AttributeConverter<Map<String, Object>, String> {
+    @Nested
+    @DisplayName("Object to JSON String Conversion Tests")
+    class ObjectToJsonStringConversionTests {
         
-        @Override
-        public String convertToDatabaseColumn(Map<String, Object> attribute) {
-            if (attribute == null) {
-                return null;
-            }
-            try {
-                return JsonUtil.toJson(attribute);
-            } catch (JsonConversionException e) {
-                throw new RuntimeException("Error converting application metadata to JSON", e);
-            }
+        @Test
+        @DisplayName("Should convert Map to JSON string")
+        void shouldConvertMapToJsonString() throws JsonUtil.JsonConversionException {
+            // Convert Map to JSON string
+            String json = JsonUtil.toJson(testMetadata);
+            
+            // Verify JSON string contains expected values
+            assertTrue(json.contains("\"source\":\"email\""));
+            assertTrue(json.contains("\"priority\":1"));
+            assertTrue(json.contains("\"tags\":[\"urgent\",\"new-customer\"]"));
+            assertTrue(json.contains("\"processingDetails\":"));
+            assertTrue(json.contains("\"processingTime\":2500"));
+            assertTrue(json.contains("\"automationScore\":0.95"));
         }
         
-        @Override
-        public Map<String, Object> convertToEntityAttribute(String dbData) {
-            if (dbData == null || dbData.isEmpty()) {
-                return new HashMap<>();
-            }
-            try {
-                return JsonUtil.fromJson(dbData, new TypeReference<Map<String, Object>>() {});
-            } catch (JsonConversionException e) {
-                throw new RuntimeException("Error converting JSON to application metadata", e);
-            }
-        }
-    }
-    
-    /**
-     * Test class for the JSON converter used in the Document entity for the metadata field.
-     */
-    public static class DocumentMetadataConverter implements AttributeConverter<Map<String, Object>, String> {
-        
-        @Override
-        public String convertToDatabaseColumn(Map<String, Object> attribute) {
-            if (attribute == null) {
-                return null;
-            }
-            try {
-                return JsonUtil.toJson(attribute);
-            } catch (JsonConversionException e) {
-                throw new RuntimeException("Error converting document metadata to JSON", e);
-            }
+        @Test
+        @DisplayName("Should convert empty Map to empty JSON object")
+        void shouldConvertEmptyMapToEmptyJsonObject() throws JsonUtil.JsonConversionException {
+            // Convert empty Map to JSON string
+            String json = JsonUtil.toJson(new HashMap<>());
+            
+            // Verify JSON string is an empty object
+            assertEquals("{}", json);
         }
         
-        @Override
-        public Map<String, Object> convertToEntityAttribute(String dbData) {
-            if (dbData == null || dbData.isEmpty()) {
-                return new HashMap<>();
-            }
-            try {
-                return JsonUtil.fromJson(dbData, new TypeReference<Map<String, Object>>() {});
-            } catch (JsonConversionException e) {
-                throw new RuntimeException("Error converting JSON to document metadata", e);
-            }
+        @Test
+        @DisplayName("Should convert null to null JSON")
+        void shouldConvertNullToNullJson() throws JsonUtil.JsonConversionException {
+            // Convert null to JSON string
+            String json = JsonUtil.toJson(null);
+            
+            // Verify JSON string is null
+            assertEquals("null", json);
         }
     }
     
-    /**
-     * Test class for the JSON converter used in the MerchantDetails entity for the address field.
-     */
-    public static class AddressConverter implements AttributeConverter<Map<String, Object>, String> {
+    @Nested
+    @DisplayName("JSON String to Object Conversion Tests")
+    class JsonStringToObjectConversionTests {
         
-        @Override
-        public String convertToDatabaseColumn(Map<String, Object> attribute) {
-            if (attribute == null) {
-                return null;
-            }
-            try {
-                return JsonUtil.toJson(attribute);
-            } catch (JsonConversionException e) {
-                throw new RuntimeException("Error converting address to JSON", e);
-            }
+        @Test
+        @DisplayName("Should convert JSON string to Map")
+        void shouldConvertJsonStringToMap() throws JsonUtil.JsonConversionException {
+            // Create JSON string
+            String json = "{\"name\":\"Test\",\"value\":123,\"active\":true}";
+            
+            // Convert JSON string to Map
+            Map<String, Object> result = JsonUtil.fromJson(json, new TypeReference<Map<String, Object>>() {});
+            
+            // Verify Map contains expected values
+            assertEquals("Test", result.get("name"));
+            assertEquals(123, result.get("value"));
+            assertEquals(true, result.get("active"));
         }
         
-        @Override
-        public Map<String, Object> convertToEntityAttribute(String dbData) {
-            if (dbData == null || dbData.isEmpty()) {
-                return new HashMap<>();
-            }
-            try {
-                return JsonUtil.fromJson(dbData, new TypeReference<Map<String, Object>>() {});
-            } catch (JsonConversionException e) {
-                throw new RuntimeException("Error converting JSON to address", e);
-            }
+        @Test
+        @DisplayName("Should convert empty JSON object to empty Map")
+        void shouldConvertEmptyJsonObjectToEmptyMap() throws JsonUtil.JsonConversionException {
+            // Convert empty JSON object to Map
+            Map<String, Object> result = JsonUtil.fromJson("{}", new TypeReference<Map<String, Object>>() {});
+            
+            // Verify Map is empty
+            assertTrue(result.isEmpty());
+        }
+        
+        @Test
+        @DisplayName("Should throw exception for invalid JSON")
+        void shouldThrowExceptionForInvalidJson() {
+            // Create invalid JSON string
+            String invalidJson = "{\"name\":\"Test\"value\":123}";
+            
+            // Verify exception is thrown for invalid JSON
+            assertThrows(JsonUtil.JsonConversionException.class, () -> {
+                JsonUtil.fromJson(invalidJson, new TypeReference<Map<String, Object>>() {});
+            });
         }
     }
     
-    @Test
-    @DisplayName("Test Application metadata conversion to JSON string")
-    void testApplicationMetadataToJson() throws JsonConversionException {
-        // Arrange
-        ApplicationMetadataConverter converter = new ApplicationMetadataConverter();
+    @Nested
+    @DisplayName("Null Handling Tests")
+    class NullHandlingTests {
         
-        // Act
-        String json = converter.convertToDatabaseColumn(testMetadata);
+        @Test
+        @DisplayName("Application should handle null metadata")
+        void applicationShouldHandleNullMetadata() {
+            // Create Application with null metadata
+            Application app = new Application(ApplicationStatus.NEW, null, 
+                    LocalDateTime.now(), LocalDateTime.now(), ReviewStatus.NOT_REVIEWED);
+            
+            // Verify metadata JSON is empty object
+            assertEquals("{}", app.getMetadataJson());
+            
+            // Verify metadata Map is empty but not null
+            assertNotNull(app.getMetadata());
+            assertTrue(app.getMetadata().isEmpty());
+        }
         
-        // Assert
-        assertNotNull(json);
-        assertTrue(json.contains("\"source\":\"email\""));
-        assertTrue(json.contains("\"processingTime\":120"));
-        assertTrue(json.contains("\"automationScore\":0.95"));
-        assertTrue(json.contains("\"confidenceScore\":0.98"));
+        @Test
+        @DisplayName("Document should handle null metadata")
+        void documentShouldHandleNullMetadata() {
+            // Create Document with null metadata
+            Document doc = new Document(testId, DocumentType.BANK_STATEMENT, "test.pdf",
+                    DocumentClassification.VERIFIED, LocalDateTime.now(), null);
+            
+            // Verify metadata JSON is empty object
+            assertEquals("{}", doc.getMetadataJson());
+            
+            // Verify metadata Map is empty but not null
+            assertNotNull(doc.getMetadata());
+            assertTrue(doc.getMetadata().isEmpty());
+        }
         
-        // Verify the JSON is valid and can be parsed back to a JsonNode
-        JsonNode jsonNode = objectMapper.readTree(json);
-        assertEquals("email", jsonNode.get("source").asText());
-        assertEquals(120, jsonNode.get("processingTime").asInt());
-        assertEquals(0.95, jsonNode.get("automationScore").asDouble());
-        assertEquals(0.98, jsonNode.get("confidenceScore").asDouble());
+        @Test
+        @DisplayName("MerchantDetails should handle null address")
+        void merchantDetailsShouldHandleNullAddress() {
+            // Create MerchantDetails with null address
+            MerchantDetails merchant = new MerchantDetails(testId, "Test Company LLC", "Test Co", "12-3456789",
+                    null, "Retail", new BigDecimal("1000000.00"));
+            
+            // Verify address JSON is empty object
+            assertEquals("{}", merchant.getAddressJson());
+            
+            // Verify address Map is empty but not null
+            assertNotNull(merchant.getAddress());
+            assertTrue(merchant.getAddress().isEmpty());
+        }
     }
     
-    @Test
-    @DisplayName("Test JSON string conversion to Application metadata")
-    void testJsonToApplicationMetadata() throws IOException, JsonConversionException {
-        // Arrange
-        ApplicationMetadataConverter converter = new ApplicationMetadataConverter();
-        String json = JsonUtil.toJson(testMetadata);
+    @Nested
+    @DisplayName("Error Handling Tests")
+    class ErrorHandlingTests {
         
-        // Act
-        Map<String, Object> result = converter.convertToEntityAttribute(json);
+        @Test
+        @DisplayName("Application should handle invalid metadata JSON")
+        void applicationShouldHandleInvalidMetadataJson() {
+            // Create Application
+            Application app = new Application();
+            
+            // Set invalid JSON string
+            app.setMetadataJson("{\"name\":\"Test\"value\":123}");
+            
+            // Verify metadata Map is empty but not null
+            assertNotNull(app.getMetadata());
+            assertTrue(app.getMetadata().isEmpty());
+        }
         
-        // Assert
-        assertNotNull(result);
-        assertEquals(4, result.size());
-        assertEquals("email", result.get("source"));
-        assertEquals(120, result.get("processingTime"));
-        assertEquals(0.95, result.get("automationScore"));
-        assertEquals(0.98, result.get("confidenceScore"));
+        @Test
+        @DisplayName("Document should handle invalid metadata JSON")
+        void documentShouldHandleInvalidMetadataJson() {
+            // Create Document
+            Document doc = new Document();
+            
+            // Set invalid JSON string
+            doc.setMetadataJson("{\"name\":\"Test\"value\":123}");
+            
+            // Verify metadata Map is empty but not null
+            assertNotNull(doc.getMetadata());
+            assertTrue(doc.getMetadata().isEmpty());
+        }
+        
+        @Test
+        @DisplayName("MerchantDetails should handle invalid address JSON")
+        void merchantDetailsShouldHandleInvalidAddressJson() {
+            // Create MerchantDetails
+            MerchantDetails merchant = new MerchantDetails();
+            
+            // Set invalid JSON string
+            merchant.setAddressJson("{\"street\":\"123 Main St\"city\":\"New York\"}");
+            
+            // Verify address Map is empty but not null
+            assertNotNull(merchant.getAddress());
+            assertTrue(merchant.getAddress().isEmpty());
+        }
     }
     
-    @Test
-    @DisplayName("Test Document metadata conversion to JSON string")
-    void testDocumentMetadataToJson() throws JsonConversionException {
-        // Arrange
-        DocumentMetadataConverter converter = new DocumentMetadataConverter();
-        Map<String, Object> documentMetadata = new HashMap<>(testMetadata);
-        documentMetadata.put("documentType", "BANK_STATEMENT");
-        documentMetadata.put("pageCount", 5);
-        documentMetadata.put("extractedFields", 12);
+    @Nested
+    @DisplayName("Entity Integration Tests")
+    class EntityIntegrationTests {
         
-        // Act
-        String json = converter.convertToDatabaseColumn(documentMetadata);
+        @Test
+        @DisplayName("Application should maintain metadata integrity")
+        void applicationShouldMaintainMetadataIntegrity() {
+            // Verify initial metadata is set correctly
+            assertEquals(testMetadata, application.getMetadata());
+            
+            // Add new metadata
+            application.addMetadata("status", "pending");
+            
+            // Verify metadata was updated
+            assertEquals("pending", application.getMetadataValue("status"));
+            
+            // Verify JSON was updated
+            assertTrue(application.getMetadataJson().contains("\"status\":\"pending\""));
+        }
         
-        // Assert
-        assertNotNull(json);
-        assertTrue(json.contains("\"documentType\":\"BANK_STATEMENT\""));
-        assertTrue(json.contains("\"pageCount\":5"));
-        assertTrue(json.contains("\"extractedFields\":12"));
+        @Test
+        @DisplayName("Document should maintain metadata integrity")
+        void documentShouldMaintainMetadataIntegrity() {
+            // Verify initial metadata is set correctly
+            assertEquals(testMetadata, document.getMetadata());
+            
+            // Add new metadata
+            document.addMetadata("confidenceScore", 0.98);
+            
+            // Verify metadata was updated
+            assertEquals(0.98, document.getConfidenceScore());
+            
+            // Verify JSON was updated
+            assertTrue(document.getMetadataJson().contains("\"confidenceScore\":0.98"));
+        }
         
-        // Verify the JSON is valid and can be parsed back to a JsonNode
-        JsonNode jsonNode = objectMapper.readTree(json);
-        assertEquals("BANK_STATEMENT", jsonNode.get("documentType").asText());
-        assertEquals(5, jsonNode.get("pageCount").asInt());
-        assertEquals(12, jsonNode.get("extractedFields").asInt());
+        @Test
+        @DisplayName("MerchantDetails should maintain address integrity")
+        void merchantDetailsShouldMaintainAddressIntegrity() {
+            // Verify initial address is set correctly
+            assertEquals(testAddress, merchantDetails.getAddress());
+            
+            // Update address field
+            merchantDetails.setAddressField("street", "456 Broadway");
+            
+            // Verify address was updated
+            assertEquals("456 Broadway", merchantDetails.getAddressField("street"));
+            
+            // Verify JSON was updated
+            assertTrue(merchantDetails.getAddressJson().contains("\"street\":\"456 Broadway\""));
+        }
     }
     
-    @Test
-    @DisplayName("Test JSON string conversion to Document metadata")
-    void testJsonToDocumentMetadata() throws IOException, JsonConversionException {
-        // Arrange
-        DocumentMetadataConverter converter = new DocumentMetadataConverter();
-        Map<String, Object> documentMetadata = new HashMap<>(testMetadata);
-        documentMetadata.put("documentType", "BANK_STATEMENT");
-        documentMetadata.put("pageCount", 5);
-        documentMetadata.put("extractedFields", 12);
-        String json = JsonUtil.toJson(documentMetadata);
+    @Nested
+    @DisplayName("Complex Object Conversion Tests")
+    class ComplexObjectConversionTests {
         
-        // Act
-        Map<String, Object> result = converter.convertToEntityAttribute(json);
+        @Test
+        @DisplayName("Should handle nested objects in metadata")
+        void shouldHandleNestedObjectsInMetadata() {
+            // Create complex nested metadata
+            Map<String, Object> complexMetadata = new HashMap<>();
+            complexMetadata.put("id", testId.toString());
+            
+            Map<String, Object> customer = new HashMap<>();
+            customer.put("name", "John Doe");
+            customer.put("email", "john@example.com");
+            
+            Map<String, Object> address = new HashMap<>();
+            address.put("street", "123 Main St");
+            address.put("city", "New York");
+            address.put("state", "NY");
+            address.put("zip", "10001");
+            
+            customer.put("address", address);
+            complexMetadata.put("customer", customer);
+            
+            List<Map<String, Object>> documents = Arrays.asList(
+                Map.of("type", "BANK_STATEMENT", "filename", "bank.pdf"),
+                Map.of("type", "TAX_RETURN", "filename", "tax.pdf")
+            );
+            complexMetadata.put("documents", documents);
+            
+            // Set complex metadata on Application
+            application.setMetadata(complexMetadata);
+            
+            // Convert to JSON and back to verify integrity
+            String json = application.getMetadataJson();
+            application.setMetadataJson(json);
+            Map<String, Object> retrievedMetadata = application.getMetadata();
+            
+            // Verify complex structure is maintained
+            assertEquals(testId.toString(), retrievedMetadata.get("id"));
+            
+            @SuppressWarnings("unchecked")
+            Map<String, Object> retrievedCustomer = (Map<String, Object>) retrievedMetadata.get("customer");
+            assertNotNull(retrievedCustomer);
+            assertEquals("John Doe", retrievedCustomer.get("name"));
+            assertEquals("john@example.com", retrievedCustomer.get("email"));
+            
+            @SuppressWarnings("unchecked")
+            Map<String, Object> retrievedAddress = (Map<String, Object>) retrievedCustomer.get("address");
+            assertNotNull(retrievedAddress);
+            assertEquals("123 Main St", retrievedAddress.get("street"));
+            assertEquals("New York", retrievedAddress.get("city"));
+            
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> retrievedDocuments = (List<Map<String, Object>>) retrievedMetadata.get("documents");
+            assertNotNull(retrievedDocuments);
+            assertEquals(2, retrievedDocuments.size());
+            assertEquals("BANK_STATEMENT", retrievedDocuments.get(0).get("type"));
+            assertEquals("tax.pdf", retrievedDocuments.get(1).get("filename"));
+        }
         
-        // Assert
-        assertNotNull(result);
-        assertEquals(7, result.size());
-        assertEquals("BANK_STATEMENT", result.get("documentType"));
-        assertEquals(5, result.get("pageCount"));
-        assertEquals(12, result.get("extractedFields"));
+        @Test
+        @DisplayName("Should handle arrays in metadata")
+        void shouldHandleArraysInMetadata() {
+            // Create metadata with arrays
+            Map<String, Object> arrayMetadata = new HashMap<>();
+            arrayMetadata.put("strings", Arrays.asList("one", "two", "three"));
+            arrayMetadata.put("numbers", Arrays.asList(1, 2, 3, 4, 5));
+            arrayMetadata.put("mixed", Arrays.asList("string", 123, true, null));
+            
+            // Set array metadata on Document
+            document.setMetadata(arrayMetadata);
+            
+            // Convert to JSON and back to verify integrity
+            String json = document.getMetadataJson();
+            document.setMetadataJson(json);
+            Map<String, Object> retrievedMetadata = document.getMetadata();
+            
+            // Verify arrays are maintained
+            @SuppressWarnings("unchecked")
+            List<String> strings = (List<String>) retrievedMetadata.get("strings");
+            assertNotNull(strings);
+            assertEquals(3, strings.size());
+            assertEquals("one", strings.get(0));
+            assertEquals("three", strings.get(2));
+            
+            @SuppressWarnings("unchecked")
+            List<Integer> numbers = (List<Integer>) retrievedMetadata.get("numbers");
+            assertNotNull(numbers);
+            assertEquals(5, numbers.size());
+            assertEquals(1, numbers.get(0));
+            assertEquals(5, numbers.get(4));
+            
+            @SuppressWarnings("unchecked")
+            List<Object> mixed = (List<Object>) retrievedMetadata.get("mixed");
+            assertNotNull(mixed);
+            assertEquals(4, mixed.size());
+            assertEquals("string", mixed.get(0));
+            assertEquals(123, mixed.get(1));
+            assertEquals(true, mixed.get(2));
+            assertNull(mixed.get(3));
+        }
     }
     
-    @Test
-    @DisplayName("Test MerchantDetails address conversion to JSON string")
-    void testAddressToJson() throws JsonConversionException {
-        // Arrange
-        AddressConverter converter = new AddressConverter();
+    @Nested
+    @DisplayName("Persistence Simulation Tests")
+    class PersistenceSimulationTests {
         
-        // Act
-        String json = converter.convertToDatabaseColumn(testAddress);
+        @Test
+        @DisplayName("Should simulate persistence and retrieval of Application metadata")
+        void shouldSimulatePersistenceAndRetrievalOfApplicationMetadata() {
+            // Get JSON representation (simulates database storage)
+            String storedJson = application.getMetadataJson();
+            
+            // Create new Application (simulates retrieval from database)
+            Application retrievedApp = new Application();
+            retrievedApp.setMetadataJson(storedJson);
+            
+            // Verify metadata was correctly retrieved
+            Map<String, Object> retrievedMetadata = retrievedApp.getMetadata();
+            assertEquals("email", retrievedMetadata.get("source"));
+            assertEquals(1, retrievedMetadata.get("priority"));
+            
+            @SuppressWarnings("unchecked")
+            List<String> tags = (List<String>) retrievedMetadata.get("tags");
+            assertNotNull(tags);
+            assertEquals(2, tags.size());
+            assertEquals("urgent", tags.get(0));
+            
+            @SuppressWarnings("unchecked")
+            Map<String, Object> processingDetails = (Map<String, Object>) retrievedMetadata.get("processingDetails");
+            assertNotNull(processingDetails);
+            assertEquals(2500, processingDetails.get("processingTime"));
+            assertEquals(0.95, processingDetails.get("automationScore"));
+        }
         
-        // Assert
-        assertNotNull(json);
-        assertTrue(json.contains("\"street\":\"123 Main St\""));
-        assertTrue(json.contains("\"city\":\"New York\""));
-        assertTrue(json.contains("\"state\":\"NY\""));
-        assertTrue(json.contains("\"zipCode\":\"10001\""));
-        assertTrue(json.contains("\"country\":\"USA\""));
+        @Test
+        @DisplayName("Should simulate persistence and retrieval of Document metadata")
+        void shouldSimulatePersistenceAndRetrievalOfDocumentMetadata() {
+            // Get JSON representation (simulates database storage)
+            String storedJson = document.getMetadataJson();
+            
+            // Create new Document (simulates retrieval from database)
+            Document retrievedDoc = new Document();
+            retrievedDoc.setMetadataJson(storedJson);
+            
+            // Verify metadata was correctly retrieved
+            Map<String, Object> retrievedMetadata = retrievedDoc.getMetadata();
+            assertEquals(testMetadata, retrievedMetadata);
+        }
         
-        // Verify the JSON is valid and can be parsed back to a JsonNode
-        JsonNode jsonNode = objectMapper.readTree(json);
-        assertEquals("123 Main St", jsonNode.get("street").asText());
-        assertEquals("New York", jsonNode.get("city").asText());
-        assertEquals("NY", jsonNode.get("state").asText());
-        assertEquals("10001", jsonNode.get("zipCode").asText());
-        assertEquals("USA", jsonNode.get("country").asText());
-    }
-    
-    @Test
-    @DisplayName("Test JSON string conversion to MerchantDetails address")
-    void testJsonToAddress() throws IOException, JsonConversionException {
-        // Arrange
-        AddressConverter converter = new AddressConverter();
-        String json = JsonUtil.toJson(testAddress);
-        
-        // Act
-        Map<String, Object> result = converter.convertToEntityAttribute(json);
-        
-        // Assert
-        assertNotNull(result);
-        assertEquals(5, result.size());
-        assertEquals("123 Main St", result.get("street"));
-        assertEquals("New York", result.get("city"));
-        assertEquals("NY", result.get("state"));
-        assertEquals("10001", result.get("zipCode"));
-        assertEquals("USA", result.get("country"));
-    }
-    
-    @Test
-    @DisplayName("Test handling null values in converters")
-    void testNullHandling() {
-        // Arrange
-        ApplicationMetadataConverter appConverter = new ApplicationMetadataConverter();
-        DocumentMetadataConverter docConverter = new DocumentMetadataConverter();
-        AddressConverter addressConverter = new AddressConverter();
-        
-        // Act & Assert - null to JSON
-        assertNull(appConverter.convertToDatabaseColumn(null));
-        assertNull(docConverter.convertToDatabaseColumn(null));
-        assertNull(addressConverter.convertToDatabaseColumn(null));
-        
-        // Act & Assert - null/empty JSON to object
-        assertTrue(appConverter.convertToEntityAttribute(null).isEmpty());
-        assertTrue(docConverter.convertToEntityAttribute(null).isEmpty());
-        assertTrue(addressConverter.convertToEntityAttribute(null).isEmpty());
-        
-        assertTrue(appConverter.convertToEntityAttribute("").isEmpty());
-        assertTrue(docConverter.convertToEntityAttribute("").isEmpty());
-        assertTrue(addressConverter.convertToEntityAttribute("").isEmpty());
-    }
-    
-    @Test
-    @DisplayName("Test error handling for invalid JSON")
-    void testInvalidJsonHandling() {
-        // Arrange
-        ApplicationMetadataConverter converter = new ApplicationMetadataConverter();
-        String invalidJson = "{\"source\":\"email\", invalid json}";
-        
-        // Act & Assert
-        Exception exception = assertThrows(RuntimeException.class, () -> {
-            converter.convertToEntityAttribute(invalidJson);
-        });
-        
-        assertTrue(exception.getMessage().contains("Error converting JSON to application metadata"));
-    }
-    
-    @Test
-    @DisplayName("Test complex nested object conversion")
-    void testComplexNestedObjectConversion() throws JsonConversionException {
-        // Arrange
-        ApplicationMetadataConverter converter = new ApplicationMetadataConverter();
-        Map<String, Object> complexMetadata = new HashMap<>();
-        
-        // Create nested objects
-        Map<String, Object> extractionDetails = new HashMap<>();
-        extractionDetails.put("engine", "OCR-v2");
-        extractionDetails.put("accuracy", 0.97);
-        
-        Map<String, Object> processingStats = new HashMap<>();
-        processingStats.put("startTime", "2023-05-15T10:30:00Z");
-        processingStats.put("endTime", "2023-05-15T10:30:05Z");
-        processingStats.put("duration", 5000);
-        
-        // Add nested objects to main metadata
-        complexMetadata.put("source", "email");
-        complexMetadata.put("extractionDetails", extractionDetails);
-        complexMetadata.put("processingStats", processingStats);
-        
-        // Act
-        String json = converter.convertToDatabaseColumn(complexMetadata);
-        Map<String, Object> result = converter.convertToEntityAttribute(json);
-        
-        // Assert
-        assertNotNull(result);
-        assertEquals(3, result.size());
-        assertEquals("email", result.get("source"));
-        
-        // Verify nested objects
-        @SuppressWarnings("unchecked")
-        Map<String, Object> resultExtractionDetails = (Map<String, Object>) result.get("extractionDetails");
-        assertNotNull(resultExtractionDetails);
-        assertEquals("OCR-v2", resultExtractionDetails.get("engine"));
-        assertEquals(0.97, resultExtractionDetails.get("accuracy"));
-        
-        @SuppressWarnings("unchecked")
-        Map<String, Object> resultProcessingStats = (Map<String, Object>) result.get("processingStats");
-        assertNotNull(resultProcessingStats);
-        assertEquals("2023-05-15T10:30:00Z", resultProcessingStats.get("startTime"));
-        assertEquals("2023-05-15T10:30:05Z", resultProcessingStats.get("endTime"));
-        assertEquals(5000, resultProcessingStats.get("duration"));
-    }
-    
-    @Test
-    @DisplayName("Test integration with Application entity")
-    void testIntegrationWithApplicationEntity() throws JsonConversionException {
-        // Arrange
-        ApplicationMetadataConverter converter = new ApplicationMetadataConverter();
-        String jsonMetadata = JsonUtil.toJson(testMetadata);
-        
-        // Mock the entity behavior
-        when(application.getMetadata()).thenReturn(testMetadata);
-        
-        // Act
-        String dbColumn = converter.convertToDatabaseColumn(application.getMetadata());
-        Map<String, Object> entityAttribute = converter.convertToEntityAttribute(dbColumn);
-        
-        // Assert
-        assertEquals(jsonMetadata, dbColumn);
-        assertEquals(testMetadata, entityAttribute);
-    }
-    
-    @Test
-    @DisplayName("Test integration with Document entity")
-    void testIntegrationWithDocumentEntity() throws JsonConversionException {
-        // Arrange
-        DocumentMetadataConverter converter = new DocumentMetadataConverter();
-        Map<String, Object> documentMetadata = new HashMap<>(testMetadata);
-        documentMetadata.put("documentType", "BANK_STATEMENT");
-        String jsonMetadata = JsonUtil.toJson(documentMetadata);
-        
-        // Mock the entity behavior
-        when(document.getMetadata()).thenReturn(documentMetadata);
-        
-        // Act
-        String dbColumn = converter.convertToDatabaseColumn(document.getMetadata());
-        Map<String, Object> entityAttribute = converter.convertToEntityAttribute(dbColumn);
-        
-        // Assert
-        assertEquals(jsonMetadata, dbColumn);
-        assertEquals(documentMetadata, entityAttribute);
-    }
-    
-    @Test
-    @DisplayName("Test integration with MerchantDetails entity")
-    void testIntegrationWithMerchantDetailsEntity() throws JsonConversionException {
-        // Arrange
-        AddressConverter converter = new AddressConverter();
-        String jsonAddress = JsonUtil.toJson(testAddress);
-        
-        // Mock the entity behavior
-        when(merchantDetails.getAddress()).thenReturn(testAddress);
-        
-        // Act
-        String dbColumn = converter.convertToDatabaseColumn(merchantDetails.getAddress());
-        Map<String, Object> entityAttribute = converter.convertToEntityAttribute(dbColumn);
-        
-        // Assert
-        assertEquals(jsonAddress, dbColumn);
-        assertEquals(testAddress, entityAttribute);
-    }
-    
-    @Test
-    @DisplayName("Test JSON with confidence scores for document metadata")
-    void testJsonWithConfidenceScores() throws JsonConversionException {
-        // Arrange
-        DocumentMetadataConverter converter = new DocumentMetadataConverter();
-        Map<String, Object> documentMetadata = new HashMap<>();
-        
-        // Create metadata with confidence scores for extracted fields
-        Map<String, Object> extractedFields = new HashMap<>();
-        
-        Map<String, Object> accountNumberField = new HashMap<>();
-        accountNumberField.put("value", "123456789");
-        accountNumberField.put("confidence", 0.98);
-        extractedFields.put("accountNumber", accountNumberField);
-        
-        Map<String, Object> balanceField = new HashMap<>();
-        balanceField.put("value", "5000.00");
-        balanceField.put("confidence", 0.95);
-        extractedFields.put("balance", balanceField);
-        
-        Map<String, Object> dateField = new HashMap<>();
-        dateField.put("value", "2023-05-15");
-        dateField.put("confidence", 0.99);
-        extractedFields.put("statementDate", dateField);
-        
-        documentMetadata.put("documentType", "BANK_STATEMENT");
-        documentMetadata.put("extractedFields", extractedFields);
-        documentMetadata.put("overallConfidence", 0.97);
-        
-        // Act
-        String json = converter.convertToDatabaseColumn(documentMetadata);
-        Map<String, Object> result = converter.convertToEntityAttribute(json);
-        
-        // Assert
-        assertNotNull(result);
-        assertEquals(3, result.size());
-        assertEquals("BANK_STATEMENT", result.get("documentType"));
-        assertEquals(0.97, result.get("overallConfidence"));
-        
-        // Verify extracted fields with confidence scores
-        @SuppressWarnings("unchecked")
-        Map<String, Object> resultExtractedFields = (Map<String, Object>) result.get("extractedFields");
-        assertNotNull(resultExtractedFields);
-        
-        @SuppressWarnings("unchecked")
-        Map<String, Object> resultAccountNumber = (Map<String, Object>) resultExtractedFields.get("accountNumber");
-        assertEquals("123456789", resultAccountNumber.get("value"));
-        assertEquals(0.98, resultAccountNumber.get("confidence"));
-        
-        @SuppressWarnings("unchecked")
-        Map<String, Object> resultBalance = (Map<String, Object>) resultExtractedFields.get("balance");
-        assertEquals("5000.00", resultBalance.get("value"));
-        assertEquals(0.95, resultBalance.get("confidence"));
+        @Test
+        @DisplayName("Should simulate persistence and retrieval of MerchantDetails address")
+        void shouldSimulatePersistenceAndRetrievalOfMerchantDetailsAddress() {
+            // Get JSON representation (simulates database storage)
+            String storedJson = merchantDetails.getAddressJson();
+            
+            // Create new MerchantDetails (simulates retrieval from database)
+            MerchantDetails retrievedMerchant = new MerchantDetails();
+            retrievedMerchant.setAddressJson(storedJson);
+            
+            // Verify address was correctly retrieved
+            Map<String, Object> retrievedAddress = retrievedMerchant.getAddress();
+            assertEquals(testAddress, retrievedAddress);
+            assertEquals("123 Main St", retrievedMerchant.getAddressField("street"));
+            assertEquals("New York", retrievedMerchant.getAddressField("city"));
+            assertEquals("NY", retrievedMerchant.getAddressField("state"));
+            assertEquals("10001", retrievedMerchant.getAddressField("zip"));
+            assertEquals("USA", retrievedMerchant.getAddressField("country"));
+        }
     }
 }
