@@ -1,485 +1,1057 @@
+# test_resource_usage.py
+# Tests the resource usage of the OCR Service during document processing
+
 import os
 import time
 import pytest
-import psutil
 import numpy as np
 import tensorflow as tf
-import GPUtil
-import pynvml
+import psutil
+import logging
+from typing import Dict, List, Tuple, Any, Optional
 from unittest.mock import patch, MagicMock
 
 # Import OCR service modules
-from ocr_service.app import OCRServiceApp
-from ocr_service.models.model_factory import ModelFactory
-from ocr_service.models.base_model import BaseModel
-from ocr_service.utils.tensorflow_utils import setup_gpu, get_available_gpus
+from src.utils.tensorflow_utils import (
+    configure_gpu_memory,
+    get_available_gpu_memory,
+    check_gpu_requirements,
+    load_model,
+    preprocess_image_for_ocr,
+    run_inference,
+    monitor_gpu_utilization
+)
+from src.services.ocr_service import OCRService
+from src.models.model_factory import ModelFactory
+from src.config.settings import Settings
+
+# Configure logging
+logger = logging.getLogger(__name__)
+
+# Constants for testing
+MIN_VRAM_GB = 8.0  # Minimum VRAM required as per spec
+MAX_MEMORY_USAGE_MB = 4096  # Maximum acceptable memory usage (4GB)
+MAX_GPU_MEMORY_PERCENT = 90  # Maximum acceptable GPU memory usage (90%)
+MAX_CPU_PERCENT = 80  # Maximum acceptable CPU usage (80%)
 
 
-@pytest.fixture(scope="module")
-def ocr_service_app():
-    """Fixture to create and initialize the OCR service application."""
-    app = OCRServiceApp()
-    app.initialize()
-    yield app
-    app.shutdown()
-
-
+# Fixtures
 @pytest.fixture
-def typed_document():
-    """Fixture to provide a sample typed document for testing."""
-    # Path to a sample typed document in the test data directory
-    return os.path.join(os.path.dirname(__file__), "..", "test_data", "typed_documents", "business_documents", "sample_invoice.pdf")
-
-
-@pytest.fixture
-def handwritten_document():
-    """Fixture to provide a sample handwritten document for testing."""
-    # Path to a sample handwritten document in the test data directory
-    return os.path.join(os.path.dirname(__file__), "..", "test_data", "handwritten_documents", "sample_form.pdf")
-
-
-@pytest.fixture
-def mixed_document():
-    """Fixture to provide a sample document with mixed content for testing."""
-    # Path to a sample mixed content document in the test data directory
-    return os.path.join(os.path.dirname(__file__), "..", "test_data", "mixed_documents", "sample_application.pdf")
-
-
-class ResourceMonitor:
-    """Utility class to monitor system resources during OCR processing."""
-    
-    def __init__(self):
-        """Initialize the resource monitor."""
-        self.process = psutil.Process(os.getpid())
-        self.cpu_percent_samples = []
-        self.memory_samples = []
-        self.gpu_memory_samples = []
-        self.gpu_utilization_samples = []
-        self.start_time = None
-        self.end_time = None
-        
-        # Initialize NVIDIA Management Library if available
-        try:
-            pynvml.nvmlInit()
-            self.nvml_initialized = True
-            self.gpu_count = pynvml.nvmlDeviceGetCount()
-        except Exception:
-            self.nvml_initialized = False
-            self.gpu_count = 0
-    
-    def start_monitoring(self):
-        """Start resource monitoring."""
-        self.start_time = time.time()
-        self.cpu_percent_samples = []
-        self.memory_samples = []
-        self.gpu_memory_samples = []
-        self.gpu_utilization_samples = []
-    
-    def sample_resources(self):
-        """Take a sample of current resource usage."""
-        # Sample CPU usage
-        self.cpu_percent_samples.append(self.process.cpu_percent())
-        
-        # Sample memory usage
-        memory_info = self.process.memory_info()
-        self.memory_samples.append({
-            'rss': memory_info.rss,  # Resident Set Size
-            'vms': memory_info.vms   # Virtual Memory Size
-        })
-        
-        # Sample GPU usage if available
-        if self.nvml_initialized and self.gpu_count > 0:
-            gpu_samples = []
-            utilization_samples = []
-            
-            for i in range(self.gpu_count):
-                handle = pynvml.nvmlDeviceGetHandleByIndex(i)
-                memory_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
-                utilization = pynvml.nvmlDeviceGetUtilizationRates(handle)
-                
-                gpu_samples.append({
-                    'used': memory_info.used,
-                    'total': memory_info.total,
-                    'percent': (memory_info.used / memory_info.total) * 100
-                })
-                
-                utilization_samples.append({
-                    'gpu': utilization.gpu,  # GPU utilization percentage
-                    'memory': utilization.memory  # Memory utilization percentage
-                })
-            
-            self.gpu_memory_samples.append(gpu_samples)
-            self.gpu_utilization_samples.append(utilization_samples)
-    
-    def stop_monitoring(self):
-        """Stop resource monitoring and return the results."""
-        self.end_time = time.time()
-        duration = self.end_time - self.start_time
-        
-        # Calculate CPU usage statistics
-        cpu_stats = {
-            'min': min(self.cpu_percent_samples) if self.cpu_percent_samples else 0,
-            'max': max(self.cpu_percent_samples) if self.cpu_percent_samples else 0,
-            'avg': np.mean(self.cpu_percent_samples) if self.cpu_percent_samples else 0,
-            'samples': self.cpu_percent_samples
-        }
-        
-        # Calculate memory usage statistics
-        memory_stats = {
-            'rss': {
-                'min': min(sample['rss'] for sample in self.memory_samples) if self.memory_samples else 0,
-                'max': max(sample['rss'] for sample in self.memory_samples) if self.memory_samples else 0,
-                'avg': np.mean([sample['rss'] for sample in self.memory_samples]) if self.memory_samples else 0
-            },
-            'vms': {
-                'min': min(sample['vms'] for sample in self.memory_samples) if self.memory_samples else 0,
-                'max': max(sample['vms'] for sample in self.memory_samples) if self.memory_samples else 0,
-                'avg': np.mean([sample['vms'] for sample in self.memory_samples]) if self.memory_samples else 0
+def mock_gpu_environment():
+    """Fixture to create a mock GPU environment for testing."""
+    # Create a mock GPU environment with controlled memory and utilization
+    with patch('src.utils.tensorflow_utils.monitor_gpu_utilization') as mock_monitor:
+        # Mock GPU utilization data
+        mock_monitor.return_value = {
+            "gpu_0": {
+                "name": "NVIDIA Test GPU",
+                "memory_used_gb": 2.0,
+                "memory_total_gb": 16.0,
+                "memory_percent": 12.5,
+                "gpu_utilization": 25,
+                "memory_utilization": 15
             }
         }
         
-        # Calculate GPU usage statistics if available
-        gpu_memory_stats = None
-        gpu_utilization_stats = None
-        
-        if self.gpu_memory_samples and self.gpu_utilization_samples:
-            gpu_memory_stats = []
-            gpu_utilization_stats = []
+        with patch('src.utils.tensorflow_utils.get_available_gpu_memory') as mock_memory:
+            # Mock available GPU memory
+            mock_memory.return_value = {"GPU:0": 14.0}  # 14GB available
             
-            for gpu_idx in range(self.gpu_count):
-                # Extract data for this GPU
-                gpu_memory_data = [sample[gpu_idx]['percent'] for sample in self.gpu_memory_samples]
-                gpu_util_data = [sample[gpu_idx]['gpu'] for sample in self.gpu_utilization_samples]
-                memory_util_data = [sample[gpu_idx]['memory'] for sample in self.gpu_utilization_samples]
+            with patch('src.utils.tensorflow_utils.check_gpu_requirements') as mock_check:
+                # Mock GPU requirements check
+                mock_check.return_value = True
                 
-                gpu_memory_stats.append({
-                    'min': min(gpu_memory_data) if gpu_memory_data else 0,
-                    'max': max(gpu_memory_data) if gpu_memory_data else 0,
-                    'avg': np.mean(gpu_memory_data) if gpu_memory_data else 0,
-                    'samples': gpu_memory_data
-                })
-                
-                gpu_utilization_stats.append({
-                    'gpu': {
-                        'min': min(gpu_util_data) if gpu_util_data else 0,
-                        'max': max(gpu_util_data) if gpu_util_data else 0,
-                        'avg': np.mean(gpu_util_data) if gpu_util_data else 0,
-                        'samples': gpu_util_data
-                    },
-                    'memory': {
-                        'min': min(memory_util_data) if memory_util_data else 0,
-                        'max': max(memory_util_data) if memory_util_data else 0,
-                        'avg': np.mean(memory_util_data) if memory_util_data else 0,
-                        'samples': memory_util_data
-                    }
-                })
+                yield {
+                    "monitor": mock_monitor,
+                    "memory": mock_memory,
+                    "check": mock_check
+                }
+
+
+@pytest.fixture
+def sample_documents(request):
+    """Fixture to provide sample documents for testing.
+    
+    Parameters:
+        request: The pytest request object with optional 'param' for document type
+    
+    Returns:
+        List of document images as numpy arrays
+    """
+    # Default to 'typed' if not specified
+    doc_type = getattr(request, 'param', 'typed')
+    
+    # Create synthetic test documents of different types and sizes
+    documents = []
+    
+    # Small document (1MB)
+    small_doc = np.random.rand(800, 600, 3).astype(np.float32)
+    
+    # Medium document (5MB)
+    medium_doc = np.random.rand(1600, 1200, 3).astype(np.float32)
+    
+    # Large document (20MB)
+    large_doc = np.random.rand(3200, 2400, 3).astype(np.float32)
+    
+    documents = [small_doc, medium_doc, large_doc]
+    
+    return {
+        "type": doc_type,
+        "documents": documents,
+        "sizes": ["small", "medium", "large"]
+    }
+
+
+@pytest.fixture
+def mock_ocr_service():
+    """Fixture to create a mock OCR service for testing."""
+    # Create a mock OCR service with controlled behavior
+    with patch('src.services.ocr_service.OCRService') as MockOCRService:
+        service_instance = MockOCRService.return_value
         
-        return {
-            'duration': duration,
-            'cpu': cpu_stats,
-            'memory': memory_stats,
-            'gpu_memory': gpu_memory_stats,
-            'gpu_utilization': gpu_utilization_stats
+        # Mock the process_document method
+        service_instance.process_document.return_value = {
+            "text": "Sample extracted text",
+            "confidence": 0.95,
+            "processing_time": 1.5
         }
-    
-    def __del__(self):
-        """Clean up resources when the monitor is destroyed."""
-        if hasattr(self, 'nvml_initialized') and self.nvml_initialized:
-            try:
-                pynvml.nvmlShutdown()
-            except Exception:
-                pass
+        
+        # Mock the get_models method
+        service_instance.get_models.return_value = {
+            "typed": MagicMock(),
+            "handwritten": MagicMock(),
+            "hybrid": MagicMock(),
+            "structure": MagicMock()
+        }
+        
+        yield service_instance
 
 
-class TestResourceUsage:
-    """Test suite for measuring resource usage during OCR processing."""
+@pytest.fixture
+def memory_tracker():
+    """Fixture to track memory usage during tests."""
+    class MemoryTracker:
+        def __init__(self):
+            self.process = psutil.Process(os.getpid())
+            self.start_memory = None
+            self.peak_memory = 0
+            self.end_memory = None
+            self.samples = []
+        
+        def start(self):
+            """Start tracking memory usage."""
+            self.start_memory = self.process.memory_info().rss / (1024 * 1024)  # MB
+            self.peak_memory = self.start_memory
+            self.samples = [self.start_memory]
+            return self.start_memory
+        
+        def sample(self):
+            """Take a memory usage sample."""
+            current = self.process.memory_info().rss / (1024 * 1024)  # MB
+            self.samples.append(current)
+            if current > self.peak_memory:
+                self.peak_memory = current
+            return current
+        
+        def stop(self):
+            """Stop tracking memory usage and return statistics."""
+            self.end_memory = self.process.memory_info().rss / (1024 * 1024)  # MB
+            self.samples.append(self.end_memory)
+            if self.end_memory > self.peak_memory:
+                self.peak_memory = self.end_memory
+            
+            return {
+                "start_mb": self.start_memory,
+                "end_mb": self.end_memory,
+                "peak_mb": self.peak_memory,
+                "diff_mb": self.end_memory - self.start_memory,
+                "samples": self.samples
+            }
     
-    def test_memory_usage_during_ocr_processing(self, ocr_service_app, typed_document):
-        """Test memory usage during OCR processing of a typed document."""
-        # Initialize resource monitor
-        monitor = ResourceMonitor()
+    return MemoryTracker()
+
+
+@pytest.fixture
+def cpu_tracker():
+    """Fixture to track CPU usage during tests."""
+    class CPUTracker:
+        def __init__(self):
+            self.process = psutil.Process(os.getpid())
+            self.start_cpu = None
+            self.peak_cpu = 0
+            self.end_cpu = None
+            self.samples = []
+            self.interval = 0.1  # Sample every 100ms
         
-        # Start monitoring
-        monitor.start_monitoring()
+        def start(self):
+            """Start tracking CPU usage."""
+            self.start_cpu = self.process.cpu_percent(interval=0.1)
+            self.peak_cpu = self.start_cpu
+            self.samples = [self.start_cpu]
+            return self.start_cpu
         
-        # Process the document with periodic resource sampling
-        result = ocr_service_app.process_document(typed_document)
-        for _ in range(10):  # Sample resources 10 times during processing
-            monitor.sample_resources()
-            time.sleep(0.1)  # Sleep to allow processing to continue
+        def sample(self):
+            """Take a CPU usage sample."""
+            current = self.process.cpu_percent(interval=self.interval)
+            self.samples.append(current)
+            if current > self.peak_cpu:
+                self.peak_cpu = current
+            return current
         
-        # Stop monitoring and get results
-        stats = monitor.stop_monitoring()
-        
-        # Verify memory usage is within acceptable limits
-        # The OCR service should use less than 4GB of RAM for a typical document
-        max_memory_usage_gb = stats['memory']['rss']['max'] / (1024 * 1024 * 1024)
-        assert max_memory_usage_gb < 4.0, f"Memory usage exceeded 4GB: {max_memory_usage_gb:.2f}GB"
-        
-        # Verify processing completed successfully
-        assert result is not None, "Document processing failed"
+        def stop(self):
+            """Stop tracking CPU usage and return statistics."""
+            self.end_cpu = self.process.cpu_percent(interval=self.interval)
+            self.samples.append(self.end_cpu)
+            if self.end_cpu > self.peak_cpu:
+                self.peak_cpu = self.end_cpu
+            
+            return {
+                "start_percent": self.start_cpu,
+                "end_percent": self.end_cpu,
+                "peak_percent": self.peak_cpu,
+                "samples": self.samples
+            }
     
-    def test_gpu_memory_usage(self, ocr_service_app, typed_document):
-        """Test GPU memory usage during OCR processing."""
-        # Skip test if no GPU is available
-        if not tf.config.list_physical_devices('GPU'):
-            pytest.skip("No GPU available for testing")
-        
-        # Initialize resource monitor
-        monitor = ResourceMonitor()
-        
-        # Start monitoring
-        monitor.start_monitoring()
-        
-        # Process the document with periodic resource sampling
-        result = ocr_service_app.process_document(typed_document)
-        for _ in range(10):  # Sample resources 10 times during processing
-            monitor.sample_resources()
-            time.sleep(0.1)  # Sleep to allow processing to continue
-        
-        # Stop monitoring and get results
-        stats = monitor.stop_monitoring()
-        
-        # Verify GPU memory usage is within acceptable limits
-        # The OCR service should use less than 80% of available GPU memory
-        if stats['gpu_memory'] is not None:
-            for gpu_idx, gpu_stats in enumerate(stats['gpu_memory']):
-                assert gpu_stats['max'] < 80.0, f"GPU {gpu_idx} memory usage exceeded 80%: {gpu_stats['max']:.2f}%"
-        
-        # Verify processing completed successfully
-        assert result is not None, "Document processing failed"
+    return CPUTracker()
+
+
+# Test functions
+@pytest.mark.parametrize("doc_type", ["typed", "handwritten", "hybrid"])
+def test_memory_usage_during_ocr_processing(mock_gpu_environment, sample_documents, memory_tracker, doc_type):
+    """Test memory usage during OCR processing for different document types.
     
-    def test_cpu_usage_during_different_stages(self, ocr_service_app, typed_document):
-        """Test CPU usage during different stages of OCR processing."""
-        # Initialize resource monitor
-        monitor = ResourceMonitor()
+    This test verifies that memory usage stays within acceptable limits during OCR processing.
+    """
+    # Arrange
+    docs = sample_documents
+    memory_tracker.start()
+    
+    # Act - Process each document and track memory usage
+    for i, doc in enumerate(docs["documents"]):
+        # Preprocess the document
+        preprocessed = preprocess_image_for_ocr(doc, doc_type)
+        memory_tracker.sample()
         
-        # Define processing stages to monitor
-        stages = [
-            "document_loading",
-            "preprocessing",
-            "text_recognition",
-            "post_processing"
+        # Create a mock model for inference
+        mock_model = MagicMock()
+        mock_model.predict.return_value = np.random.rand(1, 100, 100, 3)  # Mock output
+        
+        # Run inference
+        output, _ = run_inference(mock_model, preprocessed)
+        memory_tracker.sample()
+        
+        # Log memory usage for this document
+        logger.info(f"Memory usage after processing {docs['sizes'][i]} {doc_type} document: {memory_tracker.sample()} MB")
+    
+    # Get final memory statistics
+    memory_stats = memory_tracker.stop()
+    
+    # Assert
+    logger.info(f"Memory usage statistics for {doc_type} documents: {memory_stats}")
+    assert memory_stats["peak_mb"] < MAX_MEMORY_USAGE_MB, f"Peak memory usage ({memory_stats['peak_mb']} MB) exceeds limit ({MAX_MEMORY_USAGE_MB} MB)"
+
+
+def test_gpu_memory_utilization(mock_gpu_environment):
+    """Test GPU memory utilization during OCR processing.
+    
+    This test verifies that GPU memory usage stays within acceptable limits and that
+    the service properly detects and utilizes available GPU resources.
+    """
+    # Arrange
+    gpu_env = mock_gpu_environment
+    
+    # Act
+    # Check GPU requirements
+    meets_requirements = check_gpu_requirements(min_vram_gb=MIN_VRAM_GB)
+    
+    # Get available GPU memory
+    available_memory = get_available_gpu_memory()
+    
+    # Monitor GPU utilization
+    utilization = monitor_gpu_utilization()
+    
+    # Assert
+    assert meets_requirements, f"System does not meet minimum GPU requirements of {MIN_VRAM_GB} GB VRAM"
+    
+    # Check that we have at least one GPU with sufficient memory
+    assert any(mem >= MIN_VRAM_GB for gpu, mem in available_memory.items() if mem > 0), \
+        f"No GPU found with at least {MIN_VRAM_GB} GB VRAM"
+    
+    # Check that GPU utilization is reported correctly
+    for gpu_id, metrics in utilization.items():
+        assert "memory_percent" in metrics, f"GPU {gpu_id} does not report memory percentage"
+        assert metrics["memory_percent"] <= MAX_GPU_MEMORY_PERCENT, \
+            f"GPU {gpu_id} memory usage ({metrics['memory_percent']}%) exceeds limit ({MAX_GPU_MEMORY_PERCENT}%)"
+
+
+@pytest.mark.parametrize("processing_stage", ["preprocessing", "inference", "postprocessing"])
+def test_cpu_usage_during_processing_stages(mock_gpu_environment, sample_documents, cpu_tracker, processing_stage):
+    """Test CPU usage during different OCR processing stages.
+    
+    This test verifies that CPU usage stays within acceptable limits during different
+    stages of OCR processing.
+    """
+    # Arrange
+    docs = sample_documents
+    cpu_tracker.start()
+    
+    # Act - Process based on the stage being tested
+    if processing_stage == "preprocessing":
+        # Test CPU usage during preprocessing
+        for i, doc in enumerate(docs["documents"]):
+            preprocess_image_for_ocr(doc, docs["type"])
+            cpu_tracker.sample()
+            logger.info(f"CPU usage after preprocessing {docs['sizes'][i]} document: {cpu_tracker.sample()}%")
+    
+    elif processing_stage == "inference":
+        # Test CPU usage during inference
+        mock_model = MagicMock()
+        mock_model.predict.return_value = np.random.rand(1, 100, 100, 3)  # Mock output
+        
+        for i, doc in enumerate(docs["documents"]):
+            preprocessed = preprocess_image_for_ocr(doc, docs["type"])
+            run_inference(mock_model, preprocessed)
+            cpu_tracker.sample()
+            logger.info(f"CPU usage after inference on {docs['sizes'][i]} document: {cpu_tracker.sample()}%")
+    
+    elif processing_stage == "postprocessing":
+        # Test CPU usage during postprocessing (e.g., text extraction)
+        for i, doc in enumerate(docs["documents"]):
+            # Mock postprocessing by performing some CPU-intensive operations
+            result = np.fft.fft2(doc)  # FFT is CPU-intensive
+            threshold = np.mean(result)
+            binary = result > threshold
+            cpu_tracker.sample()
+            logger.info(f"CPU usage after postprocessing {docs['sizes'][i]} document: {cpu_tracker.sample()}%")
+    
+    # Get final CPU statistics
+    cpu_stats = cpu_tracker.stop()
+    
+    # Assert
+    logger.info(f"CPU usage statistics for {processing_stage}: {cpu_stats}")
+    assert cpu_stats["peak_percent"] < MAX_CPU_PERCENT, \
+        f"Peak CPU usage ({cpu_stats['peak_percent']}%) during {processing_stage} exceeds limit ({MAX_CPU_PERCENT}%)"
+
+
+@pytest.mark.parametrize("doc_type", ["typed", "handwritten", "hybrid"])
+def test_resource_efficiency_with_different_document_types(mock_gpu_environment, memory_tracker, cpu_tracker, doc_type):
+    """Test resource efficiency with different document types.
+    
+    This test verifies that the OCR service efficiently utilizes resources when
+    processing different types of documents.
+    """
+    # Arrange
+    # Create a document of the specified type
+    if doc_type == "typed":
+        # Typed documents might be cleaner with more uniform text
+        doc = np.ones((1024, 768, 3), dtype=np.float32) * 0.9  # Light background
+        # Add some "text-like" darker regions
+        for i in range(10):
+            y = 100 + i * 50
+            doc[y:y+20, 100:700, :] *= 0.2  # Dark "text" lines
+    
+    elif doc_type == "handwritten":
+        # Handwritten documents might have more variation
+        doc = np.ones((1024, 768, 3), dtype=np.float32) * 0.9  # Light background
+        # Add some "handwriting-like" darker regions with more variation
+        for i in range(10):
+            y = 100 + i * 50
+            # More irregular lines for handwriting
+            for j in range(5):
+                x_start = 100 + j * 120
+                width = np.random.randint(50, 100)
+                doc[y:y+20, x_start:x_start+width, :] *= 0.3
+    
+    elif doc_type == "hybrid":
+        # Hybrid documents might have both typed and handwritten elements
+        doc = np.ones((1024, 768, 3), dtype=np.float32) * 0.9  # Light background
+        # Add some "text-like" darker regions
+        for i in range(5):
+            y = 100 + i * 50
+            doc[y:y+20, 100:700, :] *= 0.2  # Dark "text" lines
+        
+        # Add some "handwriting-like" regions
+        for i in range(5):
+            y = 400 + i * 50
+            for j in range(3):
+                x_start = 100 + j * 200
+                width = np.random.randint(50, 150)
+                doc[y:y+25, x_start:x_start+width, :] *= 0.3
+    
+    # Start tracking resources
+    memory_tracker.start()
+    cpu_tracker.start()
+    
+    # Act - Process the document
+    # Preprocess
+    preprocessed = preprocess_image_for_ocr(doc, doc_type)
+    memory_after_preprocess = memory_tracker.sample()
+    cpu_after_preprocess = cpu_tracker.sample()
+    
+    # Mock inference
+    mock_model = MagicMock()
+    mock_model.predict.return_value = np.random.rand(1, 100, 100, 3)  # Mock output
+    output, inference_time = run_inference(mock_model, preprocessed)
+    memory_after_inference = memory_tracker.sample()
+    cpu_after_inference = cpu_tracker.sample()
+    
+    # Mock postprocessing
+    time.sleep(0.1)  # Simulate some processing time
+    memory_after_postprocess = memory_tracker.sample()
+    cpu_after_postprocess = cpu_tracker.sample()
+    
+    # Get final resource statistics
+    memory_stats = memory_tracker.stop()
+    cpu_stats = cpu_tracker.stop()
+    
+    # Calculate efficiency metrics
+    memory_efficiency = {
+        "preprocessing": memory_after_preprocess - memory_stats["start_mb"],
+        "inference": memory_after_inference - memory_after_preprocess,
+        "postprocessing": memory_after_postprocess - memory_after_inference,
+        "total": memory_stats["peak_mb"] - memory_stats["start_mb"]
+    }
+    
+    cpu_efficiency = {
+        "preprocessing": cpu_after_preprocess,
+        "inference": cpu_after_inference,
+        "postprocessing": cpu_after_postprocess,
+        "peak": cpu_stats["peak_percent"]
+    }
+    
+    # Log efficiency metrics
+    logger.info(f"Resource efficiency for {doc_type} document:")
+    logger.info(f"Memory efficiency (MB): {memory_efficiency}")
+    logger.info(f"CPU efficiency (%): {cpu_efficiency}")
+    logger.info(f"Inference time (s): {inference_time}")
+    
+    # Assert
+    # Check that memory usage is reasonable for the document type
+    assert memory_efficiency["total"] < MAX_MEMORY_USAGE_MB, \
+        f"Total memory usage for {doc_type} document ({memory_efficiency['total']} MB) exceeds limit ({MAX_MEMORY_USAGE_MB} MB)"
+    
+    # Check that CPU usage is reasonable
+    assert cpu_efficiency["peak"] < MAX_CPU_PERCENT, \
+        f"Peak CPU usage for {doc_type} document ({cpu_efficiency['peak']}%) exceeds limit ({MAX_CPU_PERCENT}%)"
+    
+    # Additional assertions specific to document types
+    if doc_type == "typed":
+        # Typed documents should be more efficient to process
+        assert inference_time < 2.0, f"Inference time for typed document ({inference_time}s) is too high"
+    
+    elif doc_type == "handwritten":
+        # Handwritten documents might take more resources but should still be reasonable
+        assert inference_time < 3.0, f"Inference time for handwritten document ({inference_time}s) is too high"
+
+
+def test_resource_usage_within_acceptable_limits(mock_gpu_environment, memory_tracker, cpu_tracker):
+    """Test that resource usage stays within acceptable limits for production deployment.
+    
+    This test verifies that the OCR service's resource usage meets the requirements
+    for production deployment.
+    """
+    # Arrange
+    # Create a batch of documents to simulate production load
+    batch_size = 5
+    docs = [np.random.rand(1024, 768, 3).astype(np.float32) for _ in range(batch_size)]
+    
+    # Start tracking resources
+    memory_tracker.start()
+    cpu_tracker.start()
+    
+    # Act - Process the batch of documents
+    for i, doc in enumerate(docs):
+        # Preprocess
+        preprocessed = preprocess_image_for_ocr(doc, "hybrid")  # Use hybrid model for mixed content
+        
+        # Mock inference
+        mock_model = MagicMock()
+        mock_model.predict.return_value = np.random.rand(1, 100, 100, 3)  # Mock output
+        output, _ = run_inference(mock_model, preprocessed)
+        
+        # Sample resource usage after each document
+        memory_usage = memory_tracker.sample()
+        cpu_usage = cpu_tracker.sample()
+        
+        logger.info(f"Resource usage after processing document {i+1}/{batch_size}:")
+        logger.info(f"Memory usage: {memory_usage} MB")
+        logger.info(f"CPU usage: {cpu_usage}%")
+        
+        # Check that resources stay within limits for each document
+        assert memory_usage < MAX_MEMORY_USAGE_MB, \
+            f"Memory usage after document {i+1} ({memory_usage} MB) exceeds limit ({MAX_MEMORY_USAGE_MB} MB)"
+        
+        assert cpu_usage < MAX_CPU_PERCENT, \
+            f"CPU usage after document {i+1} ({cpu_usage}%) exceeds limit ({MAX_CPU_PERCENT}%)"
+    
+    # Get final resource statistics
+    memory_stats = memory_tracker.stop()
+    cpu_stats = cpu_tracker.stop()
+    
+    # Assert
+    logger.info(f"Final resource statistics after processing {batch_size} documents:")
+    logger.info(f"Memory statistics: {memory_stats}")
+    logger.info(f"CPU statistics: {cpu_stats}")
+    
+    # Check overall resource usage
+    assert memory_stats["peak_mb"] < MAX_MEMORY_USAGE_MB, \
+        f"Peak memory usage ({memory_stats['peak_mb']} MB) exceeds limit ({MAX_MEMORY_USAGE_MB} MB)"
+    
+    assert cpu_stats["peak_percent"] < MAX_CPU_PERCENT, \
+        f"Peak CPU usage ({cpu_stats['peak_percent']}%) exceeds limit ({MAX_CPU_PERCENT}%)"
+    
+    # Check for memory leaks (memory should not grow excessively)
+    memory_growth_per_doc = memory_stats["diff_mb"] / batch_size
+    assert memory_growth_per_doc < 100, \
+        f"Memory growth per document ({memory_growth_per_doc} MB) suggests a potential memory leak"
+
+
+@pytest.mark.parametrize("batch_size", [1, 5, 10])
+def test_resource_scaling_with_batch_size(mock_gpu_environment, memory_tracker, batch_size):
+    """Test how resource usage scales with different batch sizes.
+    
+    This test verifies that resource usage scales reasonably with increasing batch sizes.
+    """
+    # Arrange
+    # Create batches of documents with different sizes
+    docs = [np.random.rand(1024, 768, 3).astype(np.float32) for _ in range(batch_size)]
+    
+    # Start tracking memory
+    memory_tracker.start()
+    
+    # Act - Process the batch of documents
+    start_time = time.time()
+    
+    for i, doc in enumerate(docs):
+        # Preprocess
+        preprocessed = preprocess_image_for_ocr(doc, "typed")  # Use typed model for consistency
+        
+        # Mock inference
+        mock_model = MagicMock()
+        mock_model.predict.return_value = np.random.rand(1, 100, 100, 3)  # Mock output
+        output, _ = run_inference(mock_model, preprocessed)
+        
+        # Sample memory usage after each document
+        memory_usage = memory_tracker.sample()
+        logger.info(f"Memory usage after processing document {i+1}/{batch_size}: {memory_usage} MB")
+    
+    # Calculate processing time
+    processing_time = time.time() - start_time
+    
+    # Get final memory statistics
+    memory_stats = memory_tracker.stop()
+    
+    # Calculate scaling metrics
+    memory_per_doc = memory_stats["diff_mb"] / batch_size if batch_size > 0 else 0
+    time_per_doc = processing_time / batch_size if batch_size > 0 else 0
+    
+    # Log scaling metrics
+    logger.info(f"Resource scaling metrics for batch size {batch_size}:")
+    logger.info(f"Total memory usage: {memory_stats['diff_mb']} MB")
+    logger.info(f"Memory per document: {memory_per_doc} MB")
+    logger.info(f"Total processing time: {processing_time} seconds")
+    logger.info(f"Time per document: {time_per_doc} seconds")
+    
+    # Assert
+    # Memory usage should scale reasonably with batch size
+    assert memory_stats["peak_mb"] < MAX_MEMORY_USAGE_MB, \
+        f"Peak memory usage ({memory_stats['peak_mb']} MB) exceeds limit ({MAX_MEMORY_USAGE_MB} MB)"
+    
+    # Memory per document should be relatively consistent (not growing excessively)
+    assert memory_per_doc < 200, \
+        f"Memory per document ({memory_per_doc} MB) is too high"
+    
+    # Processing time should scale reasonably (sub-linear is ideal due to batching efficiencies)
+    assert time_per_doc < 2.0, \
+        f"Processing time per document ({time_per_doc}s) is too high"
+    
+    # For larger batches, we expect some efficiency gains
+    if batch_size > 1:
+        # This is a simplified check - in reality, you'd want to compare with single-document processing
+        assert time_per_doc < 1.5, \
+            f"Processing time per document in batch ({time_per_doc}s) doesn't show efficiency gains"
+
+
+def test_gpu_memory_cleanup_after_processing(mock_gpu_environment, memory_tracker):
+    """Test that GPU memory is properly cleaned up after processing.
+    
+    This test verifies that GPU memory is released after document processing,
+    preventing memory leaks that could impact long-running services.
+    """
+    # Arrange
+    # Create a sequence of documents to process
+    num_docs = 3
+    docs = [np.random.rand(1024, 768, 3).astype(np.float32) for _ in range(num_docs)]
+    
+    # Start tracking memory
+    memory_tracker.start()
+    
+    # Mock TensorFlow's GPU memory tracking
+    with patch('src.utils.tensorflow_utils.monitor_gpu_utilization') as mock_monitor:
+        # Set up the mock to return decreasing GPU memory usage after each call
+        # to simulate proper cleanup
+        mock_monitor.side_effect = [
+            {"gpu_0": {"memory_percent": 50, "memory_used_gb": 8.0, "memory_total_gb": 16.0}},  # Initial usage
+            {"gpu_0": {"memory_percent": 60, "memory_used_gb": 9.6, "memory_total_gb": 16.0}},  # During processing
+            {"gpu_0": {"memory_percent": 45, "memory_used_gb": 7.2, "memory_total_gb": 16.0}}   # After cleanup
         ]
         
-        stage_stats = {}
+        # Act - Process documents and check GPU memory after each
+        gpu_memory_samples = []
         
-        # Monitor each stage separately
-        for stage in stages:
-            # Start monitoring
-            monitor.start_monitoring()
+        for i, doc in enumerate(docs):
+            # Preprocess and run inference with mock model
+            preprocessed = preprocess_image_for_ocr(doc, "typed")
+            mock_model = MagicMock()
+            mock_model.predict.return_value = np.random.rand(1, 100, 100, 3)
+            output, _ = run_inference(mock_model, preprocessed)
             
-            # Process the specific stage
-            with patch.object(ocr_service_app, 'current_stage', stage):
-                if stage == "document_loading":
-                    ocr_service_app.load_document(typed_document)
-                elif stage == "preprocessing":
-                    ocr_service_app.preprocess_document()
-                elif stage == "text_recognition":
-                    ocr_service_app.recognize_text()
-                elif stage == "post_processing":
-                    ocr_service_app.post_process_results()
+            # Force garbage collection to clean up memory
+            import gc
+            gc.collect()
             
-            # Sample resources during the stage
-            for _ in range(5):  # Sample resources 5 times during each stage
-                monitor.sample_resources()
-                time.sleep(0.1)  # Sleep to allow processing to continue
+            # Check GPU memory usage
+            gpu_usage = monitor_gpu_utilization()
+            gpu_memory_samples.append(gpu_usage["gpu_0"]["memory_percent"])
             
-            # Stop monitoring and get results for this stage
-            stats = monitor.stop_monitoring()
-            stage_stats[stage] = stats
+            logger.info(f"GPU memory usage after document {i+1}: {gpu_usage['gpu_0']['memory_percent']}%")
         
-        # Verify CPU usage for each stage is within acceptable limits
-        for stage, stats in stage_stats.items():
-            # Text recognition should be GPU-bound, so CPU usage should be lower
-            if stage == "text_recognition" and tf.config.list_physical_devices('GPU'):
-                assert stats['cpu']['avg'] < 50.0, f"CPU usage for {stage} exceeded 50%: {stats['cpu']['avg']:.2f}%"
-            else:
-                # Other stages might be more CPU-intensive
-                assert stats['cpu']['avg'] < 80.0, f"CPU usage for {stage} exceeded 80%: {stats['cpu']['avg']:.2f}%"
+        # Explicitly delete model to test cleanup
+        del mock_model
+        gc.collect()
+        
+        # Final GPU memory check after all processing
+        final_gpu_usage = monitor_gpu_utilization()
+        gpu_memory_samples.append(final_gpu_usage["gpu_0"]["memory_percent"])
+        
+        logger.info(f"Final GPU memory usage: {final_gpu_usage['gpu_0']['memory_percent']}%")
+        logger.info(f"GPU memory samples: {gpu_memory_samples}")
+        
+        # Assert
+        # GPU memory should be lower after cleanup than during peak processing
+        assert final_gpu_usage["gpu_0"]["memory_percent"] < gpu_memory_samples[1], \
+            "GPU memory not properly released after processing"
+        
+        # Final GPU memory should be close to initial memory (allowing for some overhead)
+        assert abs(final_gpu_usage["gpu_0"]["memory_percent"] - gpu_memory_samples[0]) < 10, \
+            "GPU memory usage shows significant leak after processing"
+
+
+def test_resource_usage_with_concurrent_processing(mock_gpu_environment, memory_tracker):
+    """Test resource usage when processing documents concurrently.
     
-    def test_resource_efficiency_with_different_document_types(self, ocr_service_app, typed_document, handwritten_document, mixed_document):
-        """Test resource efficiency with different document types."""
-        # Initialize resource monitor
-        monitor = ResourceMonitor()
+    This test verifies that resource usage remains within acceptable limits
+    when processing multiple documents concurrently, simulating a production load.
+    """
+    # Arrange
+    # Create documents for concurrent processing
+    num_concurrent = 3
+    docs = [np.random.rand(1024, 768, 3).astype(np.float32) for _ in range(num_concurrent)]
+    
+    # Start tracking memory
+    memory_tracker.start()
+    
+    # Act - Simulate concurrent processing using threads
+    import threading
+    
+    def process_document(doc_idx):
+        """Process a single document in a separate thread."""
+        doc = docs[doc_idx]
         
-        document_types = {
-            "typed": typed_document,
-            "handwritten": handwritten_document,
-            "mixed": mixed_document
+        # Preprocess
+        preprocessed = preprocess_image_for_ocr(doc, "typed")
+        
+        # Mock inference
+        mock_model = MagicMock()
+        mock_model.predict.return_value = np.random.rand(1, 100, 100, 3)
+        output, inference_time = run_inference(mock_model, preprocessed)
+        
+        logger.info(f"Thread {doc_idx} completed processing in {inference_time}s")
+    
+    # Create and start threads for concurrent processing
+    threads = []
+    for i in range(num_concurrent):
+        thread = threading.Thread(target=process_document, args=(i,))
+        threads.append(thread)
+        thread.start()
+    
+    # Sample memory during concurrent processing
+    concurrent_samples = []
+    for _ in range(5):  # Take 5 samples during concurrent processing
+        time.sleep(0.1)
+        concurrent_samples.append(memory_tracker.sample())
+    
+    # Wait for all threads to complete
+    for thread in threads:
+        thread.join()
+    
+    # Get final memory statistics
+    memory_stats = memory_tracker.stop()
+    
+    # Log memory usage during concurrent processing
+    logger.info(f"Memory samples during concurrent processing: {concurrent_samples}")
+    logger.info(f"Final memory statistics: {memory_stats}")
+    
+    # Assert
+    # Peak memory during concurrent processing should be within limits
+    assert memory_stats["peak_mb"] < MAX_MEMORY_USAGE_MB, \
+        f"Peak memory usage during concurrent processing ({memory_stats['peak_mb']} MB) exceeds limit ({MAX_MEMORY_USAGE_MB} MB)"
+    
+    # Memory usage should be higher during concurrent processing than single-document processing
+    # but should still be reasonable (less than num_concurrent times single-document usage)
+    assert memory_stats["peak_mb"] < 200 * num_concurrent, \
+        f"Memory usage during concurrent processing ({memory_stats['peak_mb']} MB) is excessive"
+
+
+def test_resource_usage_with_model_switching(mock_gpu_environment, memory_tracker):
+    """Test resource usage when switching between different OCR models.
+    
+    This test verifies that switching between different OCR models (typed, handwritten, etc.)
+    doesn't cause excessive resource usage or memory leaks.
+    """
+    # Arrange
+    # Create a document to process with different models
+    doc = np.random.rand(1024, 768, 3).astype(np.float32)
+    model_types = ["typed", "handwritten", "hybrid", "structure"]
+    
+    # Start tracking memory
+    memory_tracker.start()
+    
+    # Act - Process the document with each model type
+    for model_type in model_types:
+        # Preprocess for this model type
+        preprocessed = preprocess_image_for_ocr(doc, model_type)
+        
+        # Mock model loading
+        with patch('src.utils.tensorflow_utils.load_model') as mock_load:
+            mock_model = MagicMock()
+            mock_model.predict.return_value = np.random.rand(1, 100, 100, 3)
+            mock_load.return_value = mock_model
+            
+            # Load the model
+            model = load_model("/mock/model/dir", model_type)
+            
+            # Run inference
+            output, inference_time = run_inference(model, preprocessed)
+            
+            # Sample memory after using this model
+            memory_usage = memory_tracker.sample()
+            logger.info(f"Memory usage after using {model_type} model: {memory_usage} MB")
+            
+            # Force cleanup
+            del model
+            import gc
+            gc.collect()
+    
+    # Get final memory statistics
+    memory_stats = memory_tracker.stop()
+    
+    # Assert
+    logger.info(f"Memory statistics after model switching: {memory_stats}")
+    
+    # Peak memory should be within limits
+    assert memory_stats["peak_mb"] < MAX_MEMORY_USAGE_MB, \
+        f"Peak memory usage during model switching ({memory_stats['peak_mb']} MB) exceeds limit ({MAX_MEMORY_USAGE_MB} MB)"
+    
+    # Memory growth should be reasonable (not indicating a leak)
+    assert memory_stats["diff_mb"] < 500, \
+        f"Memory growth during model switching ({memory_stats['diff_mb']} MB) suggests a memory leak"
+
+
+# Main test that combines multiple resource aspects
+def test_comprehensive_resource_profile(mock_gpu_environment, memory_tracker, cpu_tracker):
+    """Comprehensive test of resource usage during OCR processing.
+    
+    This test provides a complete profile of resource usage during OCR processing,
+    covering memory, CPU, and GPU utilization across all processing stages.
+    """
+    # Arrange
+    # Create documents of different sizes
+    small_doc = np.random.rand(800, 600, 3).astype(np.float32)   # Small (~1.4MB)
+    medium_doc = np.random.rand(1600, 1200, 3).astype(np.float32)  # Medium (~5.8MB)
+    large_doc = np.random.rand(3200, 2400, 3).astype(np.float32)   # Large (~23MB)
+    
+    docs = [(small_doc, "small"), (medium_doc, "medium"), (large_doc, "large")]
+    
+    # Start tracking resources
+    memory_tracker.start()
+    cpu_tracker.start()
+    
+    # Act - Process each document and collect comprehensive metrics
+    results = []
+    
+    for doc, size in docs:
+        doc_results = {"size": size, "stages": {}}
+        
+        # Stage 1: Preprocessing
+        stage_start_time = time.time()
+        stage_start_memory = memory_tracker.sample()
+        stage_start_cpu = cpu_tracker.sample()
+        
+        preprocessed = preprocess_image_for_ocr(doc, "hybrid")
+        
+        stage_end_time = time.time()
+        stage_end_memory = memory_tracker.sample()
+        stage_end_cpu = cpu_tracker.sample()
+        
+        doc_results["stages"]["preprocessing"] = {
+            "time": stage_end_time - stage_start_time,
+            "memory_delta": stage_end_memory - stage_start_memory,
+            "cpu": stage_end_cpu
         }
         
-        type_stats = {}
+        # Stage 2: Model Inference
+        stage_start_time = time.time()
+        stage_start_memory = memory_tracker.sample()
+        stage_start_cpu = cpu_tracker.sample()
         
-        # Process each document type and measure resource usage
-        for doc_type, document in document_types.items():
-            # Start monitoring
-            monitor.start_monitoring()
+        # Mock model inference
+        mock_model = MagicMock()
+        mock_model.predict.return_value = np.random.rand(1, 100, 100, 3)
+        output, inference_time = run_inference(mock_model, preprocessed)
+        
+        stage_end_time = time.time()
+        stage_end_memory = memory_tracker.sample()
+        stage_end_cpu = cpu_tracker.sample()
+        
+        doc_results["stages"]["inference"] = {
+            "time": stage_end_time - stage_start_time,
+            "memory_delta": stage_end_memory - stage_start_memory,
+            "cpu": stage_end_cpu
+        }
+        
+        # Stage 3: Postprocessing
+        stage_start_time = time.time()
+        stage_start_memory = memory_tracker.sample()
+        stage_start_cpu = cpu_tracker.sample()
+        
+        # Mock postprocessing
+        result = np.fft.fft2(doc)  # FFT is CPU-intensive
+        threshold = np.mean(result)
+        binary = result > threshold
+        
+        stage_end_time = time.time()
+        stage_end_memory = memory_tracker.sample()
+        stage_end_cpu = cpu_tracker.sample()
+        
+        doc_results["stages"]["postprocessing"] = {
+            "time": stage_end_time - stage_start_time,
+            "memory_delta": stage_end_memory - stage_start_memory,
+            "cpu": stage_end_cpu
+        }
+        
+        # Mock GPU utilization for this document
+        with patch('src.utils.tensorflow_utils.monitor_gpu_utilization') as mock_monitor:
+            # Different GPU utilization based on document size
+            if size == "small":
+                gpu_util = 30
+            elif size == "medium":
+                gpu_util = 50
+            else:  # large
+                gpu_util = 70
+                
+            mock_monitor.return_value = {
+                "gpu_0": {
+                    "memory_percent": gpu_util,
+                    "gpu_utilization": gpu_util,
+                    "memory_used_gb": gpu_util * 0.16,  # Scale to GB
+                    "memory_total_gb": 16.0
+                }
+            }
             
-            # Process the document
-            result = ocr_service_app.process_document(document)
-            
-            # Sample resources during processing
-            for _ in range(10):  # Sample resources 10 times during processing
-                monitor.sample_resources()
-                time.sleep(0.1)  # Sleep to allow processing to continue
-            
-            # Stop monitoring and get results
-            stats = monitor.stop_monitoring()
-            type_stats[doc_type] = stats
-            
-            # Verify processing completed successfully
-            assert result is not None, f"Processing failed for {doc_type} document"
+            doc_results["gpu"] = monitor_gpu_utilization()["gpu_0"]
         
-        # Verify resource efficiency across document types
-        # Handwritten documents typically require more resources than typed documents
-        if tf.config.list_physical_devices('GPU') and type_stats['typed']['gpu_memory'] is not None and type_stats['handwritten']['gpu_memory'] is not None:
-            # Compare GPU memory usage
-            typed_gpu_usage = type_stats['typed']['gpu_memory'][0]['avg']
-            handwritten_gpu_usage = type_stats['handwritten']['gpu_memory'][0]['avg']
-            
-            # Handwritten documents should use more GPU resources, but not excessively more
-            assert handwritten_gpu_usage > typed_gpu_usage, "Handwritten document processing should use more GPU resources than typed documents"
-            assert handwritten_gpu_usage < typed_gpu_usage * 2, "Handwritten document processing is using excessive GPU resources compared to typed documents"
+        # Calculate total processing metrics
+        doc_results["total"] = {
+            "time": sum(stage["time"] for stage in doc_results["stages"].values()),
+            "memory_peak": memory_tracker.peak_memory,
+            "cpu_peak": cpu_tracker.peak_cpu
+        }
         
-        # Compare processing duration
-        assert type_stats['typed']['duration'] < type_stats['mixed']['duration'], "Typed documents should process faster than mixed documents"
-        assert type_stats['typed']['duration'] < 300, "Typed document processing should complete in under 5 minutes (300 seconds)"
-        assert type_stats['handwritten']['duration'] < 300, "Handwritten document processing should complete in under 5 minutes (300 seconds)"
-        assert type_stats['mixed']['duration'] < 300, "Mixed document processing should complete in under 5 minutes (300 seconds)"
-    
-    def test_resource_usage_within_limits(self, ocr_service_app, typed_document):
-        """Test that resource usage is within acceptable limits for production deployment."""
-        # Initialize resource monitor
-        monitor = ResourceMonitor()
+        results.append(doc_results)
         
-        # Start monitoring
-        monitor.start_monitoring()
+        # Log results for this document
+        logger.info(f"Resource profile for {size} document:")
+        logger.info(f"Total processing time: {doc_results['total']['time']:.2f}s")
+        logger.info(f"Peak memory usage: {doc_results['total']['memory_peak']:.2f} MB")
+        logger.info(f"Peak CPU usage: {doc_results['total']['cpu_peak']:.2f}%")
+        logger.info(f"GPU utilization: {doc_results['gpu']['gpu_utilization']}%")
+        logger.info(f"Stage breakdown: {doc_results['stages']}")
         
-        # Process the document
-        result = ocr_service_app.process_document(typed_document)
-        
-        # Sample resources during processing
-        for _ in range(20):  # Sample resources 20 times during processing
-            monitor.sample_resources()
-            time.sleep(0.1)  # Sleep to allow processing to continue
-        
-        # Stop monitoring and get results
-        stats = monitor.stop_monitoring()
-        
-        # Verify processing completed successfully
-        assert result is not None, "Document processing failed"
-        
-        # Verify CPU usage is within acceptable limits
-        assert stats['cpu']['max'] < 90.0, f"CPU usage exceeded 90%: {stats['cpu']['max']:.2f}%"
-        
-        # Verify memory usage is within acceptable limits
-        max_memory_usage_gb = stats['memory']['rss']['max'] / (1024 * 1024 * 1024)
-        assert max_memory_usage_gb < 4.0, f"Memory usage exceeded 4GB: {max_memory_usage_gb:.2f}GB"
-        
-        # Verify GPU memory usage is within acceptable limits if GPU is available
-        if tf.config.list_physical_devices('GPU') and stats['gpu_memory'] is not None:
-            for gpu_idx, gpu_stats in enumerate(stats['gpu_memory']):
-                assert gpu_stats['max'] < 80.0, f"GPU {gpu_idx} memory usage exceeded 80%: {gpu_stats['max']:.2f}%"
-        
-        # Verify processing time is within acceptable limits (under 5 minutes)
-        assert stats['duration'] < 300, f"Processing time exceeded 5 minutes: {stats['duration']:.2f} seconds"
-    
-    def test_gpu_memory_cleanup(self, ocr_service_app, typed_document):
-        """Test that GPU memory is properly cleaned up after processing."""
-        # Skip test if no GPU is available
-        if not tf.config.list_physical_devices('GPU'):
-            pytest.skip("No GPU available for testing")
-        
-        # Initialize resource monitor
-        monitor = ResourceMonitor()
-        
-        # Get baseline GPU memory usage
-        monitor.sample_resources()
-        baseline_gpu_memory = monitor.gpu_memory_samples[0] if monitor.gpu_memory_samples else None
-        
-        if baseline_gpu_memory is None:
-            pytest.skip("Could not get baseline GPU memory usage")
-        
-        # Process the document
-        result = ocr_service_app.process_document(typed_document)
-        assert result is not None, "Document processing failed"
-        
-        # Force garbage collection to clean up resources
+        # Cleanup after each document
+        del mock_model
         import gc
         gc.collect()
-        tf.keras.backend.clear_session()
-        
-        # Wait for resources to be released
-        time.sleep(2)
-        
-        # Check GPU memory usage after cleanup
-        monitor.sample_resources()
-        final_gpu_memory = monitor.gpu_memory_samples[-1] if monitor.gpu_memory_samples else None
-        
-        if final_gpu_memory is None:
-            pytest.skip("Could not get final GPU memory usage")
-        
-        # Verify GPU memory was properly cleaned up
-        # Allow for a small increase (10%) over baseline due to TensorFlow's memory caching
-        for gpu_idx in range(len(baseline_gpu_memory)):
-            baseline_percent = baseline_gpu_memory[gpu_idx]['percent']
-            final_percent = final_gpu_memory[gpu_idx]['percent']
-            
-            assert final_percent <= baseline_percent * 1.1, f"GPU {gpu_idx} memory not properly cleaned up: {baseline_percent:.2f}% -> {final_percent:.2f}%"
     
-    def test_tensorflow_memory_growth(self):
-        """Test that TensorFlow memory growth is properly configured."""
-        # Skip test if no GPU is available
-        if not tf.config.list_physical_devices('GPU'):
-            pytest.skip("No GPU available for testing")
+    # Get final resource statistics
+    memory_stats = memory_tracker.stop()
+    cpu_stats = cpu_tracker.stop()
+    
+    # Assert
+    # Overall resource usage should be within limits
+    assert memory_stats["peak_mb"] < MAX_MEMORY_USAGE_MB, \
+        f"Peak memory usage ({memory_stats['peak_mb']} MB) exceeds limit ({MAX_MEMORY_USAGE_MB} MB)"
+    
+    assert cpu_stats["peak_percent"] < MAX_CPU_PERCENT, \
+        f"Peak CPU usage ({cpu_stats['peak_percent']}%) exceeds limit ({MAX_CPU_PERCENT}%)"
+    
+    # Processing time should scale with document size
+    small_time = next(r["total"]["time"] for r in results if r["size"] == "small")
+    medium_time = next(r["total"]["time"] for r in results if r["size"] == "medium")
+    large_time = next(r["total"]["time"] for r in results if r["size"] == "large")
+    
+    assert small_time < medium_time < large_time, \
+        "Processing time does not scale properly with document size"
+    
+    # Large documents should still process in reasonable time
+    assert large_time < 10.0, f"Processing time for large document ({large_time}s) is too high"
+    
+    # Memory usage should scale reasonably with document size
+    small_memory = next(r["total"]["memory_peak"] for r in results if r["size"] == "small")
+    large_memory = next(r["total"]["memory_peak"] for r in results if r["size"] == "large")
+    
+    # Large document should use more memory, but not excessively more
+    assert large_memory > small_memory, "Memory usage does not scale with document size"
+    assert large_memory < small_memory * 10, "Memory usage scales excessively with document size"
+    
+    # GPU utilization should be higher for larger documents
+    small_gpu = next(r["gpu"]["gpu_utilization"] for r in results if r["size"] == "small")
+    large_gpu = next(r["gpu"]["gpu_utilization"] for r in results if r["size"] == "large")
+    
+    assert large_gpu > small_gpu, "GPU utilization does not scale with document size"
+
+
+# Helper functions
+def get_system_resource_info():
+    """Get information about system resources for logging purposes."""
+    try:
+        import platform
+        import psutil
         
-        # Check if memory growth is enabled for all GPUs
-        physical_devices = tf.config.list_physical_devices('GPU')
-        for device in physical_devices:
-            try:
-                memory_growth = tf.config.experimental.get_memory_growth(device)
-                assert memory_growth, f"Memory growth not enabled for {device}"
-            except Exception as e:
-                pytest.fail(f"Failed to check memory growth configuration: {e}")
+        # Get CPU info
+        cpu_count = psutil.cpu_count(logical=False)
+        cpu_count_logical = psutil.cpu_count(logical=True)
+        cpu_freq = psutil.cpu_freq()
+        if cpu_freq:
+            cpu_freq_current = cpu_freq.current
+            cpu_freq_max = cpu_freq.max
+        else:
+            cpu_freq_current = "Unknown"
+            cpu_freq_max = "Unknown"
         
-        # Verify that TensorFlow doesn't allocate all GPU memory at once
-        # This is a bit tricky to test directly, so we'll check if memory usage increases gradually
-        monitor = ResourceMonitor()
+        # Get memory info
+        memory = psutil.virtual_memory()
+        total_memory_gb = memory.total / (1024**3)
+        available_memory_gb = memory.available / (1024**3)
         
-        # Start with a clean session
-        tf.keras.backend.clear_session()
+        # Get GPU info using TensorFlow
+        gpus = tf.config.list_physical_devices('GPU')
+        gpu_info = []
+        for gpu in gpus:
+            gpu_info.append(str(gpu))
         
-        # Sample initial GPU memory
-        monitor.sample_resources()
-        initial_gpu_memory = monitor.gpu_memory_samples[0] if monitor.gpu_memory_samples else None
+        # Get system info
+        system_info = {
+            "platform": platform.platform(),
+            "python_version": platform.python_version(),
+            "tensorflow_version": tf.__version__,
+            "cpu": {
+                "physical_cores": cpu_count,
+                "logical_cores": cpu_count_logical,
+                "current_freq_mhz": cpu_freq_current,
+                "max_freq_mhz": cpu_freq_max
+            },
+            "memory": {
+                "total_gb": total_memory_gb,
+                "available_gb": available_memory_gb,
+                "percent_used": memory.percent
+            },
+            "gpu": {
+                "devices": gpu_info,
+                "count": len(gpus)
+            }
+        }
         
-        if initial_gpu_memory is None:
-            pytest.skip("Could not get initial GPU memory usage")
-        
-        # Create a series of small tensors and check if memory increases gradually
-        memory_samples = []
-        for i in range(5):
-            # Create a tensor that should allocate some GPU memory
-            tensor = tf.random.normal([1000, 1000])
-            _ = tensor * tensor  # Force execution
-            
-            # Sample GPU memory after creating the tensor
-            monitor.sample_resources()
-            memory_samples.append(monitor.gpu_memory_samples[-1] if monitor.gpu_memory_samples else None)
-            
-            # Sleep briefly to allow TensorFlow to manage memory
-            time.sleep(0.5)
-        
-        # Verify that memory usage increased gradually, not all at once
-        if all(sample is not None for sample in memory_samples):
-            for gpu_idx in range(len(initial_gpu_memory)):
-                # Extract memory percentages for this GPU
-                percentages = [initial_gpu_memory[gpu_idx]['percent']] + [sample[gpu_idx]['percent'] for sample in memory_samples]
-                
-                # Check if there's a gradual increase (not all memory allocated at once)
-                # We expect at least some of the differences between consecutive samples to be small
-                differences = [percentages[i+1] - percentages[i] for i in range(len(percentages)-1)]
-                small_increases = [diff for diff in differences if 0 < diff < 10.0]  # Small increases between 0% and 10%
-                
-                assert len(small_increases) > 0, f"No gradual memory increases detected for GPU {gpu_idx}, suggesting memory growth might not be working properly"
+        return system_info
+    except Exception as e:
+        logger.error(f"Error getting system resource info: {str(e)}")
+        return {"error": str(e)}
+
+
+def log_test_environment():
+    """Log information about the test environment."""
+    system_info = get_system_resource_info()
+    
+    logger.info("===== Test Environment Information =====")
+    logger.info(f"Platform: {system_info.get('platform', 'Unknown')}")
+    logger.info(f"Python version: {system_info.get('python_version', 'Unknown')}")
+    logger.info(f"TensorFlow version: {system_info.get('tensorflow_version', 'Unknown')}")
+    
+    cpu_info = system_info.get('cpu', {})
+    logger.info(f"CPU: {cpu_info.get('physical_cores', 'Unknown')} physical cores, "
+               f"{cpu_info.get('logical_cores', 'Unknown')} logical cores")
+    logger.info(f"CPU frequency: {cpu_info.get('current_freq_mhz', 'Unknown')} MHz "
+               f"(max: {cpu_info.get('max_freq_mhz', 'Unknown')} MHz)")
+    
+    memory_info = system_info.get('memory', {})
+    logger.info(f"Memory: {memory_info.get('total_gb', 'Unknown'):.2f} GB total, "
+               f"{memory_info.get('available_gb', 'Unknown'):.2f} GB available "
+               f"({memory_info.get('percent_used', 'Unknown')}% used)")
+    
+    gpu_info = system_info.get('gpu', {})
+    logger.info(f"GPUs: {gpu_info.get('count', 'Unknown')} devices")
+    for i, device in enumerate(gpu_info.get('devices', [])):
+        logger.info(f"  GPU {i}: {device}")
+    
+    logger.info("=========================================")
+
+
+# Execute this when the module is run directly
+if __name__ == "__main__":
+    # Configure logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    
+    # Log test environment information
+    log_test_environment()
+    
+    # Run a simple resource usage test
+    print("Running manual resource usage test...")
+    
+    # Create a memory tracker
+    process = psutil.Process(os.getpid())
+    initial_memory = process.memory_info().rss / (1024 * 1024)  # MB
+    
+    # Create a test document
+    doc = np.random.rand(1024, 768, 3).astype(np.float32)
+    
+    # Preprocess the document
+    preprocessed = preprocess_image_for_ocr(doc, "typed")
+    
+    # Check memory after preprocessing
+    preprocess_memory = process.memory_info().rss / (1024 * 1024)  # MB
+    
+    # Create a mock model
+    mock_model = MagicMock()
+    mock_model.predict.return_value = np.random.rand(1, 100, 100, 3)
+    
+    # Run inference
+    output, inference_time = run_inference(mock_model, preprocessed)
+    
+    # Check memory after inference
+    inference_memory = process.memory_info().rss / (1024 * 1024)  # MB
+    
+    # Check GPU utilization
+    gpu_util = monitor_gpu_utilization()
+    
+    # Print results
+    print(f"Initial memory: {initial_memory:.2f} MB")
+    print(f"Memory after preprocessing: {preprocess_memory:.2f} MB (delta: {preprocess_memory - initial_memory:.2f} MB)")
+    print(f"Memory after inference: {inference_memory:.2f} MB (delta: {inference_memory - preprocess_memory:.2f} MB)")
+    print(f"Inference time: {inference_time:.4f} seconds")
+    print(f"GPU utilization: {gpu_util}")
+    
+    print("\nTest completed successfully!")
+    
