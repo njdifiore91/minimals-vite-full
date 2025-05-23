@@ -1,392 +1,276 @@
 /**
  * Middleware Index
  * 
- * This file serves as the central export point for all middleware components in the Notification Service.
- * It provides a consistent interface for importing middleware throughout the application and includes
- * a middleware registration function for the Express app.
- *
- * The middleware components are organized in the recommended order of application:
- * 1. Security middleware (helmet)
- * 2. CORS middleware
- * 3. Body parsing middleware
- * 4. Compression middleware
- * 5. Correlation ID middleware (for request tracking)
- * 6. Logging middleware
- * 7. Rate limiting middleware
- * 8. Authentication middleware
- * 9. Validation middleware
- * 10. HMAC signature verification middleware
- * 11. Error handling middleware (applied last)
- */
-
-import { Application as ExpressApplication, RequestHandler, ErrorRequestHandler } from 'express';
-import { ILoggerConfig, IRedisConfig, IAppConfig } from '../types/config';
-
-// Import middleware components
-import { default as correlationMiddleware } from './correlation-middleware';
-import { loggingMiddleware, responseBodyCaptureMiddleware, errorLoggingMiddleware } from './logging-middleware';
-import { default as errorMiddleware } from './error-middleware';
-import { default as authMiddleware } from './auth-middleware';
-import { default as validationMiddleware } from './validation-middleware';
-import { default as rateLimitMiddleware } from './rate-limit-middleware';
-import { default as hmacMiddleware } from './hmac-middleware';
-
-// Export all middleware components
-export {
-  correlationMiddleware,
-  loggingMiddleware,
-  responseBodyCaptureMiddleware,
-  errorLoggingMiddleware,
-  errorMiddleware,
-  authMiddleware,
-  validationMiddleware,
-  rateLimitMiddleware,
-  hmacMiddleware
-};
-
-/**
- * Middleware configuration options interface
- */
-export interface IMiddlewareOptions {
-  /** Logger configuration */
-  loggerConfig: ILoggerConfig;
-  /** Redis configuration for rate limiting */
-  redisConfig: IRedisConfig;
-  /** CORS allowed origins */
-  corsOrigins: string | string[];
-  /** Current environment (development, staging, production) */
-  environment: string;
-  /** Enable request body parsing */
-  enableBodyParser?: boolean;
-  /** Enable compression */
-  enableCompression?: boolean;
-  /** Enable security headers (helmet) */
-  enableHelmet?: boolean;
-  /** Enable CORS */
-  enableCors?: boolean;
-  /** Enable rate limiting */
-  enableRateLimiting?: boolean;
-  /** Request body size limit */
-  bodySizeLimit?: string;
-  /** JWT authentication options */
-  jwtOptions?: {
-    /** Algorithm used for token verification */
-    algorithm: string;
-    /** Token expiry time in seconds */
-    expiryTime: number;
-    /** Public key path for RS256 verification */
-    publicKeyPath: string;
-  };
-  /** Webhook signature verification options */
-  webhookSignatureOptions?: {
-    /** Header name for the signature */
-    signatureHeader: string;
-    /** Header name for the timestamp */
-    timestampHeader: string;
-    /** Maximum age of timestamp in seconds */
-    maxTimestampAge: number;
-  };
-}
-
-/**
- * Middleware stack configuration interface
- */
-export interface IMiddlewareStack {
-  /** Pre-route middleware (applied before routes) */
-  preRouteMiddleware: RequestHandler[];
-  /** Post-route middleware (applied after routes) */
-  postRouteMiddleware: RequestHandler[];
-  /** Error middleware (applied last) */
-  errorMiddleware: ErrorRequestHandler[];
-}
-
-/**
- * Default middleware options
- */
-const defaultMiddlewareOptions: Partial<IMiddlewareOptions> = {
-  enableBodyParser: true,
-  enableCompression: true,
-  enableHelmet: true,
-  enableCors: true,
-  enableRateLimiting: true,
-  bodySizeLimit: '1mb'
-};
-
-/**
- * Configure and register middleware for an Express application
+ * This file serves as the central entry point for all middleware components in the Notification Service.
+ * It exports all middleware components and provides a middleware registration function for the Express app.
  * 
- * @param app Express application instance
- * @param options Middleware configuration options
- * @returns The configured middleware stack
+ * The middleware is applied in a specific order to ensure proper request processing:
+ * 1. Correlation middleware - Adds correlation IDs for distributed tracing
+ * 2. Logging middleware - Logs all requests and responses
+ * 3. Rate limiting middleware - Prevents API abuse
+ * 4. HMAC verification middleware - Verifies webhook payload signatures
+ * 5. Authentication middleware - Validates JWT tokens and enforces role-based access
+ * 6. Error middleware - Handles all errors in a consistent way
  */
-export function registerMiddleware(
-  app: ExpressApplication,
-  options: IMiddlewareOptions
-): IMiddlewareStack {
-  // Merge options with defaults
-  const config = { ...defaultMiddlewareOptions, ...options };
+
+import { Express, RequestHandler } from 'express';
+import { Logger } from 'winston';
+
+// Import all middleware components
+import { correlationMiddleware } from './correlation-middleware';
+import { loggingMiddleware } from './logging-middleware';
+import { rateLimitMiddleware } from './rate-limit-middleware';
+import { hmacMiddleware } from './hmac-middleware';
+import { authMiddleware } from './auth-middleware';
+import { errorMiddleware } from './error-middleware';
+
+// Re-export all middleware components for individual use
+export { correlationMiddleware } from './correlation-middleware';
+export { loggingMiddleware } from './logging-middleware';
+export { rateLimitMiddleware } from './rate-limit-middleware';
+export { hmacMiddleware } from './hmac-middleware';
+export { authMiddleware } from './auth-middleware';
+export { errorMiddleware } from './error-middleware';
+
+/**
+ * Middleware configuration interface
+ * Defines the structure for middleware configuration options
+ */
+export interface MiddlewareConfig {
+  /** Enable correlation ID middleware */
+  enableCorrelation?: boolean;
+  /** Enable request/response logging middleware */
+  enableLogging?: boolean;
+  /** Enable rate limiting middleware */
+  enableRateLimit?: boolean;
+  /** Enable HMAC signature verification middleware */
+  enableHmac?: boolean;
+  /** Enable JWT authentication middleware */
+  enableAuth?: boolean;
+  /** Enable global error handling middleware */
+  enableError?: boolean;
+  /** Logger instance for middleware components */
+  logger?: Logger;
+  /** Current environment (development, staging, production) */
+  environment?: string;
+  /** Redis client for rate limiting */
+  redisClient?: any;
+  /** HMAC secret key for webhook signature verification */
+  hmacSecret?: string;
+  /** JWT public key for token verification */
+  jwtPublicKey?: string;
+  /** Correlation ID header name */
+  correlationHeader?: string;
+}
+
+/**
+ * Default middleware configuration
+ * Provides sensible defaults for middleware options
+ */
+export const defaultMiddlewareConfig: MiddlewareConfig = {
+  enableCorrelation: true,
+  enableLogging: true,
+  enableRateLimit: true,
+  enableHmac: true,
+  enableAuth: true,
+  enableError: true,
+  environment: process.env.NODE_ENV || 'development',
+  correlationHeader: 'X-Correlation-ID'
+};
+
+/**
+ * Middleware registration function
+ * Applies middleware to an Express application in the correct order
+ * 
+ * @param app - Express application instance
+ * @param config - Middleware configuration options
+ * @returns The Express application instance for chaining
+ */
+export function registerMiddleware(app: Express, config: MiddlewareConfig = {}): Express {
+  // Merge provided config with defaults
+  const mergedConfig: MiddlewareConfig = { ...defaultMiddlewareConfig, ...config };
+  const { 
+    enableCorrelation, 
+    enableLogging, 
+    enableRateLimit, 
+    enableHmac, 
+    enableAuth, 
+    enableError,
+    logger,
+    redisClient,
+    hmacSecret,
+    jwtPublicKey,
+    correlationHeader
+  } = mergedConfig;
+
+  // Apply middleware in the correct order
   
-  // Initialize middleware stacks
-  const preRouteMiddleware: RequestHandler[] = [];
-  const postRouteMiddleware: RequestHandler[] = [];
-  const errorMiddlewareHandlers: ErrorRequestHandler[] = [];
-
-  // Import required middleware based on configuration
-  const express = require('express');
-  const helmet = config.enableHelmet ? require('helmet') : null;
-  const cors = config.enableCors ? require('cors') : null;
-  const compression = config.enableCompression ? require('compression') : null;
-
-  // Add security middleware (should be first)
-  if (config.enableHelmet) {
-    preRouteMiddleware.push(helmet());
-  }
-
-  // Add CORS middleware
-  if (config.enableCors) {
-    preRouteMiddleware.push(cors({
-      origin: config.corsOrigins,
-      methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-      allowedHeaders: ['Content-Type', 'Authorization', 'X-Correlation-ID', 'X-Webhook-Signature'],
-      credentials: true,
-      maxAge: 86400 // 24 hours
+  // 1. Correlation ID middleware (first to enable request tracking)
+  if (enableCorrelation) {
+    app.use(correlationMiddleware({ 
+      headerName: correlationHeader,
+      logger
     }));
   }
 
-  // Add body parsing middleware
-  if (config.enableBodyParser) {
-    preRouteMiddleware.push(express.json({ limit: config.bodySizeLimit }));
-    preRouteMiddleware.push(express.urlencoded({ extended: true, limit: config.bodySizeLimit }));
+  // 2. Logging middleware (early to log all requests)
+  if (enableLogging) {
+    app.use(loggingMiddleware({ 
+      logger,
+      level: mergedConfig.environment === 'development' ? 'debug' : 'info'
+    }));
   }
 
-  // Add compression middleware
-  if (config.enableCompression) {
-    preRouteMiddleware.push(compression());
+  // 3. Rate limiting middleware (before auth to prevent abuse)
+  if (enableRateLimit && redisClient) {
+    app.use(rateLimitMiddleware({
+      redisClient,
+      windowMs: 60 * 1000, // 1 minute
+      max: 60, // 60 requests per minute
+      standardHeaders: true,
+      logger
+    }));
   }
 
-  // Add correlation ID middleware (for request tracking)
-  preRouteMiddleware.push(correlationMiddleware());
-
-  // Add logging middleware
-  preRouteMiddleware.push(loggingMiddleware({
-    sensitiveFields: ['password', 'token', 'authorization', 'apiKey', 'secret', 'x-api-key', 'api-key'],
-    logRequestBody: config.environment !== 'production', // Only log request bodies in non-production
-    logResponseBody: config.environment === 'development', // Only log response bodies in development
-    maxBodyLength: 1024,
-    correlationIdHeader: 'x-correlation-id',
-    includeTimingInfo: true,
-  }));
-  
-  // Add response body capture middleware if in development
-  if (config.environment === 'development') {
-    preRouteMiddleware.push(responseBodyCaptureMiddleware());
+  // 4. HMAC verification middleware (for webhook endpoints)
+  if (enableHmac && hmacSecret) {
+    // Apply only to webhook routes
+    app.use('/api/webhooks', hmacMiddleware({
+      secret: hmacSecret,
+      algorithm: 'sha256',
+      logger
+    }));
   }
 
-  // Add rate limiting middleware if enabled
-  if (config.enableRateLimiting) {
-    // Apply rate limiting to API routes only
-    app.use('/api', rateLimitMiddleware(config.redisConfig));
+  // 5. Authentication middleware (for protected routes)
+  if (enableAuth && jwtPublicKey) {
+    // Apply to all routes except health check and webhook endpoints
+    app.use(/^\/(?!health|api\/webhooks).*/, authMiddleware({
+      publicKey: jwtPublicKey,
+      algorithm: 'RS256',
+      logger
+    }));
   }
+
+  // 6. Error middleware (last to catch all errors)
+  if (enableError) {
+    app.use(errorMiddleware({
+      logger,
+      showStack: mergedConfig.environment === 'development'
+    }));
+  }
+
+  return app;
+}
+
+/**
+ * Middleware stack types
+ * Defines the available middleware stacks for different use cases
+ */
+export enum MiddlewareStack {
+  /** Full middleware stack for API routes */
+  API = 'api',
+  /** Minimal stack for webhook endpoints */
+  WEBHOOK = 'webhook',
+  /** Basic stack for health check endpoints */
+  HEALTH = 'health',
+  /** Custom stack for specific routes */
+  CUSTOM = 'custom'
+}
+
+/**
+ * Register a predefined middleware stack
+ * Applies a specific set of middleware based on the stack type
+ * 
+ * @param app - Express application instance
+ * @param stack - Middleware stack type
+ * @param config - Middleware configuration options
+ * @returns The Express application instance for chaining
+ */
+export function registerMiddlewareStack(
+  app: Express, 
+  stack: MiddlewareStack, 
+  config: MiddlewareConfig = {}
+): Express {
+  const mergedConfig: MiddlewareConfig = { ...defaultMiddlewareConfig, ...config };
   
-  // Note: Auth middleware and validation middleware are not applied globally
-  // They should be applied to specific routes as needed
-
-  // Add 404 handler to post-route middleware
-  postRouteMiddleware.push((req, res, next) => {
-    res.status(404).json({
-      error: 'Not Found',
-      message: `Route ${req.method} ${req.path} not found`,
-      status: 404
-    });
-  });
-
-  // Add error logging middleware
-  errorMiddlewareHandlers.push(errorLoggingMiddleware());
-  
-  // Add error middleware (should be last)
-  errorMiddlewareHandlers.push(errorMiddleware());
-
-  // Apply pre-route middleware to the app
-  preRouteMiddleware.forEach(middleware => app.use(middleware));
-
-  // Post-route middleware will be applied after routes are registered
-  // Error middleware will be applied last
-
-  return {
-    preRouteMiddleware,
-    postRouteMiddleware,
-    errorMiddleware: errorMiddlewareHandlers
-  };
-}
-
-/**
- * Apply post-route middleware to an Express application
- * 
- * @param app Express application instance
- * @param middlewareStack Middleware stack configuration
- */
-export function applyPostRouteMiddleware(
-  app: ExpressApplication,
-  middlewareStack: IMiddlewareStack
-): void {
-  // Apply post-route middleware
-  middlewareStack.postRouteMiddleware.forEach(middleware => app.use(middleware));
-  
-  // Apply error middleware (must be last)
-  middlewareStack.errorMiddleware.forEach(middleware => app.use(middleware));
-}
-
-/**
- * Apply authentication middleware to specific routes
- * 
- * @param app Express application instance
- * @param routes Array of route paths to protect
- * @param roles Optional array of required roles for access
- */
-export function applyAuthMiddleware(
-  app: ExpressApplication,
-  routes: string[],
-  roles?: string[]
-): void {
-  routes.forEach(route => {
-    if (roles && roles.length > 0) {
-      // Apply role-based authentication
-      app.use(route, authMiddleware({ requiredRoles: roles }));
-    } else {
-      // Apply standard authentication
-      app.use(route, authMiddleware());
-    }
-  });
-}
-
-/**
- * Apply HMAC signature verification middleware to webhook routes
- * 
- * @param app Express application instance
- * @param routes Array of webhook route paths to protect
- */
-export function applyHmacMiddleware(
-  app: ExpressApplication,
-  routes: string[]
-): void {
-  routes.forEach(route => {
-    app.use(route, hmacMiddleware());
-  });
-}
-
-/**
- * Apply validation middleware to specific routes
- * 
- * @param app Express application instance
- * @param validationRules Object mapping routes to validation schemas
- */
-export function applyValidationMiddleware(
-  app: ExpressApplication,
-  validationRules: Record<string, any>
-): void {
-  Object.entries(validationRules).forEach(([route, schema]) => {
-    app.use(route, validationMiddleware(schema));
-  });
-}
-
-/**
- * Create environment-specific middleware configuration
- * 
- * @param environment Current environment (development, staging, production)
- * @param baseOptions Base middleware options
- * @returns Environment-specific middleware options
- */
-export function createEnvironmentMiddlewareOptions(
-  environment: string,
-  baseOptions: Partial<IMiddlewareOptions>
-): IMiddlewareOptions {
-  // Default options for all environments
-  const defaultOptions: IMiddlewareOptions = {
-    loggerConfig: {
-      level: 'info',
-      format: 'json',
-      timestamp: true
-    },
-    redisConfig: {
-      host: 'localhost',
-      port: 6379,
-      password: '',
-      enableTLS: false,
-      ttl: {
-        applicationData: 900, // 15 minutes in seconds
-        userSessions: 86400 // 24 hours in seconds
-      }
-    },
-    corsOrigins: '*',
-    environment,
-    enableBodyParser: true,
-    enableCompression: true,
-    enableHelmet: true,
-    enableCors: true,
-    enableRateLimiting: true,
-    bodySizeLimit: '1mb'
-  };
-
-  // Environment-specific overrides
-  const environmentOptions: Partial<IMiddlewareOptions> = {};
-
-  switch (environment) {
-    case 'development':
-      environmentOptions.loggerConfig = {
-        level: 'debug',
-        format: 'pretty',
-        timestamp: true
-      };
-      environmentOptions.enableRateLimiting = false;
-      environmentOptions.corsOrigins = '*';
-      break;
-
-    case 'staging':
-      environmentOptions.loggerConfig = {
-        level: 'info',
-        format: 'json',
-        timestamp: true
-      };
-      environmentOptions.enableRateLimiting = true;
-      environmentOptions.corsOrigins = ['https://staging.dollarfunding.com'];
-      environmentOptions.redisConfig = {
-        host: process.env.REDIS_HOST || 'redis',
-        port: parseInt(process.env.REDIS_PORT || '6379', 10),
-        password: process.env.REDIS_PASSWORD || '',
-        enableTLS: true,
-        ttl: {
-          applicationData: 900, // 15 minutes in seconds
-          userSessions: 86400 // 24 hours in seconds
-        }
-      };
-      break;
-
-    case 'production':
-      environmentOptions.loggerConfig = {
-        level: 'info',
-        format: 'json',
-        timestamp: true
-      };
-      environmentOptions.enableRateLimiting = true;
-      environmentOptions.corsOrigins = ['https://dollarfunding.com'];
-      environmentOptions.enableHelmet = true;
-      environmentOptions.redisConfig = {
-        host: process.env.REDIS_HOST || 'redis',
-        port: parseInt(process.env.REDIS_PORT || '6379', 10),
-        password: process.env.REDIS_PASSWORD || '',
-        enableTLS: true,
-        ttl: {
-          applicationData: 900, // 15 minutes in seconds
-          userSessions: 86400 // 24 hours in seconds
-        }
-      };
-      break;
-
+  switch (stack) {
+    case MiddlewareStack.API:
+      // Full middleware stack for API routes
+      return registerMiddleware(app, mergedConfig);
+      
+    case MiddlewareStack.WEBHOOK:
+      // Minimal stack for webhook endpoints (correlation, logging, HMAC, error)
+      return registerMiddleware(app, {
+        ...mergedConfig,
+        enableRateLimit: false,
+        enableAuth: false
+      });
+      
+    case MiddlewareStack.HEALTH:
+      // Basic stack for health check endpoints (correlation, logging, error)
+      return registerMiddleware(app, {
+        ...mergedConfig,
+        enableRateLimit: false,
+        enableHmac: false,
+        enableAuth: false
+      });
+      
+    case MiddlewareStack.CUSTOM:
+      // Use the provided config as is
+      return registerMiddleware(app, mergedConfig);
+      
     default:
-      // Use development settings for unknown environments
-      return createEnvironmentMiddlewareOptions('development', baseOptions);
+      // Default to full API stack
+      return registerMiddleware(app, mergedConfig);
   }
+}
 
-  // Merge options in order of precedence: default < environment < base
-  return { ...defaultOptions, ...environmentOptions, ...baseOptions };
+/**
+ * Create a middleware function that can be applied to specific routes
+ * 
+ * @param middleware - Express middleware function
+ * @param condition - Function that determines whether to apply the middleware
+ * @returns Conditional middleware function
+ */
+export function conditionalMiddleware(
+  middleware: RequestHandler,
+  condition: (req: any, res: any) => boolean
+): RequestHandler {
+  return (req, res, next) => {
+    if (condition(req, res)) {
+      return middleware(req, res, next);
+    }
+    return next();
+  };
+}
+
+/**
+ * Apply multiple middleware functions in sequence
+ * 
+ * @param middlewares - Array of Express middleware functions
+ * @returns Combined middleware function
+ */
+export function combineMiddleware(middlewares: RequestHandler[]): RequestHandler {
+  return (req, res, next) => {
+    // Create a middleware chain
+    const chain = middlewares.reduceRight(
+      (nextMiddleware, currentMiddleware) => {
+        return (err?: any) => {
+          if (err) {
+            return next(err);
+          }
+          try {
+            currentMiddleware(req, res, nextMiddleware);
+          } catch (error) {
+            next(error);
+          }
+        };
+      },
+      next
+    );
+    
+    // Start the chain
+    chain();
+  };
 }
