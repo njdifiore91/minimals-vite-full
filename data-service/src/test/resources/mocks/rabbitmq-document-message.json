@@ -1,578 +1,153 @@
 {
   "message": {
-    "document": {
-      "metadata": {
-        "id": "doc-2025-05-22-00123",
-        "filename": "business_tax_return_2024.pdf",
-        "size": 2458631,
-        "mime_type": "application/pdf",
-        "created_at": "2025-05-22T10:15:30.456Z",
-        "updated_at": "2025-05-22T10:17:45.789Z",
-        "classification_confidence": 0.92,
-        "ocr_confidence": null,
-        "application_id": "app-2025-05-22-00456",
-        "storage_path": "app-2025-05-22-00456/tax_return/doc-2025-05-22-00123/v1",
-        "checksum": "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6",
-        "page_count": 12,
-        "tags": ["tax_return", "business", "2024"]
-      },
-      "document_type": "tax_return",
-      "status": "classified",
-      "source": {
-        "source_type": "email",
-        "email_id": "email-2025-05-22-00789",
-        "email_sender": "accountant@acmesupplies.com",
-        "email_subject": "Acme Supplies - 2024 Tax Return for Funding Application",
-        "email_received_at": "2025-05-22T10:12:15.123Z",
-        "upload_user_id": null,
-        "upload_ip": null,
-        "api_client_id": null,
-        "submission_id": "sub-2025-05-22-00123",
-        "received_at": "2025-05-22T10:15:30.456Z"
-      },
-      "classification_result": {
-        "document_type": "tax_return",
-        "confidence": 0.92,
-        "confidence_scores": {
-          "tax_return": 0.92,
-          "bank_statement": 0.05,
-          "application": 0.01,
-          "pay_stub": 0.01,
-          "id_document": 0.01,
-          "other": 0.00
-        },
-        "features_used": [
-          "text_content",
-          "layout_analysis",
-          "form_detection",
-          "keyword_matching",
-          "header_footer_analysis"
-        ],
-        "model_version": "tax-classifier-v1.2.0",
-        "classified_at": "2025-05-22T10:17:45.789Z",
-        "requires_review": false
-      },
-      "processing_error": null
+    "message_id": "msg-8f29a1b5-7e3d-4e9a-b8c6-d5f2a3e1c7b9",
+    "document_id": "doc-5a7b3c2d-1e9f-4a8b-7c6d-5e4f3a2b1c9d",
+    "document_type": "LOAN_APPLICATION",
+    "application_id": "app-3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f",
+    "storage_path": "mca-documents-staging/applications/2025/05/doc-5a7b3c2d-1e9f-4a8b-7c6d-5e4f3a2b1c9d.pdf",
+    "content_type": "application/pdf",
+    "timestamp": "2025-05-23T10:15:30.456Z",
+    "source_service": "ocr-service",
+    "status": "completed",
+    "metadata": {
+      "page_count": 3,
+      "file_size_bytes": 1458962,
+      "classification_confidence": 0.98,
+      "ocr_model_version": "2.15.0",
+      "processing_time_ms": 1243.67,
+      "document_quality": "high",
+      "extraction_id": "ext-9d8c7b6a-5f4e-3d2c-1b0a-9e8d7f6a5b4c"
     },
-    "storage": {
-      "bucket": "mca-documents-production",
-      "region": "us-east-1",
-      "key": "app-2025-05-22-00456/tax_return/doc-2025-05-22-00123/v1",
-      "encryption": "AES256",
-      "version_id": "v1",
-      "content_type": "application/pdf",
-      "content_length": 2458631,
-      "etag": "\"a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6\""
+    "extraction_results": {
+      "applicant_name": {
+        "field_id": "applicant_name",
+        "field_name": "Applicant Name",
+        "value": "John A. Smith",
+        "raw_text": "John A. Smith",
+        "field_type": "text"
+      },
+      "business_name": {
+        "field_id": "business_name",
+        "field_name": "Business Name",
+        "value": "Acme Enterprises LLC",
+        "raw_text": "Acme Enterprises LLC",
+        "field_type": "text"
+      },
+      "business_address": {
+        "field_id": "business_address",
+        "field_name": "Business Address",
+        "value": "123 Main Street, Suite 400, Boston, MA 02108",
+        "raw_text": "123 Main Street\nSuite 400\nBoston, MA 02108",
+        "field_type": "text"
+      },
+      "business_phone": {
+        "field_id": "business_phone",
+        "field_name": "Business Phone",
+        "value": "(617) 555-1234",
+        "raw_text": "(617) 555-1234",
+        "field_type": "phone"
+      },
+      "business_email": {
+        "field_id": "business_email",
+        "field_name": "Business Email",
+        "value": "john.smith@acmeenterprises.com",
+        "raw_text": "john.smith@acmeenterprises.com",
+        "field_type": "email"
+      },
+      "tax_id": {
+        "field_id": "tax_id",
+        "field_name": "Tax ID (EIN)",
+        "value": "12-3456789",
+        "raw_text": "12-3456789",
+        "field_type": "ein"
+      },
+      "requested_amount": {
+        "field_id": "requested_amount",
+        "field_name": "Requested Amount",
+        "value": 75000.00,
+        "raw_text": "$75,000.00",
+        "field_type": "currency"
+      },
+      "business_start_date": {
+        "field_id": "business_start_date",
+        "field_name": "Business Start Date",
+        "value": "2018-03-15",
+        "raw_text": "03/15/2018",
+        "field_type": "date"
+      },
+      "monthly_revenue": {
+        "field_id": "monthly_revenue",
+        "field_name": "Monthly Revenue",
+        "value": 42500.00,
+        "raw_text": "$42,500.00",
+        "field_type": "currency"
+      },
+      "business_type": {
+        "field_id": "business_type",
+        "field_name": "Business Type",
+        "value": "LLC",
+        "raw_text": "Limited Liability Company (LLC)",
+        "field_type": "text"
+      },
+      "industry": {
+        "field_id": "industry",
+        "field_name": "Industry",
+        "value": "Retail",
+        "raw_text": "Retail - Specialty Goods",
+        "field_type": "text"
+      },
+      "application_date": {
+        "field_id": "application_date",
+        "field_name": "Application Date",
+        "value": "2025-05-22",
+        "raw_text": "05/22/2025",
+        "field_type": "date"
+      }
     },
-    "processing": {
-      "service_id": "document-service",
-      "node_id": "document-service-pod-abc123",
-      "processing_time_ms": 2315,
-      "processing_timestamp": "2025-05-22T10:17:45.789Z",
-      "trace_id": "trace-2025-05-22-00123",
-      "sequence_number": 1
-    }
+    "confidence_scores": {
+      "applicant_name": 0.97,
+      "business_name": 0.99,
+      "business_address": 0.95,
+      "business_phone": 0.98,
+      "business_email": 0.99,
+      "tax_id": 0.96,
+      "requested_amount": 0.92,
+      "business_start_date": 0.94,
+      "monthly_revenue": 0.91,
+      "business_type": 0.97,
+      "industry": 0.88,
+      "application_date": 0.96
+    },
+    "processing_time_ms": 1243.67,
+    "requires_verification": false,
+    "verification_fields": []
   },
   "properties": {
-    "contentType": "application/json",
-    "contentEncoding": "utf-8",
-    "deliveryMode": 2,
+    "content_type": "application/json",
+    "content_encoding": "utf-8",
+    "delivery_mode": 2,
     "priority": 5,
-    "correlationId": "corr-2025-05-22-00123",
-    "replyTo": null,
-    "expiration": "86400000",
-    "messageId": "msg-2025-05-22-00123",
-    "timestamp": 1716390645789,
-    "userId": "document-service",
-    "appId": "document-service",
-    "clusterId": "mca-cluster-1",
+    "correlation_id": "corr-7b8c9d0e-1f2a-3b4c-5d6e-7f8a9b0c1d2e",
+    "reply_to": "amq.gen-a1b2c3d4e5f6",
+    "message_id": "msg-8f29a1b5-7e3d-4e9a-b8c6-d5f2a3e1c7b9",
+    "timestamp": 1716464130456,
+    "app_id": "ocr-service",
+    "cluster_id": "rabbitmq-cluster-1",
+    "user_id": "ocr-service",
+    "expiration": "3600000",
     "headers": {
-      "document_type": "tax_return",
-      "application_id": "app-2025-05-22-00456",
-      "classification_confidence": 0.92,
-      "requires_review": "false",
-      "x-retry-count": 0
+      "document_id": "doc-5a7b3c2d-1e9f-4a8b-7c6d-5e4f3a2b1c9d",
+      "application_id": "app-3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e8f",
+      "source_service": "ocr-service",
+      "destination_service": "data-service",
+      "retry_count": 0
     }
   },
   "routing": {
-    "exchange": "mca.classification",
-    "routingKey": "classification.results",
+    "exchange": "mca.data.processing",
+    "routing_key": "data.extraction.complete",
+    "consumer_queue": "data.processing",
     "mandatory": true,
     "immediate": false
-  },
-  "alternativeExamples": [
-    {
-      "description": "Application form document example",
-      "message": {
-        "document": {
-          "metadata": {
-            "id": "doc-2025-05-22-00124",
-            "filename": "mca_application_form.pdf",
-            "size": 1245789,
-            "mime_type": "application/pdf",
-            "created_at": "2025-05-22T11:30:15.123Z",
-            "updated_at": "2025-05-22T11:32:45.678Z",
-            "classification_confidence": 0.98,
-            "ocr_confidence": null,
-            "application_id": "app-2025-05-22-00457",
-            "storage_path": "app-2025-05-22-00457/application/doc-2025-05-22-00124/v1",
-            "checksum": "b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7",
-            "page_count": 4,
-            "tags": ["application", "form", "mca"]
-          },
-          "document_type": "application",
-          "status": "classified",
-          "source": {
-            "source_type": "email",
-            "email_id": "email-2025-05-22-00790",
-            "email_sender": "john.doe@acmesupplies.com",
-            "email_subject": "Acme Supplies - MCA Application Form",
-            "email_received_at": "2025-05-22T11:28:10.456Z",
-            "upload_user_id": null,
-            "upload_ip": null,
-            "api_client_id": null,
-            "submission_id": "sub-2025-05-22-00124",
-            "received_at": "2025-05-22T11:30:15.123Z"
-          },
-          "classification_result": {
-            "document_type": "application",
-            "confidence": 0.98,
-            "confidence_scores": {
-              "application": 0.98,
-              "tax_return": 0.01,
-              "bank_statement": 0.00,
-              "pay_stub": 0.00,
-              "id_document": 0.01,
-              "other": 0.00
-            },
-            "features_used": [
-              "text_content",
-              "layout_analysis",
-              "form_detection",
-              "logo_detection",
-              "header_footer_analysis"
-            ],
-            "model_version": "application-classifier-v1.2.0",
-            "classified_at": "2025-05-22T11:32:45.678Z",
-            "requires_review": false
-          },
-          "processing_error": null
-        },
-        "storage": {
-          "bucket": "mca-documents-production",
-          "region": "us-east-1",
-          "key": "app-2025-05-22-00457/application/doc-2025-05-22-00124/v1",
-          "encryption": "AES256",
-          "version_id": "v1",
-          "content_type": "application/pdf",
-          "content_length": 1245789,
-          "etag": "\"b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7\""
-        },
-        "processing": {
-          "service_id": "document-service",
-          "node_id": "document-service-pod-abc123",
-          "processing_time_ms": 2530,
-          "processing_timestamp": "2025-05-22T11:32:45.678Z",
-          "trace_id": "trace-2025-05-22-00124",
-          "sequence_number": 1
-        }
-      },
-      "properties": {
-        "contentType": "application/json",
-        "contentEncoding": "utf-8",
-        "deliveryMode": 2,
-        "priority": 7,
-        "correlationId": "corr-2025-05-22-00124",
-        "replyTo": null,
-        "expiration": "86400000",
-        "messageId": "msg-2025-05-22-00124",
-        "timestamp": 1716394365678,
-        "userId": "document-service",
-        "appId": "document-service",
-        "clusterId": "mca-cluster-1",
-        "headers": {
-          "document_type": "application",
-          "application_id": "app-2025-05-22-00457",
-          "classification_confidence": 0.98,
-          "requires_review": "false",
-          "x-retry-count": 0
-        }
-      }
-    },
-    {
-      "description": "Bank statement document example",
-      "message": {
-        "document": {
-          "metadata": {
-            "id": "doc-2025-05-22-00125",
-            "filename": "bank_statement_april_2025.pdf",
-            "size": 1856423,
-            "mime_type": "application/pdf",
-            "created_at": "2025-05-22T12:45:30.789Z",
-            "updated_at": "2025-05-22T12:47:15.456Z",
-            "classification_confidence": 0.95,
-            "ocr_confidence": null,
-            "application_id": "app-2025-05-22-00458",
-            "storage_path": "app-2025-05-22-00458/bank_statement/doc-2025-05-22-00125/v1",
-            "checksum": "c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8",
-            "page_count": 6,
-            "tags": ["bank_statement", "april", "2025"]
-          },
-          "document_type": "bank_statement",
-          "status": "classified",
-          "source": {
-            "source_type": "email",
-            "email_id": "email-2025-05-22-00791",
-            "email_sender": "finance@acmesupplies.com",
-            "email_subject": "Acme Supplies - Bank Statements for Funding Application",
-            "email_received_at": "2025-05-22T12:42:20.123Z",
-            "upload_user_id": null,
-            "upload_ip": null,
-            "api_client_id": null,
-            "submission_id": "sub-2025-05-22-00125",
-            "received_at": "2025-05-22T12:45:30.789Z"
-          },
-          "classification_result": {
-            "document_type": "bank_statement",
-            "confidence": 0.95,
-            "confidence_scores": {
-              "bank_statement": 0.95,
-              "tax_return": 0.03,
-              "application": 0.00,
-              "pay_stub": 0.01,
-              "id_document": 0.00,
-              "other": 0.01
-            },
-            "features_used": [
-              "text_content",
-              "layout_analysis",
-              "table_detection",
-              "keyword_matching",
-              "logo_detection"
-            ],
-            "model_version": "bank-statement-classifier-v1.1.5",
-            "classified_at": "2025-05-22T12:47:15.456Z",
-            "requires_review": false
-          },
-          "processing_error": null
-        },
-        "storage": {
-          "bucket": "mca-documents-production",
-          "region": "us-east-1",
-          "key": "app-2025-05-22-00458/bank_statement/doc-2025-05-22-00125/v1",
-          "encryption": "AES256",
-          "version_id": "v1",
-          "content_type": "application/pdf",
-          "content_length": 1856423,
-          "etag": "\"c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8\""
-        },
-        "processing": {
-          "service_id": "document-service",
-          "node_id": "document-service-pod-abc123",
-          "processing_time_ms": 1845,
-          "processing_timestamp": "2025-05-22T12:47:15.456Z",
-          "trace_id": "trace-2025-05-22-00125",
-          "sequence_number": 1
-        }
-      },
-      "properties": {
-        "contentType": "application/json",
-        "contentEncoding": "utf-8",
-        "deliveryMode": 2,
-        "priority": 5,
-        "correlationId": "corr-2025-05-22-00125",
-        "replyTo": null,
-        "expiration": "86400000",
-        "messageId": "msg-2025-05-22-00125",
-        "timestamp": 1716398835456,
-        "userId": "document-service",
-        "appId": "document-service",
-        "clusterId": "mca-cluster-1",
-        "headers": {
-          "document_type": "bank_statement",
-          "application_id": "app-2025-05-22-00458",
-          "classification_confidence": 0.95,
-          "requires_review": "false",
-          "x-retry-count": 0
-        }
-      }
-    },
-    {
-      "description": "Low confidence document requiring review",
-      "message": {
-        "document": {
-          "metadata": {
-            "id": "doc-2025-05-22-00126",
-            "filename": "business_document.pdf",
-            "size": 1245789,
-            "mime_type": "application/pdf",
-            "created_at": "2025-05-22T13:15:45.123Z",
-            "updated_at": "2025-05-22T13:17:30.456Z",
-            "classification_confidence": 0.72,
-            "ocr_confidence": null,
-            "application_id": "app-2025-05-22-00459",
-            "storage_path": "app-2025-05-22-00459/other/doc-2025-05-22-00126/v1",
-            "checksum": "d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9",
-            "page_count": 8,
-            "tags": ["other", "business", "review_required"]
-          },
-          "document_type": "other",
-          "status": "review",
-          "source": {
-            "source_type": "email",
-            "email_id": "email-2025-05-22-00792",
-            "email_sender": "admin@acmesupplies.com",
-            "email_subject": "Acme Supplies - Additional Business Documents",
-            "email_received_at": "2025-05-22T13:12:30.789Z",
-            "upload_user_id": null,
-            "upload_ip": null,
-            "api_client_id": null,
-            "submission_id": "sub-2025-05-22-00126",
-            "received_at": "2025-05-22T13:15:45.123Z"
-          },
-          "classification_result": {
-            "document_type": "other",
-            "confidence": 0.72,
-            "confidence_scores": {
-              "other": 0.35,
-              "tax_return": 0.25,
-              "bank_statement": 0.20,
-              "application": 0.10,
-              "pay_stub": 0.05,
-              "id_document": 0.05
-            },
-            "features_used": [
-              "text_content",
-              "layout_analysis",
-              "form_detection",
-              "keyword_matching",
-              "header_footer_analysis"
-            ],
-            "model_version": "document-classifier-v1.2.0",
-            "classified_at": "2025-05-22T13:17:30.456Z",
-            "requires_review": true
-          },
-          "processing_error": null
-        },
-        "storage": {
-          "bucket": "mca-documents-production",
-          "region": "us-east-1",
-          "key": "app-2025-05-22-00459/other/doc-2025-05-22-00126/v1",
-          "encryption": "AES256",
-          "version_id": "v1",
-          "content_type": "application/pdf",
-          "content_length": 1245789,
-          "etag": "\"d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9\""
-        },
-        "processing": {
-          "service_id": "document-service",
-          "node_id": "document-service-pod-abc123",
-          "processing_time_ms": 1745,
-          "processing_timestamp": "2025-05-22T13:17:30.456Z",
-          "trace_id": "trace-2025-05-22-00126",
-          "sequence_number": 1
-        }
-      },
-      "properties": {
-        "contentType": "application/json",
-        "contentEncoding": "utf-8",
-        "deliveryMode": 2,
-        "priority": 6,
-        "correlationId": "corr-2025-05-22-00126",
-        "replyTo": null,
-        "expiration": "86400000",
-        "messageId": "msg-2025-05-22-00126",
-        "timestamp": 1716400650456,
-        "userId": "document-service",
-        "appId": "document-service",
-        "clusterId": "mca-cluster-1",
-        "headers": {
-          "document_type": "other",
-          "application_id": "app-2025-05-22-00459",
-          "classification_confidence": 0.72,
-          "requires_review": "true",
-          "x-retry-count": 0
-        }
-      }
-    },
-    {
-      "description": "Document with processing error",
-      "message": {
-        "document": {
-          "metadata": {
-            "id": "doc-2025-05-22-00127",
-            "filename": "corrupted_document.pdf",
-            "size": 1024567,
-            "mime_type": "application/pdf",
-            "created_at": "2025-05-22T14:30:15.789Z",
-            "updated_at": "2025-05-22T14:32:45.123Z",
-            "classification_confidence": null,
-            "ocr_confidence": null,
-            "application_id": "app-2025-05-22-00460",
-            "storage_path": "app-2025-05-22-00460/error/doc-2025-05-22-00127/v1",
-            "checksum": "e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0",
-            "page_count": null,
-            "tags": ["error", "corrupted"]
-          },
-          "document_type": null,
-          "status": "error",
-          "source": {
-            "source_type": "email",
-            "email_id": "email-2025-05-22-00793",
-            "email_sender": "finance@acmesupplies.com",
-            "email_subject": "Acme Supplies - Additional Documents",
-            "email_received_at": "2025-05-22T14:28:10.456Z",
-            "upload_user_id": null,
-            "upload_ip": null,
-            "api_client_id": null,
-            "submission_id": "sub-2025-05-22-00127",
-            "received_at": "2025-05-22T14:30:15.789Z"
-          },
-          "classification_result": null,
-          "processing_error": {
-            "error_code": "DOC-5001",
-            "error_message": "Failed to process document: PDF file is corrupted or password protected",
-            "error_timestamp": "2025-05-22T14:32:45.123Z",
-            "error_location": "document-service.classification",
-            "error_details": {
-              "exception": "PDFParseException",
-              "file_status": "corrupted",
-              "attempted_repairs": 2,
-              "repair_successful": false
-            },
-            "retry_count": 3,
-            "is_recoverable": false
-          }
-        },
-        "storage": {
-          "bucket": "mca-documents-production",
-          "region": "us-east-1",
-          "key": "app-2025-05-22-00460/error/doc-2025-05-22-00127/v1",
-          "encryption": "AES256",
-          "version_id": "v1",
-          "content_type": "application/pdf",
-          "content_length": 1024567,
-          "etag": "\"e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0\""
-        },
-        "processing": {
-          "service_id": "document-service",
-          "node_id": "document-service-pod-abc123",
-          "processing_time_ms": 2429,
-          "processing_timestamp": "2025-05-22T14:32:45.123Z",
-          "trace_id": "trace-2025-05-22-00127",
-          "sequence_number": 1
-        }
-      },
-      "properties": {
-        "contentType": "application/json",
-        "contentEncoding": "utf-8",
-        "deliveryMode": 2,
-        "priority": 8,
-        "correlationId": "corr-2025-05-22-00127",
-        "replyTo": null,
-        "expiration": "86400000",
-        "messageId": "msg-2025-05-22-00127",
-        "timestamp": 1716405165123,
-        "userId": "document-service",
-        "appId": "document-service",
-        "clusterId": "mca-cluster-1",
-        "headers": {
-          "document_type": "error",
-          "application_id": "app-2025-05-22-00460",
-          "error_code": "DOC-5001",
-          "is_recoverable": "false",
-          "x-retry-count": 3
-        }
-      }
-    }
-  ],
-  "testCases": {
-    "documentTypes": [
-      {
-        "type": "application",
-        "description": "Loan application forms"
-      },
-      {
-        "type": "tax_return",
-        "description": "Tax return documents (1040, W-2, etc.)"
-      },
-      {
-        "type": "bank_statement",
-        "description": "Bank account statements"
-      },
-      {
-        "type": "pay_stub",
-        "description": "Employment pay stubs"
-      },
-      {
-        "type": "id_document",
-        "description": "Identity documents (driver's license, passport)"
-      },
-      {
-        "type": "other",
-        "description": "Unclassified or miscellaneous documents"
-      }
-    ],
-    "processingStatuses": [
-      {
-        "status": "received",
-        "description": "Initial state when document is first received"
-      },
-      {
-        "status": "classifying",
-        "description": "Document is being classified"
-      },
-      {
-        "status": "classified",
-        "description": "Document has been classified"
-      },
-      {
-        "status": "processing",
-        "description": "Document is being processed by OCR"
-      },
-      {
-        "status": "processed",
-        "description": "Document has been processed"
-      },
-      {
-        "status": "error",
-        "description": "Error occurred during processing"
-      },
-      {
-        "status": "review",
-        "description": "Document requires manual review"
-      },
-      {
-        "status": "completed",
-        "description": "Document processing is complete"
-      }
-    ],
-    "errorScenarios": [
-      {
-        "scenario": "corrupted_document",
-        "errorCode": "DOC-5001",
-        "description": "Document is corrupted or password protected"
-      },
-      {
-        "scenario": "unsupported_format",
-        "errorCode": "DOC-5002",
-        "description": "Document format is not supported"
-      },
-      {
-        "scenario": "classification_failure",
-        "errorCode": "DOC-5003",
-        "description": "Failed to classify document"
-      },
-      {
-        "scenario": "storage_failure",
-        "errorCode": "DOC-5004",
-        "description": "Failed to store document in S3"
-      },
-      {
-        "scenario": "message_delivery_failure",
-        "errorCode": "DOC-5005",
-        "description": "Failed to deliver message to RabbitMQ"
-      }
-    ]
   }
 }
