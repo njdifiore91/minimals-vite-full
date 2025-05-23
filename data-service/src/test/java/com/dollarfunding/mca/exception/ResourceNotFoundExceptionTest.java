@@ -1,5 +1,6 @@
 package com.dollarfunding.mca.exception;
 
+import com.dollarfunding.mca.util.Constants;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
@@ -8,176 +9,214 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * Unit tests for the {@link ResourceNotFoundException} class.
- * <p>
- * These tests verify that the ResourceNotFoundException properly handles resource not found scenarios
- * with appropriate HTTP status codes, error messages, and resource identification details.
- * </p>
+ * 
+ * These tests verify that ResourceNotFoundException properly handles 404 Not Found scenarios,
+ * correctly formats error messages with resource type and identifier information, and
+ * provides appropriate static factory methods for common resource types.
  */
-public class ResourceNotFoundExceptionTest {
+@DisplayName("ResourceNotFoundException Tests")
+class ResourceNotFoundExceptionTest {
+
+    private static final String TEST_MESSAGE = "Resource not found";
+    private static final String TEST_RESOURCE_TYPE = "TestResource";
+    private static final String TEST_RESOURCE_ID = "test-123";
 
     @Test
-    @DisplayName("Should create ResourceNotFoundException with resource type and identifier")
-    public void testCreateWithResourceTypeAndIdentifier() {
+    @DisplayName("Should initialize with message and set status code to 404")
+    void shouldInitializeWithMessageAndSetStatusCodeTo404() {
         // Arrange & Act
-        String resourceType = "Application";
-        String resourceId = "APP123";
-        ResourceNotFoundException exception = new ResourceNotFoundException(resourceType, resourceId);
+        ResourceNotFoundException exception = new ResourceNotFoundException(TEST_MESSAGE);
         
         // Assert
-        assertEquals(String.format("%s with id %s not found", resourceType, resourceId), exception.getMessage());
+        assertEquals(TEST_MESSAGE, exception.getMessage());
         assertEquals(HttpStatus.NOT_FOUND, exception.getHttpStatus());
-        assertEquals(HttpStatus.NOT_FOUND.value(), exception.getStatusCode());
-        assertEquals(resourceType, exception.getResourceType());
-        assertEquals(resourceId, exception.getResourceId());
-    }
-    
-    @Test
-    @DisplayName("Should create ResourceNotFoundException with resource type, identifier, and cause")
-    public void testCreateWithResourceTypeIdentifierAndCause() {
-        // Arrange & Act
-        String resourceType = "Document";
-        String resourceId = "DOC456";
-        IllegalArgumentException cause = new IllegalArgumentException("Invalid document ID format");
-        ResourceNotFoundException exception = new ResourceNotFoundException(resourceType, resourceId, cause);
-        
-        // Assert
-        assertEquals(String.format("%s with id %s not found", resourceType, resourceId), exception.getMessage());
-        assertEquals(HttpStatus.NOT_FOUND, exception.getHttpStatus());
-        assertEquals(cause, exception.getCause());
-        assertEquals(resourceType, exception.getResourceType());
-        assertEquals(resourceId, exception.getResourceId());
-    }
-    
-    @Test
-    @DisplayName("Should create ResourceNotFoundException with custom message")
-    public void testCreateWithCustomMessage() {
-        // Arrange & Act
-        String message = "Custom resource not found message";
-        ResourceNotFoundException exception = new ResourceNotFoundException(message);
-        
-        // Assert
-        assertEquals(message, exception.getMessage());
-        assertEquals(HttpStatus.NOT_FOUND, exception.getHttpStatus());
-        assertEquals("Resource", exception.getResourceType());
+        assertEquals(404, exception.getStatusCode());
+        assertEquals("unknown", exception.getResourceType());
         assertEquals("unknown", exception.getResourceId());
     }
     
     @Test
-    @DisplayName("Should create ResourceNotFoundException with custom message and cause")
-    public void testCreateWithCustomMessageAndCause() {
-        // Arrange & Act
-        String message = "Custom resource not found message with cause";
-        IllegalStateException cause = new IllegalStateException("Database connection error");
-        ResourceNotFoundException exception = new ResourceNotFoundException(message, cause);
+    @DisplayName("Should initialize with message and cause")
+    void shouldInitializeWithMessageAndCause() {
+        // Arrange
+        Throwable cause = new IllegalArgumentException("Original error");
+        
+        // Act
+        ResourceNotFoundException exception = new ResourceNotFoundException(TEST_MESSAGE, cause);
         
         // Assert
-        assertEquals(message, exception.getMessage());
-        assertEquals(HttpStatus.NOT_FOUND, exception.getHttpStatus());
+        assertEquals(TEST_MESSAGE, exception.getMessage());
         assertEquals(cause, exception.getCause());
-        assertEquals("Resource", exception.getResourceType());
+        assertEquals(HttpStatus.NOT_FOUND, exception.getHttpStatus());
+        assertEquals(404, exception.getStatusCode());
+        assertEquals("unknown", exception.getResourceType());
         assertEquals("unknown", exception.getResourceId());
     }
     
     @Test
-    @DisplayName("Should create ResourceNotFoundException for application not found")
-    public void testApplicationNotFound() {
+    @DisplayName("Should initialize with resource type and identifier")
+    void shouldInitializeWithResourceTypeAndIdentifier() {
         // Arrange & Act
-        String applicationId = "APP789";
-        ResourceNotFoundException exception = ResourceNotFoundException.applicationNotFound(applicationId);
+        ResourceNotFoundException exception = new ResourceNotFoundException(
+                TEST_RESOURCE_TYPE, TEST_RESOURCE_ID);
         
         // Assert
-        assertEquals(String.format("%s with id %s not found", "Application", applicationId), exception.getMessage());
+        assertEquals(String.format("%s with id '%s' not found", TEST_RESOURCE_TYPE, TEST_RESOURCE_ID), 
+                exception.getMessage());
+        assertEquals(HttpStatus.NOT_FOUND, exception.getHttpStatus());
+        assertEquals(404, exception.getStatusCode());
+        assertEquals(TEST_RESOURCE_TYPE, exception.getResourceType());
+        assertEquals(TEST_RESOURCE_ID, exception.getResourceId());
+        assertEquals(Constants.ErrorCode.NOT_FOUND, exception.getErrorCode());
+    }
+    
+    @Test
+    @DisplayName("Should initialize with resource type, identifier, and cause")
+    void shouldInitializeWithResourceTypeIdentifierAndCause() {
+        // Arrange
+        Throwable cause = new IllegalArgumentException("Original error");
+        
+        // Act
+        ResourceNotFoundException exception = new ResourceNotFoundException(
+                TEST_RESOURCE_TYPE, TEST_RESOURCE_ID, cause);
+        
+        // Assert
+        assertEquals(String.format("%s with id '%s' not found", TEST_RESOURCE_TYPE, TEST_RESOURCE_ID), 
+                exception.getMessage());
+        assertEquals(cause, exception.getCause());
+        assertEquals(HttpStatus.NOT_FOUND, exception.getHttpStatus());
+        assertEquals(404, exception.getStatusCode());
+        assertEquals(TEST_RESOURCE_TYPE, exception.getResourceType());
+        assertEquals(TEST_RESOURCE_ID, exception.getResourceId());
+    }
+    
+    @Test
+    @DisplayName("Should determine correct error code for Application resource type")
+    void shouldDetermineCorrectErrorCodeForApplicationResourceType() {
+        // Arrange & Act
+        ResourceNotFoundException exception = new ResourceNotFoundException(
+                "Application", TEST_RESOURCE_ID);
+        
+        // Assert
+        assertEquals(Constants.ErrorCode.APPLICATION_NOT_FOUND, exception.getErrorCode());
+    }
+    
+    @Test
+    @DisplayName("Should determine correct error code for Document resource type")
+    void shouldDetermineCorrectErrorCodeForDocumentResourceType() {
+        // Arrange & Act
+        ResourceNotFoundException exception = new ResourceNotFoundException(
+                "Document", TEST_RESOURCE_ID);
+        
+        // Assert
+        assertEquals(Constants.ErrorCode.DOCUMENT_NOT_FOUND, exception.getErrorCode());
+    }
+    
+    @Test
+    @DisplayName("Should determine correct error code for unknown resource type")
+    void shouldDetermineCorrectErrorCodeForUnknownResourceType() {
+        // Arrange & Act
+        ResourceNotFoundException exception = new ResourceNotFoundException(
+                "UnknownType", TEST_RESOURCE_ID);
+        
+        // Assert
+        assertEquals(Constants.ErrorCode.NOT_FOUND, exception.getErrorCode());
+    }
+    
+    @Test
+    @DisplayName("Should determine correct error code for null resource type")
+    void shouldDetermineCorrectErrorCodeForNullResourceType() {
+        // Arrange & Act
+        ResourceNotFoundException exception = new ResourceNotFoundException(
+                null, TEST_RESOURCE_ID);
+        
+        // Assert
+        assertEquals(Constants.ErrorCode.NOT_FOUND, exception.getErrorCode());
+    }
+    
+    @Test
+    @DisplayName("Should create exception for application not found")
+    void shouldCreateExceptionForApplicationNotFound() {
+        // Arrange & Act
+        ResourceNotFoundException exception = ResourceNotFoundException.applicationNotFound(TEST_RESOURCE_ID);
+        
+        // Assert
+        assertEquals(String.format("%s with id '%s' not found", "Application", TEST_RESOURCE_ID), 
+                exception.getMessage());
         assertEquals(HttpStatus.NOT_FOUND, exception.getHttpStatus());
         assertEquals("Application", exception.getResourceType());
-        assertEquals(applicationId, exception.getResourceId());
+        assertEquals(TEST_RESOURCE_ID, exception.getResourceId());
+        assertEquals(Constants.ErrorCode.APPLICATION_NOT_FOUND, exception.getErrorCode());
     }
     
     @Test
-    @DisplayName("Should create ResourceNotFoundException for document not found")
-    public void testDocumentNotFound() {
+    @DisplayName("Should create exception for document not found")
+    void shouldCreateExceptionForDocumentNotFound() {
         // Arrange & Act
-        String documentId = "DOC789";
-        ResourceNotFoundException exception = ResourceNotFoundException.documentNotFound(documentId);
+        ResourceNotFoundException exception = ResourceNotFoundException.documentNotFound(TEST_RESOURCE_ID);
         
         // Assert
-        assertEquals(String.format("%s with id %s not found", "Document", documentId), exception.getMessage());
+        assertEquals(String.format("%s with id '%s' not found", "Document", TEST_RESOURCE_ID), 
+                exception.getMessage());
         assertEquals(HttpStatus.NOT_FOUND, exception.getHttpStatus());
         assertEquals("Document", exception.getResourceType());
-        assertEquals(documentId, exception.getResourceId());
+        assertEquals(TEST_RESOURCE_ID, exception.getResourceId());
+        assertEquals(Constants.ErrorCode.DOCUMENT_NOT_FOUND, exception.getErrorCode());
     }
     
     @Test
-    @DisplayName("Should create ResourceNotFoundException for merchant not found")
-    public void testMerchantNotFound() {
+    @DisplayName("Should create exception for merchant not found")
+    void shouldCreateExceptionForMerchantNotFound() {
         // Arrange & Act
-        String merchantId = "MERCH123";
-        ResourceNotFoundException exception = ResourceNotFoundException.merchantNotFound(merchantId);
+        ResourceNotFoundException exception = ResourceNotFoundException.merchantNotFound(TEST_RESOURCE_ID);
         
         // Assert
-        assertEquals(String.format("%s with id %s not found", "Merchant", merchantId), exception.getMessage());
+        assertEquals(String.format("%s with id '%s' not found", "Merchant", TEST_RESOURCE_ID), 
+                exception.getMessage());
         assertEquals(HttpStatus.NOT_FOUND, exception.getHttpStatus());
         assertEquals("Merchant", exception.getResourceType());
-        assertEquals(merchantId, exception.getResourceId());
+        assertEquals(TEST_RESOURCE_ID, exception.getResourceId());
+        assertEquals(Constants.ErrorCode.NOT_FOUND, exception.getErrorCode());
     }
     
     @Test
-    @DisplayName("Should create ResourceNotFoundException for webhook not found")
-    public void testWebhookNotFound() {
+    @DisplayName("Should create exception for webhook not found")
+    void shouldCreateExceptionForWebhookNotFound() {
         // Arrange & Act
-        String webhookId = "WEBHOOK456";
-        ResourceNotFoundException exception = ResourceNotFoundException.webhookNotFound(webhookId);
+        ResourceNotFoundException exception = ResourceNotFoundException.webhookNotFound(TEST_RESOURCE_ID);
         
         // Assert
-        assertEquals(String.format("%s with id %s not found", "Webhook", webhookId), exception.getMessage());
+        assertEquals(String.format("%s with id '%s' not found", "Webhook", TEST_RESOURCE_ID), 
+                exception.getMessage());
         assertEquals(HttpStatus.NOT_FOUND, exception.getHttpStatus());
         assertEquals("Webhook", exception.getResourceType());
-        assertEquals(webhookId, exception.getResourceId());
+        assertEquals(TEST_RESOURCE_ID, exception.getResourceId());
+        assertEquals(Constants.ErrorCode.NOT_FOUND, exception.getErrorCode());
     }
     
     @Test
-    @DisplayName("Should verify error code is set to NOT_FOUND")
-    public void testErrorCodeIsSetToNotFound() {
+    @DisplayName("Should format message with resource type and identifier")
+    void shouldFormatMessageWithResourceTypeAndIdentifier() {
         // Arrange & Act
-        ResourceNotFoundException exception = new ResourceNotFoundException("Application", "APP123");
+        ResourceNotFoundException exception = new ResourceNotFoundException(
+                TEST_RESOURCE_TYPE, TEST_RESOURCE_ID);
         
         // Assert
-        assertEquals("NOT_FOUND", exception.getErrorCode());
+        assertEquals(String.format("%s with id '%s' not found", TEST_RESOURCE_TYPE, TEST_RESOURCE_ID), 
+                exception.getMessage());
     }
     
     @Test
-    @DisplayName("Should verify status code is set to 404")
-    public void testStatusCodeIsSetTo404() {
+    @DisplayName("Should handle null resource identifier")
+    void shouldHandleNullResourceIdentifier() {
         // Arrange & Act
-        ResourceNotFoundException exception = new ResourceNotFoundException("Application", "APP123");
+        ResourceNotFoundException exception = new ResourceNotFoundException(
+                TEST_RESOURCE_TYPE, null);
         
         // Assert
-        assertEquals(404, exception.getStatusCode());
-    }
-    
-    @Test
-    @DisplayName("Should verify message formatting with different resource types and identifiers")
-    public void testMessageFormattingWithDifferentResourceTypesAndIdentifiers() {
-        // Arrange & Act - Test with various resource types and identifiers
-        ResourceNotFoundException exception1 = new ResourceNotFoundException("User", "USR001");
-        ResourceNotFoundException exception2 = new ResourceNotFoundException("Product", "PRD123");
-        ResourceNotFoundException exception3 = new ResourceNotFoundException("Order", "ORD-XYZ-789");
-        
-        // Assert
-        assertEquals("User with id USR001 not found", exception1.getMessage());
-        assertEquals("Product with id PRD123 not found", exception2.getMessage());
-        assertEquals("Order with id ORD-XYZ-789 not found", exception3.getMessage());
-    }
-    
-    @Test
-    @DisplayName("Should verify resource type and identifier getters")
-    public void testResourceTypeAndIdentifierGetters() {
-        // Arrange & Act
-        String resourceType = "CustomResource";
-        String resourceId = "CUSTOM-ID-123";
-        ResourceNotFoundException exception = new ResourceNotFoundException(resourceType, resourceId);
-        
-        // Assert
-        assertEquals(resourceType, exception.getResourceType());
-        assertEquals(resourceId, exception.getResourceId());
+        assertEquals(String.format("%s with id '%s' not found", TEST_RESOURCE_TYPE, "null"), 
+                exception.getMessage());
+        assertEquals(TEST_RESOURCE_TYPE, exception.getResourceType());
+        assertNull(exception.getResourceId());
     }
 }
