@@ -3,19 +3,21 @@ package com.dollarfunding.mca.dto;
 import com.dollarfunding.mca.entity.EventType;
 import com.dollarfunding.mca.entity.Webhook;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.validation.ConstraintViolation;
+import jakarta.validation.Validation;
+import jakarta.validation.Validator;
+import jakarta.validation.ValidatorFactory;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.NullAndEmptySource;
 import org.junit.jupiter.params.provider.ValueSource;
 
-import javax.validation.ConstraintViolation;
-import javax.validation.Validation;
-import javax.validation.Validator;
-import javax.validation.ValidatorFactory;
 import java.util.Set;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -27,426 +29,461 @@ import static org.junit.jupiter.api.Assertions.*;
  * handles event type mapping correctly, and converts between DTO and entity
  * objects appropriately.
  */
-@DisplayName("WebhookRequestDTO Tests")
-class WebhookRequestDTOTest {
+@DisplayName("Webhook Request DTO Tests")
+public class WebhookRequestDTOTest {
 
     private Validator validator;
     private ObjectMapper objectMapper;
-    private WebhookRequestDTO validDto;
-
+    
     @BeforeEach
     void setUp() {
-        // Initialize validator
         ValidatorFactory factory = Validation.buildDefaultValidatorFactory();
         validator = factory.getValidator();
-        
-        // Initialize ObjectMapper
         objectMapper = new ObjectMapper();
-        
-        // Create a valid DTO for testing
-        validDto = new WebhookRequestDTO(
-                "https://example.com/webhook",
-                "APPLICATION_CREATED",
-                "secretKey1234567890abcdef",
-                true,
-                "X-Webhook-Signature"
+        // Configure ObjectMapper to handle Java 8 date/time types
+        objectMapper.findAndRegisterModules();
+    }
+    
+    /**
+     * Test data provider for invalid endpoint URLs.
+     */
+    static Stream<Arguments> invalidEndpointUrlProvider() {
+        return Stream.of(
+            Arguments.of(null, "endpointUrl", "Endpoint URL is required"),
+            Arguments.of("", "endpointUrl", "Endpoint URL is required"),
+            Arguments.of("http://example.com", "endpointUrl", "Endpoint URL must use HTTPS protocol"),
+            Arguments.of("ftp://example.com", "endpointUrl", "Endpoint URL must use HTTPS protocol"),
+            Arguments.of("https://" + "a".repeat(256), "endpointUrl", "Endpoint URL cannot exceed 255 characters")
+        );
+    }
+    
+    /**
+     * Test data provider for invalid secret keys.
+     */
+    static Stream<Arguments> invalidSecretKeyProvider() {
+        return Stream.of(
+            Arguments.of(null, "secretKey", "Secret key is required"),
+            Arguments.of("", "secretKey", "Secret key is required"),
+            Arguments.of("short", "secretKey", "Secret key must be between 32 and 128 characters"),
+            Arguments.of("a".repeat(31), "secretKey", "Secret key must be between 32 and 128 characters"),
+            Arguments.of("a".repeat(129), "secretKey", "Secret key must be between 32 and 128 characters")
+        );
+    }
+    
+    /**
+     * Test data provider for invalid max retry attempts.
+     */
+    static Stream<Arguments> invalidMaxRetryAttemptsProvider() {
+        return Stream.of(
+            Arguments.of(-1, "maxRetryAttempts", "Max retry attempts must be at least 0"),
+            Arguments.of(11, "maxRetryAttempts", "Max retry attempts cannot exceed 10")
         );
     }
 
-    @Nested
-    @DisplayName("Validation Tests")
-    class ValidationTests {
-
-        @Test
-        @DisplayName("Valid DTO should pass validation")
-        void validDtoShouldPassValidation() {
-            // When
-            Set<ConstraintViolation<WebhookRequestDTO>> violations = validator.validate(validDto);
-            
-            // Then
-            assertTrue(violations.isEmpty(), "Valid DTO should not have validation violations");
-        }
-
-        @Test
-        @DisplayName("DTO with null active status should fail validation")
-        void dtoWithNullActiveStatusShouldFailValidation() {
-            // Given
-            WebhookRequestDTO dto = new WebhookRequestDTO(
-                    "https://example.com/webhook",
-                    "APPLICATION_CREATED",
-                    "secretKey1234567890abcdef",
-                    null,
-                    "X-Webhook-Signature"
-            );
-            
-            // When
-            Set<ConstraintViolation<WebhookRequestDTO>> violations = validator.validate(dto);
-            
-            // Then
-            assertFalse(violations.isEmpty(), "DTO with null active status should have validation violations");
-            assertEquals(1, violations.size(), "Should have exactly one violation");
-            
-            ConstraintViolation<WebhookRequestDTO> violation = violations.iterator().next();
-            assertEquals("active", violation.getPropertyPath().toString(), "Violation should be on active field");
-            assertEquals("Active status is required", violation.getMessage(), "Violation message should match annotation");
-        }
-
-        @ParameterizedTest
-        @NullAndEmptySource
-        @ValueSource(strings = {" ", "\t", "\n"})
-        @DisplayName("DTO with blank endpoint URL should fail validation")
-        void dtoWithBlankEndpointUrlShouldFailValidation(String url) {
-            // Given
-            validDto.setEndpointUrl(url);
-            
-            // When
-            Set<ConstraintViolation<WebhookRequestDTO>> violations = validator.validate(validDto);
-            
-            // Then
-            assertFalse(violations.isEmpty(), "DTO with blank endpoint URL should have validation violations");
-            
-            boolean hasEndpointUrlViolation = violations.stream()
-                    .anyMatch(v -> v.getPropertyPath().toString().equals("endpointUrl") && 
-                              v.getMessage().equals("Endpoint URL is required"));
-            
-            assertTrue(hasEndpointUrlViolation, "Should have a violation on endpointUrl field");
-        }
-
-        @ParameterizedTest
-        @ValueSource(strings = {"ftp://example.com", "example.com", "http:/invalid-url", "https://"})
-        @DisplayName("DTO with invalid endpoint URL pattern should fail validation")
-        void dtoWithInvalidEndpointUrlPatternShouldFailValidation(String url) {
-            // Given
-            validDto.setEndpointUrl(url);
-            
-            // When
-            Set<ConstraintViolation<WebhookRequestDTO>> violations = validator.validate(validDto);
-            
-            // Then
-            assertFalse(violations.isEmpty(), "DTO with invalid endpoint URL pattern should have validation violations");
-            
-            boolean hasEndpointUrlPatternViolation = violations.stream()
-                    .anyMatch(v -> v.getPropertyPath().toString().equals("endpointUrl") && 
-                              v.getMessage().contains("must be a valid URL"));
-            
-            assertTrue(hasEndpointUrlPatternViolation, "Should have a pattern violation on endpointUrl field");
-        }
-
-        @ParameterizedTest
-        @NullAndEmptySource
-        @ValueSource(strings = {" ", "\t", "\n"})
-        @DisplayName("DTO with blank event type should fail validation")
-        void dtoWithBlankEventTypeShouldFailValidation(String eventType) {
-            // Given
-            validDto.setEventType(eventType);
-            
-            // When
-            Set<ConstraintViolation<WebhookRequestDTO>> violations = validator.validate(validDto);
-            
-            // Then
-            assertFalse(violations.isEmpty(), "DTO with blank event type should have validation violations");
-            
-            boolean hasEventTypeViolation = violations.stream()
-                    .anyMatch(v -> v.getPropertyPath().toString().equals("eventType") && 
-                              v.getMessage().equals("Event type is required"));
-            
-            assertTrue(hasEventTypeViolation, "Should have a violation on eventType field");
-        }
-
-        @ParameterizedTest
-        @NullAndEmptySource
-        @ValueSource(strings = {" ", "\t", "\n"})
-        @DisplayName("DTO with blank secret key should fail validation")
-        void dtoWithBlankSecretKeyShouldFailValidation(String secretKey) {
-            // Given
-            validDto.setSecretKey(secretKey);
-            
-            // When
-            Set<ConstraintViolation<WebhookRequestDTO>> violations = validator.validate(validDto);
-            
-            // Then
-            assertFalse(violations.isEmpty(), "DTO with blank secret key should have validation violations");
-            
-            boolean hasSecretKeyViolation = violations.stream()
-                    .anyMatch(v -> v.getPropertyPath().toString().equals("secretKey") && 
-                              v.getMessage().equals("Secret key is required"));
-            
-            assertTrue(hasSecretKeyViolation, "Should have a violation on secretKey field");
-        }
-
-        @ParameterizedTest
-        @ValueSource(strings = {"short", "123456789012345"})
-        @DisplayName("DTO with secret key shorter than 16 characters should fail validation")
-        void dtoWithShortSecretKeyShouldFailValidation(String secretKey) {
-            // Given
-            validDto.setSecretKey(secretKey);
-            
-            // When
-            Set<ConstraintViolation<WebhookRequestDTO>> violations = validator.validate(validDto);
-            
-            // Then
-            assertFalse(violations.isEmpty(), "DTO with short secret key should have validation violations");
-            
-            boolean hasSecretKeySizeViolation = violations.stream()
-                    .anyMatch(v -> v.getPropertyPath().toString().equals("secretKey") && 
-                              v.getMessage().contains("must be between 16 and 64"));
-            
-            assertTrue(hasSecretKeySizeViolation, "Should have a size violation on secretKey field");
-        }
-
-        @Test
-        @DisplayName("DTO with secret key longer than 64 characters should fail validation")
-        void dtoWithLongSecretKeyShouldFailValidation() {
-            // Given
-            String longSecretKey = "a".repeat(65); // 65 characters
-            validDto.setSecretKey(longSecretKey);
-            
-            // When
-            Set<ConstraintViolation<WebhookRequestDTO>> violations = validator.validate(validDto);
-            
-            // Then
-            assertFalse(violations.isEmpty(), "DTO with long secret key should have validation violations");
-            
-            boolean hasSecretKeySizeViolation = violations.stream()
-                    .anyMatch(v -> v.getPropertyPath().toString().equals("secretKey") && 
-                              v.getMessage().contains("must be between 16 and 64"));
-            
-            assertTrue(hasSecretKeySizeViolation, "Should have a size violation on secretKey field");
-        }
-
-        @Test
-        @DisplayName("DTO with signature header longer than 100 characters should fail validation")
-        void dtoWithLongSignatureHeaderShouldFailValidation() {
-            // Given
-            String longHeader = "X-".repeat(50); // 100+ characters
-            validDto.setSignatureHeader(longHeader);
-            
-            // When
-            Set<ConstraintViolation<WebhookRequestDTO>> violations = validator.validate(validDto);
-            
-            // Then
-            assertFalse(violations.isEmpty(), "DTO with long signature header should have validation violations");
-            
-            boolean hasSignatureHeaderSizeViolation = violations.stream()
-                    .anyMatch(v -> v.getPropertyPath().toString().equals("signatureHeader") && 
-                              v.getMessage().contains("cannot exceed 100 characters"));
-            
-            assertTrue(hasSignatureHeaderSizeViolation, "Should have a size violation on signatureHeader field");
-        }
+    @Test
+    @DisplayName("Should create a valid DTO with all required fields")
+    void shouldCreateValidDTO() {
+        // Given
+        WebhookRequestDTO dto = new WebhookRequestDTO(
+                "https://example.com/webhook",
+                "a".repeat(32),
+                true,
+                EventType.APPLICATION_CREATED
+        );
+        
+        // When
+        Set<ConstraintViolation<WebhookRequestDTO>> violations = validator.validate(dto);
+        
+        // Then
+        assertTrue(violations.isEmpty(), "No validation violations should be present");
     }
-
-    @Nested
-    @DisplayName("JSON Serialization/Deserialization Tests")
-    class JsonTests {
-
-        @Test
-        @DisplayName("DTO should serialize to JSON correctly")
-        void dtoShouldSerializeToJsonCorrectly() throws Exception {
-            // When
-            String json = objectMapper.writeValueAsString(validDto);
-            
-            // Then
-            assertNotNull(json, "JSON should not be null");
-            assertTrue(json.contains("\"endpoint_url\":\"https://example.com/webhook\""), "JSON should contain endpoint_url field");
-            assertTrue(json.contains("\"event_type\":\"APPLICATION_CREATED\""), "JSON should contain event_type field");
-            assertTrue(json.contains("\"secret_key\":\"secretKey1234567890abcdef\""), "JSON should contain secret_key field");
-            assertTrue(json.contains("\"active\":true"), "JSON should contain active field");
-            assertTrue(json.contains("\"signature_header\":\"X-Webhook-Signature\""), "JSON should contain signature_header field");
+    
+    @ParameterizedTest
+    @DisplayName("Should validate endpoint URL field")
+    @MethodSource("invalidEndpointUrlProvider")
+    void shouldValidateEndpointUrlField(String endpointUrl, String fieldName, String expectedMessage) {
+        // Given
+        WebhookRequestDTO dto = new WebhookRequestDTO(
+                endpointUrl,
+                "a".repeat(32),
+                true,
+                EventType.APPLICATION_CREATED
+        );
+        
+        // When
+        Set<ConstraintViolation<WebhookRequestDTO>> violations = validator.validate(dto);
+        
+        // Then
+        assertFalse(violations.isEmpty(), "Validation violations should be present");
+        boolean foundExpectedViolation = false;
+        for (ConstraintViolation<WebhookRequestDTO> violation : violations) {
+            if (violation.getPropertyPath().toString().equals(fieldName) && 
+                violation.getMessage().equals(expectedMessage)) {
+                foundExpectedViolation = true;
+                break;
+            }
         }
-
-        @Test
-        @DisplayName("JSON should deserialize to DTO correctly")
-        void jsonShouldDeserializeToDtoCorrectly() throws Exception {
-            // Given
-            String json = "{\"endpoint_url\":\"https://api.example.org/hooks\",\"event_type\":\"DOCUMENT_UPLOADED\",\"secret_key\":\"abcdef1234567890abcdef\",\"active\":false,\"signature_header\":\"X-Signature\"}";            
-            
-            // When
-            WebhookRequestDTO dto = objectMapper.readValue(json, WebhookRequestDTO.class);
-            
-            // Then
-            assertNotNull(dto, "DTO should not be null");
-            assertEquals("https://api.example.org/hooks", dto.getEndpointUrl(), "Endpoint URL should match");
-            assertEquals("DOCUMENT_UPLOADED", dto.getEventType(), "Event type should match");
-            assertEquals("abcdef1234567890abcdef", dto.getSecretKey(), "Secret key should match");
-            assertEquals(false, dto.getActive(), "Active status should match");
-            assertEquals("X-Signature", dto.getSignatureHeader(), "Signature header should match");
-        }
-
-        @Test
-        @DisplayName("DTO should ignore unknown JSON properties")
-        void dtoShouldIgnoreUnknownJsonProperties() throws Exception {
-            // Given
-            String json = "{\"endpoint_url\":\"https://example.com/webhook\",\"event_type\":\"APPLICATION_CREATED\",\"secret_key\":\"secretKey1234567890abcdef\",\"active\":true,\"unknown_field\":\"value\"}";            
-            
-            // When
-            WebhookRequestDTO dto = objectMapper.readValue(json, WebhookRequestDTO.class);
-            
-            // Then
-            assertNotNull(dto, "DTO should not be null");
-            assertEquals("https://example.com/webhook", dto.getEndpointUrl(), "Endpoint URL should match");
-            assertEquals("APPLICATION_CREATED", dto.getEventType(), "Event type should match");
-            assertEquals("secretKey1234567890abcdef", dto.getSecretKey(), "Secret key should match");
-            assertEquals(true, dto.getActive(), "Active status should match");
-            // Unknown field should be ignored without exception
-        }
+        assertTrue(foundExpectedViolation, "Expected violation not found: " + expectedMessage);
     }
-
-    @Nested
-    @DisplayName("Entity Conversion Tests")
-    class EntityConversionTests {
-
-        @Test
-        @DisplayName("DTO should convert to entity correctly")
-        void dtoShouldConvertToEntityCorrectly() {
-            // When
-            Webhook entity = validDto.toEntity();
-            
-            // Then
-            assertNotNull(entity, "Entity should not be null");
-            assertEquals(validDto.getEndpointUrl(), entity.getEndpointUrl(), "Endpoint URL should match");
-            assertEquals(EventType.valueOf(validDto.getEventType()), entity.getEventType(), "Event type should match");
-            assertEquals(validDto.getSecretKey(), entity.getSecretKey(), "Secret key should match");
-            assertEquals(validDto.getActive(), entity.getActive(), "Active status should match");
-            assertEquals(validDto.getSignatureHeader(), entity.getSignatureHeader(), "Signature header should match");
+    
+    @ParameterizedTest
+    @DisplayName("Should validate secret key field")
+    @MethodSource("invalidSecretKeyProvider")
+    void shouldValidateSecretKeyField(String secretKey, String fieldName, String expectedMessage) {
+        // Given
+        WebhookRequestDTO dto = new WebhookRequestDTO(
+                "https://example.com/webhook",
+                secretKey,
+                true,
+                EventType.APPLICATION_CREATED
+        );
+        
+        // When
+        Set<ConstraintViolation<WebhookRequestDTO>> violations = validator.validate(dto);
+        
+        // Then
+        assertFalse(violations.isEmpty(), "Validation violations should be present");
+        boolean foundExpectedViolation = false;
+        for (ConstraintViolation<WebhookRequestDTO> violation : violations) {
+            if (violation.getPropertyPath().toString().equals(fieldName) && 
+                violation.getMessage().equals(expectedMessage)) {
+                foundExpectedViolation = true;
+                break;
+            }
         }
-
-        @Test
-        @DisplayName("DTO should update existing entity correctly")
-        void dtoShouldUpdateExistingEntityCorrectly() {
-            // Given
-            Webhook existingEntity = new Webhook();
-            existingEntity.setEndpointUrl("https://old-url.com/webhook");
-            existingEntity.setEventType(EventType.APPLICATION_UPDATED);
-            existingEntity.setSecretKey("oldSecretKey12345678");
-            existingEntity.setActive(false);
-            existingEntity.setSignatureHeader("X-Old-Signature");
-            
-            // When
-            Webhook updatedEntity = validDto.updateEntity(existingEntity);
-            
-            // Then
-            assertNotNull(updatedEntity, "Updated entity should not be null");
-            assertSame(existingEntity, updatedEntity, "Should return the same entity instance");
-            assertEquals(validDto.getEndpointUrl(), updatedEntity.getEndpointUrl(), "Endpoint URL should be updated");
-            assertEquals(EventType.valueOf(validDto.getEventType()), updatedEntity.getEventType(), "Event type should be updated");
-            assertEquals(validDto.getSecretKey(), updatedEntity.getSecretKey(), "Secret key should be updated");
-            assertEquals(validDto.getActive(), updatedEntity.getActive(), "Active status should be updated");
-            assertEquals(validDto.getSignatureHeader(), updatedEntity.getSignatureHeader(), "Signature header should be updated");
-        }
-
-        @Test
-        @DisplayName("DTO should throw exception when updating null entity")
-        void dtoShouldThrowExceptionWhenUpdatingNullEntity() {
-            // When/Then
-            IllegalArgumentException exception = assertThrows(
-                IllegalArgumentException.class,
-                () -> validDto.updateEntity(null),
-                "Should throw IllegalArgumentException when entity is null"
-            );
-            
-            assertEquals("Webhook entity cannot be null", exception.getMessage(), "Exception message should match");
-        }
+        assertTrue(foundExpectedViolation, "Expected violation not found: " + expectedMessage);
     }
-
-    @Nested
-    @DisplayName("Event Type Validation Tests")
-    class EventTypeValidationTests {
-
-        @ParameterizedTest
-        @ValueSource(strings = {
-            "APPLICATION_CREATED", "APPLICATION_UPDATED", "APPLICATION_APPROVED", 
-            "APPLICATION_REJECTED", "DOCUMENT_UPLOADED", "DOCUMENT_PROCESSED"
-        })
-        @DisplayName("DTO with valid event type should pass validation")
-        void dtoWithValidEventTypeShouldPassValidation(String eventType) {
-            // Given
-            validDto.setEventType(eventType);
-            
-            // When
-            boolean isValid = validDto.isValidEventType();
-            
-            // Then
-            assertTrue(isValid, "Valid event type should pass validation");
-        }
-
-        @ParameterizedTest
-        @ValueSource(strings = {
-            "INVALID_EVENT", "APPLICATION_DELETED", "DOCUMENT_VIEWED", 
-            "application_created", "Application_Created", ""
-        })
-        @DisplayName("DTO with invalid event type should fail validation")
-        void dtoWithInvalidEventTypeShouldFailValidation(String eventType) {
-            // Given
-            validDto.setEventType(eventType);
-            
-            // When
-            boolean isValid = validDto.isValidEventType();
-            
-            // Then
-            assertFalse(isValid, "Invalid event type should fail validation");
-        }
-
-        @Test
-        @DisplayName("toEntity should throw exception for invalid event type")
-        void toEntityShouldThrowExceptionForInvalidEventType() {
-            // Given
-            validDto.setEventType("INVALID_EVENT");
-            
-            // When/Then
-            IllegalArgumentException exception = assertThrows(
-                IllegalArgumentException.class,
-                () -> validDto.toEntity(),
-                "Should throw IllegalArgumentException for invalid event type"
-            );
-            
-            assertTrue(exception.getMessage().contains("Invalid event type"), 
-                    "Exception message should mention invalid event type");
-        }
-
-        @Test
-        @DisplayName("updateEntity should throw exception for invalid event type")
-        void updateEntityShouldThrowExceptionForInvalidEventType() {
-            // Given
-            validDto.setEventType("INVALID_EVENT");
-            Webhook existingEntity = new Webhook();
-            
-            // When/Then
-            IllegalArgumentException exception = assertThrows(
-                IllegalArgumentException.class,
-                () -> validDto.updateEntity(existingEntity),
-                "Should throw IllegalArgumentException for invalid event type"
-            );
-            
-            assertTrue(exception.getMessage().contains("Invalid event type"), 
-                    "Exception message should mention invalid event type");
-        }
+    
+    @Test
+    @DisplayName("Should validate active field is not null")
+    void shouldValidateActiveFieldNotNull() {
+        // Given
+        WebhookRequestDTO dto = new WebhookRequestDTO(
+                "https://example.com/webhook",
+                "a".repeat(32),
+                null,
+                EventType.APPLICATION_CREATED
+        );
+        
+        // When
+        Set<ConstraintViolation<WebhookRequestDTO>> violations = validator.validate(dto);
+        
+        // Then
+        assertFalse(violations.isEmpty(), "Validation violations should be present");
+        ConstraintViolation<WebhookRequestDTO> violation = violations.iterator().next();
+        assertEquals("active", violation.getPropertyPath().toString(), "Violation should be for the active field");
+        assertEquals("Active status is required", violation.getMessage(), "Violation message should match expected");
     }
-
-    @Nested
-    @DisplayName("ToString Tests")
-    class ToStringTests {
-
-        @Test
-        @DisplayName("toString should include all fields except secret key value")
-        void toStringShouldIncludeAllFieldsExceptSecretKeyValue() {
-            // When
-            String toString = validDto.toString();
-            
-            // Then
-            assertTrue(toString.contains("endpointUrl='https://example.com/webhook'"), 
-                    "toString should include endpointUrl field");
-            assertTrue(toString.contains("eventType='APPLICATION_CREATED'"), 
-                    "toString should include eventType field");
-            assertTrue(toString.contains("secretKey='[REDACTED]'"), 
-                    "toString should include secretKey field but redact the value");
-            assertTrue(toString.contains("active=true"), 
-                    "toString should include active field");
-            assertTrue(toString.contains("signatureHeader='X-Webhook-Signature'"), 
-                    "toString should include signatureHeader field");
-            
-            // Ensure the actual secret key value is not included
-            assertFalse(toString.contains("secretKey1234567890abcdef"), 
-                    "toString should not include the actual secret key value");
+    
+    @Test
+    @DisplayName("Should validate event type field is not null")
+    void shouldValidateEventTypeFieldNotNull() {
+        // Given
+        WebhookRequestDTO dto = new WebhookRequestDTO(
+                "https://example.com/webhook",
+                "a".repeat(32),
+                true,
+                null
+        );
+        
+        // When
+        Set<ConstraintViolation<WebhookRequestDTO>> violations = validator.validate(dto);
+        
+        // Then
+        assertFalse(violations.isEmpty(), "Validation violations should be present");
+        ConstraintViolation<WebhookRequestDTO> violation = violations.iterator().next();
+        assertEquals("eventType", violation.getPropertyPath().toString(), "Violation should be for the eventType field");
+        assertEquals("Event type is required", violation.getMessage(), "Violation message should match expected");
+    }
+    
+    @ParameterizedTest
+    @DisplayName("Should validate max retry attempts field")
+    @MethodSource("invalidMaxRetryAttemptsProvider")
+    void shouldValidateMaxRetryAttemptsField(Integer maxRetryAttempts, String fieldName, String expectedMessage) {
+        // Given
+        WebhookRequestDTO dto = new WebhookRequestDTO(
+                "https://example.com/webhook",
+                "a".repeat(32),
+                true,
+                EventType.APPLICATION_CREATED,
+                maxRetryAttempts,
+                "X-Webhook-Signature"
+        );
+        
+        // When
+        Set<ConstraintViolation<WebhookRequestDTO>> violations = validator.validate(dto);
+        
+        // Then
+        assertFalse(violations.isEmpty(), "Validation violations should be present");
+        boolean foundExpectedViolation = false;
+        for (ConstraintViolation<WebhookRequestDTO> violation : violations) {
+            if (violation.getPropertyPath().toString().equals(fieldName) && 
+                violation.getMessage().equals(expectedMessage)) {
+                foundExpectedViolation = true;
+                break;
+            }
         }
+        assertTrue(foundExpectedViolation, "Expected violation not found: " + expectedMessage);
+    }
+    
+    @Test
+    @DisplayName("Should validate signature header length")
+    void shouldValidateSignatureHeaderLength() {
+        // Given
+        WebhookRequestDTO dto = new WebhookRequestDTO(
+                "https://example.com/webhook",
+                "a".repeat(32),
+                true,
+                EventType.APPLICATION_CREATED,
+                3,
+                "X".repeat(101) // Exceeds max length of 100
+        );
+        
+        // When
+        Set<ConstraintViolation<WebhookRequestDTO>> violations = validator.validate(dto);
+        
+        // Then
+        assertFalse(violations.isEmpty(), "Validation violations should be present");
+        ConstraintViolation<WebhookRequestDTO> violation = violations.iterator().next();
+        assertEquals("signatureHeader", violation.getPropertyPath().toString(), "Violation should be for the signatureHeader field");
+        assertEquals("Signature header cannot exceed 100 characters", violation.getMessage(), "Violation message should match expected");
+    }
+    
+    @Test
+    @DisplayName("Should serialize to JSON correctly")
+    void shouldSerializeToJsonCorrectly() throws Exception {
+        // Given
+        WebhookRequestDTO dto = new WebhookRequestDTO(
+                "https://example.com/webhook",
+                "a".repeat(32),
+                true,
+                EventType.APPLICATION_CREATED,
+                5,
+                "X-Custom-Signature"
+        );
+        
+        // When
+        String json = objectMapper.writeValueAsString(dto);
+        
+        // Then
+        assertTrue(json.contains("\"endpoint_url\":\"https://example.com/webhook\""), "JSON should contain endpoint_url field");
+        assertTrue(json.contains("\"secret_key\":\"" + "a".repeat(32) + "\""), "JSON should contain secret_key field");
+        assertTrue(json.contains("\"active\":true"), "JSON should contain active field");
+        assertTrue(json.contains("\"event_type\":\"APPLICATION_CREATED\""), "JSON should contain event_type field");
+        assertTrue(json.contains("\"max_retry_attempts\":5"), "JSON should contain max_retry_attempts field");
+        assertTrue(json.contains("\"signature_header\":\"X-Custom-Signature\""), "JSON should contain signature_header field");
+    }
+    
+    @Test
+    @DisplayName("Should deserialize from JSON correctly")
+    void shouldDeserializeFromJsonCorrectly() throws Exception {
+        // Given
+        String json = "{\"endpoint_url\":\"https://example.com/webhook\",\"secret_key\":\"" + "a".repeat(32) + "\",\"active\":true,\"event_type\":\"APPLICATION_CREATED\",\"max_retry_attempts\":5,\"signature_header\":\"X-Custom-Signature\"}";
+        
+        // When
+        WebhookRequestDTO dto = objectMapper.readValue(json, WebhookRequestDTO.class);
+        
+        // Then
+        assertEquals("https://example.com/webhook", dto.getEndpointUrl(), "Endpoint URL should be deserialized correctly");
+        assertEquals("a".repeat(32), dto.getSecretKey(), "Secret key should be deserialized correctly");
+        assertTrue(dto.getActive(), "Active should be deserialized correctly");
+        assertEquals(EventType.APPLICATION_CREATED, dto.getEventType(), "Event type should be deserialized correctly");
+        assertEquals(5, dto.getMaxRetryAttempts(), "Max retry attempts should be deserialized correctly");
+        assertEquals("X-Custom-Signature", dto.getSignatureHeader(), "Signature header should be deserialized correctly");
+    }
+    
+    @Test
+    @DisplayName("Should convert to entity correctly")
+    void shouldConvertToEntityCorrectly() {
+        // Given
+        WebhookRequestDTO dto = new WebhookRequestDTO(
+                "https://example.com/webhook",
+                "a".repeat(32),
+                true,
+                EventType.APPLICATION_CREATED,
+                5,
+                "X-Custom-Signature"
+        );
+        
+        // When
+        Webhook entity = dto.toEntity();
+        
+        // Then
+        assertEquals("https://example.com/webhook", entity.getEndpointUrl(), "Entity endpoint URL should match DTO");
+        assertEquals("a".repeat(32), entity.getSecretKey(), "Entity secret key should match DTO");
+        assertTrue(entity.getActive(), "Entity active status should match DTO");
+        assertEquals(EventType.APPLICATION_CREATED, entity.getEventType(), "Entity event type should match DTO");
+        assertEquals(5, entity.getMaxRetryAttempts(), "Entity max retry attempts should match DTO");
+        assertEquals("X-Custom-Signature", entity.getSignatureHeader(), "Entity signature header should match DTO");
+    }
+    
+    @Test
+    @DisplayName("Should convert to entity with default values when optional fields are null")
+    void shouldConvertToEntityWithDefaultValues() {
+        // Given
+        WebhookRequestDTO dto = new WebhookRequestDTO(
+                "https://example.com/webhook",
+                "a".repeat(32),
+                true,
+                EventType.APPLICATION_CREATED
+                // maxRetryAttempts and signatureHeader are null
+        );
+        
+        // When
+        Webhook entity = dto.toEntity();
+        
+        // Then
+        assertEquals("https://example.com/webhook", entity.getEndpointUrl(), "Entity endpoint URL should match DTO");
+        assertEquals("a".repeat(32), entity.getSecretKey(), "Entity secret key should match DTO");
+        assertTrue(entity.getActive(), "Entity active status should match DTO");
+        assertEquals(EventType.APPLICATION_CREATED, entity.getEventType(), "Entity event type should match DTO");
+        // Default values should be used for null fields
+        assertNotNull(entity.getMaxRetryAttempts(), "Entity max retry attempts should not be null");
+        assertEquals(3, entity.getMaxRetryAttempts(), "Entity max retry attempts should use default value");
+        // signatureHeader might be null or have a default value depending on the entity implementation
+    }
+    
+    @Test
+    @DisplayName("Should update entity correctly")
+    void shouldUpdateEntityCorrectly() {
+        // Given
+        Webhook entity = new Webhook(
+                "https://old-example.com/webhook",
+                "b".repeat(32),
+                false,
+                EventType.DOCUMENT_UPLOADED
+        );
+        entity.setMaxRetryAttempts(2);
+        entity.setSignatureHeader("X-Old-Signature");
+        
+        WebhookRequestDTO dto = new WebhookRequestDTO(
+                "https://new-example.com/webhook",
+                "c".repeat(32),
+                true,
+                EventType.APPLICATION_CREATED,
+                5,
+                "X-New-Signature"
+        );
+        
+        // When
+        Webhook updatedEntity = dto.updateEntity(entity);
+        
+        // Then
+        assertEquals("https://new-example.com/webhook", updatedEntity.getEndpointUrl(), "Entity endpoint URL should be updated");
+        assertEquals("c".repeat(32), updatedEntity.getSecretKey(), "Entity secret key should be updated");
+        assertTrue(updatedEntity.getActive(), "Entity active status should be updated");
+        assertEquals(EventType.APPLICATION_CREATED, updatedEntity.getEventType(), "Entity event type should be updated");
+        assertEquals(5, updatedEntity.getMaxRetryAttempts(), "Entity max retry attempts should be updated");
+        assertEquals("X-New-Signature", updatedEntity.getSignatureHeader(), "Entity signature header should be updated");
+    }
+    
+    @Test
+    @DisplayName("Should create new entity when updating with null entity")
+    void shouldCreateNewEntityWhenUpdatingWithNullEntity() {
+        // Given
+        WebhookRequestDTO dto = new WebhookRequestDTO(
+                "https://example.com/webhook",
+                "a".repeat(32),
+                true,
+                EventType.APPLICATION_CREATED,
+                5,
+                "X-Custom-Signature"
+        );
+        
+        // When
+        Webhook entity = dto.updateEntity(null);
+        
+        // Then
+        assertNotNull(entity, "Entity should not be null");
+        assertEquals("https://example.com/webhook", entity.getEndpointUrl(), "Entity endpoint URL should match DTO");
+        assertEquals("a".repeat(32), entity.getSecretKey(), "Entity secret key should match DTO");
+        assertTrue(entity.getActive(), "Entity active status should match DTO");
+        assertEquals(EventType.APPLICATION_CREATED, entity.getEventType(), "Entity event type should match DTO");
+        assertEquals(5, entity.getMaxRetryAttempts(), "Entity max retry attempts should match DTO");
+        assertEquals("X-Custom-Signature", entity.getSignatureHeader(), "Entity signature header should match DTO");
+    }
+    
+    @Test
+    @DisplayName("Should create DTO from entity correctly")
+    void shouldCreateDtoFromEntityCorrectly() {
+        // Given
+        Webhook entity = new Webhook(
+                "https://example.com/webhook",
+                "a".repeat(32),
+                true,
+                EventType.APPLICATION_CREATED
+        );
+        entity.setMaxRetryAttempts(5);
+        entity.setSignatureHeader("X-Custom-Signature");
+        
+        // When
+        WebhookRequestDTO dto = WebhookRequestDTO.fromEntity(entity);
+        
+        // Then
+        assertEquals("https://example.com/webhook", dto.getEndpointUrl(), "DTO endpoint URL should match entity");
+        assertEquals("a".repeat(32), dto.getSecretKey(), "DTO secret key should match entity");
+        assertTrue(dto.getActive(), "DTO active status should match entity");
+        assertEquals(EventType.APPLICATION_CREATED, dto.getEventType(), "DTO event type should match entity");
+        assertEquals(5, dto.getMaxRetryAttempts(), "DTO max retry attempts should match entity");
+        assertEquals("X-Custom-Signature", dto.getSignatureHeader(), "DTO signature header should match entity");
+    }
+    
+    @Test
+    @DisplayName("Should return null when creating DTO from null entity")
+    void shouldReturnNullWhenCreatingDtoFromNullEntity() {
+        // When
+        WebhookRequestDTO dto = WebhookRequestDTO.fromEntity(null);
+        
+        // Then
+        assertNull(dto, "DTO should be null when entity is null");
+    }
+    
+    @Test
+    @DisplayName("Should validate event type correctly")
+    void shouldValidateEventTypeCorrectly() {
+        // Given
+        WebhookRequestDTO validDto = new WebhookRequestDTO(
+                "https://example.com/webhook",
+                "a".repeat(32),
+                true,
+                EventType.APPLICATION_CREATED
+        );
+        
+        WebhookRequestDTO nullEventTypeDto = new WebhookRequestDTO(
+                "https://example.com/webhook",
+                "a".repeat(32),
+                true,
+                null
+        );
+        
+        // When/Then
+        assertTrue(validDto.isValidEventType(), "Valid event type should be validated as true");
+        assertFalse(nullEventTypeDto.isValidEventType(), "Null event type should be validated as false");
+    }
+    
+    @Test
+    @DisplayName("Should handle toString correctly")
+    void shouldHandleToStringCorrectly() {
+        // Given
+        WebhookRequestDTO dto = new WebhookRequestDTO(
+                "https://example.com/webhook",
+                "a".repeat(32),
+                true,
+                EventType.APPLICATION_CREATED,
+                5,
+                "X-Custom-Signature"
+        );
+        
+        // When
+        String toString = dto.toString();
+        
+        // Then
+        assertTrue(toString.contains("endpointUrl='https://example.com/webhook'"), "toString should include endpointUrl");
+        assertTrue(toString.contains("active=true"), "toString should include active");
+        assertTrue(toString.contains("eventType=APPLICATION_CREATED"), "toString should include eventType");
+        assertTrue(toString.contains("maxRetryAttempts=5"), "toString should include maxRetryAttempts");
+        assertTrue(toString.contains("signatureHeader='X-Custom-Signature'"), "toString should include signatureHeader");
+        // Secret key should not be included in toString for security reasons
+        assertFalse(toString.contains("a".repeat(32)), "toString should not include the secret key");
     }
 }
