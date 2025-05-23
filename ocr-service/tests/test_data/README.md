@@ -1,285 +1,230 @@
 # OCR Service Test Data
 
-## Overview
-
-This directory contains test data for validating the OCR Service's ability to extract data from various document types with high accuracy. The test data is organized into categories based on document type and text characteristics, providing a comprehensive set of test cases for unit, integration, and performance testing.
-
-The OCR Service is designed to achieve 99% data extraction accuracy through AI and machine learning, processing both typed and handwritten text as specified in the MCA Application Processing System requirements. This test data directory serves as the foundation for validating these capabilities.
+This directory contains test data for validating the OCR Service's ability to extract data from various document types with 99% accuracy through AI and machine learning. The test data is organized to support comprehensive testing of the OCR Service's capabilities across different document types, text styles, and quality levels.
 
 ## Directory Structure
 
-The test data is organized into the following subdirectories:
-
 ```
 test_data/
-├── metadata.json                # Central metadata file for all test documents
-├── typed_documents/             # Documents with machine-printed text
-│   ├── application_forms/       # MCA application forms with typed content
-│   ├── financial_documents/     # Financial statements, tax returns, bank statements
-│   ├── business_documents/      # Invoices, contracts, business licenses
-│   └── quality_variations/      # Documents with varying quality levels
-├── handwritten_documents/       # Documents with handwritten text
-│   ├── application_forms/       # MCA application forms with handwritten content
-│   └── various styles/          # Documents with different handwriting styles
-├── mixed_documents/             # Documents with both typed and handwritten content
-│   ├── application_forms/       # Forms with typed fields and handwritten responses
-│   └── annotated documents/     # Typed documents with handwritten annotations
-├── tables/                      # Documents containing tabular data
-│   ├── financial tables/        # Financial data in tabular format
-│   └── complex tables/          # Tables with merged cells, multi-page tables
-├── forms/                       # Blank form templates for structure recognition
-└── images/                      # ID documents, photos with text
+├── metadata.json                # Central metadata file with expected OCR results
+├── typed_documents/            # Documents with machine-printed text
+│   ├── invoices/               # Invoice documents
+│   ├── financial_documents/    # Financial statements and reports
+│   └── quality_variations/     # Documents with varying quality levels
+├── handwritten_documents/      # Documents with handwritten text
+├── mixed_documents/            # Documents with both typed and handwritten content
+└── tables/                     # Documents with tabular data
 ```
 
-## Document Types
+## Test Data Overview
 
-The test data includes the following document types, as defined in the `metadata.json` file:
+### metadata.json
 
-- **APPLICATION_FORM**: MCA application forms with various fields
-- **TAX_RETURN**: Business and personal tax returns
-- **BANK_STATEMENT**: Bank account statements with transaction history
-- **PAY_STUB**: Employee pay stubs with income information
-- **ID_DOCUMENT**: Driver's licenses, passports, and other identification
-- **INVOICE**: Business invoices and receipts
-- **BUSINESS_DOCUMENT**: Business licenses, contracts, and agreements
-- **FINANCIAL_DOCUMENT**: Financial statements, profit/loss reports
-- **OTHER**: Miscellaneous document types
+The `metadata.json` file is the central configuration file that defines the structure and expected OCR results for all test documents. It contains:
 
-## Text Types
+- Document metadata (type, page count, quality, orientation)
+- Expected field values and positions for each document
+- Expected confidence scores for extracted fields
+- Table definitions and expected extraction results
+- Confidence thresholds for different quality levels
 
-The test data covers three main text types:
+This file serves as the source of truth for validating OCR extraction results during testing. All test cases should reference this file to verify that the OCR Service extracts data with the required accuracy.
 
-- **TYPED**: Machine-printed text (expected OCR accuracy: 98%)
-- **HANDWRITTEN**: Manually written text (expected OCR accuracy: 85%)
-- **MIXED**: Documents containing both typed and handwritten text (expected OCR accuracy: 90%)
+### Typed Documents
 
-## Document Quality Levels
+The `typed_documents/` directory contains machine-printed text documents of various types:
 
-To test OCR robustness, documents are provided in three quality levels:
+- **Loan applications**: Standard business loan application forms
+- **Tax returns**: Business tax return documents with financial data
+- **Bank statements**: Account statements with transaction tables
+- **Invoices**: Vendor invoices with line items and totals
+- **Financial documents**: Financial reports, projections, and analyses
 
-- **HIGH**: Clear, high-resolution documents (300+ DPI)
-- **MEDIUM**: Average quality documents with minor issues
-- **LOW**: Poor quality documents with artifacts, low resolution, or noise
+These documents are further organized into subfolders based on document type and quality variations:
 
-## The `metadata.json` File
+- `invoices/`: Contains various invoice formats from different vendors
+- `financial_documents/`: Contains financial statements and reports
+- `quality_variations/`: Contains documents with varying quality levels (high, medium, low) to test OCR robustness
 
-The `metadata.json` file is the central configuration file that defines all test documents, their characteristics, and expected OCR extraction results. It contains:
+Expected OCR accuracy for typed documents:
+- High quality: 95-99% confidence
+- Medium quality: 85-95% confidence
+- Low quality: 75-85% confidence
 
-1. **Document metadata**: Type, text type, quality level, and description
-2. **Expected fields**: Field names, values, positions, and expected confidence scores
-3. **Expected classification confidence**: Target accuracy for document classification
-4. **Expected overall confidence**: Target overall extraction accuracy
-5. **Confidence thresholds**: Defined thresholds for automation vs. human review
+### Handwritten Documents
 
-Example structure:
+The `handwritten_documents/` directory contains documents with handwritten text in various styles:
 
-```json
-{
-  "version": "1.0.0",
-  "document_types": ["APPLICATION_FORM", "TAX_RETURN", ...],
-  "text_types": ["TYPED", "HANDWRITTEN", "MIXED"],
-  "quality_levels": ["HIGH", "MEDIUM", "LOW"],
-  "documents": {
-    "typed_documents": {
-      "application_forms": [
-        {
-          "id": "app_form_typed_001",
-          "file_path": "typed_documents/application_forms/mca_application_standard.pdf",
-          "document_type": "APPLICATION_FORM",
-          "text_type": "TYPED",
-          "quality": "HIGH",
-          "description": "Standard MCA application form with typed information",
-          "expected_fields": {
-            "business_name": {
-              "value": "Acme Corporation",
-              "position": {"x1": 120, "y1": 150, "x2": 350, "y2": 170},
-              "expected_confidence": 0.98
-            },
-            // Additional fields...
-          },
-          "expected_classification_confidence": 0.99,
-          "expected_overall_confidence": 0.98
-        }
-      ]
-    }
-  },
-  "confidence_thresholds": {
-    "high_confidence": 0.90,
-    "medium_confidence": 0.75,
-    "low_confidence": 0.60,
-    "human_review_threshold": 0.75
-  },
-  "test_parameters": {
-    "typed_text_accuracy_target": 0.98,
-    "handwritten_text_accuracy_target": 0.85,
-    "mixed_text_accuracy_target": 0.90,
-    "classification_accuracy_target": 0.95,
-    "field_extraction_accuracy_target": 0.95,
-    "overall_accuracy_target": 0.93
-  }
-}
-```
+- **Cursive handwriting**: Flowing, connected script
+- **Print handwriting**: Disconnected, printed characters
+- **Mixed handwriting**: Combination of cursive and print
+- **Signatures**: Handwritten signatures in various styles
+
+These documents test the OCR Service's ability to extract handwritten text, which is typically more challenging than typed text. The directory includes documents with varying handwriting quality and legibility to test the robustness of the OCR models.
+
+Expected OCR accuracy for handwritten documents:
+- Clear handwriting: 80-90% confidence
+- Average handwriting: 75-85% confidence
+- Difficult handwriting: 65-75% confidence
+
+### Mixed Documents
+
+The `mixed_documents/` directory contains documents with both typed and handwritten content, such as:
+
+- Printed forms with handwritten entries
+- Typed documents with handwritten annotations
+- Documents with handwritten signatures on typed content
+
+These documents test the OCR Service's ability to distinguish between and correctly process both typed and handwritten text within the same document. This capability is critical for processing real-world documents like filled application forms.
+
+Expected OCR accuracy for mixed documents:
+- Typed content: 90-99% confidence
+- Handwritten content: 75-90% confidence
+
+### Tables
+
+The `tables/` directory contains documents with tabular data of varying complexity:
+
+- Simple tables with basic row/column structure
+- Complex tables with merged cells and nested headers
+- Multi-page tables that span across multiple pages
+
+These documents test the OCR Service's ability to extract structured data while maintaining row and column relationships. Table extraction is particularly important for financial documents like bank statements and invoices.
+
+Expected OCR accuracy for tables:
+- Simple tables: 90-95% confidence
+- Complex tables: 85-90% confidence
+- Multi-page tables: 80-90% confidence
 
 ## Using Test Data in Tests
 
-### Loading Test Documents
+### Unit Tests
 
-The test data can be loaded using the fixtures defined in `conftest.py`. Example:
+For unit testing individual OCR components:
 
-```python
-def test_typed_document_extraction(typed_application_form):
-    # typed_application_form is a fixture that loads a test document
-    ocr_service = OCRService()
-    result = ocr_service.process_document(typed_application_form)
-    
-    # Verify extraction accuracy against expected values
-    assert result.extracted_fields["business_name"] == "Acme Corporation"
-    assert result.confidence_scores["business_name"] >= 0.95
-```
+1. Use the `metadata.json` file to retrieve expected values for specific documents
+2. Test document classification accuracy using samples from each category
+3. Test text extraction on specific regions using the position data
+4. Validate confidence score calculation against expected thresholds
 
-### Testing Different Document Types
-
-Test different document types to ensure the OCR service can handle various formats:
+Example:
 
 ```python
-@pytest.mark.parametrize("document_fixture", [
-    "typed_application_form",
-    "handwritten_application_form",
-    "mixed_application_form",
-    "bank_statement",
-    "tax_return"
-])
-def test_document_classification(document_fixture, request):
-    # Load the document fixture dynamically
-    document = request.getfixturevalue(document_fixture)
+def test_field_extraction(document_path, field_name):
+    # Load test document metadata
+    metadata = load_metadata()
+    document_id = os.path.basename(document_path).split('.')[0]
+    document_type = get_document_type(document_path)
     
-    # Test document classification
-    document_service = DocumentService()
-    classification = document_service.classify_document(document)
+    # Get expected field data from metadata
+    expected_field = metadata[document_type][document_id]['expected_fields'][field_name]
+    expected_value = expected_field['value']
+    expected_confidence = expected_field['expected_confidence']
+    field_position = expected_field['position']
     
-    # Verify classification against expected document type
-    expected_type = document.metadata["document_type"]
-    assert classification.document_type == expected_type
-    assert classification.confidence >= 0.95
+    # Extract field using OCR
+    extracted_field = ocr_service.extract_field(document_path, field_position)
+    
+    # Assert extraction accuracy
+    assert extracted_field['value'] == expected_value
+    assert extracted_field['confidence'] >= expected_confidence
 ```
 
-### Testing OCR Accuracy
+### Integration Tests
 
-Test OCR accuracy against expected values defined in metadata:
+For testing the complete OCR pipeline:
+
+1. Process complete documents through the entire OCR pipeline
+2. Validate all extracted fields against expected values in `metadata.json`
+3. Test document processing workflows with different document types
+4. Verify that confidence scores meet the required thresholds for automation
+
+Example:
 
 ```python
-def test_ocr_accuracy(document_with_metadata):
-    # Process document with OCR service
-    ocr_service = OCRService()
-    result = ocr_service.process_document(document_with_metadata)
+def test_document_processing_pipeline(document_path):
+    # Load test document metadata
+    metadata = load_metadata()
+    document_id = os.path.basename(document_path).split('.')[0]
+    document_type = get_document_type(document_path)
     
-    # Get expected values from metadata
-    expected_fields = document_with_metadata.metadata["expected_fields"]
+    # Process document through the complete pipeline
+    processing_result = ocr_service.process_document(document_path)
     
-    # Verify each extracted field against expected values
-    for field_name, expected in expected_fields.items():
-        assert field_name in result.extracted_fields
-        assert result.extracted_fields[field_name] == expected["value"]
-        assert result.confidence_scores[field_name] >= expected["expected_confidence"]
+    # Validate all extracted fields
+    expected_fields = metadata[document_type][document_id]['expected_fields']
+    for field_name, expected_field in expected_fields.items():
+        extracted_field = processing_result['fields'].get(field_name)
+        assert extracted_field is not None
+        assert extracted_field['value'] == expected_field['value']
+        assert extracted_field['confidence'] >= expected_field['expected_confidence']
+    
+    # Validate overall document confidence
+    assert processing_result['overall_confidence'] >= metadata['confidence_thresholds']['automation_threshold']
 ```
 
-## Performance Testing
+### Performance Testing
 
-The test data includes documents of varying complexity to test OCR performance:
+For testing OCR performance and accuracy metrics:
+
+1. Process large batches of documents to measure throughput
+2. Calculate accuracy metrics across document types and quality levels
+3. Benchmark processing time for different document complexities
+4. Test GPU acceleration for performance improvements
+
+Example:
 
 ```python
-@pytest.mark.performance
-def test_ocr_processing_time(document_with_metadata):
-    # Process document with OCR service
-    ocr_service = OCRService()
+def test_ocr_accuracy_metrics():
+    # Process all test documents
+    results = []
+    for document_type in ['typed_documents', 'handwritten_documents', 'mixed_documents']:
+        document_paths = get_all_documents(document_type)
+        for document_path in document_paths:
+            result = ocr_service.process_document(document_path)
+            results.append(result)
     
-    # Measure processing time
-    start_time = time.time()
-    result = ocr_service.process_document(document_with_metadata)
-    processing_time = time.time() - start_time
+    # Calculate accuracy metrics
+    accuracy = calculate_accuracy(results)
     
-    # Verify processing time meets requirements
-    # The system must process applications in under 5 minutes
-    assert processing_time < 300  # seconds
+    # Assert overall accuracy meets requirements
+    assert accuracy >= 0.99  # 99% accuracy requirement
 ```
-
-## Expected OCR Accuracy
-
-The OCR Service is expected to achieve the following accuracy levels:
-
-| Document Type | Text Type | Quality | Expected Field Accuracy | Expected Overall Accuracy |
-|---------------|-----------|---------|------------------------|---------------------------|
-| Application Form | Typed | High | 98% | 98% |
-| Application Form | Typed | Low | 85% | 84% |
-| Application Form | Handwritten | Medium | 85% | 83% |
-| Application Form | Handwritten | Low | 78% | 75% |
-| Application Form | Mixed | High | 90% | 89% |
-| Financial Document | Typed | High | 98% | 98% |
-| Financial Document | Mixed | High | 92% | 92% |
-| ID Document | Mixed | High | 95% | 93% |
-| Table | Typed | High | 95% | 97% |
-
-These accuracy targets are defined in the `test_parameters` section of `metadata.json` and are used to validate the OCR Service's performance.
 
 ## Adding New Test Documents
 
-To add new test documents to the test data directory:
+When adding new test documents to the test data directory:
 
-1. Place the document file in the appropriate subdirectory based on its type and text characteristics
+1. Place the document in the appropriate subfolder based on its type and content
 2. Update the `metadata.json` file with the document's metadata and expected extraction results
-3. Create a fixture in `conftest.py` to load the document for testing
-4. Add test cases that use the new document to validate OCR functionality
+3. Follow the existing naming conventions for consistency
+4. Include documents with varying characteristics to test different aspects of the OCR Service
+5. Document any special characteristics or challenges in the relevant README.md file
 
-Example metadata entry for a new document:
+## Confidence Thresholds
 
-```json
-{
-  "id": "invoice_typed_002",
-  "file_path": "typed_documents/business_documents/invoice_complex.pdf",
-  "document_type": "INVOICE",
-  "text_type": "TYPED",
-  "quality": "MEDIUM",
-  "description": "Complex business invoice with multiple line items",
-  "expected_fields": {
-    "invoice_number": {
-      "value": "INV-2025-5678",
-      "position": {"x1": 450, "y1": 150, "x2": 550, "y2": 170},
-      "expected_confidence": 0.95
-    },
-    // Additional fields...
-  },
-  "expected_classification_confidence": 0.97,
-  "expected_overall_confidence": 0.96
-}
-```
+The OCR Service uses confidence thresholds to determine when human review is required:
 
-## Binary Files and Version Control
+- **High confidence (≥ 0.9)**: Automated processing without human review
+- **Medium confidence (0.75-0.9)**: May require human verification for critical fields
+- **Low confidence (< 0.75)**: Requires human review
 
-Actual document files (PDF, TIFF, PNG, JPEG) are excluded from version control using `.gitignore` files in each subdirectory. This prevents large binary files from bloating the repository while maintaining necessary metadata.
-
-To obtain the actual test documents:
-
-1. Download them from the shared document repository (contact the OCR team for access)
-2. Place them in the appropriate subdirectories according to the paths defined in `metadata.json`
-3. Run the verification script to ensure all documents are correctly placed:
-
-```bash
-python -m ocr_service.tests.verify_test_data
-```
+The automation threshold is set at 0.75, meaning fields with confidence scores below this threshold will be flagged for human review to maintain the 99% accuracy requirement.
 
 ## Test Data Maintenance
 
-The test data should be regularly updated to include new document types, edge cases, and challenging scenarios. When updating the test data:
+The test data should be regularly updated to include new document types, edge cases, and challenging scenarios. As the OCR Service evolves, the test data should be expanded to validate new capabilities and improvements.
 
-1. Maintain backward compatibility with existing tests
-2. Update the `version` field in `metadata.json` when making significant changes
-3. Document any changes in the appropriate README files
-4. Ensure all new documents have complete metadata entries
-5. Verify that the OCR Service can still achieve the required accuracy targets
+When updating the test data:
+
+1. Ensure that all new documents have corresponding entries in the `metadata.json` file
+2. Update expected confidence thresholds as OCR models improve
+3. Add new document types as they are supported by the OCR Service
+4. Document any changes to the test data structure or organization
 
 ## References
 
-- OCR Service Implementation: `ocr-service/src/services/ocr_service.py`
-- Model Implementations: `ocr-service/src/models/`
-- Test Fixtures: `ocr-service/tests/conftest.py`
-- Testing Strategy: Technical Specification Section 6.6
+- OCR Service Technical Specification (Section 0.1.1, 0.1.2, 0.1.3)
+- Testing Strategy (Section 6.6)
+- Document Classification Requirements
+- OCR Extraction Specifications
