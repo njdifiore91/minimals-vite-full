@@ -15,10 +15,15 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.boot.test.autoconfigure.orm.jpa.TestEntityManager;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 
 import com.dollarfunding.mca.entity.Application;
 import com.dollarfunding.mca.entity.ApplicationStatus;
 import com.dollarfunding.mca.entity.Document;
+import com.dollarfunding.mca.entity.DocumentClassification;
 import com.dollarfunding.mca.entity.DocumentType;
 import com.dollarfunding.mca.entity.ReviewStatus;
 import com.dollarfunding.mca.util.JsonUtil;
@@ -41,12 +46,10 @@ public class DocumentRepositoryTest {
 
     @Autowired
     private DocumentRepository documentRepository;
-
-    @Autowired
-    private ApplicationRepository applicationRepository;
-
+    
     private Application application1;
     private Application application2;
+    
     private Document document1;
     private Document document2;
     private Document document3;
@@ -56,192 +59,135 @@ public class DocumentRepositoryTest {
     /**
      * Sets up test data before each test method.
      * <p>
-     * Creates two applications and five document entities with different configurations:
+     * Creates two application entities and five document entities with different configurations:
      * <ul>
-     *   <li>document1: BANK_STATEMENT for application1, high confidence</li>
-     *   <li>document2: TAX_RETURN for application1, high confidence</li>
-     *   <li>document3: ID_VERIFICATION for application1, low confidence</li>
-     *   <li>document4: BUSINESS_LICENSE for application2, high confidence</li>
-     *   <li>document5: INVOICE for application2, missing metadata</li>
+     *   <li>document1: BANK_STATEMENT type, VERIFIED classification, uploaded 5 days ago</li>
+     *   <li>document2: TAX_RETURN type, NEEDS_REVIEW classification, uploaded 4 days ago</li>
+     *   <li>document3: BUSINESS_LICENSE type, FLAGGED classification, uploaded 3 days ago</li>
+     *   <li>document4: ID_VERIFICATION type, REJECTED classification, uploaded 2 days ago</li>
+     *   <li>document5: MISCELLANEOUS type, UNCLASSIFIED classification, uploaded 1 day ago</li>
      * </ul>
      * </p>
      */
     @BeforeEach
     public void setup() {
         // Create test applications
-        application1 = new Application(ApplicationStatus.PROCESSING, ReviewStatus.IN_REVIEW);
-        application2 = new Application(ApplicationStatus.PENDING, ReviewStatus.NEEDS_INFORMATION);
+        application1 = new Application.Builder()
+                .withStatus(ApplicationStatus.NEW)
+                .withReviewStatus(ReviewStatus.NOT_REVIEWED)
+                .addMetadata("source", "email")
+                .build();
+
+        application2 = new Application.Builder()
+                .withStatus(ApplicationStatus.PENDING)
+                .withReviewStatus(ReviewStatus.IN_REVIEW)
+                .addMetadata("source", "web")
+                .build();
 
         // Persist applications
         application1 = entityManager.persist(application1);
         application2 = entityManager.persist(application2);
-
+        
         // Create test documents with different configurations
-        document1 = createBankStatement(application1);
-        document2 = createTaxReturn(application1);
-        document3 = createIdVerification(application1);
-        document4 = createBusinessLicense(application2);
-        document5 = createInvoice(application2);
+        document1 = createDocument(
+                application1.getId(),
+                DocumentType.BANK_STATEMENT,
+                "mca-documents-production/bank-statements/statement-" + application1.getId() + ".pdf",
+                DocumentClassification.VERIFIED,
+                LocalDateTime.now().minusDays(5),
+                createMetadata("confidenceScore", 0.98, "pageCount", 5)
+        );
 
-        // Persist test documents
-        entityManager.persist(document1);
-        entityManager.persist(document2);
-        entityManager.persist(document3);
-        entityManager.persist(document4);
-        entityManager.persist(document5);
+        document2 = createDocument(
+                application1.getId(),
+                DocumentType.TAX_RETURN,
+                "mca-documents-production/tax-returns/tax-return-" + application1.getId() + ".pdf",
+                DocumentClassification.NEEDS_REVIEW,
+                LocalDateTime.now().minusDays(4),
+                createMetadata("confidenceScore", 0.75, "pageCount", 10, "taxYear", "2022")
+        );
+
+        document3 = createDocument(
+                application2.getId(),
+                DocumentType.BUSINESS_LICENSE,
+                "mca-documents-production/business-licenses/license-" + application2.getId() + ".jpg",
+                DocumentClassification.FLAGGED,
+                LocalDateTime.now().minusDays(3),
+                createMetadata("confidenceScore", 0.65, "expirationDate", "2025-12-31")
+        );
+
+        document4 = createDocument(
+                application2.getId(),
+                DocumentType.ID_VERIFICATION,
+                "mca-documents-production/id-verification/id-" + application2.getId() + ".jpg",
+                DocumentClassification.REJECTED,
+                LocalDateTime.now().minusDays(2),
+                createMetadata("confidenceScore", 0.35, "idType", "driver_license")
+        );
+
+        document5 = createDocument(
+                application2.getId(),
+                DocumentType.MISCELLANEOUS,
+                "mca-documents-production/miscellaneous/misc-" + application2.getId() + ".png",
+                DocumentClassification.UNCLASSIFIED,
+                LocalDateTime.now().minusDays(1),
+                createMetadata("confidenceScore", 0.0, "documentDescription", "Additional supporting document")
+        );
+
+        // Persist documents
+        document1 = entityManager.persist(document1);
+        document2 = entityManager.persist(document2);
+        document3 = entityManager.persist(document3);
+        document4 = entityManager.persist(document4);
+        document5 = entityManager.persist(document5);
+        
+        // Set up relationships
+        application1.addDocument(document1);
+        application1.addDocument(document2);
+        application2.addDocument(document3);
+        application2.addDocument(document4);
+        application2.addDocument(document5);
+        
         entityManager.flush();
     }
 
     /**
-     * Creates a bank statement document for testing.
+     * Creates a document with the specified properties.
      *
-     * @param application The application to associate with the document
-     * @return A bank statement document with high confidence scores
+     * @param applicationId The application ID
+     * @param type The document type
+     * @param storagePath The storage path
+     * @param classification The document classification
+     * @param uploadedAt The upload date
+     * @param metadata The document metadata
+     * @return A new document entity
      */
-    private Document createBankStatement(Application application) {
-        Document document = new Document(application.getId(), DocumentType.BANK_STATEMENT,
-                "s3://mca-documents-production/bank-statements/statement-123.pdf");
-        document.setClassification("Monthly Bank Statement");
-        document.setUploadedAt(LocalDateTime.now().minusDays(5));
-
-        Map<String, Object> metadata = new HashMap<>();
-        metadata.put("bankName", "First National Bank");
-        metadata.put("accountNumber", "XXXX-XXXX-1234");
-        metadata.put("statementDate", "2023-01-15");
-        metadata.put("accountType", "Business Checking");
-        metadata.put("accountBalance", 24750.55);
-
-        Map<String, Double> confidenceScores = new HashMap<>();
-        confidenceScores.put("classification", 0.95);
-        confidenceScores.put("bankName", 0.98);
-        confidenceScores.put("accountNumber", 0.92);
-        confidenceScores.put("statementDate", 0.97);
-        confidenceScores.put("accountBalance", 0.94);
-
-        metadata.put("confidenceScores", confidenceScores);
-        document.setMetadata(metadata);
-
-        return document;
+    private Document createDocument(UUID applicationId, DocumentType type, String storagePath,
+                                   DocumentClassification classification, LocalDateTime uploadedAt,
+                                   Map<String, Object> metadata) {
+        return new Document.Builder(applicationId, type, storagePath)
+                .withClassification(classification)
+                .withUploadedAt(uploadedAt)
+                .withMetadata(metadata)
+                .build();
     }
 
     /**
-     * Creates a tax return document for testing.
+     * Creates a metadata map with the specified key-value pairs.
      *
-     * @param application The application to associate with the document
-     * @return A tax return document with high confidence scores
+     * @param keyValues Key-value pairs (must be even number of arguments)
+     * @return A map containing the key-value pairs
      */
-    private Document createTaxReturn(Application application) {
-        Document document = new Document(application.getId(), DocumentType.TAX_RETURN,
-                "s3://mca-documents-production/tax-returns/tax-return-456.pdf");
-        document.setClassification("Business Tax Return");
-        document.setUploadedAt(LocalDateTime.now().minusDays(4));
+    private Map<String, Object> createMetadata(Object... keyValues) {
+        if (keyValues.length % 2 != 0) {
+            throw new IllegalArgumentException("Must provide an even number of key-value pairs");
+        }
 
         Map<String, Object> metadata = new HashMap<>();
-        metadata.put("taxYear", "2022");
-        metadata.put("businessName", "ABC Enterprises LLC");
-        metadata.put("ein", "XX-XXXXXXX");
-        metadata.put("filingStatus", "S-Corporation");
-        metadata.put("grossIncome", 875000.00);
-        metadata.put("netIncome", 245000.00);
-
-        Map<String, Double> confidenceScores = new HashMap<>();
-        confidenceScores.put("classification", 0.93);
-        confidenceScores.put("taxYear", 0.99);
-        confidenceScores.put("businessName", 0.97);
-        confidenceScores.put("ein", 0.95);
-        confidenceScores.put("grossIncome", 0.91);
-        confidenceScores.put("netIncome", 0.90);
-
-        metadata.put("confidenceScores", confidenceScores);
-        document.setMetadata(metadata);
-
-        return document;
-    }
-
-    /**
-     * Creates an ID verification document for testing.
-     *
-     * @param application The application to associate with the document
-     * @return An ID verification document with low confidence scores
-     */
-    private Document createIdVerification(Application application) {
-        Document document = new Document(application.getId(), DocumentType.ID_VERIFICATION,
-                "s3://mca-documents-production/id-verification/drivers-license-789.jpg");
-        document.setClassification("Driver's License");
-        document.setUploadedAt(LocalDateTime.now().minusDays(3));
-
-        Map<String, Object> metadata = new HashMap<>();
-        metadata.put("idType", "Driver's License");
-        metadata.put("state", "CA");
-        metadata.put("fullName", "John A. Smith");
-        metadata.put("idNumber", "DL12345678");
-        metadata.put("expirationDate", "2025-08-15");
-        metadata.put("dateOfBirth", "1980-06-22");
-
-        Map<String, Double> confidenceScores = new HashMap<>();
-        confidenceScores.put("classification", 0.85); // Below threshold for ID_VERIFICATION (0.90)
-        confidenceScores.put("idType", 0.92);
-        confidenceScores.put("state", 0.95);
-        confidenceScores.put("fullName", 0.88); // Below threshold
-        confidenceScores.put("idNumber", 0.87); // Below threshold
-        confidenceScores.put("expirationDate", 0.91);
-        confidenceScores.put("dateOfBirth", 0.89); // Below threshold
-
-        metadata.put("confidenceScores", confidenceScores);
-        document.setMetadata(metadata);
-
-        return document;
-    }
-
-    /**
-     * Creates a business license document for testing.
-     *
-     * @param application The application to associate with the document
-     * @return A business license document with high confidence scores
-     */
-    private Document createBusinessLicense(Application application) {
-        Document document = new Document(application.getId(), DocumentType.BUSINESS_LICENSE,
-                "s3://mca-documents-production/business-licenses/license-101.pdf");
-        document.setClassification("State Business License");
-        document.setUploadedAt(LocalDateTime.now().minusDays(2));
-
-        Map<String, Object> metadata = new HashMap<>();
-        metadata.put("licenseType", "Business Operation License");
-        metadata.put("licenseNumber", "BL-987654");
-        metadata.put("issuingAuthority", "State of California");
-        metadata.put("businessName", "XYZ Corporation");
-        metadata.put("issueDate", "2022-03-15");
-        metadata.put("expirationDate", "2024-03-14");
-
-        Map<String, Double> confidenceScores = new HashMap<>();
-        confidenceScores.put("classification", 0.94);
-        confidenceScores.put("licenseType", 0.92);
-        confidenceScores.put("licenseNumber", 0.95);
-        confidenceScores.put("issuingAuthority", 0.93);
-        confidenceScores.put("businessName", 0.91);
-        confidenceScores.put("issueDate", 0.90);
-        confidenceScores.put("expirationDate", 0.89);
-
-        metadata.put("confidenceScores", confidenceScores);
-        document.setMetadata(metadata);
-
-        return document;
-    }
-
-    /**
-     * Creates an invoice document for testing.
-     *
-     * @param application The application to associate with the document
-     * @return An invoice document with missing metadata
-     */
-    private Document createInvoice(Application application) {
-        Document document = new Document(application.getId(), DocumentType.INVOICE,
-                "s3://mca-documents-production/invoices/invoice-202.pdf");
-        document.setClassification("Sales Invoice");
-        document.setUploadedAt(LocalDateTime.now().minusDays(1));
-        // No metadata set for this document to test handling of missing metadata
-
-        return document;
+        for (int i = 0; i < keyValues.length; i += 2) {
+            metadata.put(keyValues[i].toString(), keyValues[i + 1]);
+        }
+        return metadata;
     }
 
     /**
@@ -251,15 +197,14 @@ public class DocumentRepositoryTest {
     @DisplayName("Should save and find document by ID")
     public void testSaveAndFindById() {
         // Create a new document
-        Document newDocument = new Document(application1.getId(), DocumentType.MISCELLANEOUS,
-                "s3://mca-documents-production/misc/document-999.pdf");
-        newDocument.setClassification("Miscellaneous Document");
-        newDocument.setUploadedAt(LocalDateTime.now());
-
-        Map<String, Object> metadata = new HashMap<>();
-        metadata.put("description", "Additional supporting document");
-        metadata.put("pages", 5);
-        newDocument.setMetadata(metadata);
+        Document newDocument = new Document.Builder(
+                application1.getId(),
+                DocumentType.INVOICE,
+                "mca-documents-production/invoices/invoice-new.pdf")
+                .withClassification(DocumentClassification.VERIFIED)
+                .addMetadata("confidenceScore", 0.97)
+                .addMetadata("invoiceAmount", 5000.00)
+                .build();
 
         // Save the document
         Document savedDocument = documentRepository.save(newDocument);
@@ -272,12 +217,11 @@ public class DocumentRepositoryTest {
 
         // Verify the document was found and has the correct properties
         assertThat(foundDocument).isPresent();
-        assertThat(foundDocument.get().getApplicationId()).isEqualTo(application1.getId());
-        assertThat(foundDocument.get().getType()).isEqualTo(DocumentType.MISCELLANEOUS);
-        assertThat(foundDocument.get().getClassification()).isEqualTo("Miscellaneous Document");
-        assertThat(foundDocument.get().getStoragePath()).isEqualTo("s3://mca-documents-production/misc/document-999.pdf");
-        assertThat(foundDocument.get().getMetadataValue("description")).isEqualTo("Additional supporting document");
-        assertThat(foundDocument.get().getMetadataValue("pages")).isEqualTo(5);
+        assertThat(foundDocument.get().getType()).isEqualTo(DocumentType.INVOICE);
+        assertThat(foundDocument.get().getClassification()).isEqualTo(DocumentClassification.VERIFIED);
+        assertThat(foundDocument.get().getStoragePath()).isEqualTo("mca-documents-production/invoices/invoice-new.pdf");
+        assertThat(foundDocument.get().getMetadataValue("confidenceScore")).isEqualTo(0.97);
+        assertThat(foundDocument.get().getMetadataValue("invoiceAmount")).isEqualTo(5000.00);
     }
 
     /**
@@ -295,9 +239,9 @@ public class DocumentRepositoryTest {
                 .contains(
                         DocumentType.BANK_STATEMENT,
                         DocumentType.TAX_RETURN,
-                        DocumentType.ID_VERIFICATION,
                         DocumentType.BUSINESS_LICENSE,
-                        DocumentType.INVOICE
+                        DocumentType.ID_VERIFICATION,
+                        DocumentType.MISCELLANEOUS
                 );
     }
 
@@ -328,21 +272,16 @@ public class DocumentRepositoryTest {
     @Test
     @DisplayName("Should find documents by application ID")
     public void testFindByApplicationId() {
-        // Find documents for application1
+        // Find documents by application ID
         List<Document> application1Documents = documentRepository.findByApplicationId(application1.getId());
-
-        // Verify documents for application1 were found
-        assertThat(application1Documents).hasSize(3);
+        assertThat(application1Documents).hasSize(2);
         assertThat(application1Documents).extracting(Document::getId)
-                .contains(document1.getId(), document2.getId(), document3.getId());
+                .contains(document1.getId(), document2.getId());
 
-        // Find documents for application2
         List<Document> application2Documents = documentRepository.findByApplicationId(application2.getId());
-
-        // Verify documents for application2 were found
-        assertThat(application2Documents).hasSize(2);
+        assertThat(application2Documents).hasSize(3);
         assertThat(application2Documents).extracting(Document::getId)
-                .contains(document4.getId(), document5.getId());
+                .contains(document3.getId(), document4.getId(), document5.getId());
 
         // Test with non-existent application ID
         List<Document> nonExistentApplicationDocuments = documentRepository.findByApplicationId(UUID.randomUUID());
@@ -350,39 +289,43 @@ public class DocumentRepositoryTest {
     }
 
     /**
-     * Tests that the repository can find documents by application ID ordered by upload date.
+     * Tests that the repository can find documents by application ID with pagination.
      */
     @Test
-    @DisplayName("Should find documents by application ID ordered by upload date")
-    public void testFindByApplicationIdOrderByUploadedAtDesc() {
-        // Find documents for application1 ordered by upload date (descending)
-        List<Document> orderedDocuments = documentRepository.findByApplicationIdOrderByUploadedAtDesc(application1.getId());
+    @DisplayName("Should find documents by application ID with pagination")
+    public void testFindByApplicationIdWithPagination() {
+        // Create additional documents for application2
+        for (int i = 0; i < 10; i++) {
+            Document doc = createDocument(
+                    application2.getId(),
+                    DocumentType.MISCELLANEOUS,
+                    "mca-documents-production/miscellaneous/misc-" + i + ".pdf",
+                    DocumentClassification.UNCLASSIFIED,
+                    LocalDateTime.now().minusHours(i),
+                    createMetadata("index", i, "confidenceScore", 0.5)
+            );
+            entityManager.persist(doc);
+            application2.addDocument(doc);
+        }
+        entityManager.flush();
 
-        // Verify documents are ordered by upload date (descending)
-        assertThat(orderedDocuments).hasSize(3);
-        assertThat(orderedDocuments.get(0).getId()).isEqualTo(document3.getId()); // Most recent
-        assertThat(orderedDocuments.get(1).getId()).isEqualTo(document2.getId());
-        assertThat(orderedDocuments.get(2).getId()).isEqualTo(document1.getId()); // Oldest
-    }
+        // Find documents by application ID with pagination
+        Pageable pageable = PageRequest.of(0, 5, Sort.by("uploadedAt").descending());
+        Page<Document> application2DocumentsPage = documentRepository.findByApplicationId(application2.getId(), pageable);
 
-    /**
-     * Tests that the repository can find a document by ID and application ID.
-     */
-    @Test
-    @DisplayName("Should find document by ID and application ID")
-    public void testFindByIdAndApplicationId() {
-        // Find document by ID and application ID
-        Optional<Document> foundDocument = documentRepository.findByIdAndApplicationId(
-                document1.getId(), application1.getId());
+        // Verify pagination works correctly
+        assertThat(application2DocumentsPage.getContent()).hasSize(5);
+        assertThat(application2DocumentsPage.getTotalElements()).isEqualTo(13); // 3 original + 10 new
+        assertThat(application2DocumentsPage.getTotalPages()).isEqualTo(3);
+        assertThat(application2DocumentsPage.getNumber()).isEqualTo(0);
 
-        // Verify the document was found
-        assertThat(foundDocument).isPresent();
-        assertThat(foundDocument.get().getId()).isEqualTo(document1.getId());
+        // Get next page
+        pageable = PageRequest.of(1, 5, Sort.by("uploadedAt").descending());
+        application2DocumentsPage = documentRepository.findByApplicationId(application2.getId(), pageable);
 
-        // Test with correct ID but wrong application ID
-        Optional<Document> notFoundDocument = documentRepository.findByIdAndApplicationId(
-                document1.getId(), application2.getId());
-        assertThat(notFoundDocument).isEmpty();
+        // Verify second page
+        assertThat(application2DocumentsPage.getContent()).hasSize(5);
+        assertThat(application2DocumentsPage.getNumber()).isEqualTo(1);
     }
 
     /**
@@ -400,9 +343,41 @@ public class DocumentRepositoryTest {
         assertThat(taxReturns).hasSize(1);
         assertThat(taxReturns.get(0).getId()).isEqualTo(document2.getId());
 
+        List<Document> miscellaneous = documentRepository.findByType(DocumentType.MISCELLANEOUS);
+        assertThat(miscellaneous).hasSize(1);
+        assertThat(miscellaneous.get(0).getId()).isEqualTo(document5.getId());
+
         // Test with non-existent type
-        List<Document> nonExistentTypeDocuments = documentRepository.findByType(DocumentType.MISCELLANEOUS);
+        List<Document> nonExistentTypeDocuments = documentRepository.findByType(DocumentType.INVOICE);
         assertThat(nonExistentTypeDocuments).isEmpty();
+    }
+
+    /**
+     * Tests that the repository can find documents by classification.
+     */
+    @Test
+    @DisplayName("Should find documents by classification")
+    public void testFindByClassification() {
+        // Find documents by classification
+        List<Document> verifiedDocuments = documentRepository.findByClassification(DocumentClassification.VERIFIED);
+        assertThat(verifiedDocuments).hasSize(1);
+        assertThat(verifiedDocuments.get(0).getId()).isEqualTo(document1.getId());
+
+        List<Document> needsReviewDocuments = documentRepository.findByClassification(DocumentClassification.NEEDS_REVIEW);
+        assertThat(needsReviewDocuments).hasSize(1);
+        assertThat(needsReviewDocuments.get(0).getId()).isEqualTo(document2.getId());
+
+        List<Document> flaggedDocuments = documentRepository.findByClassification(DocumentClassification.FLAGGED);
+        assertThat(flaggedDocuments).hasSize(1);
+        assertThat(flaggedDocuments.get(0).getId()).isEqualTo(document3.getId());
+
+        List<Document> rejectedDocuments = documentRepository.findByClassification(DocumentClassification.REJECTED);
+        assertThat(rejectedDocuments).hasSize(1);
+        assertThat(rejectedDocuments.get(0).getId()).isEqualTo(document4.getId());
+
+        List<Document> unclassifiedDocuments = documentRepository.findByClassification(DocumentClassification.UNCLASSIFIED);
+        assertThat(unclassifiedDocuments).hasSize(1);
+        assertThat(unclassifiedDocuments.get(0).getId()).isEqualTo(document5.getId());
     }
 
     /**
@@ -417,35 +392,15 @@ public class DocumentRepositoryTest {
         assertThat(application1BankStatements).hasSize(1);
         assertThat(application1BankStatements.get(0).getId()).isEqualTo(document1.getId());
 
-        // Test with correct application ID but non-existent type
-        List<Document> application1Miscellaneous = documentRepository.findByApplicationIdAndType(
-                application1.getId(), DocumentType.MISCELLANEOUS);
-        assertThat(application1Miscellaneous).isEmpty();
+        List<Document> application2Miscellaneous = documentRepository.findByApplicationIdAndType(
+                application2.getId(), DocumentType.MISCELLANEOUS);
+        assertThat(application2Miscellaneous).hasSize(1);
+        assertThat(application2Miscellaneous.get(0).getId()).isEqualTo(document5.getId());
 
-        // Test with non-existent application ID
-        List<Document> nonExistentApplicationBankStatements = documentRepository.findByApplicationIdAndType(
-                UUID.randomUUID(), DocumentType.BANK_STATEMENT);
-        assertThat(nonExistentApplicationBankStatements).isEmpty();
-    }
-
-    /**
-     * Tests that the repository can find documents by classification.
-     */
-    @Test
-    @DisplayName("Should find documents by classification")
-    public void testFindByClassification() {
-        // Find documents by classification
-        List<Document> monthlyBankStatements = documentRepository.findByClassification("Monthly Bank Statement");
-        assertThat(monthlyBankStatements).hasSize(1);
-        assertThat(monthlyBankStatements.get(0).getId()).isEqualTo(document1.getId());
-
-        List<Document> businessTaxReturns = documentRepository.findByClassification("Business Tax Return");
-        assertThat(businessTaxReturns).hasSize(1);
-        assertThat(businessTaxReturns.get(0).getId()).isEqualTo(document2.getId());
-
-        // Test with non-existent classification
-        List<Document> nonExistentClassificationDocuments = documentRepository.findByClassification("Non-existent Classification");
-        assertThat(nonExistentClassificationDocuments).isEmpty();
+        // Test with non-existent combination
+        List<Document> application1Invoices = documentRepository.findByApplicationIdAndType(
+                application1.getId(), DocumentType.INVOICE);
+        assertThat(application1Invoices).isEmpty();
     }
 
     /**
@@ -455,20 +410,66 @@ public class DocumentRepositoryTest {
     @DisplayName("Should find documents by application ID and classification")
     public void testFindByApplicationIdAndClassification() {
         // Find documents by application ID and classification
-        List<Document> application1MonthlyBankStatements = documentRepository.findByApplicationIdAndClassification(
-                application1.getId(), "Monthly Bank Statement");
-        assertThat(application1MonthlyBankStatements).hasSize(1);
-        assertThat(application1MonthlyBankStatements.get(0).getId()).isEqualTo(document1.getId());
+        List<Document> application1VerifiedDocuments = documentRepository.findByApplicationIdAndClassification(
+                application1.getId(), DocumentClassification.VERIFIED);
+        assertThat(application1VerifiedDocuments).hasSize(1);
+        assertThat(application1VerifiedDocuments.get(0).getId()).isEqualTo(document1.getId());
 
-        // Test with correct application ID but non-existent classification
-        List<Document> application1NonExistentClassification = documentRepository.findByApplicationIdAndClassification(
-                application1.getId(), "Non-existent Classification");
-        assertThat(application1NonExistentClassification).isEmpty();
+        List<Document> application2RejectedDocuments = documentRepository.findByApplicationIdAndClassification(
+                application2.getId(), DocumentClassification.REJECTED);
+        assertThat(application2RejectedDocuments).hasSize(1);
+        assertThat(application2RejectedDocuments.get(0).getId()).isEqualTo(document4.getId());
 
-        // Test with non-existent application ID
-        List<Document> nonExistentApplicationMonthlyBankStatements = documentRepository.findByApplicationIdAndClassification(
-                UUID.randomUUID(), "Monthly Bank Statement");
-        assertThat(nonExistentApplicationMonthlyBankStatements).isEmpty();
+        // Test with non-existent combination
+        List<Document> application1RejectedDocuments = documentRepository.findByApplicationIdAndClassification(
+                application1.getId(), DocumentClassification.REJECTED);
+        assertThat(application1RejectedDocuments).isEmpty();
+    }
+
+    /**
+     * Tests that the repository can find documents by type and classification.
+     */
+    @Test
+    @DisplayName("Should find documents by type and classification")
+    public void testFindByTypeAndClassification() {
+        // Find documents by type and classification
+        List<Document> verifiedBankStatements = documentRepository.findByTypeAndClassification(
+                DocumentType.BANK_STATEMENT, DocumentClassification.VERIFIED);
+        assertThat(verifiedBankStatements).hasSize(1);
+        assertThat(verifiedBankStatements.get(0).getId()).isEqualTo(document1.getId());
+
+        List<Document> needsReviewTaxReturns = documentRepository.findByTypeAndClassification(
+                DocumentType.TAX_RETURN, DocumentClassification.NEEDS_REVIEW);
+        assertThat(needsReviewTaxReturns).hasSize(1);
+        assertThat(needsReviewTaxReturns.get(0).getId()).isEqualTo(document2.getId());
+
+        // Test with non-existent combination
+        List<Document> verifiedTaxReturns = documentRepository.findByTypeAndClassification(
+                DocumentType.TAX_RETURN, DocumentClassification.VERIFIED);
+        assertThat(verifiedTaxReturns).isEmpty();
+    }
+
+    /**
+     * Tests that the repository can find documents by application ID, type, and classification.
+     */
+    @Test
+    @DisplayName("Should find documents by application ID, type, and classification")
+    public void testFindByApplicationIdAndTypeAndClassification() {
+        // Find documents by application ID, type, and classification
+        List<Document> application1VerifiedBankStatements = documentRepository.findByApplicationIdAndTypeAndClassification(
+                application1.getId(), DocumentType.BANK_STATEMENT, DocumentClassification.VERIFIED);
+        assertThat(application1VerifiedBankStatements).hasSize(1);
+        assertThat(application1VerifiedBankStatements.get(0).getId()).isEqualTo(document1.getId());
+
+        List<Document> application2RejectedIdVerifications = documentRepository.findByApplicationIdAndTypeAndClassification(
+                application2.getId(), DocumentType.ID_VERIFICATION, DocumentClassification.REJECTED);
+        assertThat(application2RejectedIdVerifications).hasSize(1);
+        assertThat(application2RejectedIdVerifications.get(0).getId()).isEqualTo(document4.getId());
+
+        // Test with non-existent combination
+        List<Document> application1RejectedBankStatements = documentRepository.findByApplicationIdAndTypeAndClassification(
+                application1.getId(), DocumentType.BANK_STATEMENT, DocumentClassification.REJECTED);
+        assertThat(application1RejectedBankStatements).isEmpty();
     }
 
     /**
@@ -497,30 +498,6 @@ public class DocumentRepositoryTest {
     }
 
     /**
-     * Tests that the repository can find documents by application ID and upload date range.
-     */
-    @Test
-    @DisplayName("Should find documents by application ID and upload date range")
-    public void testFindByApplicationIdAndUploadedAtBetween() {
-        // Find documents for application1 uploaded within a date range
-        LocalDateTime startDate = LocalDateTime.now().minusDays(5).withHour(0).withMinute(0).withSecond(0);
-        LocalDateTime endDate = LocalDateTime.now().minusDays(3).withHour(23).withMinute(59).withSecond(59);
-
-        List<Document> application1DocumentsInRange = documentRepository.findByApplicationIdAndUploadedAtBetween(
-                application1.getId(), startDate, endDate);
-
-        // Verify documents for application1 uploaded within the date range were found
-        assertThat(application1DocumentsInRange).hasSize(3);
-        assertThat(application1DocumentsInRange).extracting(Document::getId)
-                .contains(document1.getId(), document2.getId(), document3.getId());
-
-        // Test with application2
-        List<Document> application2DocumentsInRange = documentRepository.findByApplicationIdAndUploadedAtBetween(
-                application2.getId(), startDate, endDate);
-        assertThat(application2DocumentsInRange).isEmpty();
-    }
-
-    /**
      * Tests that the repository can find documents uploaded after a specific date.
      */
     @Test
@@ -532,9 +509,9 @@ public class DocumentRepositoryTest {
         List<Document> documentsAfterDate = documentRepository.findByUploadedAtAfter(date);
 
         // Verify documents uploaded after the date were found
-        assertThat(documentsAfterDate).hasSize(3);
+        assertThat(documentsAfterDate).hasSize(2);
         assertThat(documentsAfterDate).extracting(Document::getId)
-                .contains(document3.getId(), document4.getId(), document5.getId());
+                .contains(document4.getId(), document5.getId());
     }
 
     /**
@@ -555,22 +532,187 @@ public class DocumentRepositoryTest {
     }
 
     /**
+     * Tests that the repository can find documents by application ID and upload date range.
+     */
+    @Test
+    @DisplayName("Should find documents by application ID and upload date range")
+    public void testFindByApplicationIdAndUploadedAtBetween() {
+        // Find documents by application ID and upload date range
+        LocalDateTime startDate = LocalDateTime.now().minusDays(5).withHour(0).withMinute(0).withSecond(0);
+        LocalDateTime endDate = LocalDateTime.now().minusDays(3).withHour(23).withMinute(59).withSecond(59);
+
+        List<Document> application1DocumentsInRange = documentRepository.findByApplicationIdAndUploadedAtBetween(
+                application1.getId(), startDate, endDate);
+
+        // Verify documents for application1 uploaded within the date range were found
+        assertThat(application1DocumentsInRange).hasSize(2);
+        assertThat(application1DocumentsInRange).extracting(Document::getId)
+                .contains(document1.getId(), document2.getId());
+
+        // Test with application2
+        List<Document> application2DocumentsInRange = documentRepository.findByApplicationIdAndUploadedAtBetween(
+                application2.getId(), startDate, endDate);
+        assertThat(application2DocumentsInRange).hasSize(1);
+        assertThat(application2DocumentsInRange.get(0).getId()).isEqualTo(document3.getId());
+    }
+
+    /**
+     * Tests that the repository can find documents by type and upload date range.
+     */
+    @Test
+    @DisplayName("Should find documents by type and upload date range")
+    public void testFindByTypeAndUploadedAtBetween() {
+        // Find documents by type and upload date range
+        LocalDateTime startDate = LocalDateTime.now().minusDays(5).withHour(0).withMinute(0).withSecond(0);
+        LocalDateTime endDate = LocalDateTime.now().minusDays(1).withHour(23).withMinute(59).withSecond(59);
+
+        List<Document> bankStatementsInRange = documentRepository.findByTypeAndUploadedAtBetween(
+                DocumentType.BANK_STATEMENT, startDate, endDate);
+
+        // Verify bank statements uploaded within the date range were found
+        assertThat(bankStatementsInRange).hasSize(1);
+        assertThat(bankStatementsInRange.get(0).getId()).isEqualTo(document1.getId());
+
+        // Test with another type
+        List<Document> idVerificationsInRange = documentRepository.findByTypeAndUploadedAtBetween(
+                DocumentType.ID_VERIFICATION, startDate, endDate);
+        assertThat(idVerificationsInRange).hasSize(1);
+        assertThat(idVerificationsInRange.get(0).getId()).isEqualTo(document4.getId());
+    }
+
+    /**
+     * Tests that the repository can find documents by classification and upload date range.
+     */
+    @Test
+    @DisplayName("Should find documents by classification and upload date range")
+    public void testFindByClassificationAndUploadedAtBetween() {
+        // Find documents by classification and upload date range
+        LocalDateTime startDate = LocalDateTime.now().minusDays(5).withHour(0).withMinute(0).withSecond(0);
+        LocalDateTime endDate = LocalDateTime.now().minusDays(1).withHour(23).withMinute(59).withSecond(59);
+
+        List<Document> verifiedDocumentsInRange = documentRepository.findByClassificationAndUploadedAtBetween(
+                DocumentClassification.VERIFIED, startDate, endDate);
+
+        // Verify verified documents uploaded within the date range were found
+        assertThat(verifiedDocumentsInRange).hasSize(1);
+        assertThat(verifiedDocumentsInRange.get(0).getId()).isEqualTo(document1.getId());
+
+        // Test with another classification
+        List<Document> rejectedDocumentsInRange = documentRepository.findByClassificationAndUploadedAtBetween(
+                DocumentClassification.REJECTED, startDate, endDate);
+        assertThat(rejectedDocumentsInRange).hasSize(1);
+        assertThat(rejectedDocumentsInRange.get(0).getId()).isEqualTo(document4.getId());
+    }
+
+    /**
+     * Tests that the repository can find documents by storage path.
+     */
+    @Test
+    @DisplayName("Should find documents by storage path")
+    public void testFindByStoragePath() {
+        // Find documents by storage path
+        String storagePath = document1.getStoragePath();
+        List<Document> documentsByPath = documentRepository.findByStoragePath(storagePath);
+
+        // Verify documents with the specified storage path were found
+        assertThat(documentsByPath).hasSize(1);
+        assertThat(documentsByPath.get(0).getId()).isEqualTo(document1.getId());
+
+        // Test with non-existent storage path
+        List<Document> nonExistentPathDocuments = documentRepository.findByStoragePath("non-existent-path");
+        assertThat(nonExistentPathDocuments).isEmpty();
+    }
+
+    /**
+     * Tests that the repository can find documents with a storage path containing a specific string.
+     */
+    @Test
+    @DisplayName("Should find documents with storage path containing a specific string")
+    public void testFindByStoragePathContaining() {
+        // Find documents with storage path containing a specific string
+        List<Document> bankStatementDocuments = documentRepository.findByStoragePathContaining("bank-statements");
+
+        // Verify documents with storage path containing the specified string were found
+        assertThat(bankStatementDocuments).hasSize(1);
+        assertThat(bankStatementDocuments.get(0).getId()).isEqualTo(document1.getId());
+
+        // Test with another string
+        List<Document> pdfDocuments = documentRepository.findByStoragePathContaining(".pdf");
+        assertThat(pdfDocuments).hasSize(2);
+        assertThat(pdfDocuments).extracting(Document::getId)
+                .contains(document1.getId(), document2.getId());
+
+        // Test with non-existent string
+        List<Document> nonExistentStringDocuments = documentRepository.findByStoragePathContaining("non-existent-string");
+        assertThat(nonExistentStringDocuments).isEmpty();
+    }
+
+    /**
      * Tests that the repository can count documents by application ID.
      */
     @Test
     @DisplayName("Should count documents by application ID")
     public void testCountByApplicationId() {
-        // Count documents for application1
+        // Count documents by application ID
         long application1DocumentCount = documentRepository.countByApplicationId(application1.getId());
-        assertThat(application1DocumentCount).isEqualTo(3);
+        assertThat(application1DocumentCount).isEqualTo(2);
 
-        // Count documents for application2
         long application2DocumentCount = documentRepository.countByApplicationId(application2.getId());
-        assertThat(application2DocumentCount).isEqualTo(2);
+        assertThat(application2DocumentCount).isEqualTo(3);
 
-        // Count documents for non-existent application
+        // Test with non-existent application ID
         long nonExistentApplicationDocumentCount = documentRepository.countByApplicationId(UUID.randomUUID());
         assertThat(nonExistentApplicationDocumentCount).isEqualTo(0);
+    }
+
+    /**
+     * Tests that the repository can count documents by type.
+     */
+    @Test
+    @DisplayName("Should count documents by type")
+    public void testCountByType() {
+        // Count documents by type
+        long bankStatementCount = documentRepository.countByType(DocumentType.BANK_STATEMENT);
+        assertThat(bankStatementCount).isEqualTo(1);
+
+        long taxReturnCount = documentRepository.countByType(DocumentType.TAX_RETURN);
+        assertThat(taxReturnCount).isEqualTo(1);
+
+        long businessLicenseCount = documentRepository.countByType(DocumentType.BUSINESS_LICENSE);
+        assertThat(businessLicenseCount).isEqualTo(1);
+
+        long idVerificationCount = documentRepository.countByType(DocumentType.ID_VERIFICATION);
+        assertThat(idVerificationCount).isEqualTo(1);
+
+        long miscellaneousCount = documentRepository.countByType(DocumentType.MISCELLANEOUS);
+        assertThat(miscellaneousCount).isEqualTo(1);
+
+        // Test with non-existent type
+        long invoiceCount = documentRepository.countByType(DocumentType.INVOICE);
+        assertThat(invoiceCount).isEqualTo(0);
+    }
+
+    /**
+     * Tests that the repository can count documents by classification.
+     */
+    @Test
+    @DisplayName("Should count documents by classification")
+    public void testCountByClassification() {
+        // Count documents by classification
+        long verifiedCount = documentRepository.countByClassification(DocumentClassification.VERIFIED);
+        assertThat(verifiedCount).isEqualTo(1);
+
+        long needsReviewCount = documentRepository.countByClassification(DocumentClassification.NEEDS_REVIEW);
+        assertThat(needsReviewCount).isEqualTo(1);
+
+        long flaggedCount = documentRepository.countByClassification(DocumentClassification.FLAGGED);
+        assertThat(flaggedCount).isEqualTo(1);
+
+        long rejectedCount = documentRepository.countByClassification(DocumentClassification.REJECTED);
+        assertThat(rejectedCount).isEqualTo(1);
+
+        long unclassifiedCount = documentRepository.countByClassification(DocumentClassification.UNCLASSIFIED);
+        assertThat(unclassifiedCount).isEqualTo(1);
     }
 
     /**
@@ -579,59 +721,42 @@ public class DocumentRepositoryTest {
     @Test
     @DisplayName("Should count documents by application ID and type")
     public void testCountByApplicationIdAndType() {
-        // Count documents for application1 by type
+        // Count documents by application ID and type
         long application1BankStatementCount = documentRepository.countByApplicationIdAndType(
                 application1.getId(), DocumentType.BANK_STATEMENT);
         assertThat(application1BankStatementCount).isEqualTo(1);
 
-        long application1TaxReturnCount = documentRepository.countByApplicationIdAndType(
-                application1.getId(), DocumentType.TAX_RETURN);
-        assertThat(application1TaxReturnCount).isEqualTo(1);
+        long application2MiscellaneousCount = documentRepository.countByApplicationIdAndType(
+                application2.getId(), DocumentType.MISCELLANEOUS);
+        assertThat(application2MiscellaneousCount).isEqualTo(1);
 
-        // Count documents for non-existent type
-        long application1MiscellaneousCount = documentRepository.countByApplicationIdAndType(
-                application1.getId(), DocumentType.MISCELLANEOUS);
-        assertThat(application1MiscellaneousCount).isEqualTo(0);
+        // Test with non-existent combination
+        long application1InvoiceCount = documentRepository.countByApplicationIdAndType(
+                application1.getId(), DocumentType.INVOICE);
+        assertThat(application1InvoiceCount).isEqualTo(0);
     }
 
     /**
-     * Tests that the repository can check if a document exists by ID and application ID.
+     * Tests that the repository can count documents uploaded within a specific date range.
      */
     @Test
-    @DisplayName("Should check if document exists by ID and application ID")
-    public void testExistsByIdAndApplicationId() {
-        // Check if document exists by ID and application ID
-        boolean exists = documentRepository.existsByIdAndApplicationId(document1.getId(), application1.getId());
-        assertThat(exists).isTrue();
+    @DisplayName("Should count documents by upload date range")
+    public void testCountByUploadedAtBetween() {
+        // Count documents uploaded within a date range
+        LocalDateTime startDate = LocalDateTime.now().minusDays(4).withHour(0).withMinute(0).withSecond(0);
+        LocalDateTime endDate = LocalDateTime.now().minusDays(2).withHour(23).withMinute(59).withSecond(59);
 
-        // Check with correct ID but wrong application ID
-        boolean notExistsWrongApplication = documentRepository.existsByIdAndApplicationId(
-                document1.getId(), application2.getId());
-        assertThat(notExistsWrongApplication).isFalse();
+        long documentsInRangeCount = documentRepository.countByUploadedAtBetween(startDate, endDate);
 
-        // Check with non-existent ID
-        boolean notExistsWrongId = documentRepository.existsByIdAndApplicationId(
-                UUID.randomUUID(), application1.getId());
-        assertThat(notExistsWrongId).isFalse();
-    }
+        // Verify count of documents uploaded within the date range
+        assertThat(documentsInRangeCount).isEqualTo(3);
 
-    /**
-     * Tests that the repository can delete documents by application ID.
-     */
-    @Test
-    @DisplayName("Should delete documents by application ID")
-    public void testDeleteByApplicationId() {
-        // Delete documents for application1
-        documentRepository.deleteByApplicationId(application1.getId());
-        entityManager.flush();
+        // Test with date range that doesn't include any documents
+        LocalDateTime pastStartDate = LocalDateTime.now().minusDays(10);
+        LocalDateTime pastEndDate = LocalDateTime.now().minusDays(6);
 
-        // Verify documents for application1 were deleted
-        List<Document> application1Documents = documentRepository.findByApplicationId(application1.getId());
-        assertThat(application1Documents).isEmpty();
-
-        // Verify documents for application2 still exist
-        List<Document> application2Documents = documentRepository.findByApplicationId(application2.getId());
-        assertThat(application2Documents).hasSize(2);
+        long documentsInPastRangeCount = documentRepository.countByUploadedAtBetween(pastStartDate, pastEndDate);
+        assertThat(documentsInPastRangeCount).isEqualTo(0);
     }
 
     /**
@@ -641,12 +766,13 @@ public class DocumentRepositoryTest {
     @DisplayName("Should find documents with metadata containing a specific key")
     public void testFindByMetadataContainsKey() {
         // Find documents with metadata containing a specific key
-        String jsonPath = "{\"bankName\": {}}";
-        List<Document> documentsWithBankName = documentRepository.findByMetadataContainsKey(jsonPath);
+        String jsonPath = "{\"pageCount\": {}}";
+        List<Document> documentsWithPageCount = documentRepository.findByMetadataContainsKey(jsonPath);
 
         // Verify documents with the specified metadata key were found
-        assertThat(documentsWithBankName).hasSize(1);
-        assertThat(documentsWithBankName.get(0).getId()).isEqualTo(document1.getId());
+        assertThat(documentsWithPageCount).hasSize(2);
+        assertThat(documentsWithPageCount).extracting(Document::getId)
+                .contains(document1.getId(), document2.getId());
 
         // Test with another key
         String taxYearJsonPath = "{\"taxYear\": {}}";
@@ -662,12 +788,12 @@ public class DocumentRepositoryTest {
     @DisplayName("Should find documents with metadata containing a specific key-value pair")
     public void testFindByMetadataContains() {
         // Find documents with metadata containing a specific key-value pair
-        String keyValueJson = "{\"bankName\": \"First National Bank\"}";
-        List<Document> documentsWithBankName = documentRepository.findByMetadataContains(keyValueJson);
+        String keyValueJson = "{\"confidenceScore\": 0.98}";
+        List<Document> documentsWithHighConfidence = documentRepository.findByMetadataContains(keyValueJson);
 
         // Verify documents with the specified metadata key-value pair were found
-        assertThat(documentsWithBankName).hasSize(1);
-        assertThat(documentsWithBankName.get(0).getId()).isEqualTo(document1.getId());
+        assertThat(documentsWithHighConfidence).hasSize(1);
+        assertThat(documentsWithHighConfidence.get(0).getId()).isEqualTo(document1.getId());
 
         // Test with another key-value pair
         String taxYearJson = "{\"taxYear\": \"2022\"}";
@@ -682,227 +808,329 @@ public class DocumentRepositoryTest {
     }
 
     /**
-     * Tests that the repository can find documents with a confidence score above a threshold for a specific field.
+     * Tests that the repository can find documents with a confidence score above a specific threshold.
      */
     @Test
     @DisplayName("Should find documents with confidence score above threshold")
-    public void testFindByConfidenceScoreGreaterThan() {
-        // Find documents with classification confidence score above 0.90
-        List<Document> highConfidenceDocuments = documentRepository.findByConfidenceScoreGreaterThan(
-                "classification", 0.90);
+    public void testFindByConfidenceScoreGreaterThanEqual() {
+        // Find documents with confidence score above threshold
+        List<Document> highConfidenceDocuments = documentRepository.findByConfidenceScoreGreaterThanEqual(0.7);
 
-        // Verify documents with high confidence scores were found
-        assertThat(highConfidenceDocuments).hasSize(3);
+        // Verify documents with confidence score above threshold were found
+        assertThat(highConfidenceDocuments).hasSize(2);
         assertThat(highConfidenceDocuments).extracting(Document::getId)
-                .contains(document1.getId(), document2.getId(), document4.getId());
+                .contains(document1.getId(), document2.getId());
 
         // Test with higher threshold
-        List<Document> veryHighConfidenceDocuments = documentRepository.findByConfidenceScoreGreaterThan(
-                "classification", 0.94);
+        List<Document> veryHighConfidenceDocuments = documentRepository.findByConfidenceScoreGreaterThanEqual(0.9);
         assertThat(veryHighConfidenceDocuments).hasSize(1);
         assertThat(veryHighConfidenceDocuments.get(0).getId()).isEqualTo(document1.getId());
     }
 
     /**
-     * Tests that the repository can find documents with a confidence score below a threshold for a specific field.
+     * Tests that the repository can find documents with a confidence score below a specific threshold.
      */
     @Test
     @DisplayName("Should find documents with confidence score below threshold")
     public void testFindByConfidenceScoreLessThan() {
-        // Find documents with classification confidence score below 0.90
-        List<Document> lowConfidenceDocuments = documentRepository.findByConfidenceScoreLessThan(
-                "classification", 0.90);
+        // Find documents with confidence score below threshold
+        List<Document> lowConfidenceDocuments = documentRepository.findByConfidenceScoreLessThan(0.7);
 
-        // Verify documents with low confidence scores were found
-        assertThat(lowConfidenceDocuments).hasSize(1);
-        assertThat(lowConfidenceDocuments.get(0).getId()).isEqualTo(document3.getId());
+        // Verify documents with confidence score below threshold were found
+        assertThat(lowConfidenceDocuments).hasSize(3);
+        assertThat(lowConfidenceDocuments).extracting(Document::getId)
+                .contains(document3.getId(), document4.getId(), document5.getId());
 
         // Test with lower threshold
-        List<Document> veryLowConfidenceDocuments = documentRepository.findByConfidenceScoreLessThan(
-                "classification", 0.80);
-        assertThat(veryLowConfidenceDocuments).isEmpty();
+        List<Document> veryLowConfidenceDocuments = documentRepository.findByConfidenceScoreLessThan(0.4);
+        assertThat(veryLowConfidenceDocuments).hasSize(2);
+        assertThat(veryLowConfidenceDocuments).extracting(Document::getId)
+                .contains(document4.getId(), document5.getId());
     }
 
     /**
-     * Tests that the repository can find documents with a specific storage path pattern.
+     * Tests that the repository can find documents that require manual review.
      */
     @Test
-    @DisplayName("Should find documents by storage path pattern")
-    public void testFindByStoragePathPattern() {
-        // Find documents with storage path matching a pattern
-        List<Document> bankStatementDocuments = documentRepository.findByStoragePathPattern(
-                "s3://mca-documents-production/bank-statements/%");
+    @DisplayName("Should find documents requiring manual review")
+    public void testFindDocumentsRequiringManualReview() {
+        // Find documents requiring manual review
+        List<Document> documentsRequiringManualReview = documentRepository.findDocumentsRequiringManualReview();
 
-        // Verify documents with matching storage path pattern were found
-        assertThat(bankStatementDocuments).hasSize(1);
-        assertThat(bankStatementDocuments.get(0).getId()).isEqualTo(document1.getId());
-
-        // Test with another pattern
-        List<Document> taxReturnDocuments = documentRepository.findByStoragePathPattern(
-                "s3://mca-documents-production/tax-returns/%");
-        assertThat(taxReturnDocuments).hasSize(1);
-        assertThat(taxReturnDocuments.get(0).getId()).isEqualTo(document2.getId());
-
-        // Test with broader pattern
-        List<Document> allProductionDocuments = documentRepository.findByStoragePathPattern(
-                "s3://mca-documents-production/%");
-        assertThat(allProductionDocuments).hasSize(5);
+        // Verify documents requiring manual review were found
+        assertThat(documentsRequiringManualReview).hasSize(2);
+        assertThat(documentsRequiringManualReview).extracting(Document::getId)
+                .contains(document2.getId(), document3.getId());
     }
 
     /**
-     * Tests that the repository can find documents that need review based on confidence scores.
+     * Tests that the repository can find documents that are acceptable for processing.
      */
     @Test
-    @DisplayName("Should find documents needing review")
-    public void testFindDocumentsNeedingReview() {
-        // Find documents needing review
-        List<Document> documentsNeedingReview = documentRepository.findDocumentsNeedingReview();
+    @DisplayName("Should find acceptable documents")
+    public void testFindAcceptableDocuments() {
+        // Find acceptable documents
+        List<Document> acceptableDocuments = documentRepository.findAcceptableDocuments();
 
-        // Verify documents needing review were found
-        assertThat(documentsNeedingReview).hasSize(1);
-        assertThat(documentsNeedingReview.get(0).getId()).isEqualTo(document3.getId());
+        // Verify acceptable documents were found
+        assertThat(acceptableDocuments).hasSize(2);
+        assertThat(acceptableDocuments).extracting(Document::getId)
+                .contains(document1.getId(), document2.getId());
     }
 
     /**
-     * Tests that the repository can find documents that need review for a specific application.
+     * Tests that the repository can find documents that have been rejected.
      */
     @Test
-    @DisplayName("Should find documents needing review by application ID")
-    public void testFindDocumentsNeedingReviewByApplicationId() {
-        // Find documents needing review for application1
-        List<Document> application1DocumentsNeedingReview = documentRepository.findDocumentsNeedingReviewByApplicationId(
-                application1.getId());
+    @DisplayName("Should find rejected documents")
+    public void testFindRejectedDocuments() {
+        // Find rejected documents
+        List<Document> rejectedDocuments = documentRepository.findRejectedDocuments();
 
-        // Verify documents needing review for application1 were found
-        assertThat(application1DocumentsNeedingReview).hasSize(1);
-        assertThat(application1DocumentsNeedingReview.get(0).getId()).isEqualTo(document3.getId());
+        // Verify rejected documents were found
+        assertThat(rejectedDocuments).hasSize(1);
+        assertThat(rejectedDocuments.get(0).getId()).isEqualTo(document4.getId());
+    }
+
+    /**
+     * Tests that the repository can find documents that have been verified.
+     */
+    @Test
+    @DisplayName("Should find verified documents")
+    public void testFindVerifiedDocuments() {
+        // Find verified documents
+        List<Document> verifiedDocuments = documentRepository.findVerifiedDocuments();
+
+        // Verify verified documents were found
+        assertThat(verifiedDocuments).hasSize(1);
+        assertThat(verifiedDocuments.get(0).getId()).isEqualTo(document1.getId());
+    }
+
+    /**
+     * Tests that the repository can find documents that have not yet been classified.
+     */
+    @Test
+    @DisplayName("Should find unclassified documents")
+    public void testFindUnclassifiedDocuments() {
+        // Find unclassified documents
+        List<Document> unclassifiedDocuments = documentRepository.findUnclassifiedDocuments();
+
+        // Verify unclassified documents were found
+        assertThat(unclassifiedDocuments).hasSize(1);
+        assertThat(unclassifiedDocuments.get(0).getId()).isEqualTo(document5.getId());
+    }
+
+    /**
+     * Tests that the repository can find documents associated with a specific application that require manual review.
+     */
+    @Test
+    @DisplayName("Should find documents requiring manual review by application ID")
+    public void testFindDocumentsRequiringManualReviewByApplicationId() {
+        // Find documents requiring manual review by application ID
+        List<Document> application1DocumentsRequiringManualReview = documentRepository
+                .findDocumentsRequiringManualReviewByApplicationId(application1.getId());
+
+        // Verify documents requiring manual review for application1 were found
+        assertThat(application1DocumentsRequiringManualReview).hasSize(1);
+        assertThat(application1DocumentsRequiringManualReview.get(0).getId()).isEqualTo(document2.getId());
 
         // Test with application2
-        List<Document> application2DocumentsNeedingReview = documentRepository.findDocumentsNeedingReviewByApplicationId(
-                application2.getId());
-        assertThat(application2DocumentsNeedingReview).isEmpty();
+        List<Document> application2DocumentsRequiringManualReview = documentRepository
+                .findDocumentsRequiringManualReviewByApplicationId(application2.getId());
+        assertThat(application2DocumentsRequiringManualReview).hasSize(1);
+        assertThat(application2DocumentsRequiringManualReview.get(0).getId()).isEqualTo(document3.getId());
     }
 
     /**
-     * Tests that the repository can find documents with high-confidence classification.
+     * Tests that the repository can find documents of a specific type that require manual review.
      */
     @Test
-    @DisplayName("Should find documents with high-confidence classification")
-    public void testFindDocumentsWithHighConfidenceClassification() {
-        // Find documents with high-confidence classification
-        List<Document> highConfidenceDocuments = documentRepository.findDocumentsWithHighConfidenceClassification();
+    @DisplayName("Should find documents requiring manual review by type")
+    public void testFindDocumentsRequiringManualReviewByType() {
+        // Find documents requiring manual review by type
+        List<Document> taxReturnDocumentsRequiringManualReview = documentRepository
+                .findDocumentsRequiringManualReviewByType(DocumentType.TAX_RETURN);
 
-        // Verify documents with high-confidence classification were found
-        assertThat(highConfidenceDocuments).hasSize(3);
-        assertThat(highConfidenceDocuments).extracting(Document::getId)
-                .contains(document1.getId(), document2.getId(), document4.getId());
+        // Verify tax return documents requiring manual review were found
+        assertThat(taxReturnDocumentsRequiringManualReview).hasSize(1);
+        assertThat(taxReturnDocumentsRequiringManualReview.get(0).getId()).isEqualTo(document2.getId());
+
+        // Test with another type
+        List<Document> businessLicenseDocumentsRequiringManualReview = documentRepository
+                .findDocumentsRequiringManualReviewByType(DocumentType.BUSINESS_LICENSE);
+        assertThat(businessLicenseDocumentsRequiringManualReview).hasSize(1);
+        assertThat(businessLicenseDocumentsRequiringManualReview.get(0).getId()).isEqualTo(document3.getId());
+
+        // Test with type that doesn't have documents requiring manual review
+        List<Document> bankStatementDocumentsRequiringManualReview = documentRepository
+                .findDocumentsRequiringManualReviewByType(DocumentType.BANK_STATEMENT);
+        assertThat(bankStatementDocumentsRequiringManualReview).isEmpty();
     }
 
     /**
-     * Tests that the repository can find documents with low-confidence classification.
+     * Tests that the repository can find documents with a specific file extension.
      */
     @Test
-    @DisplayName("Should find documents with low-confidence classification")
-    public void testFindDocumentsWithLowConfidenceClassification() {
-        // Find documents with low-confidence classification
-        List<Document> lowConfidenceDocuments = documentRepository.findDocumentsWithLowConfidenceClassification();
+    @DisplayName("Should find documents by file extension")
+    public void testFindByFileExtension() {
+        // Find documents by file extension
+        List<Document> pdfDocuments = documentRepository.findByFileExtension("pdf");
 
-        // Verify documents with low-confidence classification were found
-        assertThat(lowConfidenceDocuments).hasSize(1);
-        assertThat(lowConfidenceDocuments.get(0).getId()).isEqualTo(document3.getId());
+        // Verify documents with PDF extension were found
+        assertThat(pdfDocuments).hasSize(2);
+        assertThat(pdfDocuments).extracting(Document::getId)
+                .contains(document1.getId(), document2.getId());
+
+        // Test with another extension
+        List<Document> jpgDocuments = documentRepository.findByFileExtension("jpg");
+        assertThat(jpgDocuments).hasSize(2);
+        assertThat(jpgDocuments).extracting(Document::getId)
+                .contains(document3.getId(), document4.getId());
+
+        // Test with another extension (case insensitive)
+        List<Document> pngDocuments = documentRepository.findByFileExtension("PNG");
+        assertThat(pngDocuments).hasSize(1);
+        assertThat(pngDocuments.get(0).getId()).isEqualTo(document5.getId());
+
+        // Test with non-existent extension
+        List<Document> docxDocuments = documentRepository.findByFileExtension("docx");
+        assertThat(docxDocuments).isEmpty();
     }
 
     /**
-     * Tests that the repository can find documents containing personally identifiable information (PII).
+     * Tests that the repository can find documents with a specific MIME type.
      */
     @Test
-    @DisplayName("Should find documents containing PII")
-    public void testFindDocumentsContainingPII() {
-        // Find documents containing PII
-        List<Document> documentsWithPII = documentRepository.findDocumentsContainingPII();
+    @DisplayName("Should find documents by MIME type")
+    public void testFindByMimeType() {
+        // Find documents by MIME type
+        List<Document> pdfDocuments = documentRepository.findByMimeType("application/pdf");
 
-        // Verify documents containing PII were found
-        assertThat(documentsWithPII).hasSize(2);
-        assertThat(documentsWithPII).extracting(Document::getType)
-                .contains(DocumentType.ID_VERIFICATION, DocumentType.TAX_RETURN);
+        // Verify documents with PDF MIME type were found
+        assertThat(pdfDocuments).hasSize(2);
+        assertThat(pdfDocuments).extracting(Document::getId)
+                .contains(document1.getId(), document2.getId());
+
+        // Test with another MIME type
+        List<Document> jpegDocuments = documentRepository.findByMimeType("image/jpeg");
+        assertThat(jpegDocuments).hasSize(2);
+        assertThat(jpegDocuments).extracting(Document::getId)
+                .contains(document3.getId(), document4.getId());
+
+        // Test with another MIME type
+        List<Document> pngDocuments = documentRepository.findByMimeType("image/png");
+        assertThat(pngDocuments).hasSize(1);
+        assertThat(pngDocuments.get(0).getId()).isEqualTo(document5.getId());
+
+        // Test with non-existent MIME type
+        List<Document> wordDocuments = documentRepository.findByMimeType("application/msword");
+        assertThat(wordDocuments).isEmpty();
     }
 
     /**
-     * Tests that the repository can find financial documents.
+     * Tests that the repository can find documents in a specific S3 bucket.
      */
     @Test
-    @DisplayName("Should find financial documents")
-    public void testFindFinancialDocuments() {
-        // Find financial documents
-        List<Document> financialDocuments = documentRepository.findFinancialDocuments();
+    @DisplayName("Should find documents by bucket name")
+    public void testFindByBucketName() {
+        // Find documents by bucket name
+        List<Document> productionBucketDocuments = documentRepository.findByBucketName("mca-documents-production");
 
-        // Verify financial documents were found
-        assertThat(financialDocuments).hasSize(3);
-        assertThat(financialDocuments).extracting(Document::getType)
-                .contains(DocumentType.BANK_STATEMENT, DocumentType.TAX_RETURN, DocumentType.INVOICE);
+        // Verify documents in the production bucket were found
+        assertThat(productionBucketDocuments).hasSize(5);
+
+        // Test with non-existent bucket name
+        List<Document> stagingBucketDocuments = documentRepository.findByBucketName("mca-documents-staging");
+        assertThat(stagingBucketDocuments).isEmpty();
     }
 
     /**
-     * Tests that the repository can find documents with valid storage information.
+     * Tests that the repository can delete all documents associated with a specific application.
      */
     @Test
-    @DisplayName("Should find documents with valid storage")
-    public void testFindDocumentsWithValidStorage() {
-        // Find documents with valid storage
-        List<Document> documentsWithValidStorage = documentRepository.findDocumentsWithValidStorage();
-
-        // Verify all documents have valid storage
-        assertThat(documentsWithValidStorage).hasSize(5);
-
-        // Create a document with invalid storage
-        Document invalidStorageDocument = new Document(application1.getId(), DocumentType.MISCELLANEOUS,
-                "invalid-storage-path");
-        invalidStorageDocument.setClassification("Invalid Storage Document");
-        invalidStorageDocument.setUploadedAt(LocalDateTime.now());
-        entityManager.persist(invalidStorageDocument);
+    @DisplayName("Should delete documents by application ID")
+    public void testDeleteByApplicationId() {
+        // Delete documents by application ID
+        long deletedCount = documentRepository.deleteByApplicationId(application1.getId());
         entityManager.flush();
 
-        // Find documents with valid storage again
-        List<Document> documentsWithValidStorageAfterInvalid = documentRepository.findDocumentsWithValidStorage();
+        // Verify documents for application1 were deleted
+        assertThat(deletedCount).isEqualTo(2);
+        List<Document> remainingDocuments = documentRepository.findAll();
+        assertThat(remainingDocuments).hasSize(3);
+        assertThat(remainingDocuments).extracting(Document::getId)
+                .contains(document3.getId(), document4.getId(), document5.getId());
 
-        // Verify only documents with valid storage were found
-        assertThat(documentsWithValidStorageAfterInvalid).hasSize(5);
+        // Verify no documents remain for application1
+        List<Document> application1Documents = documentRepository.findByApplicationId(application1.getId());
+        assertThat(application1Documents).isEmpty();
     }
 
     /**
-     * Tests that the repository can find documents with invalid or missing storage information.
+     * Tests that the repository can delete all documents of a specific type.
      */
     @Test
-    @DisplayName("Should find documents with invalid storage")
-    public void testFindDocumentsWithInvalidStorage() {
-        // Initially, all documents have valid storage
-        List<Document> documentsWithInvalidStorage = documentRepository.findDocumentsWithInvalidStorage();
-        assertThat(documentsWithInvalidStorage).isEmpty();
-
-        // Create documents with invalid storage
-        Document nullStorageDocument = new Document(application1.getId(), DocumentType.MISCELLANEOUS, null);
-        nullStorageDocument.setClassification("Null Storage Document");
-        nullStorageDocument.setUploadedAt(LocalDateTime.now());
-
-        Document emptyStorageDocument = new Document(application1.getId(), DocumentType.MISCELLANEOUS, "");
-        emptyStorageDocument.setClassification("Empty Storage Document");
-        emptyStorageDocument.setUploadedAt(LocalDateTime.now());
-
-        Document invalidStorageDocument = new Document(application1.getId(), DocumentType.MISCELLANEOUS,
-                "invalid-storage-path");
-        invalidStorageDocument.setClassification("Invalid Storage Document");
-        invalidStorageDocument.setUploadedAt(LocalDateTime.now());
-
-        entityManager.persist(nullStorageDocument);
-        entityManager.persist(emptyStorageDocument);
-        entityManager.persist(invalidStorageDocument);
+    @DisplayName("Should delete documents by type")
+    public void testDeleteByType() {
+        // Delete documents by type
+        long deletedCount = documentRepository.deleteByType(DocumentType.BANK_STATEMENT);
         entityManager.flush();
 
-        // Find documents with invalid storage
-        List<Document> documentsWithInvalidStorageAfter = documentRepository.findDocumentsWithInvalidStorage();
+        // Verify bank statement documents were deleted
+        assertThat(deletedCount).isEqualTo(1);
+        List<Document> remainingDocuments = documentRepository.findAll();
+        assertThat(remainingDocuments).hasSize(4);
+        assertThat(remainingDocuments).extracting(Document::getId)
+                .contains(document2.getId(), document3.getId(), document4.getId(), document5.getId());
 
-        // Verify documents with invalid storage were found
-        assertThat(documentsWithInvalidStorageAfter).hasSize(3);
+        // Verify no bank statement documents remain
+        List<Document> bankStatementDocuments = documentRepository.findByType(DocumentType.BANK_STATEMENT);
+        assertThat(bankStatementDocuments).isEmpty();
+    }
+
+    /**
+     * Tests that the repository can delete all documents with a specific classification.
+     */
+    @Test
+    @DisplayName("Should delete documents by classification")
+    public void testDeleteByClassification() {
+        // Delete documents by classification
+        long deletedCount = documentRepository.deleteByClassification(DocumentClassification.REJECTED);
+        entityManager.flush();
+
+        // Verify rejected documents were deleted
+        assertThat(deletedCount).isEqualTo(1);
+        List<Document> remainingDocuments = documentRepository.findAll();
+        assertThat(remainingDocuments).hasSize(4);
+        assertThat(remainingDocuments).extracting(Document::getId)
+                .contains(document1.getId(), document2.getId(), document3.getId(), document5.getId());
+
+        // Verify no rejected documents remain
+        List<Document> rejectedDocuments = documentRepository.findByClassification(DocumentClassification.REJECTED);
+        assertThat(rejectedDocuments).isEmpty();
+    }
+
+    /**
+     * Tests that the repository can delete all documents uploaded before a specific date.
+     */
+    @Test
+    @DisplayName("Should delete documents uploaded before a specific date")
+    public void testDeleteByUploadedAtBefore() {
+        // Delete documents uploaded before a specific date
+        LocalDateTime date = LocalDateTime.now().minusDays(3).withHour(0).withMinute(0).withSecond(0);
+        long deletedCount = documentRepository.deleteByUploadedAtBefore(date);
+        entityManager.flush();
+
+        // Verify documents uploaded before the date were deleted
+        assertThat(deletedCount).isEqualTo(2);
+        List<Document> remainingDocuments = documentRepository.findAll();
+        assertThat(remainingDocuments).hasSize(3);
+        assertThat(remainingDocuments).extracting(Document::getId)
+                .contains(document3.getId(), document4.getId(), document5.getId());
+
+        // Verify no documents uploaded before the date remain
+        List<Document> documentsBeforeDate = documentRepository.findByUploadedAtBefore(date);
+        assertThat(documentsBeforeDate).isEmpty();
     }
 
     /**
@@ -918,93 +1146,121 @@ public class DocumentRepositoryTest {
         assertThat(documentWithApplication.getApplication()).isNotNull();
         assertThat(documentWithApplication.getApplication().getId()).isEqualTo(application1.getId());
 
-        // Retrieve application with documents relationship
-        Application applicationWithDocuments = entityManager.find(Application.class, application1.getId());
-
-        // Verify the documents relationship is correctly established
-        assertThat(applicationWithDocuments.getDocuments()).isNotNull();
-        assertThat(applicationWithDocuments.getDocuments()).hasSize(3);
-        assertThat(applicationWithDocuments.getDocuments()).extracting(Document::getId)
-                .contains(document1.getId(), document2.getId(), document3.getId());
-
-        // Test adding a document to an application
-        Document newDocument = new Document(application1.getId(), DocumentType.MISCELLANEOUS,
-                "s3://mca-documents-production/misc/new-document.pdf");
-        newDocument.setClassification("New Miscellaneous Document");
-        newDocument.setUploadedAt(LocalDateTime.now());
-
-        applicationWithDocuments.addDocument(newDocument);
-        entityManager.persist(newDocument);
+        // Test setting a different application
+        documentWithApplication.setApplication(application2);
         entityManager.flush();
 
-        // Verify the document was added to the application
-        Application updatedApplication = entityManager.find(Application.class, application1.getId());
-        assertThat(updatedApplication.getDocuments()).hasSize(4);
+        // Verify the application relationship was updated
+        Document updatedDocument = entityManager.find(Document.class, document1.getId());
+        assertThat(updatedDocument.getApplication().getId()).isEqualTo(application2.getId());
+        assertThat(updatedDocument.getApplicationId()).isEqualTo(application2.getId());
 
-        // Test removing a document from an application
-        updatedApplication.removeDocument(newDocument);
+        // Test setting application ID directly
+        updatedDocument.setApplicationId(application1.getId());
         entityManager.flush();
 
-        // Verify the document was removed from the application
-        Application applicationAfterRemoval = entityManager.find(Application.class, application1.getId());
-        assertThat(applicationAfterRemoval.getDocuments()).hasSize(3);
+        // Verify the application ID was updated
+        Document documentAfterIdUpdate = entityManager.find(Document.class, document1.getId());
+        assertThat(documentAfterIdUpdate.getApplicationId()).isEqualTo(application1.getId());
     }
 
     /**
-     * Tests the Document entity's business methods.
+     * Tests the Document entity's metadata handling methods.
      */
     @Test
-    @DisplayName("Should handle Document entity business methods")
-    public void testDocumentEntityBusinessMethods() {
-        // Test containsPII method
-        assertThat(document1.containsPII()).isFalse(); // BANK_STATEMENT
-        assertThat(document2.containsPII()).isTrue();  // TAX_RETURN
-        assertThat(document3.containsPII()).isTrue();  // ID_VERIFICATION
+    @DisplayName("Should handle Document entity metadata methods")
+    public void testDocumentEntityMetadataMethods() {
+        // Test getMetadata method
+        Map<String, Object> metadata = document1.getMetadata();
+        assertThat(metadata).isNotNull();
+        assertThat(metadata).containsEntry("confidenceScore", 0.98);
+        assertThat(metadata).containsEntry("pageCount", 5);
 
-        // Test isFinancialDocument method
-        assertThat(document1.isFinancialDocument()).isTrue();  // BANK_STATEMENT
-        assertThat(document2.isFinancialDocument()).isTrue();  // TAX_RETURN
-        assertThat(document3.isFinancialDocument()).isFalse(); // ID_VERIFICATION
-        assertThat(document4.isFinancialDocument()).isFalse(); // BUSINESS_LICENSE
-        assertThat(document5.isFinancialDocument()).isTrue();  // INVOICE
+        // Test getMetadataValue method
+        assertThat(document1.getMetadataValue("confidenceScore")).isEqualTo(0.98);
+        assertThat(document1.getMetadataValue("pageCount")).isEqualTo(5);
 
-        // Test getOcrConfidenceThreshold method
-        assertThat(document1.getOcrConfidenceThreshold()).isEqualTo(0.85); // BANK_STATEMENT
-        assertThat(document2.getOcrConfidenceThreshold()).isEqualTo(0.80); // TAX_RETURN
-        assertThat(document3.getOcrConfidenceThreshold()).isEqualTo(0.90); // ID_VERIFICATION
+        // Test addMetadata method
+        document1.addMetadata("new_key", "new_value");
+        assertThat(document1.getMetadataValue("new_key")).isEqualTo("new_value");
 
-        // Test isClassifiedWithHighConfidence method
-        assertThat(document1.isClassifiedWithHighConfidence()).isTrue();  // 0.95 > 0.85
-        assertThat(document2.isClassifiedWithHighConfidence()).isTrue();  // 0.93 > 0.80
-        assertThat(document3.isClassifiedWithHighConfidence()).isFalse(); // 0.85 < 0.90
+        // Test setMetadata method
+        Map<String, Object> newMetadata = new HashMap<>();
+        newMetadata.put("completely_new", "completely_new_value");
+        newMetadata.put("another_key", 123);
+        document1.setMetadata(newMetadata);
 
-        // Test getBucketName and getObjectKey methods
+        assertThat(document1.getMetadata()).isEqualTo(newMetadata);
+        assertThat(document1.getMetadataValue("confidenceScore")).isNull(); // Old key is gone
+        assertThat(document1.getMetadataValue("completely_new")).isEqualTo("completely_new_value");
+        assertThat(document1.getMetadataValue("another_key")).isEqualTo(123);
+
+        // Test JSON conversion
+        String metadataJson = document1.getMetadataJson();
+        assertThat(metadataJson).isNotNull();
+        assertThat(metadataJson).contains("completely_new");
+        assertThat(metadataJson).contains("completely_new_value");
+        assertThat(metadataJson).contains("another_key");
+        assertThat(metadataJson).contains("123");
+
+        // Test setMetadataJson method
+        String newMetadataJson = "{\"json_key\": \"json_value\", \"json_number\": 456}";
+        document1.setMetadataJson(newMetadataJson);
+
+        assertThat(document1.getMetadataValue("json_key")).isEqualTo("json_value");
+        assertThat(document1.getMetadataValue("json_number")).isEqualTo(456);
+    }
+
+    /**
+     * Tests the Document entity's utility methods.
+     */
+    @Test
+    @DisplayName("Should handle Document entity utility methods")
+    public void testDocumentEntityUtilityMethods() {
+        // Test getFileName method
+        assertThat(document1.getFileName()).isEqualTo("statement-" + application1.getId() + ".pdf");
+
+        // Test getFileExtension method
+        assertThat(document1.getFileExtension()).isEqualTo("pdf");
+        assertThat(document3.getFileExtension()).isEqualTo("jpg");
+        assertThat(document5.getFileExtension()).isEqualTo("png");
+
+        // Test getMimeType method
+        assertThat(document1.getMimeType()).isEqualTo("application/pdf");
+        assertThat(document3.getMimeType()).isEqualTo("image/jpeg");
+        assertThat(document5.getMimeType()).isEqualTo("image/png");
+
+        // Test requiresManualReview method
+        assertThat(document1.requiresManualReview()).isFalse(); // VERIFIED
+        assertThat(document2.requiresManualReview()).isTrue();  // NEEDS_REVIEW
+        assertThat(document3.requiresManualReview()).isTrue();  // FLAGGED
+        assertThat(document4.requiresManualReview()).isFalse(); // REJECTED
+        assertThat(document5.requiresManualReview()).isFalse(); // UNCLASSIFIED
+
+        // Test isAcceptable method
+        assertThat(document1.isAcceptable()).isTrue();  // VERIFIED
+        assertThat(document2.isAcceptable()).isTrue();  // NEEDS_REVIEW
+        assertThat(document3.isAcceptable()).isFalse(); // FLAGGED
+        assertThat(document4.isAcceptable()).isFalse(); // REJECTED
+        assertThat(document5.isAcceptable()).isFalse(); // UNCLASSIFIED
+
+        // Test getBucketName method
         assertThat(document1.getBucketName()).isEqualTo("mca-documents-production");
-        assertThat(document1.getObjectKey()).isEqualTo("bank-statements/statement-123.pdf");
 
-        // Test hasValidStorage method
-        assertThat(document1.hasValidStorage()).isTrue();
+        // Test getObjectKey method
+        assertThat(document1.getObjectKey()).isEqualTo("bank-statements/statement-" + application1.getId() + ".pdf");
 
-        // Test hasMetadata method
-        assertThat(document1.hasMetadata()).isTrue();
-        assertThat(document5.hasMetadata()).isFalse();
+        // Test getConfidenceScore method
+        assertThat(document1.getConfidenceScore()).isEqualTo(0.98);
+        assertThat(document2.getConfidenceScore()).isEqualTo(0.75);
+        assertThat(document3.getConfidenceScore()).isEqualTo(0.65);
+        assertThat(document4.getConfidenceScore()).isEqualTo(0.35);
+        assertThat(document5.getConfidenceScore()).isEqualTo(0.0);
 
-        // Test isValidForProcessing method
-        assertThat(document1.isValidForProcessing()).isTrue();
-
-        // Test adding and retrieving metadata
-        document5.addMetadata("testKey", "testValue");
-        assertThat(document5.getMetadataValue("testKey")).isEqualTo("testValue");
-
-        // Test adding confidence scores
-        Map<String, Double> confidenceScores = new HashMap<>();
-        confidenceScores.put("classification", 0.88);
-        confidenceScores.put("invoiceNumber", 0.92);
-        document5.addConfidenceScores(confidenceScores);
-
-        // Verify confidence scores were added
-        assertThat(document5.getConfidenceScore("classification")).isEqualTo(0.88);
-        assertThat(document5.getConfidenceScore("invoiceNumber")).isEqualTo(0.92);
+        // Test setConfidenceScore method
+        document5.setConfidenceScore(0.85);
+        assertThat(document5.getConfidenceScore()).isEqualTo(0.85);
+        assertThat(document5.getClassification()).isEqualTo(DocumentClassification.NEEDS_REVIEW); // Classification updated based on score
     }
 
     /**
@@ -1016,18 +1272,13 @@ public class DocumentRepositoryTest {
         // Create a document using the builder pattern
         Document.Builder builder = new Document.Builder(
                 application1.getId(),
-                DocumentType.MISCELLANEOUS,
-                "s3://mca-documents-production/misc/builder-document.pdf");
-
-        builder.withClassification("Builder Test Document")
-               .withUploadedAt(LocalDateTime.now())
-               .addMetadata("source", "builder-test")
-               .addMetadata("pages", 10);
-
-        Map<String, Double> confidenceScores = new HashMap<>();
-        confidenceScores.put("classification", 0.95);
-        confidenceScores.put("pages", 0.99);
-        builder.withConfidenceScores(confidenceScores);
+                DocumentType.INVOICE,
+                "mca-documents-production/invoices/invoice-builder-test.pdf")
+                .withClassification(DocumentClassification.VERIFIED)
+                .withUploadedAt(LocalDateTime.now())
+                .addMetadata("confidenceScore", 0.99)
+                .addMetadata("invoiceAmount", 10000.00)
+                .addMetadata("invoiceNumber", "INV-12345");
 
         Document builtDocument = builder.build();
 
@@ -1036,13 +1287,11 @@ public class DocumentRepositoryTest {
 
         // Verify the document was saved with the correct properties
         assertThat(savedDocument.getId()).isNotNull();
-        assertThat(savedDocument.getApplicationId()).isEqualTo(application1.getId());
-        assertThat(savedDocument.getType()).isEqualTo(DocumentType.MISCELLANEOUS);
-        assertThat(savedDocument.getClassification()).isEqualTo("Builder Test Document");
-        assertThat(savedDocument.getStoragePath()).isEqualTo("s3://mca-documents-production/misc/builder-document.pdf");
-        assertThat(savedDocument.getMetadataValue("source")).isEqualTo("builder-test");
-        assertThat(savedDocument.getMetadataValue("pages")).isEqualTo(10);
-        assertThat(savedDocument.getConfidenceScore("classification")).isEqualTo(0.95);
-        assertThat(savedDocument.getConfidenceScore("pages")).isEqualTo(0.99);
+        assertThat(savedDocument.getType()).isEqualTo(DocumentType.INVOICE);
+        assertThat(savedDocument.getClassification()).isEqualTo(DocumentClassification.VERIFIED);
+        assertThat(savedDocument.getStoragePath()).isEqualTo("mca-documents-production/invoices/invoice-builder-test.pdf");
+        assertThat(savedDocument.getMetadataValue("confidenceScore")).isEqualTo(0.99);
+        assertThat(savedDocument.getMetadataValue("invoiceAmount")).isEqualTo(10000.00);
+        assertThat(savedDocument.getMetadataValue("invoiceNumber")).isEqualTo("INV-12345");
     }
 }
