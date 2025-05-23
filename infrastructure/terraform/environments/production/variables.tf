@@ -12,6 +12,43 @@ variable "replica_region" {
   default     = "us-west-2"  # Default replica region, can be overridden in terraform.tfvars
 }
 
+variable "aws_account_id" {
+  description = "The AWS account ID"
+  type        = string
+  # No default value for security reasons, must be provided via terraform.tfvars or environment variables
+}
+
+variable "domain_name" {
+  description = "The domain name for the MCA Application Processing System"
+  type        = string
+  default     = "dollarfunding.com"
+}
+
+variable "cluster_name" {
+  description = "The name of the Kubernetes cluster"
+  type        = string
+  default     = "mca-production"
+}
+
+variable "kubernetes_config_path" {
+  description = "Path to the Kubernetes config file"
+  type        = string
+  default     = "~/.kube/config"
+}
+
+variable "kubernetes_config_context" {
+  description = "Kubernetes config context to use"
+  type        = string
+  default     = "mca-production"
+}
+
+variable "grafana_admin_password" {
+  description = "Admin password for Grafana"
+  type        = string
+  sensitive   = true
+  # No default value for security reasons, must be provided via terraform.tfvars or environment variables
+}
+
 # Database variables
 variable "db_name" {
   description = "The name of the PostgreSQL database"
