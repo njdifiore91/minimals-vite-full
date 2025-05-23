@@ -1,147 +1,176 @@
 # Sample Documents for MCA Application Processing System
 
-## Overview
-
-This directory contains sample documents used for testing the Data Service component of the Merchant Cash Advance (MCA) Application Processing System. These documents simulate real-world inputs that the system will process, allowing for comprehensive testing of document classification, OCR data extraction, and application processing workflows.
+This directory contains sample documents used for testing the Merchant Cash Advance (MCA) Application Processing System's data extraction, classification, and processing capabilities. These documents serve as standardized test data to ensure consistent validation of the system's accuracy and performance.
 
 ## Purpose
 
-The sample documents in this folder serve several critical purposes:
+The sample documents in this folder are designed to:
 
-1. **Validation of OCR Accuracy**: Test the system's ability to maintain 99% data extraction accuracy through AI and machine learning as specified in the technical requirements.
-
-2. **Document Classification Testing**: Verify that the Document Service correctly classifies different document types with high confidence levels.
-
-3. **End-to-End Processing Verification**: Ensure the complete document processing pipeline functions correctly from email ingestion through final application processing.
-
-4. **Regression Testing**: Provide a consistent set of test documents to detect any regressions in processing accuracy during development.
-
-5. **Performance Benchmarking**: Establish baseline performance metrics for document processing times and accuracy rates.
+- Provide consistent test data for unit, integration, and end-to-end testing
+- Validate the 99% data extraction accuracy requirement specified in section 0.1.1
+- Test document classification algorithms across various document types
+- Verify OCR processing capabilities for both typed and handwritten text
+- Benchmark system performance against documents of varying quality
+- Support automated testing of the Data Service's processing logic
 
 ## Document Organization
 
-The sample documents are organized into the following categories, each in its own subdirectory:
+The sample documents are organized into the following categories:
 
-### 1. Application Forms (`/application_forms`)
+### 1. Application Forms
 
-Contains MCA application forms in various formats:
+Merchant Cash Advance application forms containing business information, funding requests, and owner details.
+
+**Examples:**
 - Standard typed applications
 - Handwritten applications
 - Partially completed applications
-- Applications with various quality levels
+- Low-quality scanned applications
 
-### 2. Financial Documents (`/financial_documents`)
+### 2. Financial Documents
 
-Includes financial records necessary for MCA application processing:
-- Bank statements (multiple months)
+Financial records used to verify business performance and creditworthiness.
+
+**Examples:**
+- Bank statements (multiple banks and formats)
 - Credit card processing statements
+- Tax returns
 - Profit and loss statements
 - Balance sheets
-- Cash flow statements
 
-### 3. Identity Documents (`/identity_documents`)
+### 3. Identity Documents
 
-Contains personal identification documents for business owners:
-- Driver's licenses
+Documents used to verify the identity of business owners and authorized signatories.
+
+**Examples:**
+- Driver's licenses from various states
 - Passports
-- National ID cards
-- Other government-issued identification
+- State ID cards
+- Military IDs
 
-### 4. Business Documents (`/business_documents`)
+### 4. Business Documents
 
-Includes various business verification documents:
+Documents that verify business existence, structure, and compliance.
+
+**Examples:**
 - Business licenses
-- Incorporation certificates
-- Business tax returns
-- Articles of organization
+- Articles of incorporation
 - Operating agreements
+- EIN certificates
+- Business insurance policies
 
 ## Document Characteristics
 
-The sample documents have been created with various characteristics to test the system's robustness:
-
 ### Document Formats
-- **PDF**: Most common format for official documents
-- **TIFF/TIF**: Common format for scanned documents
-- **JPEG/JPG**: Typical format for mobile phone captures
-- **PNG**: Alternative format for digital documents
 
-### Content Types
-- **Typed**: Machine-printed text (high OCR accuracy expected)
-- **Handwritten**: Manually completed forms (more challenging for OCR)
-- **Mixed**: Combination of typed and handwritten content
+The sample documents are provided in the following formats:
+
+- **PDF**: Most common format, used for multi-page documents
+- **JPEG**: Used for photographed documents (typically from mobile devices)
+- **PNG**: Used for screenshots and digital documents
+- **TIFF**: Used for faxed documents and legacy scanning systems
+
+### Text Types
+
+Documents contain various text types to test OCR capabilities:
+
+- **Typed**: Machine-printed text (highest expected accuracy)
+- **Handwritten**: Manually written text (challenging for OCR)
+- **Mixed**: Combination of typed and handwritten content (e.g., forms with handwritten entries)
 
 ### Quality Variations
-- **High**: Clear, high-resolution documents (baseline for testing)
-- **Medium**: Slightly degraded quality (tests robustness)
-- **Low**: Poor quality scans or images (tests system limits)
+
+Documents are provided in different quality levels to test system resilience:
+
+- **High**: Clear, high-resolution scans with good contrast
+- **Medium**: Average quality with minor issues
+- **Low**: Poor quality with potential OCR challenges
+- **Damaged**: Documents with physical damage (tears, stains, etc.)
 
 ## Naming Conventions
 
-All sample documents follow a consistent naming convention to facilitate testing:
+Sample documents follow a consistent naming pattern to facilitate identification:
 
 ```
-[document_type]_[subtype]_[entity]_[additional_info].[format]
+[document_type]_[subtype]_[quality]_[sequence].ext
 ```
 
 Examples:
-- `mca_application_standard.pdf` - Standard MCA application form
-- `bank_statement_acme_april.pdf` - April bank statement for Acme company
-- `drivers_license_smith.jpg` - Driver's license for person with last name Smith
-- `business_license_acme.pdf` - Business license for Acme company
-
-## Metadata and Expected Results
-
-Each document has associated metadata defined in the `metadata.json` file at the root of this directory. This metadata includes:
-
-- Document type and subtype
-- Format and quality information
-- Expected classification results (type and confidence level)
-- Expected data extraction results (field values and confidence levels)
-
-This metadata is used by automated tests to verify that the system correctly processes each document and extracts the expected information with the required accuracy levels.
+- `mca_application_standard_001.pdf`: Standard MCA application, sequence #1
+- `bank_statement_acme_april_001.pdf`: Bank statement for Acme business, April, sequence #1
+- `drivers_license_ca_standard.pdf`: California driver's license, standard quality
+- `business_license_state_high_001.pdf`: State business license, high quality, sequence #1
 
 ## Usage in Testing
 
-These sample documents are used in various testing scenarios:
+### Integration with Metadata
 
-1. **Unit Tests**: Testing specific components of the Data Service
-2. **Integration Tests**: Verifying interactions between services
-3. **End-to-End Tests**: Validating complete processing workflows
-4. **Performance Tests**: Measuring processing times and resource usage
-5. **Accuracy Tests**: Verifying data extraction meets the 99% accuracy requirement
+All sample documents are referenced in the `metadata.json` file, which contains:
 
-## Adding New Test Documents
+- Document classification information
+- Expected field values for validation
+- Confidence scores for OCR extraction
+- Bounding box coordinates for key fields
+- Test scenario associations
 
-When adding new test documents to this collection, please follow these guidelines:
+### Test Scenarios
 
-1. **Place in Correct Directory**: Add the document to the appropriate category subdirectory
-2. **Follow Naming Conventions**: Use the established naming pattern
-3. **Update Metadata**: Add an entry to the `metadata.json` file with all required information
-4. **Document Source**: Include information about the document's source or creation method
-5. **Verify Gitignore**: Ensure the document is properly handled by the `.gitignore` configuration
+The documents are organized into test sets that represent complete or partial application packages:
 
-## Important Notes
+1. **Complete Application Set**: Full document set with high-quality scans
+2. **Partial Application Set**: Incomplete document set requiring follow-up
+3. **Low Quality Application Set**: Complete set with poor quality documents
+4. **Handwritten Application Set**: Application with handwritten forms
 
-1. **Binary Files**: Actual document files (PDF, TIFF, JPEG, PNG) are not stored in the Git repository to prevent bloat. They must be downloaded separately from the secure document storage. See the `.gitignore` file for details.
+### Performance Benchmarks
 
-2. **Sensitive Information**: All sample documents contain fictional data. No real personal or business information should ever be added to this test collection.
+Each document and document set has associated performance benchmarks:
 
-3. **Document Retrieval**: To obtain the actual document files, follow the instructions in the `.gitignore` file to download them from the secure S3 storage location.
+- Expected processing time
+- Expected automation level
+- Expected extraction accuracy
+- Classification confidence thresholds
 
-4. **Consistency**: Maintain consistency between the actual documents and their metadata entries in `metadata.json`.
+## Guidelines for Adding New Test Documents
 
-## Related Documentation
+When adding new sample documents to this collection:
 
-- See the Document Service documentation for details on document classification
-- See the OCR Service documentation for information on data extraction processes
-- See the Data Service documentation for application processing workflows
+1. **Follow naming conventions** described above
+2. **Update metadata.json** with document details and expected extraction results
+3. **Include varied quality levels** to test system resilience
+4. **Anonymize sensitive information** while maintaining realistic data patterns
+5. **Add documents to appropriate category folders**
+6. **Document expected field values** for validation testing
+7. **Include in relevant test scenarios** if applicable
 
-## Testing Requirements
+## Cross-Service Testing
 
-These sample documents support the system's key requirements:
+These sample documents are used across multiple services in the MCA processing pipeline:
 
-- Process applications in under 5 minutes from receipt to completion
-- Maintain 99% data extraction accuracy through AI and machine learning
-- Achieve 93% reduction in manual processing through automation
-- Support all required document types for complete application processing
+- **Email Service**: Tests email attachment extraction
+- **Document Service**: Tests document classification
+- **OCR Service**: Tests data extraction from various document types
+- **Data Service**: Tests business rule application and data processing
+- **Notification Service**: Tests status updates based on document processing
+
+## Validation Rules
+
+The sample documents support testing of various validation rules:
+
+- Business validation (name, EIN, business type)
+- Financial validation (account numbers, statement periods)
+- Identity validation (name matching, expiration dates)
+- Cross-document validation (consistency across documents)
+
+## Maintaining Test Data
+
+The sample document collection should be periodically reviewed and updated to:
+
+- Add new document types as they are encountered in production
+- Improve coverage of edge cases and rare document formats
+- Update expected values as business rules change
+- Ensure continued alignment with the 99% accuracy requirement
+
+---
+
+For detailed information about specific documents, refer to the `metadata.json` file and the category-specific metadata files in each subdirectory.
