@@ -4,947 +4,508 @@
 """
 OCR Service Module
 
-This module provides the core OCR processing service that orchestrates the application of
-TensorFlow models for text extraction from documents. It handles model loading, selection
-of appropriate OCR techniques based on document type, and processing of documents with
+This module provides the core OCR processing service that orchestrates the application of 
+TensorFlow models for text extraction from documents. It handles model loading, selection 
+of appropriate OCR techniques based on document type, and processing of documents with 
 GPU acceleration.
-
-The service is designed to achieve 99% data extraction accuracy and process documents
-quickly to meet the 5-minute end-to-end requirement for the MCA application processing system.
 """
 
-import time
-from typing import Dict, List, Optional, Tuple, Union, Any
-import logging
-import traceback
 import os
+import time
+import logging
+from typing import Dict, List, Optional, Tuple, Union, Any
+
+import tensorflow as tf
+import numpy as np
 
 # Import from local modules
 from ..config import app_config, tensorflow_config
 from ..models.model_factory import ModelFactory
 from ..models.base_model import BaseModel
-from ..types.documents import Document, DocumentType, ProcessingStatus
-from ..types.extraction import ExtractedData, ExtractedField, ConfidenceScore
-from ..types.models import OCRModelType, ModelResult
-from ..types.errors import ServiceError, ErrorCategory, Result
+from ..types.models import OCRModelType, ModelParameters, ModelResult
+from ..types.extraction import ExtractedData, ConfidenceScore, ExtractedField
+from ..types.storage import StorageMetadata
+from ..types.errors import ServiceError, Result
 from ..utils import (
-    logging_utils, 
-    time_utils, 
-    tensorflow_utils, 
-    image_utils, 
-    retry_utils,
-    validation_utils,
-    text_utils
+    image_utils,
+    tensorflow_utils,
+    text_utils,
+    time_utils,
+    logging_utils,
+    error_utils
 )
 
 
 class OCRService:
     """
-    Core OCR processing service that orchestrates document text extraction using TensorFlow models.
+    Core OCR processing service that orchestrates the application of TensorFlow models
+    for text extraction from documents.
     
-    This service handles the selection and application of appropriate OCR models based on document
-    type and content characteristics. It supports typed text, handwritten text, and hybrid document
-    processing with GPU acceleration to achieve high accuracy and performance.
-    
-    The service is designed to achieve 99% data extraction accuracy and process documents
-    quickly to meet the 5-minute end-to-end requirement for the MCA application processing system.
-    
-    Key features:
-    - Automatic model selection based on document type and content analysis
-    - GPU-accelerated processing with CPU fallback for large documents
-    - Confidence scoring for all extracted fields
-    - Automatic flagging of low-confidence extractions for human review
-    - Comprehensive performance monitoring and optimization
-    - Document type-specific processing optimizations
-    - Robust error handling and retry logic
+    This service handles:
+    - TensorFlow model loading and initialization with GPU acceleration
+    - Document type detection for OCR strategy selection
+    - Typed text OCR processing for machine-printed documents
+    - Handwritten text OCR processing for handwritten documents
+    - Hybrid OCR processing for mixed document types
+    - Performance monitoring and optimization for GPU utilization
     """
     
     def __init__(self):
         """
-        Initialize the OCR service with required configurations and models.
-        
-        Sets up logging, loads TensorFlow configuration, initializes GPU resources,
-        and prepares the model factory for OCR model creation.
-        
-        Raises:
-            ServiceError: If initialization fails, particularly if GPU is required but not available
+        Initialize the OCR service with TensorFlow models and GPU configuration.
         """
         self.logger = logging.getLogger(__name__)
         self.logger.info("Initializing OCR Service")
         
-        # Load TensorFlow configuration
-        self.tf_config = tensorflow_config
-        
-        # Initialize GPU resources
-        self.gpu_available = tensorflow_utils.setup_gpu_environment(
-            memory_limit=self.tf_config.gpu_memory_limit,
-            allow_growth=self.tf_config.gpu_memory_growth
-        )
-        
-        if not self.gpu_available and self.tf_config.require_gpu:
-            error_msg = "GPU acceleration required but no compatible GPU found"
-            self.logger.error(error_msg)
-            raise ServiceError(
-                message=error_msg,
-                category=ErrorCategory.CONFIGURATION,
-                details={"tf_config": self.tf_config.__dict__}
-            )
-        
-        # Log GPU information
-        if self.gpu_available:
-            gpu_info = tensorflow_utils.get_gpu_info()
-            self.logger.info(f"Using GPU for OCR processing: {gpu_info}")
-        else:
-            self.logger.warning("No GPU available. Using CPU for OCR processing (slower performance)")
+        # Configure GPU settings
+        self._configure_gpu()
         
         # Initialize model factory
         self.model_factory = ModelFactory()
         
-        # Load models in background to speed up first request
-        self._preload_models()
+        # Load models based on configuration
+        self._load_models()
         
         self.logger.info("OCR Service initialized successfully")
     
-    def _preload_models(self):
+    def _configure_gpu(self) -> None:
         """
-        Preload OCR models to improve performance for the first request.
-        
-        This method loads all OCR models in the background to avoid the initial
-        loading delay when processing the first document.
+        Configure TensorFlow to use GPU acceleration with optimized settings.
         """
         try:
-            self.logger.info("Preloading OCR models...")
-            # Preload all model types
-            for model_type in OCRModelType:
-                self.model_factory.get_model(model_type)
-            self.logger.info("OCR models preloaded successfully")
+            # Check if GPU is available
+            gpus = tf.config.list_physical_devices('GPU')
+            if not gpus:
+                self.logger.warning("No GPU found. Running on CPU which may impact performance")
+                return
+            
+            self.logger.info(f"Found {len(gpus)} GPU(s): {gpus}")
+            
+            # Configure memory growth to avoid allocating all GPU memory at once
+            for gpu in gpus:
+                tf.config.experimental.set_memory_growth(gpu, True)
+            
+            # Set visible devices if specified in config
+            if tensorflow_config.VISIBLE_DEVICES is not None:
+                tf.config.set_visible_devices(
+                    gpus[tensorflow_config.VISIBLE_DEVICES], 'GPU'
+                )
+            
+            # Configure memory limit if specified
+            if tensorflow_config.GPU_MEMORY_LIMIT > 0:
+                tf.config.set_logical_device_configuration(
+                    gpus[0],
+                    [tf.config.LogicalDeviceConfiguration(
+                        memory_limit=tensorflow_config.GPU_MEMORY_LIMIT
+                    )]
+                )
+            
+            # Set TensorFlow to use mixed precision for better performance
+            if tensorflow_config.USE_MIXED_PRECISION:
+                tf.keras.mixed_precision.set_global_policy('mixed_float16')
+            
+            self.logger.info("GPU configuration completed successfully")
+        
         except Exception as e:
-            # Log error but don't fail initialization - models will be loaded on demand
-            self.logger.warning(f"Failed to preload OCR models: {str(e)}")
-            self.logger.debug(traceback.format_exc())
+            error_msg = f"Error configuring GPU: {str(e)}"
+            self.logger.error(error_msg)
+            # Continue with CPU as fallback
+            self.logger.warning("Falling back to CPU execution")
     
-    def process_document(self, document: Document) -> Result[Tuple[ExtractedData, float]]:
+    def _load_models(self) -> None:
         """
-        Process a document using appropriate OCR models based on document type and content.
+        Load and initialize all required OCR models.
+        """
+        try:
+            self.logger.info("Loading OCR models")
+            
+            # Record model loading start time for performance monitoring
+            start_time = time.time()
+            
+            # Pre-load models for faster inference during processing
+            # This ensures models are ready when documents arrive
+            self.typed_model = self.model_factory.get_model(OCRModelType.TYPED)
+            self.handwritten_model = self.model_factory.get_model(OCRModelType.HANDWRITTEN)
+            self.hybrid_model = self.model_factory.get_model(OCRModelType.HYBRID)
+            
+            # Warm up models with dummy data to initialize weights and optimize performance
+            self._warm_up_models()
+            
+            elapsed_time = time.time() - start_time
+            self.logger.info(f"All OCR models loaded successfully in {elapsed_time:.2f} seconds")
+        
+        except Exception as e:
+            error_msg = f"Failed to load OCR models: {str(e)}"
+            self.logger.error(error_msg)
+            raise ServiceError("MODEL_LOADING_ERROR", error_msg)
+    
+    def _warm_up_models(self) -> None:
+        """
+        Warm up models with dummy data to initialize weights and optimize performance.
+        """
+        try:
+            self.logger.info("Warming up OCR models")
+            
+            # Create a small dummy image for model warm-up
+            dummy_image = np.zeros((300, 300, 3), dtype=np.uint8)
+            dummy_image = image_utils.preprocess_image(dummy_image)
+            
+            # Warm up each model with the dummy image
+            self.typed_model.extract_text(dummy_image)
+            self.handwritten_model.extract_text(dummy_image)
+            self.hybrid_model.extract_text(dummy_image)
+            
+            self.logger.info("Model warm-up completed successfully")
+        
+        except Exception as e:
+            self.logger.warning(f"Model warm-up failed: {str(e)}. This may impact initial processing performance.")
+    
+    def detect_document_type(self, image: np.ndarray) -> OCRModelType:
+        """
+        Detect the document type (typed, handwritten, or mixed) to select the appropriate OCR model.
         
         Args:
-            document: The document to process, containing metadata and binary content
+            image: The preprocessed document image as a numpy array
             
         Returns:
-            A Result containing either:
-              - A tuple with the extracted data and the total processing time in seconds
-              - A ServiceError if processing fails
+            OCRModelType: The detected document type (TYPED, HANDWRITTEN, or HYBRID)
+        """
+        try:
+            self.logger.info("Detecting document type for OCR model selection")
+            
+            # Use TensorFlow utilities to analyze the image and detect text type
+            text_type_result = tensorflow_utils.detect_text_type(image)
+            
+            # Calculate percentages of different text types
+            typed_percentage = text_type_result.get('typed_percentage', 0)
+            handwritten_percentage = text_type_result.get('handwritten_percentage', 0)
+            
+            # Decision thresholds from configuration
+            typed_threshold = tensorflow_config.TYPED_THRESHOLD
+            handwritten_threshold = tensorflow_config.HANDWRITTEN_THRESHOLD
+            
+            # Determine document type based on percentages and thresholds
+            if typed_percentage >= typed_threshold and handwritten_percentage < handwritten_threshold:
+                self.logger.info(f"Document classified as TYPED (typed: {typed_percentage:.2f}%, handwritten: {handwritten_percentage:.2f}%)")
+                return OCRModelType.TYPED
+            
+            elif handwritten_percentage >= handwritten_threshold and typed_percentage < typed_threshold:
+                self.logger.info(f"Document classified as HANDWRITTEN (typed: {typed_percentage:.2f}%, handwritten: {handwritten_percentage:.2f}%)")
+                return OCRModelType.HANDWRITTEN
+            
+            else:
+                self.logger.info(f"Document classified as HYBRID (typed: {typed_percentage:.2f}%, handwritten: {handwritten_percentage:.2f}%)")
+                return OCRModelType.HYBRID
+        
+        except Exception as e:
+            error_msg = f"Error detecting document type: {str(e)}"
+            self.logger.error(error_msg)
+            # Default to hybrid model as the safest fallback
+            self.logger.warning("Defaulting to HYBRID model due to detection error")
+            return OCRModelType.HYBRID
+    
+    def select_model(self, document_type: OCRModelType) -> BaseModel:
+        """
+        Select the appropriate OCR model based on the document type.
+        
+        Args:
+            document_type: The detected document type
+            
+        Returns:
+            BaseModel: The selected OCR model instance
+        """
+        if document_type == OCRModelType.TYPED:
+            return self.typed_model
+        elif document_type == OCRModelType.HANDWRITTEN:
+            return self.handwritten_model
+        else:  # HYBRID or unknown
+            return self.hybrid_model
+    
+    def process_document(self, document_data: bytes, metadata: Dict[str, Any]) -> Result[ExtractedData]:
+        """
+        Process a document for OCR text extraction.
+        
+        Args:
+            document_data: The raw document data as bytes
+            metadata: Document metadata including classification information
+            
+        Returns:
+            Result[ExtractedData]: The extracted data with confidence scores or an error
         """
         start_time = time.time()
-        request_id = document.metadata.request_id if hasattr(document.metadata, 'request_id') else None
-        self.logger.info(f"Processing document: {document.metadata.filename}", extra={"request_id": request_id})
+        request_id = metadata.get('request_id', 'unknown')
+        document_type = metadata.get('document_type', 'unknown')
+        
+        self.logger.info(f"Processing document: request_id={request_id}, document_type={document_type}")
         
         try:
-            # Update document status
-            document.processing_status = ProcessingStatus.PROCESSING
+            # Convert document to image
+            image = image_utils.convert_document_to_image(document_data)
+            if image is None:
+                error_msg = "Failed to convert document to image"
+                self.logger.error(error_msg)
+                return Result.failure(ServiceError("DOCUMENT_CONVERSION_ERROR", error_msg))
             
-            # Preprocess document image
-            preprocessed_image = self._preprocess_document(document)
+            # Preprocess the image for OCR
+            preprocessed_image = image_utils.preprocess_image(image)
             
-            # Determine document content type and select appropriate model
-            model_type = self._determine_model_type(preprocessed_image, document.document_type)
-            self.logger.info(
-                f"Selected model type: {model_type.name} for document {document.metadata.filename}",
-                extra={"request_id": request_id}
-            )
+            # Detect document type if not provided in metadata or override is enabled
+            model_type = None
+            if 'classification' in metadata and not tensorflow_config.OVERRIDE_CLASSIFICATION:
+                # Use classification from metadata if available
+                classification = metadata['classification']
+                if classification == 'typed':
+                    model_type = OCRModelType.TYPED
+                elif classification == 'handwritten':
+                    model_type = OCRModelType.HANDWRITTEN
+                elif classification == 'mixed':
+                    model_type = OCRModelType.HYBRID
             
-            # Get appropriate model from factory
-            ocr_model = self.model_factory.get_model(model_type)
+            # If model type is not determined from metadata, detect it
+            if model_type is None:
+                model_type = self.detect_document_type(preprocessed_image)
             
-            # Extract text using selected model
-            extraction_result = self._extract_text(ocr_model, preprocessed_image, document)
+            # Select the appropriate model
+            model = self.select_model(model_type)
             
-            # Format and validate extraction results
-            extracted_data = self._format_extraction_results(extraction_result, document)
+            # Extract text using the selected model
+            self.logger.info(f"Extracting text using {model_type.name} model")
+            extraction_result = model.extract_text(preprocessed_image)
             
-            # Update document status
-            document.processing_status = ProcessingStatus.COMPLETED
+            # Apply structure recognition to identify forms, tables, and sections
+            structured_data = self._apply_structure_recognition(extraction_result, metadata)
             
-            # Calculate processing time
+            # Extract key-value fields based on document type and structure
+            extracted_fields = self._extract_fields(structured_data, metadata)
+            
+            # Calculate confidence scores for extracted fields
+            scored_fields = self._score_field_confidence(extracted_fields)
+            
+            # Format the results as JSON
+            result = self._format_extraction_result(scored_fields, metadata)
+            
+            # Calculate processing time for monitoring
             processing_time = time.time() - start_time
-            self.logger.info(
-                f"Document processing completed in {processing_time:.2f} seconds: {document.metadata.filename}",
-                extra={"request_id": request_id}
-            )
+            self.logger.info(f"Document processing completed in {processing_time:.2f} seconds")
             
-            # Log performance metrics
-            self._log_performance_metrics(document, processing_time, extracted_data)
+            # Add processing metrics to result
+            result.metadata['processing_time'] = processing_time
+            result.metadata['model_type'] = model_type.name
             
-            # Check if processing time meets performance requirements
-            if processing_time > app_config.max_processing_time_seconds:
-                self.logger.warning(
-                    f"Document processing exceeded target time: {processing_time:.2f} seconds > "
-                    f"{app_config.max_processing_time_seconds} seconds",
-                    extra={"request_id": request_id}
-                )
-            
-            return Result.success((extracted_data, processing_time))
-            
-        except Exception as e:
-            # Update document status to error
-            document.processing_status = ProcessingStatus.ERROR
-            
-            # Calculate processing time even for errors
-            processing_time = time.time() - start_time
-            
-            # Log the error with context
-            error_msg = f"Error processing document {document.metadata.filename}: {str(e)}"
-            self.logger.error(error_msg, extra={"request_id": request_id})
-            self.logger.debug(traceback.format_exc(), extra={"request_id": request_id})
-            
-            # Create service error with context
-            error = ServiceError(
-                message=error_msg,
-                category=ErrorCategory.PROCESSING,
-                details={
-                    "document_id": document.metadata.document_id,
-                    "document_type": document.document_type.name if document.document_type else "UNKNOWN",
-                    "processing_time": processing_time,
-                    "original_error": str(e),
-                    "traceback": traceback.format_exc(),
-                    "request_id": request_id
-                }
-            )
-            
-            return Result.failure(error)
-    
-    def _preprocess_document(self, document: Document) -> Any:
-        """
-        Preprocess the document image for OCR processing.
-        
-        Applies image normalization, enhancement, and preparation techniques to optimize
-        the document for text extraction.
-        
-        Args:
-            document: The document to preprocess
-            
-        Returns:
-            Preprocessed image ready for OCR processing
-            
-        Raises:
-            ServiceError: If preprocessing fails
-        """
-        request_id = document.metadata.request_id if hasattr(document.metadata, 'request_id') else None
-        self.logger.debug(f"Preprocessing document: {document.metadata.filename}", extra={"request_id": request_id})
-        
-        try:
-            # Convert document content to image based on file type
-            image = image_utils.convert_to_image(document.content, document.metadata.mime_type)
-            
-            # Check image quality and dimensions
-            quality_score = image_utils.assess_image_quality(image)
-            if quality_score < self.tf_config.min_image_quality_score:
-                self.logger.warning(
-                    f"Low quality document image detected (score: {quality_score}). "
-                    f"OCR results may be less accurate.",
-                    extra={"request_id": request_id}
-                )
-            
-            # Apply preprocessing pipeline with document-type specific optimizations
-            preprocessing_options = self._get_preprocessing_options(document.document_type)
-            
-            preprocessed = image_utils.preprocess_for_ocr(
-                image,
-                **preprocessing_options
-            )
-            
-            # Log preprocessing results
-            self.logger.debug(
-                f"Document preprocessing completed with options: {preprocessing_options}",
-                extra={"request_id": request_id}
-            )
-            
-            return preprocessed
+            return Result.success(result)
         
         except Exception as e:
-            error_msg = f"Failed to preprocess document {document.metadata.filename}: {str(e)}"
-            self.logger.error(error_msg, extra={"request_id": request_id})
-            raise ServiceError(
-                message=error_msg,
-                category=ErrorCategory.PREPROCESSING,
-                details={
-                    "document_id": document.metadata.document_id,
-                    "mime_type": document.metadata.mime_type,
-                    "original_error": str(e),
-                    "request_id": request_id
-                }
+            error_msg = f"Error processing document: {str(e)}"
+            self.logger.error(error_msg, exc_info=True)
+            processing_time = time.time() - start_time
+            return Result.failure(
+                ServiceError(
+                    "DOCUMENT_PROCESSING_ERROR", 
+                    error_msg,
+                    metadata={
+                        'processing_time': processing_time,
+                        'request_id': request_id
+                    }
+                )
             )
     
-    def _get_preprocessing_options(self, document_type: Optional[DocumentType]) -> Dict[str, bool]:
+    def _apply_structure_recognition(self, extraction_result: Dict[str, Any], metadata: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Get document type-specific preprocessing options.
-        
-        Different document types benefit from different preprocessing techniques.
-        This method returns the optimal preprocessing options for each document type.
+        Apply structure recognition to identify forms, tables, and document sections.
         
         Args:
-            document_type: The type of document being processed
+            extraction_result: The raw extraction result from the OCR model
+            metadata: Document metadata including classification information
             
         Returns:
-            Dictionary of preprocessing options
+            Dict[str, Any]: The structured data with identified forms, tables, and sections
         """
-        # Default preprocessing options
-        options = {
-            "deskew": True,
-            "denoise": True,
-            "normalize": True,
-            "enhance_contrast": True,
-            "remove_background": False,
-            "sharpen": False,
-            "binarize": False
-        }
-        
-        # Apply document type-specific optimizations
-        if document_type:
-            if document_type == DocumentType.ID_DOCUMENT:
-                # ID documents often have security features that shouldn't be removed
-                options["remove_background"] = False
-                options["enhance_contrast"] = True
-                options["sharpen"] = True
-            
-            elif document_type == DocumentType.BANK_STATEMENT:
-                # Bank statements often have light text that benefits from contrast enhancement
-                options["enhance_contrast"] = True
-                options["remove_background"] = True
-                
-            elif document_type == DocumentType.APPLICATION:
-                # Applications may have handwritten text that benefits from less aggressive processing
-                options["denoise"] = True
-                options["sharpen"] = False
-                options["binarize"] = False
-                
-            elif document_type == DocumentType.TAX_RETURN:
-                # Tax returns often have dense text that benefits from background removal
-                options["remove_background"] = True
-                options["sharpen"] = True
-        
-        return options
-    
-    def _determine_model_type(self, image: Any, document_type: Optional[DocumentType]) -> OCRModelType:
-        """
-        Determine the appropriate OCR model type based on document content and classification.
-        
-        Analyzes the document image to detect whether it contains typed text, handwritten text,
-        or a mixture of both, and selects the appropriate OCR model type accordingly.
-        
-        Args:
-            image: The preprocessed document image
-            document_type: The classified document type, if available
-            
-        Returns:
-            The selected OCR model type (TYPED, HANDWRITTEN, or HYBRID)
-        """
-        # Start with a model type prediction based on document type
-        predicted_model_type = None
-        
-        # Use document type to inform model selection if available
-        if document_type:
-            # Document types that typically contain handwritten content
-            if document_type == DocumentType.APPLICATION:
-                # Applications often contain a mix of typed and handwritten content
-                predicted_model_type = OCRModelType.HYBRID
-                
-            elif document_type == DocumentType.ID_DOCUMENT:
-                # ID documents often contain both typed and handwritten elements
-                predicted_model_type = OCRModelType.HYBRID
-                
-            elif document_type in [DocumentType.TAX_RETURN, DocumentType.BANK_STATEMENT]:
-                # These are typically typed documents
-                predicted_model_type = OCRModelType.TYPED
-                
-            elif document_type == DocumentType.PAY_STUB:
-                # Pay stubs are typically typed documents
-                predicted_model_type = OCRModelType.TYPED
-        
-        # If we have a high-confidence prediction based on document type, use it
-        # Otherwise, analyze the image content to detect text types
-        if predicted_model_type is None or self.tf_config.always_analyze_content:
-            # Analyze image to detect text type using TensorFlow text detection model
-            has_typed, has_handwritten, confidence = tensorflow_utils.detect_text_types(image)
-            
-            self.logger.debug(
-                f"Text type detection results: typed={has_typed}, handwritten={has_handwritten}, "
-                f"confidence={confidence:.2f}"
-            )
-            
-            # Determine model type based on detected text types
-            if has_typed and has_handwritten:
-                detected_model_type = OCRModelType.HYBRID
-            elif has_handwritten:
-                detected_model_type = OCRModelType.HANDWRITTEN
-            else:
-                # Default to typed text model if no handwriting detected
-                detected_model_type = OCRModelType.TYPED
-            
-            # If we had a prediction but detection has high confidence, use detection result
-            if predicted_model_type is not None:
-                if confidence >= self.tf_config.text_type_confidence_threshold:
-                    # Detection has high confidence, override prediction
-                    if predicted_model_type != detected_model_type:
-                        self.logger.info(
-                            f"Overriding predicted model type {predicted_model_type} with detected "
-                            f"model type {detected_model_type} (confidence: {confidence:.2f})"
-                        )
-                    return detected_model_type
-                else:
-                    # Detection has low confidence, use prediction
-                    self.logger.info(
-                        f"Using predicted model type {predicted_model_type} due to low detection "
-                        f"confidence ({confidence:.2f})"
-                    )
-                    return predicted_model_type
-            else:
-                # No prediction, use detection result
-                return detected_model_type
-        else:
-            # Use the high-confidence prediction based on document type
-            self.logger.debug(f"Using predicted model type {predicted_model_type} based on document type")
-            return predicted_model_type
-    
-    @retry_utils.retry(max_attempts=3, exceptions=(ServiceError,), 
-    exclude_categories=[ErrorCategory.VALIDATION, ErrorCategory.CONFIGURATION])
-    def _extract_text(self, model: BaseModel, image: Any, document: Document) -> ModelResult:
-        """
-        Extract text from the document image using the selected OCR model.
-        
-        Applies the OCR model to the preprocessed document image and extracts text content
-        with confidence scores. Includes retry logic for transient failures.
-        
-        Args:
-            model: The OCR model to use for text extraction
-            image: The preprocessed document image
-            document: The original document with metadata
-            
-        Returns:
-            Model result containing extracted text and confidence scores
-            
-        Raises:
-            ServiceError: If text extraction fails after retries
-        """
-        request_id = document.metadata.request_id if hasattr(document.metadata, 'request_id') else None
-        self.logger.debug(
-            f"Extracting text from document: {document.metadata.filename}", 
-            extra={"request_id": request_id}
-        )
-        
         try:
-            # Apply the model to extract text with document type context
-            extraction_start = time.time()
-            result = model.extract_text(
-                image, 
-                document_type=document.document_type,
-                context={
-                    "document_id": document.metadata.document_id,
-                    "request_id": request_id,
-                    "filename": document.metadata.filename
-                }
-            )
-            extraction_time = time.time() - extraction_start
+            self.logger.info("Applying structure recognition")
             
-            # Log extraction statistics
-            self.logger.info(
-                f"Text extraction completed for {document.metadata.filename} in {extraction_time:.2f}s: "
-                f"{len(result.extracted_fields)} fields extracted with "
-                f"average confidence {result.average_confidence:.2f}",
-                extra={"request_id": request_id}
-            )
+            # Get document type from metadata for specialized structure recognition
+            document_type = metadata.get('document_type', 'unknown')
             
-            # Check if extraction meets quality thresholds
-            if result.average_confidence < self.tf_config.min_acceptable_confidence:
-                self.logger.warning(
-                    f"Low confidence extraction results ({result.average_confidence:.2f}) for "
-                    f"document {document.metadata.filename}. Results may require manual review.",
-                    extra={"request_id": request_id}
+            # Apply structure recognition based on document type
+            if document_type == 'application_form':
+                return tensorflow_utils.recognize_application_form_structure(extraction_result)
+            elif document_type == 'tax_document':
+                return tensorflow_utils.recognize_tax_document_structure(extraction_result)
+            elif document_type == 'bank_statement':
+                return tensorflow_utils.recognize_bank_statement_structure(extraction_result)
+            elif document_type == 'identity_document':
+                return tensorflow_utils.recognize_identity_document_structure(extraction_result)
+            else:
+                # Generic structure recognition for unknown document types
+                return tensorflow_utils.recognize_generic_structure(extraction_result)
+        
+        except Exception as e:
+            self.logger.warning(f"Structure recognition failed: {str(e)}. Falling back to raw extraction.")
+            return extraction_result
+    
+    def _extract_fields(self, structured_data: Dict[str, Any], metadata: Dict[str, Any]) -> List[ExtractedField]:
+        """
+        Extract key-value fields from structured data based on document type.
+        
+        Args:
+            structured_data: The structured data with identified forms, tables, and sections
+            metadata: Document metadata including classification information
+            
+        Returns:
+            List[ExtractedField]: The extracted fields with values
+        """
+        try:
+            self.logger.info("Extracting key-value fields")
+            
+            # Get document type from metadata for specialized field extraction
+            document_type = metadata.get('document_type', 'unknown')
+            
+            # Apply field extraction based on document type
+            if document_type == 'application_form':
+                return text_utils.extract_application_form_fields(structured_data)
+            elif document_type == 'tax_document':
+                return text_utils.extract_tax_document_fields(structured_data)
+            elif document_type == 'bank_statement':
+                return text_utils.extract_bank_statement_fields(structured_data)
+            elif document_type == 'identity_document':
+                return text_utils.extract_identity_document_fields(structured_data)
+            else:
+                # Generic field extraction for unknown document types
+                return text_utils.extract_generic_fields(structured_data)
+        
+        except Exception as e:
+            self.logger.warning(f"Field extraction failed: {str(e)}. Returning empty field list.")
+            return []
+    
+    def _score_field_confidence(self, extracted_fields: List[ExtractedField]) -> List[ExtractedField]:
+        """
+        Calculate confidence scores for extracted fields.
+        
+        Args:
+            extracted_fields: The extracted fields with values
+            
+        Returns:
+            List[ExtractedField]: The extracted fields with confidence scores
+        """
+        try:
+            self.logger.info("Calculating confidence scores for extracted fields")
+            
+            # Use confidence service to score each field
+            scored_fields = []
+            for field in extracted_fields:
+                # Calculate confidence based on OCR certainty and field validation
+                confidence = tensorflow_utils.calculate_field_confidence(
+                    field.value,
+                    field.field_type,
+                    field.location
                 )
-            
-            # Check if extraction time meets performance requirements
-            if extraction_time > self.tf_config.extraction_time_warning_threshold:
-                self.logger.warning(
-                    f"Slow text extraction ({extraction_time:.2f}s) for document "
-                    f"{document.metadata.filename}. Consider optimization.",
-                    extra={"request_id": request_id}
+                
+                # Create a new field with confidence score
+                scored_field = ExtractedField(
+                    field_id=field.field_id,
+                    field_type=field.field_type,
+                    value=field.value,
+                    confidence=ConfidenceScore(confidence),
+                    location=field.location,
+                    metadata=field.metadata
                 )
+                
+                # Flag low confidence fields
+                if confidence < tensorflow_config.CONFIDENCE_THRESHOLD:
+                    scored_field.metadata['requires_review'] = True
+                
+                scored_fields.append(scored_field)
+            
+            return scored_fields
+        
+        except Exception as e:
+            self.logger.warning(f"Confidence scoring failed: {str(e)}. Using default confidence values.")
+            # Apply default confidence if scoring fails
+            for field in extracted_fields:
+                field.confidence = ConfidenceScore(0.5)  # Default mid-range confidence
+                field.metadata['requires_review'] = True  # Flag for review due to scoring failure
+            
+            return extracted_fields
+    
+    def _format_extraction_result(self, scored_fields: List[ExtractedField], metadata: Dict[str, Any]) -> ExtractedData:
+        """
+        Format the extraction result as structured JSON data.
+        
+        Args:
+            scored_fields: The extracted fields with confidence scores
+            metadata: Document metadata including classification information
+            
+        Returns:
+            ExtractedData: The formatted extraction result
+        """
+        try:
+            self.logger.info("Formatting extraction result as JSON")
+            
+            # Get document type from metadata for specialized JSON formatting
+            document_type = metadata.get('document_type', 'unknown')
+            
+            # Create extraction metadata
+            extraction_metadata = {
+                'document_id': metadata.get('document_id', 'unknown'),
+                'request_id': metadata.get('request_id', 'unknown'),
+                'document_type': document_type,
+                'extraction_timestamp': time_utils.get_iso_timestamp(),
+                'ocr_service_version': app_config.VERSION,
+                'requires_review': any(field.metadata.get('requires_review', False) for field in scored_fields)
+            }
+            
+            # Calculate overall confidence score
+            if scored_fields:
+                overall_confidence = sum(field.confidence.value for field in scored_fields) / len(scored_fields)
+                extraction_metadata['overall_confidence'] = overall_confidence
+            else:
+                extraction_metadata['overall_confidence'] = 0.0
+            
+            # Create the extraction result
+            result = ExtractedData(
+                fields=scored_fields,
+                metadata=extraction_metadata
+            )
             
             return result
-            
+        
         except Exception as e:
-            error_msg = f"Text extraction failed for document {document.metadata.filename}: {str(e)}"
-            self.logger.error(error_msg, extra={"request_id": request_id})
+            self.logger.warning(f"Result formatting failed: {str(e)}. Using simplified format.")
             
-            # Check if this is a GPU-related error that might benefit from fallback to CPU
-            if tensorflow_utils.is_gpu_memory_error(str(e)) and self.gpu_available:
-                self.logger.warning(
-                    f"GPU memory error detected. Attempting fallback to CPU for document "
-                    f"{document.metadata.filename}",
-                    extra={"request_id": request_id}
-                )
-                try:
-                    # Temporarily disable GPU for this extraction
-                    with tensorflow_utils.cpu_only_context():
-                        result = model.extract_text(
-                            image, 
-                            document_type=document.document_type,
-                            context={
-                                "document_id": document.metadata.document_id,
-                                "request_id": request_id,
-                                "filename": document.metadata.filename,
-                                "fallback_to_cpu": True
-                            }
-                        )
-                    
-                    self.logger.info(
-                        f"Successfully extracted text using CPU fallback for document "
-                        f"{document.metadata.filename}",
-                        extra={"request_id": request_id}
-                    )
-                    return result
-                    
-                except Exception as cpu_error:
-                    # CPU fallback also failed, raise the original error
-                    self.logger.error(
-                        f"CPU fallback extraction also failed: {str(cpu_error)}",
-                        extra={"request_id": request_id}
-                    )
-            
-            # Raise service error with context for retry mechanism
-            raise ServiceError(
-                message=error_msg,
-                category=ErrorCategory.EXTRACTION,
-                details={
-                    "document_id": document.metadata.document_id,
-                    "model_type": model.model_type.name,
-                    "original_error": str(e),
-                    "request_id": request_id
-                }
-            )
-    
-    def _format_extraction_results(self, result: ModelResult, document: Document) -> ExtractedData:
-        """
-        Format the extraction results into structured data for downstream processing.
-        
-        Transforms the raw OCR results into a structured JSON format with field names,
-        values, and confidence scores according to document type-specific schemas.
-        
-        Args:
-            result: The model extraction result
-            document: The original document with metadata
-            
-        Returns:
-            Structured extracted data in standardized format
-            
-        Raises:
-            ServiceError: If formatting fails
-        """
-        request_id = document.metadata.request_id if hasattr(document.metadata, 'request_id') else None
-        self.logger.debug(
-            f"Formatting extraction results for document: {document.metadata.filename}",
-            extra={"request_id": request_id}
-        )
-        
-        try:
-            # Create extracted data object with basic metadata
-            extracted_data = ExtractedData(
-                document_id=document.metadata.document_id,
-                document_type=document.document_type.name if document.document_type else "UNKNOWN",
-                extraction_timestamp=time_utils.get_current_timestamp(),
-                average_confidence=result.average_confidence,
-                fields={},
-                metadata={
-                    "model_type": result.model_type.name,
-                    "processing_time": result.processing_time,
-                    "version": app_config.version,
-                    "request_id": request_id,
-                    "filename": document.metadata.filename,
-                    "mime_type": document.metadata.mime_type,
-                    "gpu_accelerated": self.gpu_available and not result.metadata.get("fallback_to_cpu", False)
-                }
-            )
-            
-            # Add document-specific schema version based on document type
-            if document.document_type:
-                schema_version = self._get_schema_version_for_document_type(document.document_type)
-                extracted_data.metadata["schema_version"] = schema_version
-            
-            # Add extracted fields with confidence scores and validation
-            for field in result.extracted_fields:
-                # Apply field-specific validation and normalization
-                normalized_value = self._normalize_field_value(field.value, field.name, document.document_type)
-                
-                # Calculate if field requires review based on confidence and validation results
-                requires_review = field.confidence < self.tf_config.confidence_threshold
-                
-                # Add field to extracted data
-                extracted_data.fields[field.name] = {
-                    "value": normalized_value,
-                    "raw_value": field.value,  # Keep original value for reference
-                    "confidence": field.confidence,
-                    "requires_review": requires_review,
-                    "position": field.position if hasattr(field, 'position') else None,
-                    "page": field.page if hasattr(field, 'page') else 1
-                }
-            
-            # Add document structure information if available
-            if hasattr(result, 'document_structure') and result.document_structure:
-                extracted_data.metadata["document_structure"] = result.document_structure
-            
-            # Flag document for review if overall confidence is low or critical fields are missing
-            extracted_data.requires_review = self._determine_if_review_required(
-                extracted_data, document.document_type
-            )
-            
-            # Validate the extracted data against the expected schema
-            self._validate_extracted_data(extracted_data, document.document_type)
-            
-            return extracted_data
-            
-        except Exception as e:
-            error_msg = f"Failed to format extraction results for document {document.metadata.filename}: {str(e)}"
-            self.logger.error(error_msg, extra={"request_id": request_id})
-            raise ServiceError(
-                message=error_msg,
-                category=ErrorCategory.FORMATTING,
-                details={
-                    "document_id": document.metadata.document_id,
-                    "original_error": str(e),
-                    "request_id": request_id
-                }
-            )
-    
-    def _get_schema_version_for_document_type(self, document_type: DocumentType) -> str:
-        """
-        Get the schema version for a specific document type.
-        
-        Different document types may have different schema versions for their
-        extracted data format.
-        
-        Args:
-            document_type: The type of document
-            
-        Returns:
-            Schema version string
-        """
-        # Schema version mapping by document type
-        schema_versions = {
-            DocumentType.APPLICATION: "1.2",
-            DocumentType.TAX_RETURN: "1.1",
-            DocumentType.BANK_STATEMENT: "1.3",
-            DocumentType.PAY_STUB: "1.0",
-            DocumentType.ID_DOCUMENT: "1.1",
-            DocumentType.OTHER: "1.0"
-        }
-        
-        return schema_versions.get(document_type, "1.0")
-    
-    def _normalize_field_value(self, value: str, field_name: str, document_type: Optional[DocumentType]) -> str:
-        """
-        Normalize and validate a field value based on field name and document type.
-        
-        Applies field-specific normalization rules to ensure consistent data format
-        for downstream processing.
-        
-        Args:
-            value: The raw field value from OCR
-            field_name: The name of the field
-            document_type: The type of document
-            
-        Returns:
-            Normalized field value
-        """
-        # Skip normalization for empty values
-        if not value or not value.strip():
-            return value
-        
-        # Apply common normalization rules
-        normalized = value.strip()
-        
-        # Apply field-specific normalization
-        if "date" in field_name.lower():
-            # Normalize date formats
-            try:
-                normalized = time_utils.normalize_date_string(normalized)
-            except ValueError:
-                # If date normalization fails, return the original value
-                pass
-                
-        elif "amount" in field_name.lower() or "total" in field_name.lower():
-            # Normalize currency amounts
-            normalized = normalized.replace("$", "").replace(",", "").strip()
-            
-        elif "ssn" in field_name.lower() or "social" in field_name.lower():
-            # Normalize Social Security Numbers
-            normalized = normalized.replace("-", "").replace(" ", "").strip()
-            
-        elif "phone" in field_name.lower():
-            # Normalize phone numbers
-            normalized = normalized.replace("-", "").replace("(", "").replace(")", "").replace(" ", "").strip()
-            
-        elif "ein" in field_name.lower() or "tax_id" in field_name.lower():
-            # Normalize Employer Identification Numbers
-            normalized = normalized.replace("-", "").replace(" ", "").strip()
-        
-        return normalized
-    
-    def _determine_if_review_required(self, extracted_data: ExtractedData, document_type: Optional[DocumentType]) -> bool:
-        """
-        Determine if the document requires human review based on extraction results.
-        
-        Checks overall confidence, presence of critical fields, and field-specific
-        confidence scores to decide if human review is needed.
-        
-        Args:
-            extracted_data: The extracted data
-            document_type: The type of document
-            
-        Returns:
-            True if human review is required, False otherwise
-        """
-        # Check overall confidence threshold
-        if extracted_data.average_confidence < self.tf_config.document_confidence_threshold:
-            return True
-        
-        # If document type is unknown, require review
-        if not document_type:
-            return True
-        
-        # Check for missing critical fields based on document type
-        critical_fields = self._get_critical_fields_for_document_type(document_type)
-        for field in critical_fields:
-            if field not in extracted_data.fields:
-                # Critical field is missing
-                return True
-            if extracted_data.fields[field]["requires_review"]:
-                # Critical field has low confidence
-                return True
-        
-        # Check if too many fields require review
-        fields_requiring_review = sum(1 for field in extracted_data.fields.values() if field["requires_review"])
-        total_fields = len(extracted_data.fields)
-        
-        if total_fields > 0 and (fields_requiring_review / total_fields) > self.tf_config.max_fields_requiring_review_ratio:
-            return True
-        
-        return False
-    
-    def _get_critical_fields_for_document_type(self, document_type: DocumentType) -> List[str]:
-        """
-        Get the list of critical fields for a specific document type.
-        
-        Critical fields are those that must be present and have high confidence
-        for the document to be processed automatically without human review.
-        
-        Args:
-            document_type: The type of document
-            
-        Returns:
-            List of critical field names
-        """
-        # Define critical fields by document type
-        critical_fields_map = {
-            DocumentType.APPLICATION: [
-                "legal_name", "dba_name", "business_address", "business_phone", 
-                "tax_id", "requested_amount"
-            ],
-            DocumentType.TAX_RETURN: [
-                "tax_year", "business_name", "ein", "total_income", "taxable_income"
-            ],
-            DocumentType.BANK_STATEMENT: [
-                "account_holder", "account_number", "statement_date", "ending_balance"
-            ],
-            DocumentType.PAY_STUB: [
-                "employee_name", "employer_name", "pay_period", "gross_pay", "net_pay"
-            ],
-            DocumentType.ID_DOCUMENT: [
-                "full_name", "id_number", "expiration_date"
-            ],
-            DocumentType.OTHER: []
-        }
-        
-        return critical_fields_map.get(document_type, [])
-    
-    def _validate_extracted_data(self, extracted_data: ExtractedData, document_type: Optional[DocumentType]) -> None:
-        """
-        Validate the extracted data against the expected schema for the document type.
-        
-        Ensures that the extracted data meets the structural and content requirements
-        for downstream processing.
-        
-        Args:
-            extracted_data: The extracted data to validate
-            document_type: The type of document
-            
-        Raises:
-            ServiceError: If validation fails
-        """
-        # Skip validation for unknown document types
-        if not document_type:
-            return
-        
-        try:
-            # Validate basic structure
-            if not hasattr(extracted_data, 'fields') or not extracted_data.fields:
-                raise ValueError("Extracted data must contain fields")
-            
-            if not hasattr(extracted_data, 'document_id') or not extracted_data.document_id:
-                raise ValueError("Extracted data must contain document_id")
-            
-            # Validate document type-specific schema
-            # This would typically use a JSON schema validator in a production system
-            # For simplicity, we're just checking critical fields here
-            critical_fields = self._get_critical_fields_for_document_type(document_type)
-            missing_fields = [field for field in critical_fields if field not in extracted_data.fields]
-            
-            if missing_fields and not extracted_data.requires_review:
-                self.logger.warning(
-                    f"Document is missing critical fields {missing_fields} but is not flagged for review. "
-                    f"Forcing review flag."
-                )
-                extracted_data.requires_review = True
-                
-        except Exception as e:
-            # Log validation error but don't fail - just flag for review
-            self.logger.warning(f"Extracted data validation failed: {str(e)}")
-            extracted_data.requires_review = True
-            extracted_data.metadata["validation_error"] = str(e)
-    
-    def _log_performance_metrics(self, document: Document, processing_time: float, extracted_data: ExtractedData) -> None:
-        """
-        Log performance metrics for monitoring and optimization.
-        
-        Records processing time, extraction accuracy, and resource utilization metrics
-        for monitoring and performance optimization.
-        
-        Args:
-            document: The processed document
-            processing_time: Total processing time in seconds
-            extracted_data: The extracted data with confidence scores
-        """
-        request_id = document.metadata.request_id if hasattr(document.metadata, 'request_id') else None
-        
-        # Get GPU utilization and memory usage if available
-        gpu_metrics = {}
-        if self.gpu_available:
-            gpu_metrics = {
-                "gpu_utilization": tensorflow_utils.get_gpu_utilization(),
-                "gpu_memory_used": tensorflow_utils.get_gpu_memory_used(),
-                "gpu_memory_total": tensorflow_utils.get_gpu_memory_total()
+            # Create a simplified result if formatting fails
+            extraction_metadata = {
+                'document_id': metadata.get('document_id', 'unknown'),
+                'request_id': metadata.get('request_id', 'unknown'),
+                'extraction_timestamp': time_utils.get_iso_timestamp(),
+                'ocr_service_version': app_config.VERSION,
+                'error': str(e),
+                'requires_review': True
             }
-        
-        # Calculate field statistics
-        total_fields = len(extracted_data.fields)
-        low_confidence_fields = sum(
-            1 for field in extracted_data.fields.values() 
-            if field["requires_review"]
-        )
-        
-        # Calculate accuracy metrics
-        accuracy_metrics = {
-            "average_confidence": extracted_data.average_confidence,
-            "total_fields": total_fields,
-            "low_confidence_fields": low_confidence_fields,
-            "low_confidence_percentage": (low_confidence_fields / total_fields * 100) if total_fields > 0 else 0,
-            "requires_review": extracted_data.requires_review
-        }
-        
-        # Calculate performance metrics
-        performance_metrics = {
-            "processing_time": processing_time,
-            "processing_time_ms": int(processing_time * 1000),
-            "fields_per_second": total_fields / processing_time if processing_time > 0 else 0,
-            "meets_sla": processing_time <= app_config.max_processing_time_seconds
-        }
-        
-        # Document metadata
-        document_metrics = {
-            "document_id": document.metadata.document_id,
-            "document_type": document.document_type.name if document.document_type else "UNKNOWN",
-            "mime_type": document.metadata.mime_type,
-            "file_size_bytes": document.metadata.size if hasattr(document.metadata, 'size') else None,
-            "page_count": document.metadata.page_count if hasattr(document.metadata, 'page_count') else 1
-        }
-        
-        # System metrics
-        system_metrics = {
-            "service_version": app_config.version,
-            "environment": app_config.environment,
-            "host": os.environ.get("HOSTNAME", "unknown"),
-            "timestamp": time_utils.get_current_timestamp()
-        }
-        
-        # Combine all metrics
-        metrics = {
-            **document_metrics,
-            **accuracy_metrics,
-            **performance_metrics,
-            **gpu_metrics,
-            **system_metrics,
-            "request_id": request_id
-        }
-        
-        # Log metrics as structured JSON
-        self.logger.info(f"Performance metrics: {metrics}", extra={"request_id": request_id})
-        
-        # Additional logging for monitoring systems
-        logging_utils.log_metrics("ocr_processing", metrics)
-        
-        # Check if we're meeting performance targets
-        if not performance_metrics["meets_sla"]:
-            self.logger.warning(
-                f"Document processing time ({processing_time:.2f}s) exceeds SLA target "
-                f"({app_config.max_processing_time_seconds}s)",
-                extra={"request_id": request_id}
+            
+            return ExtractedData(
+                fields=scored_fields,
+                metadata=extraction_metadata
             )
-        
-        # Check if we're meeting accuracy targets
-        if extracted_data.average_confidence < self.tf_config.target_confidence:
-            self.logger.warning(
-                f"Document extraction confidence ({extracted_data.average_confidence:.2f}) below target "
-                f"({self.tf_config.target_confidence})",
-                extra={"request_id": request_id}
-            )
-        
-        # Record metrics for model performance tracking
-        self._record_model_performance_metrics(
-            document.document_type,
-            extracted_data.metadata.get("model_type", "UNKNOWN"),
-            accuracy_metrics,
-            performance_metrics
-        )
     
-    def _record_model_performance_metrics(self, document_type: Optional[DocumentType], 
-                                         model_type: str, accuracy_metrics: Dict, 
-                                         performance_metrics: Dict) -> None:
+    def get_service_status(self) -> Dict[str, Any]:
         """
-        Record model performance metrics for long-term tracking and optimization.
+        Get the current status of the OCR service.
         
-        Aggregates performance metrics by document type and model type to track
-        model performance over time and identify optimization opportunities.
-        
-        Args:
-            document_type: The type of document processed
-            model_type: The type of model used for extraction
-            accuracy_metrics: Metrics related to extraction accuracy
-            performance_metrics: Metrics related to processing performance
+        Returns:
+            Dict[str, Any]: Service status information
         """
-        try:
-            # In a production system, this would store metrics in a time-series database
-            # For this implementation, we'll just log them
-            doc_type = document_type.name if document_type else "UNKNOWN"
-            
-            self.logger.debug(
-                f"Model performance metrics - Document Type: {doc_type}, Model Type: {model_type}, "
-                f"Confidence: {accuracy_metrics['average_confidence']:.2f}, "
-                f"Processing Time: {performance_metrics['processing_time']:.2f}s"
-            )
-            
-            # This would typically update a metrics database or monitoring system
-            # For example, using Prometheus, StatsD, or a custom metrics aggregator
-            pass
-            
-        except Exception as e:
-            # Don't fail processing if metrics recording fails
-            self.logger.warning(f"Failed to record model performance metrics: {str(e)}")
+        # Check GPU status
+        gpu_info = tensorflow_utils.get_gpu_info()
+        
+        # Check model status
+        models_loaded = hasattr(self, 'typed_model') and hasattr(self, 'handwritten_model') and hasattr(self, 'hybrid_model')
+        
+        return {
+            'service': 'ocr-service',
+            'version': app_config.VERSION,
+            'status': 'healthy' if models_loaded else 'degraded',
+            'gpu_available': bool(gpu_info.get('gpus', [])),
+            'gpu_info': gpu_info,
+            'models_loaded': models_loaded,
+            'timestamp': time_utils.get_iso_timestamp()
+        }
