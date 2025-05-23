@@ -2,161 +2,171 @@ package com.dollarfunding.mca.service;
 
 import com.dollarfunding.mca.dto.MerchantDetailsRequestDTO;
 import com.dollarfunding.mca.dto.MerchantDetailsResponseDTO;
-import com.dollarfunding.mca.exception.BusinessRuleException;
-import com.dollarfunding.mca.exception.ResourceNotFoundException;
-import com.dollarfunding.mca.exception.ValidationException;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.Pageable;
+import com.dollarfunding.mca.entity.MerchantDetails;
 
-import java.math.BigDecimal;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
  * Service interface that defines the contract for managing merchant details in the MCA application.
- * <p>
- * Provides methods for creating, retrieving, updating, and validating merchant information
- * associated with applications. This interface is implemented by MerchantServiceImpl and used
- * by ApplicationService to handle merchant-related operations.
- * </p>
- * <p>
- * The service handles field-level encryption for sensitive merchant data (PII) and provides
- * methods for filtering and retrieving merchant details with various criteria.
- * </p>
+ * 
+ * This service provides methods for creating, retrieving, updating, and validating merchant information
+ * associated with applications. It handles the encryption and decryption of sensitive merchant data
+ * and provides filtering options for merchant retrieval.
  */
 public interface MerchantService {
 
     /**
      * Creates a new merchant details record associated with an application.
      *
-     * @param applicationId The ID of the application to associate the merchant with
-     * @param merchantDetailsRequestDTO The merchant details data
-     * @return The created merchant details
-     * @throws ResourceNotFoundException if the application is not found
-     * @throws ValidationException if the merchant data fails validation
-     * @throws BusinessRuleException if a merchant already exists for the application
+     * @param applicationId The ID of the application to associate with the merchant details
+     * @param merchantDetailsDTO The merchant details data to create
+     * @return The created merchant details as a response DTO
+     * @throws com.dollarfunding.mca.exception.ResourceNotFoundException if the application is not found
+     * @throws com.dollarfunding.mca.exception.ValidationException if the merchant details data is invalid
      */
-    MerchantDetailsResponseDTO createMerchantDetails(UUID applicationId, MerchantDetailsRequestDTO merchantDetailsRequestDTO);
+    MerchantDetailsResponseDTO createMerchantDetails(UUID applicationId, MerchantDetailsRequestDTO merchantDetailsDTO);
 
     /**
      * Retrieves merchant details by ID.
      *
      * @param id The ID of the merchant details to retrieve
-     * @return The merchant details
-     * @throws ResourceNotFoundException if the merchant details are not found
+     * @param includeSensitiveData Whether to include sensitive (decrypted) data in the response
+     * @return An Optional containing the merchant details if found, or empty if not found
      */
-    MerchantDetailsResponseDTO getMerchantDetailsById(Long id);
+    Optional<MerchantDetailsResponseDTO> getMerchantDetailsById(UUID id, boolean includeSensitiveData);
 
     /**
      * Retrieves merchant details by application ID.
      *
-     * @param applicationId The ID of the application
-     * @return The merchant details associated with the application
-     * @throws ResourceNotFoundException if the merchant details are not found
+     * @param applicationId The ID of the application associated with the merchant details
+     * @param includeSensitiveData Whether to include sensitive (decrypted) data in the response
+     * @return An Optional containing the merchant details if found, or empty if not found
      */
-    MerchantDetailsResponseDTO getMerchantDetailsByApplicationId(UUID applicationId);
+    Optional<MerchantDetailsResponseDTO> getMerchantDetailsByApplicationId(UUID applicationId, boolean includeSensitiveData);
 
     /**
-     * Updates existing merchant details.
+     * Updates an existing merchant details record.
      *
      * @param id The ID of the merchant details to update
-     * @param merchantDetailsRequestDTO The updated merchant details data
-     * @return The updated merchant details
-     * @throws ResourceNotFoundException if the merchant details are not found
-     * @throws ValidationException if the merchant data fails validation
+     * @param merchantDetailsDTO The updated merchant details data
+     * @return The updated merchant details as a response DTO
+     * @throws com.dollarfunding.mca.exception.ResourceNotFoundException if the merchant details are not found
+     * @throws com.dollarfunding.mca.exception.ValidationException if the updated merchant details data is invalid
      */
-    MerchantDetailsResponseDTO updateMerchantDetails(Long id, MerchantDetailsRequestDTO merchantDetailsRequestDTO);
+    MerchantDetailsResponseDTO updateMerchantDetails(UUID id, MerchantDetailsRequestDTO merchantDetailsDTO);
 
     /**
-     * Updates merchant details for a specific application.
+     * Validates merchant details data for completeness and accuracy.
      *
-     * @param applicationId The ID of the application
-     * @param merchantDetailsRequestDTO The updated merchant details data
-     * @return The updated merchant details
-     * @throws ResourceNotFoundException if the merchant details are not found
-     * @throws ValidationException if the merchant data fails validation
+     * @param merchantDetailsDTO The merchant details data to validate
+     * @return A map of validation errors, empty if validation passes
      */
-    MerchantDetailsResponseDTO updateMerchantDetailsByApplicationId(UUID applicationId, MerchantDetailsRequestDTO merchantDetailsRequestDTO);
+    Map<String, String> validateMerchantDetails(MerchantDetailsRequestDTO merchantDetailsDTO);
+
+    /**
+     * Associates merchant details with an application.
+     *
+     * @param merchantId The ID of the merchant details to associate
+     * @param applicationId The ID of the application to associate with
+     * @return The updated merchant details as a response DTO
+     * @throws com.dollarfunding.mca.exception.ResourceNotFoundException if either resource is not found
+     */
+    MerchantDetailsResponseDTO associateMerchantWithApplication(UUID merchantId, UUID applicationId);
+
+    /**
+     * Retrieves merchant details with filtering options.
+     *
+     * @param filters A map of filter criteria (e.g., industry, revenue range)
+     * @param includeSensitiveData Whether to include sensitive (decrypted) data in the response
+     * @return A list of merchant details matching the filter criteria
+     */
+    List<MerchantDetailsResponseDTO> getMerchantDetailsWithFilters(Map<String, Object> filters, boolean includeSensitiveData);
+
+    /**
+     * Encrypts sensitive merchant data.
+     *
+     * @param merchantDetails The merchant details entity containing data to encrypt
+     * @return The merchant details entity with encrypted sensitive data
+     */
+    MerchantDetails encryptSensitiveData(MerchantDetails merchantDetails);
+
+    /**
+     * Decrypts sensitive merchant data.
+     *
+     * @param merchantDetails The merchant details entity containing data to decrypt
+     * @return The merchant details entity with decrypted sensitive data
+     */
+    MerchantDetails decryptSensitiveData(MerchantDetails merchantDetails);
+
+    /**
+     * Checks if merchant details exist for an application.
+     *
+     * @param applicationId The ID of the application to check
+     * @return true if merchant details exist for the application, false otherwise
+     */
+    boolean merchantDetailsExistForApplication(UUID applicationId);
 
     /**
      * Deletes merchant details by ID.
      *
      * @param id The ID of the merchant details to delete
-     * @throws ResourceNotFoundException if the merchant details are not found
+     * @throws com.dollarfunding.mca.exception.ResourceNotFoundException if the merchant details are not found
      */
-    void deleteMerchantDetails(Long id);
+    void deleteMerchantDetails(UUID id);
 
     /**
-     * Retrieves all merchant details with pagination.
+     * Retrieves all merchant details.
      *
-     * @param pageable Pagination information
-     * @return A page of merchant details
+     * @param includeSensitiveData Whether to include sensitive (decrypted) data in the response
+     * @return A list of all merchant details
      */
-    Page<MerchantDetailsResponseDTO> getAllMerchantDetails(Pageable pageable);
+    List<MerchantDetailsResponseDTO> getAllMerchantDetails(boolean includeSensitiveData);
 
     /**
-     * Finds merchants by industry with pagination.
+     * Searches for merchant details by legal name or DBA name.
      *
-     * @param industry The industry to filter by
-     * @param pageable Pagination information
-     * @return A page of merchant details in the specified industry
+     * @param searchTerm The search term to match against legal name or DBA name
+     * @param includeSensitiveData Whether to include sensitive (decrypted) data in the response
+     * @return A list of merchant details matching the search term
      */
-    Page<MerchantDetailsResponseDTO> findMerchantsByIndustry(String industry, Pageable pageable);
+    List<MerchantDetailsResponseDTO> searchMerchantDetailsByName(String searchTerm, boolean includeSensitiveData);
 
     /**
-     * Finds merchants by revenue range with pagination.
+     * Validates the address of a merchant for completeness and format.
      *
-     * @param minRevenue The minimum revenue
-     * @param maxRevenue The maximum revenue
-     * @param pageable Pagination information
-     * @return A page of merchant details within the specified revenue range
+     * @param address The address map to validate
+     * @return A map of validation errors, empty if validation passes
      */
-    Page<MerchantDetailsResponseDTO> findMerchantsByRevenueRange(BigDecimal minRevenue, BigDecimal maxRevenue, Pageable pageable);
+    Map<String, String> validateAddress(Map<String, Object> address);
 
     /**
-     * Finds merchants by state with pagination.
+     * Retrieves merchant details by EIN (Employer Identification Number).
      *
-     * @param state The state to filter by (2-letter code)
-     * @param pageable Pagination information
-     * @return A page of merchant details in the specified state
+     * @param ein The EIN to search for
+     * @param includeSensitiveData Whether to include sensitive (decrypted) data in the response
+     * @return A list of merchant details matching the EIN
      */
-    Page<MerchantDetailsResponseDTO> findMerchantsByState(String state, Pageable pageable);
+    List<MerchantDetailsResponseDTO> getMerchantDetailsByEin(String ein, boolean includeSensitiveData);
 
     /**
-     * Finds merchants by city with pagination.
+     * Retrieves merchant details by industry.
      *
-     * @param city The city to filter by
-     * @param pageable Pagination information
-     * @return A page of merchant details in the specified city
+     * @param industry The industry to search for
+     * @param includeSensitiveData Whether to include sensitive (decrypted) data in the response
+     * @return A list of merchant details in the specified industry
      */
-    Page<MerchantDetailsResponseDTO> findMerchantsByCity(String city, Pageable pageable);
+    List<MerchantDetailsResponseDTO> getMerchantDetailsByIndustry(String industry, boolean includeSensitiveData);
 
     /**
-     * Finds merchants by industry and state with pagination.
+     * Retrieves merchant details by revenue range.
      *
-     * @param industry The industry to filter by
-     * @param state The state to filter by (2-letter code)
-     * @param pageable Pagination information
-     * @return A page of merchant details in the specified industry and state
+     * @param minRevenue The minimum revenue (inclusive)
+     * @param maxRevenue The maximum revenue (inclusive)
+     * @param includeSensitiveData Whether to include sensitive (decrypted) data in the response
+     * @return A list of merchant details within the specified revenue range
      */
-    Page<MerchantDetailsResponseDTO> findMerchantsByIndustryAndState(String industry, String state, Pageable pageable);
-
-    /**
-     * Finds merchants by industry and revenue range with pagination.
-     *
-     * @param industry The industry to filter by
-     * @param minRevenue The minimum revenue
-     * @param maxRevenue The maximum revenue
-     * @param pageable Pagination information
-     * @return A page of merchant details in the specified industry and revenue range
-     */
-    Page<MerchantDetailsResponseDTO> findMerchantsByIndustryAndRevenueRange(
-            String industry, BigDecimal minRevenue, BigDecimal maxRevenue, Pageable pageable);
-
-    /**
-     * Checks if merchant details exist for an application.
-     *
-     * @param applicationId The ID of the application
-     * @return true if merchant details exist, false otherwise
-     */
-    boolean merchantDetailsExistForApplication(UUID applicationId);
+    List<MerchantDetailsResponseDTO> getMerchantDetailsByRevenueRange(Double minRevenue, Double maxRevenue, boolean includeSensitiveData);
 }
