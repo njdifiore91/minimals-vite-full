@@ -1,695 +1,1128 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
 """
-Hybrid Recognition Model for OCR Service.
+Hybrid Recognition Model for OCR Processing
 
 This module implements a combined TensorFlow model that can process documents
-containing both typed and handwritten text. It intelligently switches between
-typed and handwritten recognition algorithms based on text region classification.
+containing both typed and handwritten text. The model intelligently switches
+between typed and handwritten recognition algorithms based on text region
+classification, optimizing accuracy for mixed-format documents.
+
+Key features:
+- Text region classification to determine text type (typed vs handwritten)
+- Intelligent model switching based on text characteristics
+- Unified confidence scoring across different text types
+- Optimized processing pipeline for mixed-format documents
+
 This model is essential for processing mixed-format documents like partially
-completed application forms.
+completed application forms, significantly reducing processing time compared
+to running documents through separate models.
 """
 
 import logging
+import os
 import time
-import uuid
-from typing import Any, Dict, List, Optional, Tuple, Union
+import traceback
 from datetime import datetime
+from typing import Dict, List, Tuple, Any, Optional, Union
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np
 import tensorflow as tf
+import cv2
 
-# Import type definitions
-from src.types.models import ModelParameters, ModelResult, OCRModelType, TensorFlowModel
-from src.types.extraction import ConfidenceScore, ExtractedData, ExtractedField, FieldLocation, FieldType
+from .base_model import BaseOCRModel
+from .typed_text_model import TypedTextModel
+from .handwritten_text_model import HandwrittenTextModel
+from ..types.config import TensorFlowConfig
+from ..types.documents import DocumentContent, DocumentMetadata, DocumentType
+from ..types.extraction import ConfidenceScore, ExtractedData, ExtractedField, FieldLocation
+from ..types.models import ModelParameters, ModelResult, OCRModelType, TextRegion, TextType
+from ..utils.image_utils import (
+    normalize_image, preprocess_image, detect_text_regions, crop_region,
+    enhance_contrast, deskew_image, sharpen_image, normalize_size
+)
+from ..utils.logging_utils import get_logger
+from ..utils.text_utils import clean_text, normalize_text, correct_ocr_errors
 
-# Import configuration
-from src.config import tensorflow_config
 
-# Setup logging
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
-class TextRegionClassifier:
+class HybridRecognitionModel(BaseOCRModel):
     """
-    Classifier for determining whether a text region contains typed or handwritten text.
-    
-    This class provides methods to analyze image regions and classify them as containing
-    either typed or handwritten text, enabling the hybrid model to apply the appropriate
-    recognition algorithm to each region.
-    """
-    
-    def __init__(self, model_path: str, confidence_threshold: float = 0.75):
-        """
-        Initialize the text region classifier.
-        
-        Args:
-            model_path: Path to the TensorFlow model for text region classification
-            confidence_threshold: Threshold for classification confidence (default: 0.75)
-        """
-        self.model_path = model_path
-        self.confidence_threshold = confidence_threshold
-        self.model = None
-        self._load_model()
-    
-    def _load_model(self) -> None:
-        """
-        Load the text region classification model from the specified path.
-        
-        Raises:
-            RuntimeError: If the model cannot be loaded
-        """
-        try:
-            # Configure GPU memory growth to avoid OOM errors
-            gpus = tf.config.experimental.list_physical_devices('GPU')
-            if gpus:
-                for gpu in gpus:
-                    tf.config.experimental.set_memory_growth(gpu, True)
-            
-            # Load the model
-            self.model = tf.keras.models.load_model(self.model_path)
-            logger.info(f"Loaded text region classification model from {self.model_path}")
-        except Exception as e:
-            error_msg = f"Error loading text region classification model: {str(e)}"
-            logger.error(error_msg)
-            raise RuntimeError(error_msg)
-    
-    def classify_region(self, image_region: np.ndarray) -> Tuple[str, float]:
-        """
-        Classify a text region as typed or handwritten.
-        
-        Args:
-            image_region: Image region as a numpy array
-            
-        Returns:
-            A tuple of (classification_result, confidence_score)
-            where classification_result is either 'typed' or 'handwritten'
-        
-        Raises:
-            RuntimeError: If classification fails
-        """
-        if self.model is None:
-            raise RuntimeError("Text region classification model not loaded")
-        
-        try:
-            # Preprocess the image region
-            preprocessed = self._preprocess_region(image_region)
-            
-            # Run inference
-            prediction = self.model.predict(preprocessed, verbose=0)
-            
-            # Process the prediction
-            # Assuming the model outputs a single value between 0 and 1,
-            # where values closer to 0 indicate typed text and values closer to 1 indicate handwritten text
-            typed_score = 1.0 - prediction[0][0]
-            handwritten_score = prediction[0][0]
-            
-            if handwritten_score > typed_score:
-                return ('handwritten', float(handwritten_score))
-            else:
-                return ('typed', float(typed_score))
-        except Exception as e:
-            error_msg = f"Error classifying text region: {str(e)}"
-            logger.error(error_msg)
-            raise RuntimeError(error_msg)
-    
-    def _preprocess_region(self, image_region: np.ndarray) -> np.ndarray:
-        """
-        Preprocess an image region for classification.
-        
-        Args:
-            image_region: Image region as a numpy array
-            
-        Returns:
-            Preprocessed image region ready for model input
-        """
-        # Resize to expected input size (e.g., 224x224)
-        resized = tf.image.resize(image_region, [224, 224])
-        
-        # Normalize pixel values to [0, 1]
-        normalized = resized / 255.0
-        
-        # Add batch dimension
-        batched = tf.expand_dims(normalized, 0)
-        
-        return batched
-
-
-class TextRegion:
-    """
-    Represents a region of text in a document image.
-    
-    This class encapsulates a region of text, its classification (typed or handwritten),
-    and the confidence of that classification. It's used by the hybrid model to track
-    different text regions within a document.
-    """
-    
-    def __init__(self, image: np.ndarray, bounding_box: Dict[str, float], 
-                 text_type: str = None, confidence: float = None):
-        """
-        Initialize a text region.
-        
-        Args:
-            image: Image array of the text region
-            bounding_box: Dictionary with 'top', 'left', 'bottom', 'right' coordinates (normalized 0-1)
-            text_type: Type of text ('typed' or 'handwritten'), if known
-            confidence: Confidence score for the text type classification, if known
-        """
-        self.image = image
-        self.bounding_box = bounding_box
-        self.text_type = text_type
-        self.confidence = confidence
-        self.extracted_text = None
-        self.text_confidence = None
-    
-    def to_field_location(self, page: int = 0) -> FieldLocation:
-        """
-        Convert the bounding box to a FieldLocation.
-        
-        Args:
-            page: Page number (default: 0)
-            
-        Returns:
-            FieldLocation object representing this region's position
-        """
-        width = self.bounding_box['right'] - self.bounding_box['left']
-        height = self.bounding_box['bottom'] - self.bounding_box['top']
-        
-        return {
-            'page': page,
-            'top': self.bounding_box['top'],
-            'left': self.bounding_box['left'],
-            'bottom': self.bounding_box['bottom'],
-            'right': self.bounding_box['right'],
-            'width': width,
-            'height': height
-        }
-
-
-class HybridRecognitionModel:
-    """
-    Combined TensorFlow model for processing documents with both typed and handwritten text.
+    Combined OCR model that can process documents with both typed and handwritten text.
     
     This model intelligently switches between typed and handwritten recognition algorithms
-    based on text region classification. It's essential for processing mixed-format documents
-    like partially completed application forms.
+    based on text region classification. It's optimized for mixed-format documents like
+    partially completed application forms.
+    
+    Attributes:
+        typed_model (TypedTextModel): Model for processing typed/printed text
+        handwritten_model (HandwrittenTextModel): Model for processing handwritten text
+        classifier_model (tf.keras.Model): Model for classifying text regions as typed or handwritten
+        region_overlap_threshold (float): Threshold for determining region overlaps
+        min_region_size (int): Minimum size of text regions to process
+        confidence_threshold (float): Minimum confidence threshold for text extraction
     """
     
-    def __init__(self, parameters: ModelParameters):
+    def __init__(self, 
+                 model_path: str, 
+                 config: TensorFlowConfig,
+                 parameters: Optional[ModelParameters] = None) -> None:
         """
         Initialize the hybrid recognition model.
         
         Args:
-            parameters: Model parameters for configuration
+            model_path: Path to the model directory containing all required models
+            config: TensorFlow configuration settings
+            parameters: Additional model parameters (optional)
         """
-        self.parameters = parameters
-        self.typed_model = None
-        self.handwritten_model = None
-        self.region_classifier = None
-        self.region_detector = None
-        self._initialize_models()
+        # Initialize base model with hybrid model name
+        super().__init__(model_path, "hybrid_recognition_model", config, parameters)
+        
+        # Set default parameters if none provided
+        if parameters is None:
+            parameters = {}
+        
+        # Model paths
+        typed_model_path = parameters.get('typed_model_path', f"{model_path}/typed")
+        handwritten_model_path = parameters.get('handwritten_model_path', f"{model_path}/handwritten")
+        classifier_model_path = parameters.get('classifier_model_path', f"{model_path}/classifier")
+        
+        # Configuration parameters
+        self.region_overlap_threshold = parameters.get('region_overlap_threshold', 0.5)
+        self.min_region_size = parameters.get('min_region_size', 100)  # Minimum region size in pixels
+        self.confidence_threshold = parameters.get('confidence_threshold', 0.7)
+        self.max_regions = parameters.get('max_regions', 50)  # Maximum number of regions to process
+        self.use_parallel_processing = parameters.get('use_parallel_processing', True)
+        
+        # Initialize sub-models with appropriate configurations
+        logger.info("Initializing typed text model...")
+        typed_config = self._create_model_config(config, "typed")
+        self.typed_model = TypedTextModel(typed_model_path, typed_config)
+        
+        logger.info("Initializing handwritten text model...")
+        handwritten_config = self._create_model_config(config, "handwritten")
+        self.handwritten_model = HandwrittenTextModel(handwritten_model_path, handwritten_config)
+        
+        # Initialize text region classifier model
+        logger.info("Initializing text region classifier model...")
+        self._load_classifier_model(classifier_model_path)
+        
+        logger.info("Hybrid recognition model initialized successfully")
     
-    def _initialize_models(self) -> None:
+    def _create_model_config(self, base_config: TensorFlowConfig, model_type: str) -> TensorFlowConfig:
         """
-        Initialize all component models needed for hybrid recognition.
+        Create a specialized configuration for each sub-model.
         
-        This includes:
-        - Text region detector (for segmenting text regions)
-        - Text region classifier (for determining text type)
-        - Typed text recognition model
-        - Handwritten text recognition model
+        This allows for optimizing GPU memory usage between the models.
         
+        Args:
+            base_config: Base TensorFlow configuration
+            model_type: Type of model ("typed" or "handwritten")
+            
+        Returns:
+            Specialized TensorFlow configuration
+        """
+        # Create a copy of the base configuration
+        config_dict = base_config.__dict__.copy()
+        
+        # Adjust GPU memory limit based on model type
+        if model_type == "typed":
+            # Typed text models typically need less memory
+            config_dict["gpu_memory_limit"] = min(config_dict.get("gpu_memory_limit", 4096), 4096)
+        elif model_type == "handwritten":
+            # Handwritten models are more complex and need more memory
+            config_dict["gpu_memory_limit"] = min(config_dict.get("gpu_memory_limit", 6144), 6144)
+        
+        # Create a new configuration object
+        return TensorFlowConfig(**config_dict)
+    
+    def _load_classifier_model(self, classifier_path: str) -> None:
+        """
+        Load the text region classifier model.
+        
+        This model classifies text regions as either typed or handwritten.
+        
+        Args:
+            classifier_path: Path to the classifier model
+            
         Raises:
-            RuntimeError: If any model fails to initialize
+            RuntimeError: If model loading fails
         """
         try:
-            # Configure GPU memory growth to avoid OOM errors
-            gpus = tf.config.experimental.list_physical_devices('GPU')
-            if gpus:
-                for gpu in gpus:
-                    tf.config.experimental.set_memory_growth(gpu, True)
-                
-                # Set memory limit if specified
-                if self.parameters.get('gpu_memory_limit'):
-                    tf.config.experimental.set_virtual_device_configuration(
-                        gpus[0],
-                        [tf.config.experimental.VirtualDeviceConfiguration(
-                            memory_limit=self.parameters['gpu_memory_limit']
-                        )]
-                    )
-            
-            # Load text region detector model
-            region_detector_path = tensorflow_config.get_model_path('text_region_detector')
-            self.region_detector = tf.keras.models.load_model(region_detector_path)
-            logger.info(f"Loaded text region detector model from {region_detector_path}")
-            
-            # Initialize text region classifier
-            region_classifier_path = tensorflow_config.get_model_path('text_region_classifier')
-            self.region_classifier = TextRegionClassifier(
-                model_path=region_classifier_path,
-                confidence_threshold=self.parameters.get('confidence_threshold', 0.75)
-            )
-            logger.info(f"Initialized text region classifier from {region_classifier_path}")
-            
-            # Load typed text model
-            typed_model_path = tensorflow_config.get_model_path('typed_text_model')
-            self.typed_model = tf.keras.models.load_model(typed_model_path)
-            logger.info(f"Loaded typed text model from {typed_model_path}")
-            
-            # Load handwritten text model
-            handwritten_model_path = tensorflow_config.get_model_path('handwritten_text_model')
-            self.handwritten_model = tf.keras.models.load_model(handwritten_model_path)
-            logger.info(f"Loaded handwritten text model from {handwritten_model_path}")
-            
+            # Load the classifier model
+            self.classifier_model = tf.saved_model.load(classifier_path)
+            logger.info("Text region classifier model loaded successfully")
         except Exception as e:
-            error_msg = f"Error initializing hybrid recognition model: {str(e)}"
+            error_msg = f"Failed to load text region classifier model: {str(e)}"
             logger.error(error_msg)
             raise RuntimeError(error_msg)
     
-    def detect_text_regions(self, image: np.ndarray) -> List[Dict[str, Any]]:
+    def classify_text_region(self, region_image: np.ndarray) -> Tuple[TextType, float]:
         """
-        Detect text regions in an image.
+        Classify a text region as either typed or handwritten.
         
         Args:
-            image: Document image as a numpy array
+            region_image: Image of the text region to classify
             
         Returns:
-            List of dictionaries containing bounding box coordinates for text regions
-            
-        Raises:
-            RuntimeError: If region detection fails
+            Tuple of (text_type, confidence)
         """
-        if self.region_detector is None:
-            raise RuntimeError("Text region detector model not loaded")
-        
         try:
-            # Preprocess the image for region detection
-            preprocessed = self._preprocess_image(image)
+            # Preprocess the region image for classification
+            preprocessed = self._preprocess_for_classification(region_image)
             
-            # Run inference to detect text regions
-            detection_result = self.region_detector.predict(preprocessed, verbose=0)
+            # Add batch dimension
+            input_tensor = np.expand_dims(preprocessed, axis=0)
             
-            # Process the detection result to extract bounding boxes
-            # The exact format depends on the model architecture (e.g., YOLO, SSD, Faster R-CNN)
-            # This is a simplified example assuming the model outputs bounding boxes directly
-            bounding_boxes = self._process_detection_result(detection_result, image.shape)
+            # Run inference with the classifier model
+            predictions = self.classifier_model(input_tensor)
             
-            return bounding_boxes
-        except Exception as e:
-            error_msg = f"Error detecting text regions: {str(e)}"
-            logger.error(error_msg)
-            raise RuntimeError(error_msg)
-    
-    def _process_detection_result(self, detection_result: Any, image_shape: Tuple[int, ...]) -> List[Dict[str, Any]]:
-        """
-        Process detection results to extract bounding boxes.
-        
-        Args:
-            detection_result: Raw output from the region detector model
-            image_shape: Shape of the original image
-            
-        Returns:
-            List of dictionaries containing normalized bounding box coordinates
-        """
-        # This is a simplified implementation
-        # The actual implementation would depend on the specific model architecture used
-        height, width = image_shape[:2]
-        bounding_boxes = []
-        
-        # Assuming detection_result contains boxes, scores, and classes
-        boxes = detection_result['boxes'][0] if isinstance(detection_result, dict) else detection_result[0]
-        scores = detection_result['scores'][0] if isinstance(detection_result, dict) else detection_result[1]
-        
-        # Filter by confidence threshold
-        confidence_threshold = self.parameters.get('detection_confidence_threshold', 0.5)
-        
-        for i, score in enumerate(scores):
-            if score >= confidence_threshold:
-                # Get coordinates (assumed to be in [y1, x1, y2, x2] format)
-                y1, x1, y2, x2 = boxes[i]
-                
-                # Normalize coordinates to [0, 1] range
-                bounding_box = {
-                    'top': float(y1 / height),
-                    'left': float(x1 / width),
-                    'bottom': float(y2 / height),
-                    'right': float(x2 / width),
-                    'confidence': float(score)
-                }
-                
-                bounding_boxes.append(bounding_box)
-        
-        return bounding_boxes
-    
-    def _preprocess_image(self, image: np.ndarray) -> np.ndarray:
-        """
-        Preprocess an image for model input.
-        
-        Args:
-            image: Input image as a numpy array
-            
-        Returns:
-            Preprocessed image ready for model input
-        """
-        # Resize if needed
-        if self.parameters.get('input_shape'):
-            height, width, _ = self.parameters['input_shape']
-            resized = tf.image.resize(image, [height, width])
-        else:
-            resized = image
-        
-        # Convert to grayscale if needed
-        if self.parameters.get('grayscale', False) and resized.shape[-1] == 3:
-            grayscale = tf.image.rgb_to_grayscale(resized)
-            # Expand back to 3 channels if the model expects it
-            if self.parameters.get('input_shape') and self.parameters['input_shape'][-1] == 3:
-                processed = tf.tile(grayscale, [1, 1, 3])
+            # Get the predicted class and confidence
+            # Assuming predictions shape is [batch_size, num_classes] where num_classes=2
+            # Class 0 = Typed, Class 1 = Handwritten
+            if isinstance(predictions, dict) and 'logits' in predictions:
+                # Some models return a dictionary with logits
+                logits = predictions['logits'].numpy()
+                probabilities = tf.nn.softmax(logits, axis=-1).numpy()
             else:
-                processed = grayscale
-        else:
-            processed = resized
-        
-        # Normalize if needed
-        if self.parameters.get('normalize_input', True):
-            processed = processed / 255.0
-        
-        # Add batch dimension
-        batched = tf.expand_dims(processed, 0)
-        
-        return batched
-    
-    def extract_text_from_region(self, region: TextRegion) -> Tuple[str, float]:
-        """
-        Extract text from a text region using the appropriate model.
-        
-        Args:
-            region: TextRegion object containing the image and metadata
+                # Others might return probabilities directly
+                probabilities = predictions.numpy()
             
-        Returns:
-            Tuple of (extracted_text, confidence_score)
+            # Get the class with highest probability
+            class_idx = np.argmax(probabilities[0])
+            confidence = float(probabilities[0, class_idx])
             
-        Raises:
-            RuntimeError: If text extraction fails
-        """
-        # If region type is not determined, classify it
-        if region.text_type is None:
-            region.text_type, region.confidence = self.region_classifier.classify_region(region.image)
-        
-        try:
-            # Select the appropriate model based on text type
-            if region.text_type == 'handwritten':
-                if self.handwritten_model is None:
-                    raise RuntimeError("Handwritten text model not loaded")
-                
-                # Preprocess for handwritten model
-                preprocessed = self._preprocess_for_handwritten(region.image)
-                
-                # Extract text using handwritten model
-                result = self.handwritten_model.predict(preprocessed, verbose=0)
-                text, confidence = self._decode_handwritten_result(result)
-            else:  # typed text
-                if self.typed_model is None:
-                    raise RuntimeError("Typed text model not loaded")
-                
-                # Preprocess for typed model
-                preprocessed = self._preprocess_for_typed(region.image)
-                
-                # Extract text using typed model
-                result = self.typed_model.predict(preprocessed, verbose=0)
-                text, confidence = self._decode_typed_result(result)
+            # Map class index to TextType
+            text_type = TextType.TYPED if class_idx == 0 else TextType.HANDWRITTEN
             
-            return text, confidence
+            logger.debug(f"Classified region as {text_type.value} with confidence {confidence:.2f}")
+            return text_type, confidence
+            
         except Exception as e:
-            error_msg = f"Error extracting text from region: {str(e)}"
-            logger.error(error_msg)
-            raise RuntimeError(error_msg)
+            logger.error(f"Error classifying text region: {str(e)}")
+            # Default to typed text with low confidence if classification fails
+            return TextType.TYPED, 0.5
     
-    def _preprocess_for_typed(self, image: np.ndarray) -> np.ndarray:
+    def _preprocess_for_classification(self, image: np.ndarray) -> np.ndarray:
         """
-        Preprocess an image for the typed text model.
+        Preprocess an image for text type classification.
         
         Args:
-            image: Image region as a numpy array
+            image: Input image as numpy array
             
         Returns:
-            Preprocessed image ready for typed text model input
+            Preprocessed image ready for classification
         """
-        # Apply specific preprocessing for typed text
-        # This might include different resizing, normalization, etc.
-        # For simplicity, we'll use the same preprocessing as the general method
-        return self._preprocess_image(image)
-    
-    def _preprocess_for_handwritten(self, image: np.ndarray) -> np.ndarray:
-        """
-        Preprocess an image for the handwritten text model.
-        
-        Args:
-            image: Image region as a numpy array
-            
-        Returns:
-            Preprocessed image ready for handwritten text model input
-        """
-        # Apply specific preprocessing for handwritten text
-        # This might include different resizing, normalization, etc.
-        # For simplicity, we'll use the same preprocessing as the general method
-        return self._preprocess_image(image)
-    
-    def _decode_typed_result(self, result: Any) -> Tuple[str, float]:
-        """
-        Decode the result from the typed text model.
-        
-        Args:
-            result: Raw output from the typed text model
-            
-        Returns:
-            Tuple of (decoded_text, confidence_score)
-        """
-        # This is a simplified implementation
-        # The actual implementation would depend on the specific model architecture used
-        # For example, for a CTC-based model, you would use a CTC decoder
-        
-        # Assuming the model outputs character probabilities and we need to decode them
-        # This is just a placeholder implementation
-        if isinstance(result, dict) and 'text' in result and 'confidence' in result:
-            return result['text'], result['confidence']
-        
-        # For a more realistic implementation, you might have something like:
-        # decoded_text = ctc_decoder.decode(result['logits'])
-        # confidence = calculate_confidence(result['logits'])
-        
-        # Simplified placeholder
-        decoded_text = "Sample typed text"
-        confidence = 0.95
-        
-        return decoded_text, confidence
-    
-    def _decode_handwritten_result(self, result: Any) -> Tuple[str, float]:
-        """
-        Decode the result from the handwritten text model.
-        
-        Args:
-            result: Raw output from the handwritten text model
-            
-        Returns:
-            Tuple of (decoded_text, confidence_score)
-        """
-        # This is a simplified implementation
-        # The actual implementation would depend on the specific model architecture used
-        # Handwritten text recognition often requires more complex decoding
-        
-        # Assuming the model outputs character probabilities and we need to decode them
-        # This is just a placeholder implementation
-        if isinstance(result, dict) and 'text' in result and 'confidence' in result:
-            return result['text'], result['confidence']
-        
-        # For a more realistic implementation, you might have something like:
-        # decoded_text = attention_decoder.decode(result['logits'])
-        # confidence = calculate_confidence(result['logits'])
-        
-        # Simplified placeholder
-        decoded_text = "Sample handwritten text"
-        confidence = 0.85
-        
-        return decoded_text, confidence
-    
-    def process_document(self, image: np.ndarray, document_type: str = None) -> ExtractedData:
-        """
-        Process a document image using the hybrid recognition model.
-        
-        This is the main entry point for document processing. It detects text regions,
-        classifies them as typed or handwritten, extracts text using the appropriate models,
-        and returns structured data.
-        
-        Args:
-            image: Document image as a numpy array
-            document_type: Type of document, if known (optional)
-            
-        Returns:
-            ExtractedData containing the structured extraction results
-            
-        Raises:
-            RuntimeError: If document processing fails
-        """
-        start_time = time.time()
-        extraction_id = str(uuid.uuid4())
-        
         try:
-            # Step 1: Detect text regions in the document
-            logger.info(f"Detecting text regions in document {extraction_id}")
-            bounding_boxes = self.detect_text_regions(image)
+            # Resize to classifier input size (e.g., 224x224 for many CNN models)
+            input_size = (224, 224)
+            resized = cv2.resize(image, input_size)
             
-            # Step 2: Create TextRegion objects for each detected region
+            # Convert to grayscale if needed
+            if len(resized.shape) == 3 and resized.shape[2] == 3:
+                grayscale = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
+                # Convert back to 3 channels for model input
+                processed = cv2.cvtColor(grayscale, cv2.COLOR_GRAY2RGB)
+            elif len(resized.shape) == 2:
+                # Convert grayscale to 3 channels for model input
+                processed = cv2.cvtColor(resized, cv2.COLOR_GRAY2RGB)
+            else:
+                processed = resized
+            
+            # Normalize pixel values to [0, 1]
+            normalized = processed.astype(np.float32) / 255.0
+            
+            return normalized
+            
+        except Exception as e:
+            logger.error(f"Error preprocessing image for classification: {str(e)}")
+            # Return original image as fallback
+            return image
+    
+    def detect_and_classify_regions(self, image: np.ndarray) -> List[TextRegion]:
+        """
+        Detect text regions in the image and classify them as typed or handwritten.
+        
+        Args:
+            image: Input image as numpy array
+            
+        Returns:
+            List of TextRegion objects with classification
+        """
+        try:
+            # Detect text regions in the image
+            logger.debug("Detecting text regions in image")
+            raw_regions = detect_text_regions(image)
+            
+            # Filter out very small regions
+            filtered_regions = []
+            for i, (x, y, w, h) in enumerate(raw_regions):
+                if w * h >= self.min_region_size:
+                    filtered_regions.append((x, y, w, h))
+            
+            # Limit the number of regions to process
+            if len(filtered_regions) > self.max_regions:
+                logger.warning(f"Too many text regions detected ({len(filtered_regions)}). "
+                              f"Limiting to {self.max_regions} regions.")
+                # Sort regions by size (largest first) and take the top max_regions
+                filtered_regions.sort(key=lambda r: r[2] * r[3], reverse=True)
+                filtered_regions = filtered_regions[:self.max_regions]
+            
+            # Process each region
             text_regions = []
-            for bbox in bounding_boxes:
-                # Extract the region from the image
-                top = int(bbox['top'] * image.shape[0])
-                left = int(bbox['left'] * image.shape[1])
-                bottom = int(bbox['bottom'] * image.shape[0])
-                right = int(bbox['right'] * image.shape[1])
+            for i, (x, y, w, h) in enumerate(filtered_regions):
+                # Crop the region from the image
+                region_image = crop_region(image, x, y, w, h)
                 
-                region_image = image[top:bottom, left:right]
-                text_regions.append(TextRegion(region_image, bbox))
-            
-            # Step 3: Classify each region as typed or handwritten
-            logger.info(f"Classifying {len(text_regions)} text regions")
-            for region in text_regions:
-                region.text_type, region.confidence = self.region_classifier.classify_region(region.image)
-            
-            # Step 4: Extract text from each region using the appropriate model
-            logger.info(f"Extracting text from regions")
-            extracted_fields = {}
-            low_confidence_fields = []
-            raw_text_parts = []
-            
-            for i, region in enumerate(text_regions):
-                # Extract text using the appropriate model
-                text, confidence = self.extract_text_from_region(region)
-                region.extracted_text = text
-                region.text_confidence = confidence
+                # Classify the region as typed or handwritten
+                text_type, confidence = self.classify_text_region(region_image)
                 
-                # Add to raw text
-                raw_text_parts.append(text)
+                # Create TextRegion object
+                region = TextRegion(
+                    id=i,
+                    bbox=(x, y, w, h),
+                    text_type=text_type,
+                    classification_confidence=confidence,
+                    text="",  # Will be filled later during extraction
+                    extraction_confidence=0.0  # Will be filled later during extraction
+                )
                 
-                # Create field name (this would be more sophisticated in a real implementation)
-                field_name = f"field_{i+1}"
-                
-                # Create extracted field
-                field_location = region.to_field_location(page=0)
-                confidence_score = ConfidenceScore.from_float(confidence)
-                
-                extracted_field = {
-                    'field_name': field_name,
-                    'field_type': FieldType.TEXT.value,
-                    'value': text,
-                    'raw_text': text,
-                    'confidence': confidence_score,
-                    'location': field_location,
-                    'alternatives': [],  # Would contain alternative recognitions in a real implementation
-                    'metadata': {
-                        'text_type': region.text_type,
-                        'classification_confidence': region.confidence
-                    },
-                    'requires_verification': confidence < self.parameters.get('confidence_threshold', 0.7),
-                    'verification_reason': 'Low confidence' if confidence < self.parameters.get('confidence_threshold', 0.7) else None,
-                    'extraction_timestamp': datetime.now()
-                }
-                
-                extracted_fields[field_name] = extracted_field
-                
-                # Check if this is a low confidence field
-                if confidence < self.parameters.get('confidence_threshold', 0.7):
-                    low_confidence_fields.append(field_name)
+                text_regions.append(region)
             
-            # Step 5: Prepare the extraction result
-            processing_time = time.time() - start_time
+            logger.info(f"Detected and classified {len(text_regions)} text regions")
+            return text_regions
             
-            # Create extraction metadata
-            metadata = {
-                'extraction_id': extraction_id,
-                'document_id': extraction_id,  # In a real implementation, this would be provided
-                'model_id': self.parameters.get('model_name', 'hybrid_text_ocr'),
-                'model_version': self.parameters.get('model_version', '1.0.0'),
-                'document_type': document_type or 'unknown',
-                'page_count': 1,  # Assuming single page for simplicity
-                'language': self.parameters.get('language', 'en'),
-                'processing_node': 'node-1',  # In a real implementation, this would be dynamic
-                'extraction_status': 'success',
-                'processing_time': processing_time,
-                'warnings': [],
-                'errors': []
-            }
-            
-            # Create the final extraction result
-            extraction_result = {
-                'extraction_id': extraction_id,
-                'fields': extracted_fields,
-                'tables': [],  # Would contain table data in a real implementation
-                'metadata': metadata,
-                'raw_text': '\n'.join(raw_text_parts),
-                'low_confidence_fields': low_confidence_fields,
-                'requires_verification': len(low_confidence_fields) > 0,
-                'extraction_timestamp': datetime.now(),
-                'schema_version': '1.0',
-                'document_type': document_type or 'unknown'
-            }
-            
-            logger.info(f"Document processing completed in {processing_time:.2f} seconds")
-            return extraction_result
-        
         except Exception as e:
-            error_msg = f"Error processing document: {str(e)}"
-            logger.error(error_msg)
-            raise RuntimeError(error_msg)
-
-
-class HybridRecognitionModelFactory:
-    """
-    Factory class for creating HybridRecognitionModel instances.
+            logger.error(f"Error detecting and classifying text regions: {str(e)}")
+            return []
     
-    This class provides methods for creating and configuring HybridRecognitionModel
-    instances with appropriate parameters based on document types and processing requirements.
-    """
-    
-    @staticmethod
-    def create_model(document_type: str = None, custom_parameters: Dict[str, Any] = None) -> HybridRecognitionModel:
+    def extract_text_from_regions(self, image: np.ndarray, regions: List[TextRegion]) -> List[TextRegion]:
         """
-        Create a HybridRecognitionModel instance with appropriate parameters.
+        Extract text from each classified region using the appropriate model.
+        
+        This method optimizes processing by using parallel execution when appropriate,
+        helping to meet the requirement of processing applications in under 5 minutes.
         
         Args:
-            document_type: Type of document to process (optional)
-            custom_parameters: Custom parameters to override defaults (optional)
+            image: Input image as numpy array
+            regions: List of classified text regions
             
         Returns:
-            Configured HybridRecognitionModel instance
+            Updated list of TextRegion objects with extracted text
         """
-        # Start with default parameters
-        parameters = dict(tensorflow_config.DEFAULT_HYBRID_MODEL_PARAMS)
+        try:
+            # Process regions in parallel if enabled and we have multiple regions
+            if self.use_parallel_processing and len(regions) > 1:
+                return self._extract_text_parallel(image, regions)
+            else:
+                return self._extract_text_sequential(image, regions)
+                
+        except Exception as e:
+            logger.error(f"Error extracting text from regions: {str(e)}")
+            return regions
+    
+    def _extract_text_parallel(self, image: np.ndarray, regions: List[TextRegion]) -> List[TextRegion]:
+        """
+        Extract text from regions in parallel using ThreadPoolExecutor.
         
-        # Adjust parameters based on document type if specified
-        if document_type:
-            if document_type == 'application_form':
-                # Application forms often have more handwritten content
-                parameters.update({
-                    'confidence_threshold': 0.65,  # Lower threshold for application forms
-                    'detection_confidence_threshold': 0.4,  # More aggressive region detection
-                    'gpu_memory_limit': 8192,  # 8GB for complex forms
-                })
-            elif document_type == 'tax_return':
-                # Tax returns are mostly typed with some handwritten sections
-                parameters.update({
-                    'confidence_threshold': 0.75,  # Higher threshold for tax documents
-                    'detection_confidence_threshold': 0.5,
-                    'gpu_memory_limit': 6144,  # 6GB is sufficient
-                })
-            elif document_type == 'bank_statement':
-                # Bank statements are mostly typed with tabular data
-                parameters.update({
-                    'confidence_threshold': 0.8,  # Higher threshold for structured documents
-                    'detection_confidence_threshold': 0.6,
-                    'gpu_memory_limit': 4096,  # 4GB is sufficient
-                })
+        This method significantly improves processing time for documents with many text regions.
         
-        # Override with any custom parameters
-        if custom_parameters:
-            parameters.update(custom_parameters)
+        Args:
+            image: Input image as numpy array
+            regions: List of classified text regions
+            
+        Returns:
+            Updated list of TextRegion objects with extracted text
+        """
+        # Group regions by text type
+        typed_regions = [r for r in regions if r.text_type == TextType.TYPED]
+        handwritten_regions = [r for r in regions if r.text_type == TextType.HANDWRITTEN]
         
-        # Create and return the model
-        return HybridRecognitionModel(parameters)
+        # Process each type in parallel
+        updated_regions = []
+        
+        # Function to process a single region
+        def process_region(region):
+            try:
+                # Crop the region from the image
+                x, y, w, h = region.bbox
+                region_image = crop_region(image, x, y, w, h)
+                
+                # Process based on text type
+                if region.text_type == TextType.TYPED:
+                    # Apply additional preprocessing for typed text
+                    enhanced_image = enhance_contrast(region_image, clip_limit=2.0)
+                    deskewed_image = deskew_image(enhanced_image)
+                    
+                    # Use typed text model
+                    result = self.typed_model.extract_text(deskewed_image)
+                else:
+                    # Apply additional preprocessing for handwritten text
+                    enhanced_image = enhance_contrast(region_image, clip_limit=3.0)
+                    
+                    # Use handwritten text model
+                    result = self.handwritten_model.extract_text(enhanced_image)
+                
+                # Extract results
+                extracted_text = result.get("text", "")
+                confidence = result.get("confidence", 0.0)
+                
+                # Update region with extracted text and confidence
+                region.text = extracted_text
+                region.extraction_confidence = confidence
+                
+                return region, True
+                
+            except Exception as e:
+                logger.error(f"Error processing region {region.id} in parallel: {str(e)}")
+                # Mark as failed but return the region
+                region.text = ""
+                region.extraction_confidence = 0.0
+                return region, False
+        
+        # Maximum number of workers based on available CPU cores
+        max_workers = min(8, (os.cpu_count() or 4))
+        
+        # Process regions in parallel
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all regions for processing
+            future_to_region = {executor.submit(process_region, region): region for region in regions}
+            
+            # Collect results as they complete
+            for future in as_completed(future_to_region):
+                try:
+                    region, success = future.result()
+                    if success and region.extraction_confidence >= self.confidence_threshold and region.text.strip():
+                        updated_regions.append(region)
+                except Exception as e:
+                    logger.error(f"Exception in parallel processing: {str(e)}")
+        
+        # Sort regions by vertical position (top to bottom)
+        updated_regions.sort(key=lambda r: r.bbox[1])
+        
+        return updated_regions
+    
+    def _extract_text_sequential(self, image: np.ndarray, regions: List[TextRegion]) -> List[TextRegion]:
+        """
+        Extract text from regions sequentially.
+        
+        Args:
+            image: Input image as numpy array
+            regions: List of classified text regions
+            
+        Returns:
+            Updated list of TextRegion objects with extracted text
+        """
+        updated_regions = []
+        
+        # Group regions by text type for batch processing
+        typed_regions = [r for r in regions if r.text_type == TextType.TYPED]
+        handwritten_regions = [r for r in regions if r.text_type == TextType.HANDWRITTEN]
+        
+        # Process typed regions
+        for region in typed_regions:
+            try:
+                # Crop the region from the image
+                x, y, w, h = region.bbox
+                region_image = crop_region(image, x, y, w, h)
+                
+                # Apply additional preprocessing for typed text
+                enhanced_image = enhance_contrast(region_image, clip_limit=2.0)
+                deskewed_image = deskew_image(enhanced_image)
+                
+                # Use typed text model
+                result = self.typed_model.extract_text(deskewed_image)
+                extracted_text = result.get("text", "")
+                confidence = result.get("confidence", 0.0)
+                
+                # Update region with extracted text and confidence
+                region.text = extracted_text
+                region.extraction_confidence = confidence
+                
+                # Skip regions with low confidence or empty text
+                if confidence >= self.confidence_threshold and extracted_text.strip():
+                    updated_regions.append(region)
+                else:
+                    logger.debug(f"Skipping low confidence typed region: {confidence:.2f} < {self.confidence_threshold}")
+                    
+            except Exception as e:
+                logger.error(f"Error processing typed region {region.id}: {str(e)}")
+                # Keep the region but mark it as failed
+                region.text = ""
+                region.extraction_confidence = 0.0
+                updated_regions.append(region)
+        
+        # Process handwritten regions
+        for region in handwritten_regions:
+            try:
+                # Crop the region from the image
+                x, y, w, h = region.bbox
+                region_image = crop_region(image, x, y, w, h)
+                
+                # Apply additional preprocessing for handwritten text
+                enhanced_image = enhance_contrast(region_image, clip_limit=3.0)
+                
+                # Use handwritten text model
+                result = self.handwritten_model.extract_text(enhanced_image)
+                extracted_text = result.get("text", "")
+                confidence = result.get("confidence", 0.0)
+                
+                # Update region with extracted text and confidence
+                region.text = extracted_text
+                region.extraction_confidence = confidence
+                
+                # Skip regions with low confidence or empty text
+                if confidence >= self.confidence_threshold and extracted_text.strip():
+                    updated_regions.append(region)
+                else:
+                    logger.debug(f"Skipping low confidence handwritten region: {confidence:.2f} < {self.confidence_threshold}")
+                    
+            except Exception as e:
+                logger.error(f"Error processing handwritten region {region.id}: {str(e)}")
+                # Keep the region but mark it as failed
+                region.text = ""
+                region.extraction_confidence = 0.0
+                updated_regions.append(region)
+        
+        # Sort regions by vertical position (top to bottom)
+        updated_regions.sort(key=lambda r: r.bbox[1])
+        
+        return updated_regions
+    
+    def extract_text(self, image: np.ndarray) -> List[Tuple[str, ConfidenceScore]]:
+        """
+        Extract text from the document image using the hybrid approach.
+        
+        This method implements the abstract method from BaseOCRModel.
+        
+        Args:
+            image: Preprocessed document image as a numpy array
+            
+        Returns:
+            List of tuples containing extracted text and confidence scores
+        """
+        try:
+            # Detect and classify text regions
+            regions = self.detect_and_classify_regions(image)
+            
+            # Extract text from each region
+            processed_regions = self.extract_text_from_regions(image, regions)
+            
+            # Combine results
+            results = []
+            for region in processed_regions:
+                if region.text and region.extraction_confidence > 0:
+                    confidence = ConfidenceScore.from_float(region.extraction_confidence)
+                    results.append((region.text, confidence))
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Error extracting text: {str(e)}")
+            return []
+    
+    def extract_fields(self, image: np.ndarray, 
+                      document_metadata: DocumentMetadata) -> List[ExtractedField]:
+        """
+        Extract structured fields from the document image.
+        
+        This method implements the abstract method from BaseOCRModel.
+        
+        Args:
+            image: Preprocessed document image as a numpy array
+            document_metadata: Metadata of the document including type and classification
+            
+        Returns:
+            List of extracted fields with values and confidence scores
+        """
+        try:
+            # Get document type from metadata
+            document_type = document_metadata.get("type", DocumentType.APPLICATION)
+            
+            # Detect and classify text regions
+            regions = self.detect_and_classify_regions(image)
+            
+            # Extract text from each region
+            processed_regions = self.extract_text_from_regions(image, regions)
+            
+            # Extract fields based on document type
+            if document_type == DocumentType.APPLICATION:
+                return self._extract_application_fields(processed_regions, document_metadata)
+            elif document_type == DocumentType.INVOICE:
+                return self._extract_invoice_fields(processed_regions, document_metadata)
+            elif document_type == DocumentType.BANK_STATEMENT:
+                return self._extract_bank_statement_fields(processed_regions, document_metadata)
+            else:
+                # Default extraction for unknown document types
+                return self._extract_generic_fields(processed_regions, document_metadata)
+                
+        except Exception as e:
+            logger.error(f"Error extracting fields: {str(e)}")
+            return []
+    
+    def _extract_application_fields(self, regions: List[TextRegion], 
+                                  document_metadata: DocumentMetadata) -> List[ExtractedField]:
+        """
+        Extract fields specific to application forms.
+        
+        Args:
+            regions: List of processed text regions
+            document_metadata: Document metadata
+            
+        Returns:
+            List of extracted fields
+        """
+        # Define field patterns to look for in application forms
+        field_patterns = {
+            "legal_name": [r"legal\s+name[\s:]*([\w\s.,&'-]+)", r"business\s+name[\s:]*([\w\s.,&'-]+)"],
+            "dba_name": [r"dba[\s:]*([\w\s.,&'-]+)", r"doing\s+business\s+as[\s:]*([\w\s.,&'-]+)"],
+            "ein": [r"ein[\s:]*([0-9]{2}-?[0-9]{7})", r"tax\s+id[\s:]*([0-9]{2}-?[0-9]{7})"],
+            "address": [r"address[\s:]*([\w\s.,#'-]+)", r"location[\s:]*([\w\s.,#'-]+)"],
+            "phone": [r"phone[\s:]*([0-9()-\s.]+)", r"telephone[\s:]*([0-9()-\s.]+)"],
+            "email": [r"email[\s:]*([\w.@-]+)", r"e-mail[\s:]*([\w.@-]+)"],
+            "revenue": [r"revenue[\s:]*\$?([0-9,.]+)[kK]?", r"annual\s+sales[\s:]*\$?([0-9,.]+)[kK]?"],
+            "years_in_business": [r"years\s+in\s+business[\s:]*([0-9.]+)", r"time\s+in\s+business[\s:]*([0-9.]+)"]
+        }
+        
+        # Extract fields using regex patterns
+        extracted_fields = self._extract_fields_with_patterns(regions, field_patterns)
+        
+        # Create ExtractedField objects
+        fields = []
+        for field_name, (value, confidence, region_id) in extracted_fields.items():
+            # Get region information for field location
+            region = next((r for r in regions if r.id == region_id), None)
+            
+            # Create field location
+            if region:
+                x, y, w, h = region.bbox
+                location = FieldLocation(
+                    page=0,  # Assuming single page
+                    top=y,
+                    left=x,
+                    bottom=y + h,
+                    right=x + w,
+                    width=w,
+                    height=h
+                )
+            else:
+                # Default location if region not found
+                location = FieldLocation(
+                    page=0,
+                    top=0,
+                    left=0,
+                    bottom=0,
+                    right=0,
+                    width=0,
+                    height=0
+                )
+            
+            # Create extracted field
+            field = ExtractedField(
+                name=field_name,
+                value=value,
+                confidence=ConfidenceScore.from_float(confidence),
+                location=location,
+                category="application",
+                metadata={
+                    "text_type": region.text_type.value if region else "unknown",
+                    "extraction_time": datetime.now().isoformat()
+                }
+            )
+            
+            fields.append(field)
+        
+        return fields
+    
+    def _extract_invoice_fields(self, regions: List[TextRegion], 
+                              document_metadata: DocumentMetadata) -> List[ExtractedField]:
+        """
+        Extract fields specific to invoices.
+        
+        Args:
+            regions: List of processed text regions
+            document_metadata: Document metadata
+            
+        Returns:
+            List of extracted fields
+        """
+        # Define field patterns for invoices
+        field_patterns = {
+            "invoice_number": [r"invoice\s+(?:no|number|#)[\s:]*([\w-]+)", r"inv\s+(?:no|number|#)[\s:]*([\w-]+)"],
+            "invoice_date": [r"invoice\s+date[\s:]*([\w\s.,/-]+)", r"date[\s:]*([\w\s.,/-]+)"],
+            "due_date": [r"due\s+date[\s:]*([\w\s.,/-]+)", r"payment\s+due[\s:]*([\w\s.,/-]+)"],
+            "total_amount": [r"total[\s:]*\$?([0-9,.]+)", r"amount\s+due[\s:]*\$?([0-9,.]+)"],
+            "vendor_name": [r"from[\s:]*([\w\s.,&'-]+)", r"vendor[\s:]*([\w\s.,&'-]+)"],
+            "customer_name": [r"to[\s:]*([\w\s.,&'-]+)", r"bill\s+to[\s:]*([\w\s.,&'-]+)"]
+        }
+        
+        # Extract fields using regex patterns
+        extracted_fields = self._extract_fields_with_patterns(regions, field_patterns)
+        
+        # Create ExtractedField objects (similar to application fields)
+        fields = []
+        for field_name, (value, confidence, region_id) in extracted_fields.items():
+            # Get region information for field location
+            region = next((r for r in regions if r.id == region_id), None)
+            
+            # Create field location
+            if region:
+                x, y, w, h = region.bbox
+                location = FieldLocation(
+                    page=0,  # Assuming single page
+                    top=y,
+                    left=x,
+                    bottom=y + h,
+                    right=x + w,
+                    width=w,
+                    height=h
+                )
+            else:
+                # Default location if region not found
+                location = FieldLocation(
+                    page=0,
+                    top=0,
+                    left=0,
+                    bottom=0,
+                    right=0,
+                    width=0,
+                    height=0
+                )
+            
+            # Create extracted field
+            field = ExtractedField(
+                name=field_name,
+                value=value,
+                confidence=ConfidenceScore.from_float(confidence),
+                location=location,
+                category="invoice",
+                metadata={
+                    "text_type": region.text_type.value if region else "unknown",
+                    "extraction_time": datetime.now().isoformat()
+                }
+            )
+            
+            fields.append(field)
+        
+        return fields
+    
+    def _extract_bank_statement_fields(self, regions: List[TextRegion], 
+                                     document_metadata: DocumentMetadata) -> List[ExtractedField]:
+        """
+        Extract fields specific to bank statements.
+        
+        Args:
+            regions: List of processed text regions
+            document_metadata: Document metadata
+            
+        Returns:
+            List of extracted fields
+        """
+        # Define field patterns for bank statements
+        field_patterns = {
+            "account_number": [r"account\s+(?:no|number|#)[\s:]*([\w-]+)", r"acct\s+(?:no|number|#)[\s:]*([\w-]+)"],
+            "statement_date": [r"statement\s+date[\s:]*([\w\s.,/-]+)", r"period[\s:]*([\w\s.,/-]+)"],
+            "opening_balance": [r"opening\s+balance[\s:]*\$?([0-9,.]+)", r"beginning\s+balance[\s:]*\$?([0-9,.]+)"],
+            "closing_balance": [r"closing\s+balance[\s:]*\$?([0-9,.]+)", r"ending\s+balance[\s:]*\$?([0-9,.]+)"],
+            "bank_name": [r"bank\s+name[\s:]*([\w\s.,&'-]+)", r"([\w\s.,&'-]+)\s+bank"],
+            "customer_name": [r"customer[\s:]*([\w\s.,&'-]+)", r"account\s+holder[\s:]*([\w\s.,&'-]+)"]
+        }
+        
+        # Extract fields using regex patterns
+        extracted_fields = self._extract_fields_with_patterns(regions, field_patterns)
+        
+        # Create ExtractedField objects (similar to application fields)
+        fields = []
+        for field_name, (value, confidence, region_id) in extracted_fields.items():
+            # Get region information for field location
+            region = next((r for r in regions if r.id == region_id), None)
+            
+            # Create field location
+            if region:
+                x, y, w, h = region.bbox
+                location = FieldLocation(
+                    page=0,  # Assuming single page
+                    top=y,
+                    left=x,
+                    bottom=y + h,
+                    right=x + w,
+                    width=w,
+                    height=h
+                )
+            else:
+                # Default location if region not found
+                location = FieldLocation(
+                    page=0,
+                    top=0,
+                    left=0,
+                    bottom=0,
+                    right=0,
+                    width=0,
+                    height=0
+                )
+            
+            # Create extracted field
+            field = ExtractedField(
+                name=field_name,
+                value=value,
+                confidence=ConfidenceScore.from_float(confidence),
+                location=location,
+                category="bank_statement",
+                metadata={
+                    "text_type": region.text_type.value if region else "unknown",
+                    "extraction_time": datetime.now().isoformat()
+                }
+            )
+            
+            fields.append(field)
+        
+        return fields
+    
+    def _extract_generic_fields(self, regions: List[TextRegion], 
+                              document_metadata: DocumentMetadata) -> List[ExtractedField]:
+        """
+        Extract generic fields for unknown document types.
+        
+        Args:
+            regions: List of processed text regions
+            document_metadata: Document metadata
+            
+        Returns:
+            List of extracted fields
+        """
+        # For generic documents, we'll extract key-value pairs based on common patterns
+        field_patterns = {
+            "name": [r"name[\s:]*([\w\s.,&'-]+)"],
+            "date": [r"date[\s:]*([\w\s.,/-]+)"],
+            "amount": [r"amount[\s:]*\$?([0-9,.]+)", r"total[\s:]*\$?([0-9,.]+)"],
+            "id": [r"id[\s:]*([\w-]+)", r"number[\s:]*([\w-]+)"],
+            "address": [r"address[\s:]*([\w\s.,#'-]+)"],
+            "phone": [r"phone[\s:]*([0-9()-\s.]+)"],
+            "email": [r"email[\s:]*([\w.@-]+)"]
+        }
+        
+        # Extract fields using regex patterns
+        extracted_fields = self._extract_fields_with_patterns(regions, field_patterns)
+        
+        # Create ExtractedField objects
+        fields = []
+        for field_name, (value, confidence, region_id) in extracted_fields.items():
+            # Get region information for field location
+            region = next((r for r in regions if r.id == region_id), None)
+            
+            # Create field location
+            if region:
+                x, y, w, h = region.bbox
+                location = FieldLocation(
+                    page=0,  # Assuming single page
+                    top=y,
+                    left=x,
+                    bottom=y + h,
+                    right=x + w,
+                    width=w,
+                    height=h
+                )
+            else:
+                # Default location if region not found
+                location = FieldLocation(
+                    page=0,
+                    top=0,
+                    left=0,
+                    bottom=0,
+                    right=0,
+                    width=0,
+                    height=0
+                )
+            
+            # Create extracted field
+            field = ExtractedField(
+                name=field_name,
+                value=value,
+                confidence=ConfidenceScore.from_float(confidence),
+                location=location,
+                category="generic",
+                metadata={
+                    "text_type": region.text_type.value if region else "unknown",
+                    "extraction_time": datetime.now().isoformat()
+                }
+            )
+            
+            fields.append(field)
+        
+        return fields
+    
+    def _extract_fields_with_patterns(self, regions: List[TextRegion], 
+                                    field_patterns: Dict[str, List[str]]) -> Dict[str, Tuple[str, float, int]]:
+        """
+        Extract fields from text regions using regex patterns.
+        
+        Args:
+            regions: List of processed text regions
+            field_patterns: Dictionary of field names and their regex patterns
+            
+        Returns:
+            Dictionary of field names and their extracted values, confidences, and region IDs
+        """
+        import re
+        
+        # Initialize results dictionary
+        extracted_fields = {}
+        
+        # Process each region
+        for region in regions:
+            # Skip empty regions
+            if not region.text:
+                continue
+            
+            # Check each field pattern
+            for field_name, patterns in field_patterns.items():
+                # Skip if field already extracted with high confidence
+                if field_name in extracted_fields and extracted_fields[field_name][1] > 0.8:
+                    continue
+                
+                # Try each pattern for this field
+                for pattern in patterns:
+                    match = re.search(pattern, region.text, re.IGNORECASE)
+                    if match:
+                        value = match.group(1).strip()
+                        confidence = region.extraction_confidence
+                        
+                        # Store or update the field if it has higher confidence
+                        if field_name not in extracted_fields or confidence > extracted_fields[field_name][1]:
+                            extracted_fields[field_name] = (value, confidence, region.id)
+                        
+                        break  # Found a match, no need to try other patterns
+        
+        return extracted_fields
+    
+    def process_document(self, document_content: DocumentContent, 
+                        document_metadata: DocumentMetadata) -> ModelResult:
+        """
+        Process a document to extract text and structured fields using the hybrid approach.
+        
+        This method overrides the process_document method from BaseOCRModel to implement
+        the hybrid processing approach. It's optimized to meet the requirement of processing
+        applications in under 5 minutes from receipt to completion as specified in section 0.1.2.
+        
+        Args:
+            document_content: Binary content of the document
+            document_metadata: Metadata of the document
+            
+        Returns:
+            ModelResult containing extracted data and processing metadata
+        """
+        start_time = datetime.now()
+        
+        try:
+            # Preprocess the document
+            logger.info(f"Preprocessing document {document_metadata.get('id', '')}")
+            preprocessed_image = self.preprocess_document(document_content, document_metadata)
+            
+            # Detect and classify text regions
+            logger.info("Detecting and classifying text regions")
+            regions = self.detect_and_classify_regions(preprocessed_image)
+            
+            # Log region statistics
+            typed_count = sum(1 for r in regions if r.text_type == TextType.TYPED)
+            handwritten_count = sum(1 for r in regions if r.text_type == TextType.HANDWRITTEN)
+            logger.info(f"Detected {len(regions)} regions: {typed_count} typed, {handwritten_count} handwritten")
+            
+            # Extract text from each region
+            logger.info("Extracting text from regions")
+            processed_regions = self.extract_text_from_regions(preprocessed_image, regions)
+            
+            # Log processing statistics
+            successful_regions = sum(1 for r in processed_regions if r.text)
+            logger.info(f"Successfully extracted text from {successful_regions} of {len(processed_regions)} regions")
+            
+            # Extract fields based on document type
+            document_type = document_metadata.get("type", DocumentType.APPLICATION)
+            logger.info(f"Extracting fields for document type: {document_type}")
+            
+            if document_type == DocumentType.APPLICATION:
+                extracted_fields = self._extract_application_fields(processed_regions, document_metadata)
+            elif document_type == DocumentType.INVOICE:
+                extracted_fields = self._extract_invoice_fields(processed_regions, document_metadata)
+            elif document_type == DocumentType.BANK_STATEMENT:
+                extracted_fields = self._extract_bank_statement_fields(processed_regions, document_metadata)
+            else:
+                extracted_fields = self._extract_generic_fields(processed_regions, document_metadata)
+            
+            # Log field extraction statistics
+            logger.info(f"Extracted {len(extracted_fields)} fields from document")
+            
+            # Calculate overall confidence score
+            confidence_scores = [field.confidence for field in extracted_fields]
+            overall_confidence = sum(confidence_scores) / len(confidence_scores) if confidence_scores else 0.0
+            
+            # Check if confidence meets the 99% accuracy requirement
+            if overall_confidence < 0.99:
+                logger.warning(f"Document confidence {overall_confidence:.2f} is below the 99% accuracy requirement")
+            
+            # Combine all extracted text
+            all_text = [region.text for region in processed_regions if region.text]
+            
+            # Calculate processing time
+            processing_time_ms = (datetime.now() - start_time).total_seconds() * 1000
+            
+            # Check if processing time meets the 5-minute requirement
+            if processing_time_ms > 300000:  # 5 minutes = 300,000 ms
+                logger.warning(f"Document processing time {processing_time_ms/1000:.2f}s exceeds the 5-minute requirement")
+            
+            # Format results
+            extracted_data = ExtractedData(
+                fields=extracted_fields,
+                text=all_text,
+                confidence=overall_confidence,
+                metadata={
+                    "model_name": self.model_name,
+                    "model_version": self.model_version,
+                    "document_id": document_metadata.get("id", ""),
+                    "document_type": document_metadata.get("type", ""),
+                    "processing_time_ms": processing_time_ms,
+                    "regions_detected": len(regions),
+                    "regions_processed": len(processed_regions),
+                    "typed_regions": sum(1 for r in processed_regions if r.text_type == TextType.TYPED),
+                    "handwritten_regions": sum(1 for r in processed_regions if r.text_type == TextType.HANDWRITTEN),
+                    "requires_verification": overall_confidence < 0.99,
+                    "extraction_timestamp": datetime.now().isoformat()
+                }
+            )
+            
+            # Create model result
+            result = ModelResult(
+                success=True,
+                data=extracted_data,
+                error=None,
+                processing_time_ms=processing_time_ms
+            )
+            
+            logger.info(
+                f"Successfully processed document {document_metadata.get('id', '')} "
+                f"with hybrid model (confidence: {overall_confidence:.2f}, time: {processing_time_ms/1000:.2f}s)"
+            )
+            
+            return result
+            
+        except Exception as e:
+            error_msg = f"Failed to process document: {str(e)}"
+            logger.error(error_msg)
+            
+            # Create error result
+            result = ModelResult(
+                success=False,
+                data=None,
+                error={
+                    "message": error_msg,
+                    "type": type(e).__name__,
+                    "stack_trace": str(e.__traceback__)
+                },
+                processing_time_ms=(datetime.now() - start_time).total_seconds() * 1000
+            )
+            
+            return result
+    
+    def get_region_statistics(self, image: np.ndarray) -> Dict[str, Any]:
+        """
+        Get statistics about text regions in the document.
+        
+        This method is useful for analyzing the document composition and
+        understanding the distribution of typed vs handwritten content.
+        
+        Args:
+            image: Input image as numpy array
+            
+        Returns:
+            Dictionary of statistics about text regions
+        """
+        try:
+            # Detect and classify text regions
+            regions = self.detect_and_classify_regions(image)
+            
+            # Count typed and handwritten regions
+            typed_count = sum(1 for r in regions if r.text_type == TextType.TYPED)
+            handwritten_count = sum(1 for r in regions if r.text_type == TextType.HANDWRITTEN)
+            
+            # Calculate area covered by each type
+            total_area = image.shape[0] * image.shape[1]
+            typed_area = sum(r.bbox[2] * r.bbox[3] for r in regions if r.text_type == TextType.TYPED)
+            handwritten_area = sum(r.bbox[2] * r.bbox[3] for r in regions if r.text_type == TextType.HANDWRITTEN)
+            
+            # Calculate percentages
+            typed_percentage = (typed_area / total_area) * 100 if total_area > 0 else 0
+            handwritten_percentage = (handwritten_area / total_area) * 100 if total_area > 0 else 0
+            
+            # Create statistics dictionary
+            stats = {
+                "total_regions": len(regions),
+                "typed_regions": typed_count,
+                "handwritten_regions": handwritten_count,
+                "typed_percentage": typed_percentage,
+                "handwritten_percentage": handwritten_percentage,
+                "mixed_document": typed_count > 0 and handwritten_count > 0
+            }
+            
+            return stats
+            
+        except Exception as e:
+            logger.error(f"Error getting region statistics: {str(e)}")
+            return {
+                "error": str(e),
+                "total_regions": 0,
+                "typed_regions": 0,
+                "handwritten_regions": 0,
+                "typed_percentage": 0,
+                "handwritten_percentage": 0,
+                "mixed_document": False
+            }
+    
+    def visualize_regions(self, image: np.ndarray) -> np.ndarray:
+        """
+        Create a visualization of detected and classified text regions.
+        
+        This method is useful for debugging and understanding how the model
+        is segmenting and classifying the document.
+        
+        Args:
+            image: Input image as numpy array
+            
+        Returns:
+            Visualization image with colored bounding boxes
+        """
+        try:
+            # Make a copy of the image for visualization
+            if len(image.shape) == 2:  # Grayscale
+                vis_image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+            else:  # Already color
+                vis_image = image.copy()
+            
+            # Detect and classify text regions
+            regions = self.detect_and_classify_regions(image)
+            
+            # Draw bounding boxes for each region
+            for region in regions:
+                x, y, w, h = region.bbox
+                
+                # Choose color based on text type (green for typed, blue for handwritten)
+                if region.text_type == TextType.TYPED:
+                    color = (0, 255, 0)  # Green
+                else:
+                    color = (255, 0, 0)  # Blue
+                
+                # Draw rectangle
+                cv2.rectangle(vis_image, (x, y), (x + w, y + h), color, 2)
+                
+                # Add confidence text
+                conf_text = f"{region.classification_confidence:.2f}"
+                cv2.putText(vis_image, conf_text, (x, y - 5), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+            
+            return vis_image
+            
+        except Exception as e:
+            logger.error(f"Error visualizing regions: {str(e)}")
+            return image
