@@ -1,22 +1,22 @@
 /**
- * Notification Service Utilities
+ * Utility Functions Index
  * 
  * This barrel file exports all utility functions from the Notification Service utils module.
- * It simplifies importing utilities throughout the service by providing a single entry point.
- * This approach ensures consistent utility usage and enables tree-shaking for optimized builds.
+ * It provides a single entry point for importing utilities throughout the service,
+ * ensuring consistent utility usage and enabling tree-shaking for optimized builds.
  */
 
-// Time formatting utilities
+// Export date and time formatting utilities
 export * from './format-time';
 
-// Number formatting utilities
+// Export number formatting utilities
 export * from './format-number';
 
-// HMAC signature utilities for webhook security
+// Export HMAC signature utilities for webhook security
 export * from './hmac';
 
-// Retry utilities for webhook delivery
+// Export retry utilities for webhook delivery reliability
 export * from './retry';
 
-// Validation utilities for payload schema validation
+// Export validation utilities for data integrity
 export * from './validation';
