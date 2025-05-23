@@ -2,8 +2,7 @@
 #
 # This file specifies which financial document files should be excluded from version control
 # to prevent repository bloat while ensuring that documentation and configuration files
-# are properly tracked. Financial documents are typically large binary files that would
-# significantly increase the repository size if included.
+# are properly tracked.
 
 # Exclude all binary financial document files by default
 *.pdf
@@ -19,15 +18,7 @@
 *.jpeg
 *.JPEG
 
-# Exclude financial data exports
-*.csv
-*.CSV
-*.xlsx
-*.XLSX
-*.xls
-*.XLS
-
-# Exclude large data files
+# Exclude large financial data files
 *.zip
 *.ZIP
 *.tar.gz
@@ -50,8 +41,9 @@
 
 # Keep metadata files
 !metadata.csv
-!financial_document_index.csv
-!financial_annotations.csv
+!document_index.csv
+!annotations.csv
+!financial_documents_manifest.json
 
 # INSTRUCTIONS FOR FINANCIAL TEST DOCUMENTS
 #
@@ -65,14 +57,5 @@
 #
 # 3. Run the verification script to ensure all required financial test documents are present:
 #    python ../../../verify_test_data.py typed_documents/financial_documents
-#
-# 4. The financial documents include various types such as:
-#    - Bank statements
-#    - Tax returns
-#    - Profit and loss statements
-#    - Balance sheets
-#    - Income statements
-#    - Cash flow statements
-#    - Credit reports
 #
 # For more information, see the README.md file in this directory.
