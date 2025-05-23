@@ -1,94 +1,166 @@
-# Outputs for the Prometheus and Grafana monitoring stack
+# infrastructure/terraform/modules/monitoring/outputs.tf
 
-output "prometheus_server_endpoint" {
-  description = "The endpoint URL of the Prometheus server"
-  value       = "http://prometheus-server.${var.namespace}.svc.cluster.local"
+# This file exports output values from the monitoring module, including:
+# - Dashboard URLs for accessing monitoring dashboards
+# - API endpoints for programmatic access to monitoring data
+# - Authentication details for programmatic access (marked as sensitive)
+# - Resource identifiers for cross-module references
+
+#--------------------------------------------------------------
+# General Outputs
+#--------------------------------------------------------------
+
+output "monitoring_type" {
+  description = "The type of monitoring system deployed (datadog or prometheus)"
+  value       = var.monitoring_type
 }
 
-output "grafana_endpoint" {
-  description = "The endpoint URL of the Grafana dashboard"
-  value       = "http://prometheus-grafana.${var.namespace}.svc.cluster.local"
+output "environment" {
+  description = "The environment where monitoring is deployed"
+  value       = var.environment
 }
 
-output "alertmanager_endpoint" {
-  description = "The endpoint URL of the Alertmanager"
-  value       = "http://prometheus-alertmanager.${var.namespace}.svc.cluster.local"
+#--------------------------------------------------------------
+# Dashboard URLs
+#--------------------------------------------------------------
+
+output "dashboard_url" {
+  description = "URL to access the main monitoring dashboard"
+  value       = local.use_datadog ? "https://app.datadoghq.com/dashboard/mca-${var.environment}" : "http://${local.use_prometheus ? module.prometheus[0].grafana_endpoint : ""}"
 }
 
-output "prometheus_namespace" {
-  description = "The namespace where Prometheus is deployed"
-  value       = local.namespace
+output "application_dashboard_url" {
+  description = "URL to access the MCA application processing dashboard"
+  value       = local.use_datadog ? "https://app.datadoghq.com/dashboard/${local.use_datadog ? module.datadog[0].dashboard_id : ""}" : "http://${local.use_prometheus ? module.prometheus[0].grafana_endpoint : ""}/d/mca-application-processing"
 }
 
-output "grafana_admin_password" {
-  description = "The admin password for Grafana"
-  value       = var.grafana_admin_password
+output "infrastructure_dashboard_url" {
+  description = "URL to access the infrastructure monitoring dashboard"
+  value       = local.use_datadog ? "https://app.datadoghq.com/infrastructure" : "http://${local.use_prometheus ? module.prometheus[0].grafana_endpoint : ""}/d/mca-infrastructure"
+}
+
+#--------------------------------------------------------------
+# API Endpoints
+#--------------------------------------------------------------
+
+output "api_endpoint" {
+  description = "API endpoint for programmatic access to monitoring data"
+  value       = local.use_datadog ? "https://api.datadoghq.com/api/v1" : "http://${local.use_prometheus ? module.prometheus[0].prometheus_endpoint : ""}/api/v1"
+}
+
+output "metrics_endpoint" {
+  description = "API endpoint for metrics data"
+  value       = local.use_datadog ? "https://api.datadoghq.com/api/v1/metrics" : "http://${local.use_prometheus ? module.prometheus[0].prometheus_endpoint : ""}/api/v1/query"
+}
+
+output "alerts_endpoint" {
+  description = "API endpoint for alerts data"
+  value       = local.use_datadog ? "https://api.datadoghq.com/api/v1/monitor" : "http://${local.use_prometheus ? module.prometheus[0].alertmanager_endpoint : ""}/api/v1/alerts"
+}
+
+#--------------------------------------------------------------
+# Authentication Details (Sensitive)
+#--------------------------------------------------------------
+
+output "api_key" {
+  description = "API key for programmatic access to monitoring system"
+  value       = local.use_datadog ? var.datadog_api_key : null
   sensitive   = true
 }
 
-output "prometheus_service_account" {
-  description = "The service account used by Prometheus"
-  value       = "prometheus-${var.prometheus_release_name}"
+output "app_key" {
+  description = "Application key for programmatic access to monitoring system"
+  value       = local.use_datadog ? var.datadog_app_key : null
+  sensitive   = true
 }
 
-output "monitoring_enabled" {
-  description = "Whether monitoring is enabled"
-  value       = true
+output "grafana_admin_password" {
+  description = "Admin password for Grafana (only applicable for prometheus monitoring type)"
+  value       = local.use_prometheus ? module.prometheus[0].grafana_admin_password : null
+  sensitive   = true
 }
 
-output "exporters_deployed" {
-  description = "List of exporters that have been deployed"
-  value       = [
-    var.postgres_exporter_enabled ? "postgres-exporter" : null,
-    var.rabbitmq_exporter_enabled ? "rabbitmq-exporter" : null,
-    var.redis_exporter_enabled ? "redis-exporter" : null,
-    var.cloudwatch_exporter_enabled ? "cloudwatch-exporter" : null
-  ]
+#--------------------------------------------------------------
+# Resource Identifiers
+#--------------------------------------------------------------
+
+output "dashboard_id" {
+  description = "ID of the main application dashboard"
+  value       = local.use_datadog ? module.datadog[0].dashboard_id : null
 }
 
-output "service_monitors_deployed" {
-  description = "List of service monitors that have been deployed"
-  value       = [
-    var.email_service_monitor_enabled ? "email-service-monitor" : null,
-    var.document_service_monitor_enabled ? "document-service-monitor" : null,
-    var.ocr_service_monitor_enabled ? "ocr-service-monitor" : null,
-    var.data_service_monitor_enabled ? "data-service-monitor" : null,
-    var.notification_service_monitor_enabled ? "notification-service-monitor" : null,
-    var.api_gateway_service_monitor_enabled ? "api-gateway-monitor" : null
-  ]
+#--------------------------------------------------------------
+# Monitor IDs
+#--------------------------------------------------------------
+
+output "app_processing_time_monitor_id" {
+  description = "ID of the application processing time monitor"
+  value       = local.use_datadog ? module.datadog[0].app_processing_time_monitor_id : null
 }
 
-output "grafana_ingress_hosts" {
-  description = "The hosts configured for Grafana ingress"
-  value       = var.grafana_ingress_enabled ? var.grafana_ingress_hosts : []
+output "ocr_accuracy_monitor_id" {
+  description = "ID of the OCR accuracy monitor"
+  value       = local.use_datadog ? module.datadog[0].ocr_accuracy_monitor_id : null
 }
 
-output "prometheus_retention_period" {
-  description = "The data retention period for Prometheus"
-  value       = var.prometheus_retention_period
+output "queue_depth_monitor_id" {
+  description = "ID of the queue depth monitor"
+  value       = local.use_datadog ? module.datadog[0].queue_depth_monitor_id : null
 }
 
-output "prometheus_storage_size" {
-  description = "The storage size allocated for Prometheus"
-  value       = var.prometheus_storage_enabled ? var.prometheus_storage_size : "ephemeral"
+output "api_response_time_monitor_id" {
+  description = "ID of the API response time monitor"
+  value       = local.use_datadog ? module.datadog[0].api_response_time_monitor_id : null
 }
 
-output "grafana_storage_size" {
-  description = "The storage size allocated for Grafana"
-  value       = var.grafana_storage_enabled ? var.grafana_storage_size : "ephemeral"
+#--------------------------------------------------------------
+# Prometheus/Grafana Specific Outputs
+#--------------------------------------------------------------
+
+output "prometheus_endpoint" {
+  description = "Endpoint for Prometheus server (only applicable for prometheus monitoring type)"
+  value       = local.use_prometheus ? module.prometheus[0].prometheus_endpoint : null
 }
 
-output "prometheus_version" {
-  description = "The version of Prometheus deployed"
-  value       = var.prometheus_version
+output "alertmanager_endpoint" {
+  description = "Endpoint for Alertmanager (only applicable for prometheus monitoring type)"
+  value       = local.use_prometheus ? module.prometheus[0].alertmanager_endpoint : null
 }
 
-output "grafana_version" {
-  description = "The version of Grafana deployed"
-  value       = var.grafana_version
+output "grafana_endpoint" {
+  description = "Endpoint for Grafana dashboard (only applicable for prometheus monitoring type)"
+  value       = local.use_prometheus ? module.prometheus[0].grafana_endpoint : null
 }
 
-output "alertmanager_version" {
-  description = "The version of Alertmanager deployed"
-  value       = var.alertmanager_version
+#--------------------------------------------------------------
+# Integration Outputs
+#--------------------------------------------------------------
+
+output "monitoring_namespace" {
+  description = "Kubernetes namespace where monitoring resources are deployed"
+  value       = local.use_prometheus ? module.prometheus[0].monitoring_namespace : null
+}
+
+output "service_account_name" {
+  description = "Name of the service account used by monitoring system"
+  value       = local.use_prometheus ? module.prometheus[0].service_account_name : null
+}
+
+output "metrics_collection_interval" {
+  description = "Interval in seconds at which metrics are collected"
+  value       = local.metric_collection_interval
+}
+
+output "metrics_retention_days" {
+  description = "Number of days metrics are retained in the monitoring system"
+  value       = local.metrics_retention_days[var.environment]
+}
+
+#--------------------------------------------------------------
+# Alert Thresholds
+#--------------------------------------------------------------
+
+output "alert_thresholds" {
+  description = "Alert thresholds configured for various metrics"
+  value       = local.alert_thresholds
 }
