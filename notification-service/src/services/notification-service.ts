@@ -1,24 +1,23 @@
 import { Channel, ConsumeMessage } from 'amqplib';
 import { Logger } from 'winston';
 
-import { config } from '../config';
-import { logger } from '../config/logger';
 import {
-  IRabbitMQMessage,
-  NotificationType,
   INotification,
-  INotificationPayload,
+  NotificationType,
   INotificationRecipient,
-  MessageChannel,
-  IRetryOptions,
-  ILogContext
-} from '../types';
+  NotificationStatus,
+  NotificationPriority,
+} from '../types/notification';
+import { IRabbitMQMessage } from '../types/rabbitmq';
 import { WebhookService } from './webhook-service';
-import { MessageService } from './message-service';
 import { RetryService } from './retry-service';
 import { AuditService } from './audit-service';
+import { MessageService } from './message-service';
+import { rabbitmqConfig } from '../config/rabbitmq';
 
 /**
+ * NotificationService
+ * 
  * Core service that processes notification messages from RabbitMQ, determines notification types,
  * resolves recipients, and orchestrates the delivery process. It acts as the central coordinator
  * for the notification system, consuming messages from the notification queue and delegating to
@@ -26,73 +25,70 @@ import { AuditService } from './audit-service';
  */
 export class NotificationService {
   private channel: Channel | null = null;
-  private readonly logger: Logger;
-  private readonly webhookService: WebhookService;
-  private readonly messageService: MessageService;
-  private readonly retryService: RetryService;
-  private readonly auditService: AuditService;
-  private readonly consumerTag: string;
-  private isConsuming: boolean = false;
+  private consumerTag: string | null = null;
+  private isProcessing = false;
 
   /**
-   * Creates a new instance of the NotificationService.
+   * Creates an instance of NotificationService.
    * 
-   * @param channel - RabbitMQ channel for consuming messages
-   * @param webhookService - Service for webhook delivery
+   * @param logger - Winston logger instance for service-wide logging
+   * @param webhookService - Service for webhook payload delivery
    * @param messageService - Service for email, SMS, and push notifications
-   * @param retryService - Service for handling retry logic
-   * @param auditService - Service for logging audit records
-   * @param logContext - Logging context for correlation
+   * @param retryService - Service for managing notification retries
+   * @param auditService - Service for logging notification activities
    */
   constructor(
-    channel: Channel,
-    webhookService: WebhookService,
-    messageService: MessageService,
-    retryService: RetryService,
-    auditService: AuditService,
-    private readonly logContext: ILogContext = {}
-  ) {
+    private readonly logger: Logger,
+    private readonly webhookService: WebhookService,
+    private readonly messageService: MessageService,
+    private readonly retryService: RetryService,
+    private readonly auditService: AuditService,
+  ) {}
+
+  /**
+   * Initializes the notification service and sets up the RabbitMQ consumer.
+   * 
+   * @param channel - RabbitMQ channel for consuming messages
+   * @returns Promise that resolves when initialization is complete
+   */
+  public async initialize(channel: Channel): Promise<void> {
+    this.logger.info('Initializing NotificationService');
     this.channel = channel;
-    this.webhookService = webhookService;
-    this.messageService = messageService;
-    this.retryService = retryService;
-    this.auditService = auditService;
-    this.logger = logger.child({ ...logContext, service: 'NotificationService' });
-    this.consumerTag = `notification-consumer-${Date.now()}`;
+
+    try {
+      // Ensure the notification queue exists
+      await this.channel.assertQueue(rabbitmqConfig.queues.notification, {
+        durable: true,
+      });
+
+      this.logger.info(`NotificationService initialized successfully`);
+    } catch (error) {
+      this.logger.error('Failed to initialize NotificationService', { error });
+      throw error;
+    }
   }
 
   /**
    * Starts consuming messages from the notification queue.
    * 
-   * @returns Promise that resolves when the consumer is registered
+   * @returns Promise that resolves when the consumer is started
    */
-  public async startConsuming(): Promise<void> {
+  public async startConsumer(): Promise<void> {
     if (!this.channel) {
-      throw new Error('RabbitMQ channel is not initialized');
-    }
-
-    if (this.isConsuming) {
-      this.logger.warn('Already consuming messages from the notification queue');
-      return;
+      throw new Error('NotificationService not initialized');
     }
 
     try {
-      // Ensure the queue exists
-      await this.channel.assertQueue(config.rabbitmq.queues.notification, {
-        durable: true,
-      });
-
-      // Start consuming messages
-      await this.channel.consume(
-        config.rabbitmq.queues.notification,
+      const { consumerTag } = await this.channel.consume(
+        rabbitmqConfig.queues.notification,
         this.handleMessage.bind(this),
-        { consumerTag: this.consumerTag }
+        { noAck: false }
       );
 
-      this.isConsuming = true;
-      this.logger.info('Started consuming messages from the notification queue');
+      this.consumerTag = consumerTag;
+      this.logger.info('NotificationService consumer started', { consumerTag });
     } catch (error) {
-      this.logger.error('Failed to start consuming messages', { error });
+      this.logger.error('Failed to start NotificationService consumer', { error });
       throw error;
     }
   }
@@ -100,159 +96,194 @@ export class NotificationService {
   /**
    * Stops consuming messages from the notification queue.
    * 
-   * @returns Promise that resolves when the consumer is cancelled
+   * @returns Promise that resolves when the consumer is stopped
    */
-  public async stopConsuming(): Promise<void> {
-    if (!this.channel || !this.isConsuming) {
+  public async stopConsumer(): Promise<void> {
+    if (!this.channel || !this.consumerTag) {
       return;
     }
 
     try {
       await this.channel.cancel(this.consumerTag);
-      this.isConsuming = false;
-      this.logger.info('Stopped consuming messages from the notification queue');
+      this.consumerTag = null;
+      this.logger.info('NotificationService consumer stopped');
     } catch (error) {
-      this.logger.error('Failed to stop consuming messages', { error });
+      this.logger.error('Failed to stop NotificationService consumer', { error });
       throw error;
     }
   }
 
   /**
-   * Handles an incoming message from the notification queue.
+   * Handles incoming notification messages from RabbitMQ.
    * 
-   * @param message - The RabbitMQ message to process
+   * @param msg - RabbitMQ message containing notification data
    */
-  private async handleMessage(message: ConsumeMessage | null): Promise<void> {
-    if (!message || !this.channel) {
+  private async handleMessage(msg: ConsumeMessage | null): Promise<void> {
+    if (!msg || !this.channel) {
       return;
     }
 
-    const messageId = message.properties.messageId || 'unknown';
-    const correlationId = message.properties.correlationId || 'unknown';
-    const logContext = { ...this.logContext, messageId, correlationId };
-    const childLogger = this.logger.child(logContext);
+    // Set processing flag to track active processing
+    this.isProcessing = true;
 
     try {
-      childLogger.info('Received notification message');
-
       // Parse the message content
-      const content = message.content.toString();
-      const rabbitMQMessage = JSON.parse(content) as IRabbitMQMessage;
+      const content = msg.content.toString();
+      const message: IRabbitMQMessage = JSON.parse(content);
+
+      this.logger.info('Processing notification message', {
+        messageId: message.messageId,
+        correlationId: message.correlationId,
+      });
+
+      // Validate the message structure
+      if (!this.validateMessage(message)) {
+        this.logger.warn('Invalid notification message structure', { messageId: message.messageId });
+        // Acknowledge invalid messages to remove them from the queue
+        this.channel.ack(msg);
+        return;
+      }
 
       // Process the notification
-      await this.processNotification(rabbitMQMessage, logContext);
+      await this.processNotification(message);
 
-      // Acknowledge the message
-      this.channel.ack(message);
-      childLogger.info('Successfully processed notification message');
+      // Acknowledge the message after successful processing
+      this.channel.ack(msg);
+      this.logger.info('Notification message processed successfully', { messageId: message.messageId });
     } catch (error) {
-      childLogger.error('Failed to process notification message', { error });
+      this.logger.error('Error processing notification message', { error });
 
-      // Negative acknowledge the message to requeue it
+      // Negative acknowledge the message to requeue it for retry
       // Only requeue if it hasn't been redelivered too many times
-      const redelivered = message.fields.redelivered;
-      const redeliveryCount = message.properties.headers?.['x-redelivery-count'] || 0;
+      const redelivered = msg.fields.redelivered;
+      const redeliveryCount = this.getRedeliveryCount(msg);
 
-      if (redelivered && redeliveryCount >= config.rabbitmq.maxRedeliveries) {
-        childLogger.warn('Message exceeded max redeliveries, sending to dead letter queue');
-        this.channel.nack(message, false, false);
+      if (redelivered && redeliveryCount > rabbitmqConfig.maxRedeliveries) {
+        this.logger.warn('Message exceeded max redeliveries, not requeuing', {
+          redeliveryCount,
+          maxRedeliveries: rabbitmqConfig.maxRedeliveries,
+        });
+        // Acknowledge the message to remove it from the queue
+        this.channel.ack(msg);
+
+        // Send to dead letter queue for manual inspection
+        await this.sendToDeadLetterQueue(msg);
       } else {
-        childLogger.info('Requeueing message for retry');
-        this.channel.nack(message, false, true);
+        // Requeue the message for retry
+        this.channel.nack(msg, false, true);
       }
+    } finally {
+      this.isProcessing = false;
     }
   }
 
   /**
-   * Processes a notification message and delegates to appropriate delivery services.
+   * Validates the structure of a notification message.
    * 
-   * @param message - The parsed RabbitMQ message
-   * @param logContext - Logging context for correlation
+   * @param message - RabbitMQ message to validate
+   * @returns True if the message is valid, false otherwise
    */
-  private async processNotification(
-    message: IRabbitMQMessage,
-    logContext: ILogContext
-  ): Promise<void> {
-    const childLogger = this.logger.child(logContext);
-    
-    // Validate the message structure
-    if (!message.payload || !message.metadata) {
-      throw new Error('Invalid notification message structure');
+  private validateMessage(message: IRabbitMQMessage): boolean {
+    // Basic validation of required fields
+    if (!message || !message.payload) {
+      return false;
     }
 
-    // Determine notification type
-    const notificationType = this.determineNotificationType(message);
-    childLogger.info('Determined notification type', { notificationType });
+    // Validate notification-specific fields
+    const payload = message.payload;
+    if (!payload.type || !payload.applicationId) {
+      return false;
+    }
 
-    // Create notification payload
-    const payload = this.createNotificationPayload(message, notificationType);
-    
-    // Resolve recipients
-    const recipients = await this.resolveRecipients(message, notificationType);
-    childLogger.info('Resolved recipients', { recipientCount: recipients.length });
+    return true;
+  }
 
-    if (recipients.length === 0) {
-      childLogger.warn('No recipients found for notification');
+  /**
+   * Processes a notification message by determining type, resolving recipients,
+   * and delivering through appropriate channels.
+   * 
+   * @param message - RabbitMQ message containing notification data
+   */
+  private async processNotification(message: IRabbitMQMessage): Promise<void> {
+    const { payload, messageId, correlationId } = message;
+
+    // Create notification object from message payload
+    const notification: INotification = {
+      id: messageId,
+      correlationId,
+      type: this.determineNotificationType(payload),
+      status: NotificationStatus.PENDING,
+      priority: this.determinePriority(payload),
+      applicationId: payload.applicationId,
+      payload: payload,
+      metadata: payload.metadata || {},
+      recipients: [],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    // Log notification creation
+    this.logger.info('Created notification', {
+      notificationId: notification.id,
+      type: notification.type,
+      applicationId: notification.applicationId,
+    });
+
+    // Resolve recipients based on notification type and application metadata
+    notification.recipients = await this.resolveRecipients(notification);
+
+    if (notification.recipients.length === 0) {
+      this.logger.warn('No recipients found for notification', {
+        notificationId: notification.id,
+        type: notification.type,
+      });
+      
+      // Record the notification with no recipients
+      await this.auditService.recordNotificationAttempt(notification, [], 'NO_RECIPIENTS');
       return;
     }
 
-    // Create notification object
-    const notification: INotification = {
-      id: message.metadata.id || `notification-${Date.now()}`,
-      type: notificationType,
-      status: 'PENDING',
-      priority: this.determinePriority(notificationType),
-      payload,
-      recipients,
-      metadata: {
-        ...message.metadata,
-        processedAt: new Date().toISOString(),
-      },
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
+    // Deliver notification to all recipients through appropriate channels
+    const deliveryResults = await this.deliverNotification(notification);
 
-    // Log the notification for audit purposes
-    await this.auditService.logNotification(notification, logContext);
+    // Update notification status based on delivery results
+    notification.status = this.determineOverallStatus(deliveryResults);
+    notification.updatedAt = new Date();
 
-    // Process each recipient
-    const deliveryPromises = recipients.map(recipient => 
-      this.deliverNotification(notification, recipient, logContext)
+    // Record the notification delivery attempt
+    await this.auditService.recordNotificationAttempt(
+      notification,
+      deliveryResults,
+      notification.status
     );
 
-    // Wait for all deliveries to complete
-    await Promise.all(deliveryPromises);
+    // Schedule retries for failed deliveries if applicable
+    if (notification.status === NotificationStatus.FAILED || notification.status === NotificationStatus.PARTIALLY_DELIVERED) {
+      await this.scheduleRetries(notification, deliveryResults);
+    }
   }
 
   /**
-   * Determines the notification type based on the message content.
+   * Determines the notification type based on the message payload.
    * 
-   * @param message - The parsed RabbitMQ message
+   * @param payload - Notification payload from RabbitMQ message
    * @returns The determined notification type
    */
-  private determineNotificationType(message: IRabbitMQMessage): NotificationType {
-    // Check for explicit type in metadata
-    if (message.metadata.notificationType) {
-      return message.metadata.notificationType as NotificationType;
+  private determineNotificationType(payload: any): NotificationType {
+    // Check for explicit type in the payload
+    if (payload.type) {
+      const type = payload.type.toUpperCase();
+      if (Object.values(NotificationType).includes(type as NotificationType)) {
+        return type as NotificationType;
+      }
     }
 
-    // Check for status updates
-    if (message.payload.status || message.metadata.status) {
-      return NotificationType.STATUS_UPDATE;
-    }
-
-    // Check for errors
-    if (message.payload.error || message.metadata.error) {
+    // Infer type from payload content if not explicitly specified
+    if (payload.error || payload.errorCode) {
       return NotificationType.ERROR;
     }
 
-    // Check for completion
-    if (
-      message.payload.status === 'COMPLETED' ||
-      message.metadata.status === 'COMPLETED' ||
-      message.payload.completed === true ||
-      message.metadata.completed === true
-    ) {
+    if (payload.status === 'COMPLETED' || payload.status === 'APPROVED') {
       return NotificationType.COMPLETION;
     }
 
@@ -261,346 +292,279 @@ export class NotificationService {
   }
 
   /**
-   * Creates a notification payload from the message content.
+   * Determines the notification priority based on the message payload.
    * 
-   * @param message - The parsed RabbitMQ message
-   * @param type - The notification type
-   * @returns The notification payload
+   * @param payload - Notification payload from RabbitMQ message
+   * @returns The determined notification priority
    */
-  private createNotificationPayload(
-    message: IRabbitMQMessage,
-    type: NotificationType
-  ): INotificationPayload {
-    // Start with the original payload
-    const payload: INotificationPayload = {
-      ...message.payload,
-      notificationType: type,
-    };
-
-    // Add application data if available
-    if (message.metadata.applicationId) {
-      payload.applicationId = message.metadata.applicationId;
-    }
-
-    // Add status information if available
-    if (message.metadata.status) {
-      payload.status = message.metadata.status;
-    }
-
-    // Add error information if available
-    if (message.metadata.error) {
-      payload.error = message.metadata.error;
-    }
-
-    // Add timestamp
-    payload.timestamp = new Date().toISOString();
-
-    return payload;
-  }
-
-  /**
-   * Resolves the recipients for a notification based on the message content and type.
-   * 
-   * @param message - The parsed RabbitMQ message
-   * @param type - The notification type
-   * @returns Promise that resolves to an array of notification recipients
-   */
-  private async resolveRecipients(
-    message: IRabbitMQMessage,
-    type: NotificationType
-  ): Promise<INotificationRecipient[]> {
-    const recipients: INotificationRecipient[] = [];
-
-    // Check for explicit recipients in the message
-    if (message.recipients && Array.isArray(message.recipients)) {
-      return message.recipients;
-    }
-
-    // Check for webhook configurations in metadata
-    if (message.metadata.webhookIds && Array.isArray(message.metadata.webhookIds)) {
-      const webhookIds = message.metadata.webhookIds as string[];
-      
-      for (const webhookId of webhookIds) {
-        recipients.push({
-          type: 'WEBHOOK',
-          webhookId,
-          active: true,
-        });
+  private determinePriority(payload: any): NotificationPriority {
+    // Check for explicit priority in the payload
+    if (payload.priority) {
+      const priority = payload.priority.toUpperCase();
+      if (Object.values(NotificationPriority).includes(priority as NotificationPriority)) {
+        return priority as NotificationPriority;
       }
     }
 
-    // Check for application ID and resolve configured webhooks
-    if (message.metadata.applicationId) {
-      const applicationId = message.metadata.applicationId as string;
-      
-      // Get webhooks configured for this application
-      const webhooks = await this.webhookService.getWebhooksForApplication(applicationId);
-      
-      for (const webhook of webhooks) {
-        // Check if webhook is configured for this notification type
-        if (webhook.eventTypes.includes(type) || webhook.eventTypes.includes('ALL')) {
+    // Infer priority from notification type and content
+    if (payload.type === NotificationType.ERROR) {
+      return NotificationPriority.HIGH;
+    }
+
+    if (payload.type === NotificationType.COMPLETION) {
+      return NotificationPriority.MEDIUM;
+    }
+
+    // Check for urgent flag
+    if (payload.urgent === true) {
+      return NotificationPriority.HIGH;
+    }
+
+    // Default priority
+    return NotificationPriority.MEDIUM;
+  }
+
+  /**
+   * Resolves the recipients for a notification based on type and application metadata.
+   * 
+   * @param notification - Notification object to resolve recipients for
+   * @returns Promise resolving to an array of notification recipients
+   */
+  private async resolveRecipients(notification: INotification): Promise<INotificationRecipient[]> {
+    const recipients: INotificationRecipient[] = [];
+    const { applicationId, type, metadata } = notification;
+
+    try {
+      // Get application details to determine recipients
+      // This could involve a database lookup or API call to the Data Service
+      // For now, we'll use the metadata from the notification itself
+
+      // Check for explicitly specified recipients in the notification metadata
+      if (metadata.recipients && Array.isArray(metadata.recipients)) {
+        recipients.push(...metadata.recipients);
+      }
+
+      // If no explicit recipients, resolve based on application configuration
+      if (recipients.length === 0) {
+        // This would typically involve looking up webhook configurations, email preferences, etc.
+        // For demonstration, we'll add a default webhook recipient
+        recipients.push({
+          type: 'webhook',
+          endpoint: `https://api.example.com/webhooks/${applicationId}`,
+          apiKey: metadata.apiKey || 'default-key',
+        });
+
+        // Add email recipient if email is available
+        if (metadata.email) {
           recipients.push({
-            type: 'WEBHOOK',
-            webhookId: webhook.id,
-            active: webhook.status === 'ACTIVE',
+            type: 'email',
+            email: metadata.email,
+            name: metadata.name || '',
           });
         }
       }
-    }
 
-    // Check for email recipients
-    if (message.metadata.emailRecipients && Array.isArray(message.metadata.emailRecipients)) {
-      const emailRecipients = message.metadata.emailRecipients as string[];
+      // Log the resolved recipients
+      this.logger.info('Resolved notification recipients', {
+        notificationId: notification.id,
+        recipientCount: recipients.length,
+      });
+
+      return recipients;
+    } catch (error) {
+      this.logger.error('Error resolving notification recipients', {
+        notificationId: notification.id,
+        error,
+      });
       
-      for (const email of emailRecipients) {
-        recipients.push({
-          type: 'EMAIL',
-          email,
-          active: true,
-        });
-      }
-    }
-
-    // Check for SMS recipients
-    if (message.metadata.smsRecipients && Array.isArray(message.metadata.smsRecipients)) {
-      const smsRecipients = message.metadata.smsRecipients as string[];
-      
-      for (const phone of smsRecipients) {
-        recipients.push({
-          type: 'SMS',
-          phone,
-          active: true,
-        });
-      }
-    }
-
-    return recipients;
-  }
-
-  /**
-   * Determines the priority of a notification based on its type.
-   * 
-   * @param type - The notification type
-   * @returns The notification priority
-   */
-  private determinePriority(type: NotificationType): 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL' {
-    switch (type) {
-      case NotificationType.ERROR:
-        return 'HIGH';
-      case NotificationType.COMPLETION:
-        return 'MEDIUM';
-      case NotificationType.STATUS_UPDATE:
-      default:
-        return 'LOW';
+      // Return empty array on error
+      return [];
     }
   }
 
   /**
-   * Delivers a notification to a specific recipient.
+   * Delivers a notification to all recipients through appropriate channels.
    * 
-   * @param notification - The notification to deliver
-   * @param recipient - The recipient to deliver to
-   * @param logContext - Logging context for correlation
-   * @returns Promise that resolves when the delivery is complete
+   * @param notification - Notification object to deliver
+   * @returns Promise resolving to an array of delivery results
    */
-  private async deliverNotification(
-    notification: INotification,
-    recipient: INotificationRecipient,
-    logContext: ILogContext
-  ): Promise<void> {
-    const childLogger = this.logger.child({ ...logContext, recipientType: recipient.type });
-    
-    // Skip inactive recipients
-    if (recipient.active === false) {
-      childLogger.info('Skipping inactive recipient');
+  private async deliverNotification(notification: INotification): Promise<any[]> {
+    const deliveryResults = [];
+
+    // Process each recipient in parallel
+    const deliveryPromises = notification.recipients.map(async (recipient) => {
+      try {
+        let result;
+
+        // Route to appropriate delivery service based on recipient type
+        switch (recipient.type) {
+          case 'webhook':
+            result = await this.webhookService.deliverWebhook(notification, recipient);
+            break;
+          case 'email':
+            result = await this.messageService.sendEmail(notification, recipient);
+            break;
+          case 'sms':
+            result = await this.messageService.sendSms(notification, recipient);
+            break;
+          case 'push':
+            result = await this.messageService.sendPushNotification(notification, recipient);
+            break;
+          default:
+            throw new Error(`Unsupported recipient type: ${recipient.type}`);
+        }
+
+        return {
+          recipient,
+          success: true,
+          result,
+          timestamp: new Date(),
+        };
+      } catch (error) {
+        this.logger.error('Error delivering notification', {
+          notificationId: notification.id,
+          recipientType: recipient.type,
+          error,
+        });
+
+        return {
+          recipient,
+          success: false,
+          error: error.message || 'Unknown error',
+          timestamp: new Date(),
+        };
+      }
+    });
+
+    // Wait for all deliveries to complete
+    const results = await Promise.all(deliveryPromises);
+    deliveryResults.push(...results);
+
+    return deliveryResults;
+  }
+
+  /**
+   * Determines the overall notification status based on delivery results.
+   * 
+   * @param deliveryResults - Array of delivery results
+   * @returns The overall notification status
+   */
+  private determineOverallStatus(deliveryResults: any[]): NotificationStatus {
+    if (deliveryResults.length === 0) {
+      return NotificationStatus.FAILED;
+    }
+
+    const successCount = deliveryResults.filter(result => result.success).length;
+
+    if (successCount === 0) {
+      return NotificationStatus.FAILED;
+    }
+
+    if (successCount === deliveryResults.length) {
+      return NotificationStatus.DELIVERED;
+    }
+
+    return NotificationStatus.PARTIALLY_DELIVERED;
+  }
+
+  /**
+   * Schedules retries for failed notification deliveries.
+   * 
+   * @param notification - Notification object to retry
+   * @param deliveryResults - Array of delivery results
+   */
+  private async scheduleRetries(notification: INotification, deliveryResults: any[]): Promise<void> {
+    // Filter for failed deliveries
+    const failedDeliveries = deliveryResults.filter(result => !result.success);
+
+    if (failedDeliveries.length === 0) {
+      return;
+    }
+
+    this.logger.info('Scheduling retries for failed deliveries', {
+      notificationId: notification.id,
+      failedCount: failedDeliveries.length,
+    });
+
+    // Schedule retries for each failed delivery
+    for (const delivery of failedDeliveries) {
+      try {
+        await this.retryService.scheduleRetry(notification, delivery.recipient, delivery.error);
+      } catch (error) {
+        this.logger.error('Failed to schedule retry', {
+          notificationId: notification.id,
+          recipientType: delivery.recipient.type,
+          error,
+        });
+      }
+    }
+  }
+
+  /**
+   * Gets the redelivery count from a RabbitMQ message.
+   * 
+   * @param msg - RabbitMQ message
+   * @returns The number of times the message has been redelivered
+   */
+  private getRedeliveryCount(msg: ConsumeMessage): number {
+    // Check for x-death header which contains redelivery information
+    const headers = msg.properties.headers || {};
+    const xDeath = headers['x-death'] || [];
+
+    if (xDeath.length > 0 && xDeath[0].count) {
+      return xDeath[0].count;
+    }
+
+    // If x-death header is not available, use a simple approach
+    return msg.fields.redelivered ? 1 : 0;
+  }
+
+  /**
+   * Sends a message to the dead letter queue for manual inspection.
+   * 
+   * @param msg - RabbitMQ message to send to DLQ
+   */
+  private async sendToDeadLetterQueue(msg: ConsumeMessage): Promise<void> {
+    if (!this.channel) {
       return;
     }
 
     try {
-      // Determine the delivery channel
-      switch (recipient.type) {
-        case 'WEBHOOK':
-          if (!recipient.webhookId) {
-            throw new Error('Webhook ID is required for webhook recipients');
-          }
-          
-          childLogger.info('Delivering notification via webhook', { webhookId: recipient.webhookId });
-          await this.webhookService.deliverWebhook(
-            notification,
-            recipient.webhookId,
-            this.getRetryOptions(notification),
-            logContext
-          );
-          break;
+      // Ensure the dead letter queue exists
+      await this.channel.assertQueue(rabbitmqConfig.queues.deadLetter, {
+        durable: true,
+      });
 
-        case 'EMAIL':
-          if (!recipient.email) {
-            throw new Error('Email address is required for email recipients');
-          }
-          
-          childLogger.info('Delivering notification via email', { email: recipient.email });
-          await this.messageService.sendMessage({
-            channel: MessageChannel.EMAIL,
-            recipient: recipient.email,
-            subject: this.getNotificationSubject(notification),
-            payload: notification.payload,
-            priority: notification.priority,
-            metadata: notification.metadata,
-          }, logContext);
-          break;
+      // Publish the original message to the dead letter queue
+      this.channel.sendToQueue(
+        rabbitmqConfig.queues.deadLetter,
+        msg.content,
+        {
+          persistent: true,
+          headers: {
+            ...msg.properties.headers,
+            'x-original-exchange': msg.fields.exchange,
+            'x-original-routing-key': msg.fields.routingKey,
+            'x-error': 'Exceeded maximum redelivery attempts',
+            'x-timestamp': new Date().toISOString(),
+          },
+        }
+      );
 
-        case 'SMS':
-          if (!recipient.phone) {
-            throw new Error('Phone number is required for SMS recipients');
-          }
-          
-          childLogger.info('Delivering notification via SMS', { phone: recipient.phone });
-          await this.messageService.sendMessage({
-            channel: MessageChannel.SMS,
-            recipient: recipient.phone,
-            payload: notification.payload,
-            priority: notification.priority,
-            metadata: notification.metadata,
-          }, logContext);
-          break;
-
-        case 'PUSH':
-          if (!recipient.deviceToken) {
-            throw new Error('Device token is required for push notification recipients');
-          }
-          
-          childLogger.info('Delivering notification via push', { deviceToken: recipient.deviceToken });
-          await this.messageService.sendMessage({
-            channel: MessageChannel.PUSH,
-            recipient: recipient.deviceToken,
-            title: this.getNotificationSubject(notification),
-            payload: notification.payload,
-            priority: notification.priority,
-            metadata: notification.metadata,
-          }, logContext);
-          break;
-
-        default:
-          throw new Error(`Unsupported recipient type: ${recipient.type}`);
-      }
-
-      childLogger.info('Successfully delivered notification');
+      this.logger.info('Message sent to dead letter queue', {
+        queue: rabbitmqConfig.queues.deadLetter,
+      });
     } catch (error) {
-      childLogger.error('Failed to deliver notification', { error });
-      
-      // Check if the error is retryable
-      if (this.isRetryableError(error) && notification.metadata.maxRetries !== 0) {
-        childLogger.info('Scheduling notification for retry');
-        
-        // Schedule for retry
-        await this.retryService.scheduleRetry(
-          notification,
-          recipient,
-          error,
-          this.getRetryOptions(notification),
-          logContext
-        );
-      } else {
-        childLogger.warn('Notification delivery failed permanently');
-        
-        // Log the permanent failure
-        await this.auditService.logDeliveryFailure(
-          notification,
-          recipient,
-          error,
-          logContext
-        );
-      }
-
-      // Rethrow the error to be handled by the caller
-      throw error;
+      this.logger.error('Failed to send message to dead letter queue', { error });
     }
   }
 
   /**
-   * Gets the subject line for a notification based on its type and content.
+   * Checks if the service is currently processing a message.
    * 
-   * @param notification - The notification
-   * @returns The subject line for the notification
+   * @returns True if the service is processing, false otherwise
    */
-  private getNotificationSubject(notification: INotification): string {
-    const appId = notification.payload.applicationId || notification.metadata.applicationId || 'Unknown';
-    
-    switch (notification.type) {
-      case NotificationType.STATUS_UPDATE:
-        const status = notification.payload.status || 'updated';
-        return `Application ${appId} status ${status}`;
-      
-      case NotificationType.ERROR:
-        return `Error processing application ${appId}`;
-      
-      case NotificationType.COMPLETION:
-        return `Application ${appId} processing completed`;
-      
-      default:
-        return `Notification for application ${appId}`;
-    }
-  }
-
-  /**
-   * Gets the retry options for a notification based on its metadata.
-   * 
-   * @param notification - The notification
-   * @returns The retry options
-   */
-  private getRetryOptions(notification: INotification): IRetryOptions {
-    return {
-      maxRetries: notification.metadata.maxRetries ?? config.retry.maxRetries,
-      initialDelay: notification.metadata.initialRetryDelay ?? config.retry.initialDelay,
-      maxDelay: notification.metadata.maxRetryDelay ?? config.retry.maxDelay,
-      backoffFactor: notification.metadata.retryBackoffFactor ?? config.retry.backoffFactor,
-      jitter: notification.metadata.retryJitter ?? config.retry.jitter,
-    };
-  }
-
-  /**
-   * Determines if an error is retryable based on its type and properties.
-   * 
-   * @param error - The error to check
-   * @returns True if the error is retryable, false otherwise
-   */
-  private isRetryableError(error: any): boolean {
-    // Network errors are generally retryable
-    if (error.code === 'ECONNREFUSED' || 
-        error.code === 'ECONNRESET' || 
-        error.code === 'ETIMEDOUT' || 
-        error.code === 'ENETUNREACH') {
-      return true;
-    }
-
-    // HTTP 5xx errors are generally retryable
-    if (error.status >= 500 && error.status < 600) {
-      return true;
-    }
-
-    // HTTP 429 (Too Many Requests) is retryable
-    if (error.status === 429) {
-      return true;
-    }
-
-    // Some HTTP 4xx errors are not retryable
-    if (error.status >= 400 && error.status < 500) {
-      // These specific 4xx errors are not retryable
-      if (error.status === 400 || // Bad Request
-          error.status === 401 || // Unauthorized
-          error.status === 403 || // Forbidden
-          error.status === 404 || // Not Found
-          error.status === 410) { // Gone
-        return false;
-      }
-    }
-
-    // Check for explicit non-retryable flag
-    if (error.retryable === false) {
-      return false;
-    }
-
-    // Default to retryable for unknown errors
-    return true;
+  public isCurrentlyProcessing(): boolean {
+    return this.isProcessing;
   }
 }
