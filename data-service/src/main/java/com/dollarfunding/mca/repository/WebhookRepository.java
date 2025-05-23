@@ -1,26 +1,26 @@
 package com.dollarfunding.mca.repository;
 
-import java.util.List;
-import java.util.Optional;
+import com.dollarfunding.mca.entity.EventType;
+import com.dollarfunding.mca.entity.Webhook;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
-import com.dollarfunding.mca.entity.EventType;
-import com.dollarfunding.mca.entity.Webhook;
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Optional;
 
 /**
  * Repository interface for {@link Webhook} entities.
  * <p>
  * This repository provides database access methods for webhook configurations,
- * including standard CRUD operations inherited from JpaRepository and custom
- * query methods for finding webhooks by endpoint URL, active status, and event type.
- * </p>
- * <p>
- * It is used by the WebhookService to manage webhook configurations for notification
- * delivery to external systems.
+ * including custom query methods for finding webhooks by endpoint URL, active status,
+ * and event type. It is used by the WebhookService to manage webhook configurations
+ * for notification delivery to external systems.
  * </p>
  */
 @Repository
@@ -35,154 +35,114 @@ public interface WebhookRepository extends JpaRepository<Webhook, Long> {
     Optional<Webhook> findByEndpointUrl(String endpointUrl);
 
     /**
-     * Finds all webhooks with the specified active status.
-     *
-     * @param active the active status to filter by
-     * @return a list of webhooks with the specified active status
-     */
-    List<Webhook> findByActive(Boolean active);
-
-    /**
-     * Finds all webhooks configured for the specified event type.
-     *
-     * @param eventType the event type to filter by
-     * @return a list of webhooks configured for the specified event type
-     */
-    List<Webhook> findByEventType(EventType eventType);
-
-    /**
-     * Finds all active webhooks configured for the specified event type.
-     *
-     * @param eventType the event type to filter by
-     * @param active the active status to filter by
-     * @return a list of active webhooks configured for the specified event type
-     */
-    List<Webhook> findByEventTypeAndActive(EventType eventType, Boolean active);
-
-    /**
-     * Finds all webhooks that need to be retried after failed delivery attempts.
-     * <p>
-     * A webhook needs to be retried if it is active and has failed attempts greater than 0
-     * but less than or equal to its maximum retry attempts.
-     * </p>
-     *
-     * @return a list of webhooks that need to be retried
-     */
-    @Query("SELECT w FROM Webhook w WHERE w.active = true AND w.failedAttempts > 0 AND w.failedAttempts <= w.maxRetryAttempts")
-    List<Webhook> findWebhooksForRetry();
-
-    /**
-     * Finds all webhooks that need to be retried for a specific event type.
-     *
-     * @param eventType the event type to filter by
-     * @return a list of webhooks that need to be retried for the specified event type
-     */
-    @Query("SELECT w FROM Webhook w WHERE w.active = true AND w.eventType = :eventType AND w.failedAttempts > 0 AND w.failedAttempts <= w.maxRetryAttempts")
-    List<Webhook> findWebhooksForRetryByEventType(@Param("eventType") EventType eventType);
-
-    /**
-     * Finds all webhooks with a specific delivery status.
-     *
-     * @param status the delivery status to filter by
-     * @return a list of webhooks with the specified delivery status
-     */
-    List<Webhook> findByLastDeliveryStatusContaining(String status);
-
-    /**
-     * Checks if a webhook with the specified endpoint URL already exists.
+     * Checks if a webhook exists with the given endpoint URL.
      *
      * @param endpointUrl the URL of the webhook endpoint
-     * @return true if a webhook with the specified endpoint URL exists, false otherwise
+     * @return true if a webhook with the given URL exists, false otherwise
      */
     boolean existsByEndpointUrl(String endpointUrl);
 
     /**
-     * Finds all webhooks with failed attempts exceeding their maximum retry attempts.
-     * <p>
-     * These webhooks have permanently failed and require manual intervention.
-     * </p>
+     * Finds all webhooks with the given active status.
      *
-     * @return a list of webhooks that have permanently failed
+     * @param active the active status to filter by
+     * @return a list of webhooks with the given active status
      */
-    @Query("SELECT w FROM Webhook w WHERE w.failedAttempts > w.maxRetryAttempts")
-    List<Webhook> findPermanentlyFailedWebhooks();
+    List<Webhook> findByActive(Boolean active);
 
     /**
-     * Finds all webhooks with a specific maximum number of retry attempts.
+     * Finds all webhooks with the given active status, with pagination.
      *
-     * @param maxRetryAttempts the maximum number of retry attempts to filter by
-     * @return a list of webhooks with the specified maximum number of retry attempts
+     * @param active the active status to filter by
+     * @param pageable pagination information
+     * @return a page of webhooks with the given active status
      */
-    List<Webhook> findByMaxRetryAttempts(Integer maxRetryAttempts);
+    Page<Webhook> findByActive(Boolean active, Pageable pageable);
 
     /**
-     * Finds all webhooks for application-related events.
-     * <p>
-     * Application-related events include APPLICATION_CREATED, APPLICATION_UPDATED,
-     * APPLICATION_APPROVED, and APPLICATION_REJECTED.
-     * </p>
+     * Finds all webhooks configured for the given event type.
      *
-     * @return a list of webhooks for application-related events
+     * @param eventType the event type to filter by
+     * @return a list of webhooks configured for the given event type
      */
-    @Query("SELECT w FROM Webhook w WHERE w.eventType IN ('APPLICATION_CREATED', 'APPLICATION_UPDATED', 'APPLICATION_APPROVED', 'APPLICATION_REJECTED')")
-    List<Webhook> findApplicationWebhooks();
+    List<Webhook> findByEventType(EventType eventType);
 
     /**
-     * Finds all webhooks for document-related events.
-     * <p>
-     * Document-related events include DOCUMENT_UPLOADED and DOCUMENT_PROCESSED.
-     * </p>
+     * Finds all active webhooks configured for the given event type.
      *
-     * @return a list of webhooks for document-related events
+     * @param eventType the event type to filter by
+     * @param active the active status to filter by
+     * @return a list of active webhooks configured for the given event type
      */
-    @Query("SELECT w FROM Webhook w WHERE w.eventType IN ('DOCUMENT_UPLOADED', 'DOCUMENT_PROCESSED')")
-    List<Webhook> findDocumentWebhooks();
+    List<Webhook> findByEventTypeAndActive(EventType eventType, Boolean active);
 
     /**
-     * Finds all active webhooks for application-related events.
+     * Finds all webhooks that have failed but are still eligible for retry.
+     * These are webhooks that are active, have at least one failure, but have not
+     * exceeded their maximum retry attempts.
      *
-     * @return a list of active webhooks for application-related events
+     * @return a list of webhooks eligible for retry
      */
-    @Query("SELECT w FROM Webhook w WHERE w.active = true AND w.eventType IN ('APPLICATION_CREATED', 'APPLICATION_UPDATED', 'APPLICATION_APPROVED', 'APPLICATION_REJECTED')")
-    List<Webhook> findActiveApplicationWebhooks();
+    @Query("SELECT w FROM Webhook w WHERE w.active = true AND w.consecutiveFailures > 0 AND w.consecutiveFailures < w.maxRetryAttempts")
+    List<Webhook> findWebhooksEligibleForRetry();
 
     /**
-     * Finds all active webhooks for document-related events.
+     * Finds all webhooks that have failed and exceeded their maximum retry attempts.
+     * These are webhooks that are active but have reached their retry limit.
      *
-     * @return a list of active webhooks for document-related events
+     * @return a list of webhooks that have exceeded their retry limit
      */
-    @Query("SELECT w FROM Webhook w WHERE w.active = true AND w.eventType IN ('DOCUMENT_UPLOADED', 'DOCUMENT_PROCESSED')")
-    List<Webhook> findActiveDocumentWebhooks();
-    
+    @Query("SELECT w FROM Webhook w WHERE w.active = true AND w.consecutiveFailures >= w.maxRetryAttempts")
+    List<Webhook> findWebhooksExceededRetryLimit();
+
     /**
-     * Finds all webhooks with successful delivery status.
+     * Finds all webhooks that have not been successfully delivered since the given time.
      *
-     * @return a list of webhooks with successful delivery status
+     * @param since the time threshold for last successful delivery
+     * @return a list of webhooks that have not been successfully delivered since the given time
      */
-    @Query("SELECT w FROM Webhook w WHERE w.lastDeliverySuccess = true")
-    List<Webhook> findSuccessfulWebhooks();
-    
+    @Query("SELECT w FROM Webhook w WHERE w.active = true AND (w.lastSuccessAt IS NULL OR w.lastSuccessAt < :since)")
+    List<Webhook> findWebhooksNotDeliveredSince(@Param("since") LocalDateTime since);
+
     /**
-     * Finds all webhooks with failed delivery status.
+     * Finds all webhooks that have failed since the given time.
      *
-     * @return a list of webhooks with failed delivery status
+     * @param since the time threshold for last failure
+     * @return a list of webhooks that have failed since the given time
      */
-    @Query("SELECT w FROM Webhook w WHERE w.lastDeliverySuccess = false")
-    List<Webhook> findFailedWebhooks();
-    
+    @Query("SELECT w FROM Webhook w WHERE w.lastFailureAt IS NOT NULL AND w.lastFailureAt >= :since")
+    List<Webhook> findWebhooksFailedSince(@Param("since") LocalDateTime since);
+
     /**
-     * Finds all webhooks that have never been delivered.
+     * Counts the number of active webhooks for the given event type.
      *
-     * @return a list of webhooks that have never been delivered
+     * @param eventType the event type to count
+     * @return the number of active webhooks for the given event type
      */
-    @Query("SELECT w FROM Webhook w WHERE w.lastDeliveryAttempt IS NULL")
-    List<Webhook> findNeverDeliveredWebhooks();
-    
+    long countByEventTypeAndActive(EventType eventType, Boolean active);
+
     /**
-     * Finds all webhooks with a specific HTTP status code from the last delivery.
+     * Finds all webhooks with the given description pattern.
      *
-     * @param statusCode the HTTP status code to filter by
-     * @return a list of webhooks with the specified HTTP status code
+     * @param descriptionPattern the pattern to match in the description field
+     * @return a list of webhooks with descriptions matching the given pattern
      */
-    List<Webhook> findByLastDeliveryStatusCode(Integer statusCode);
+    @Query("SELECT w FROM Webhook w WHERE w.description LIKE %:pattern%")
+    List<Webhook> findByDescriptionContaining(@Param("pattern") String descriptionPattern);
+
+    /**
+     * Finds all webhooks created after the given date.
+     *
+     * @param createdAfter the date after which webhooks were created
+     * @return a list of webhooks created after the given date
+     */
+    List<Webhook> findByCreatedAtAfter(LocalDateTime createdAfter);
+
+    /**
+     * Finds all webhooks updated after the given date.
+     *
+     * @param updatedAfter the date after which webhooks were updated
+     * @return a list of webhooks updated after the given date
+     */
+    List<Webhook> findByUpdatedAtAfter(LocalDateTime updatedAfter);
 }
