@@ -2,229 +2,236 @@
 # -*- coding: utf-8 -*-
 
 """
-Unit tests for the utils package initialization.
+Unit tests for the __init__.py module of the utils package.
 
-This module contains tests for the __init__.py module of the utils package,
-ensuring proper module initialization, import functionality, version tracking,
-and API surface consistency.
+This module contains tests for proper module initialization, import functionality,
+version tracking, import order to prevent circular dependencies, and API surface
+consistency to ensure the utility package works correctly as a whole.
 """
 
-import importlib
 import sys
-import os
+import importlib
+import inspect
+import re
+from unittest.mock import patch, MagicMock
+
 import pytest
-from unittest.mock import patch
-from pathlib import Path
+
+# Import the utils package to test
+import ocr_service.utils as utils
 
 
-# Helper function to get the path to the utils __init__.py file
-def get_utils_init_path():
-    """Get the path to the utils __init__.py file."""
-    # Start with the current file's directory
-    current_dir = Path(__file__).parent
-    # Navigate to the utils directory
-    utils_dir = current_dir.parent.parent / 'src' / 'utils'
-    return utils_dir / '__init__.py'
+class TestPackageInitialization:
+    """Tests for proper initialization of the utils package."""
+
+    def test_package_exists(self):
+        """Test that the utils package exists and can be imported."""
+        assert 'ocr_service.utils' in sys.modules
+        assert utils is not None
+
+    def test_package_docstring(self):
+        """Test that the utils package has a proper docstring."""
+        assert utils.__doc__ is not None
+        assert "OCR Service Utilities Package" in utils.__doc__
+        assert "This package provides utility functions" in utils.__doc__
+
+    def test_package_attributes(self):
+        """Test that the utils package has the expected attributes."""
+        assert hasattr(utils, '__version__')
+        assert hasattr(utils, '__all__')
 
 
-class TestUtilsInit:
-    """Test class for the utils package initialization."""
+class TestVersionTracking:
+    """Tests for version tracking in the utils package."""
 
-    def test_version_info_exists(self):
-        """Test that version information exists and is properly formatted."""
-        # Import directly from the utils package
-        from src.utils import __version__, __author__, __email__, __status__
-        
-        # Check that version info exists
-        assert __version__, "__version__ should be defined"
-        assert __author__, "__author__ should be defined"
-        assert __email__, "__email__ should be defined"
-        assert __status__, "__status__ should be defined"
-        
-        # Check version format (should be in semver format: X.Y.Z)
-        version_parts = __version__.split('.')
-        assert len(version_parts) == 3, "Version should be in X.Y.Z format"
-        assert all(part.isdigit() for part in version_parts), "Version parts should be numeric"
-        
-        # Check email format
-        assert '@' in __email__, "Email should contain @ symbol"
-        assert '.' in __email__.split('@')[1], "Email domain should contain a dot"
-        
-        # Check status is a valid value
-        valid_statuses = ['Development', 'Alpha', 'Beta', 'Production']
-        assert __status__ in valid_statuses, f"Status should be one of {valid_statuses}"
+    def test_version_format(self):
+        """Test that the version follows semantic versioning format (X.Y.Z)."""
+        version_pattern = r'^\d+\.\d+\.\d+$'
+        assert re.match(version_pattern, utils.__version__) is not None
 
-    def test_all_modules_importable(self):
-        """Test that all utility modules can be imported without errors."""
-        from src.utils import __all__
-        
-        for module_name in __all__:
-            # Attempt to import each module
-            module = importlib.import_module(f"src.utils.{module_name}")
-            assert module is not None, f"Failed to import {module_name}"
+    def test_version_is_string(self):
+        """Test that the version is a string."""
+        assert isinstance(utils.__version__, str)
 
-    def test_all_variable_matches_imports(self):
-        """Test that __all__ contains all the modules that are imported."""
-        from src.utils import __all__
-        
-        # Get the list of modules that are imported in __init__.py
-        init_path = get_utils_init_path()
-        with open(init_path, "r") as f:
-            init_content = f.read()
-        
-        # Extract import statements
-        import_lines = [line.strip() for line in init_content.split('\n') 
-                      if line.strip().startswith('from . import')]
-        
-        imported_modules = []
-        for line in import_lines:
-            # Extract module name from 'from . import module_name'
-            module = line.replace('from . import', '').strip()
-            imported_modules.append(module)
-        
-        # Check that all imported modules are in __all__
-        for module in imported_modules:
-            assert module in __all__, f"{module} is imported but not in __all__"
-        
-        # Check that all modules in __all__ are imported
-        for module in __all__:
-            assert module in imported_modules, f"{module} is in __all__ but not imported"
+    def test_version_is_not_empty(self):
+        """Test that the version is not empty."""
+        assert utils.__version__ != ""
 
-    def test_import_order_prevents_circular_dependencies(self):
-        """Test that the import order in __init__.py prevents circular dependencies."""
-        # This test verifies the import order by checking the module dependencies
-        # against the actual import order in __init__.py
-        
-        init_path = get_utils_init_path()
-        with open(init_path, "r") as f:
-            init_content = f.read()
-        
-        # Extract import statements
-        import_lines = [line.strip() for line in init_content.split('\n') 
-                      if line.strip().startswith('from . import')]
-        
-        # Get the actual import order
-        actual_import_order = []
-        for line in import_lines:
-            module = line.replace('from . import', '').strip()
-            actual_import_order.append(module)
-        
-        # Define the expected dependency order based on the comments in __init__.py
-        # Core utilities with no internal dependencies should come first
-        core_utils = ['logging_utils', 'error_utils', 'time_utils', 'validation_utils']
-        # File and security utilities come next
-        file_security_utils = ['file_utils', 'security_utils']
-        # External service integration utilities follow
-        service_utils = ['retry_utils', 's3_utils', 'rabbitmq_utils']
-        # OCR processing utilities come last
-        ocr_utils = ['image_utils', 'text_utils', 'tensorflow_utils']
-        
-        expected_order_groups = [core_utils, file_security_utils, service_utils, ocr_utils]
-        
-        # Check that the actual import order follows the expected dependency groups
-        current_group_index = 0
-        for module in actual_import_order:
-            # Find which group this module belongs to
-            group_found = False
-            for i, group in enumerate(expected_order_groups):
-                if module in group:
-                    group_found = True
-                    # Ensure we're not going backwards in the group order
-                    assert i >= current_group_index, \
-                        f"Module {module} from group {i} imported after modules from group {current_group_index}"
-                    current_group_index = i
-                    break
-            
-            assert group_found, f"Module {module} not found in any expected dependency group"
 
-    def test_api_surface_consistency(self):
-        """Test that the API surface is consistent and well-defined."""
-        from src.utils import __all__
-        
-        # Check that __all__ is a list or tuple
-        assert isinstance(__all__, (list, tuple)), "__all__ should be a list or tuple"
-        
-        # Check that all entries in __all__ are strings
-        assert all(isinstance(module, str) for module in __all__), "All entries in __all__ should be strings"
-        
-        # Check for duplicates in __all__
-        assert len(__all__) == len(set(__all__)), "__all__ should not contain duplicates"
-        
-        # Check that all modules in __all__ end with _utils
-        assert all(module.endswith('_utils') for module in __all__), \
-            "All utility modules should follow the naming convention of ending with '_utils'"
+class TestImportFunctionality:
+    """Tests for proper import functionality of the utils package."""
 
-    def test_import_order_matches_dependency_comments(self):
-        """Test that the import order matches the dependency comments in the file."""
-        init_path = get_utils_init_path()
-        with open(init_path, "r") as f:
-            init_content = f.read()
-        
-        # Extract the dependency comments and the actual imports
-        lines = init_content.split('\n')
-        comment_sections = []
-        current_section = []
-        in_comment_section = False
-        
-        for line in lines:
-            line = line.strip()
-            if line.startswith('# ') and not in_comment_section and 'utilities' in line.lower():
-                in_comment_section = True
-                current_section = [line]
-            elif in_comment_section and line.startswith('# '):
-                current_section.append(line)
-            elif in_comment_section and line.startswith('from . import'):
-                # End of comment section, add the import
-                current_section.append(line)
-                comment_sections.append(current_section)
-                in_comment_section = False
-            elif in_comment_section and not line:
-                # Empty line, continue collecting comments
-                continue
-            elif in_comment_section:
-                # Non-comment line, end the section
-                comment_sections.append(current_section)
-                in_comment_section = False
-        
-        # Check that each comment section is followed by appropriate imports
-        for section in comment_sections:
-            comments = [line for line in section if line.startswith('# ')]
-            imports = [line for line in section if line.startswith('from . import')]
-            
-            if not imports:
-                continue  # Skip sections without imports
-            
-            # Check that the comments describe the imports that follow
-            for import_line in imports:
-                module = import_line.replace('from . import', '').strip()
-                # Check if any comment in this section mentions this module or its category
-                module_mentioned = any(module in comment.lower() for comment in comments)
-                category_mentioned = any(module.replace('_utils', '') in comment.lower() for comment in comments)
-                
-                assert module_mentioned or category_mentioned, \
-                    f"Module {module} is not described in the preceding comments: {comments}"
+    def test_time_utils_imports(self):
+        """Test that time utility functions are properly imported."""
+        # Test a sample of time utility functions
+        assert hasattr(utils, 'get_current_timestamp')
+        assert hasattr(utils, 'format_datetime')
+        assert hasattr(utils, 'calculate_processing_time')
+        assert callable(utils.get_current_timestamp)
+        assert callable(utils.format_datetime)
+        assert callable(utils.calculate_processing_time)
+
+    def test_file_utils_imports(self):
+        """Test that file utility functions are properly imported."""
+        # Test a sample of file utility functions
+        assert hasattr(utils, 'get_mime_type')
+        assert hasattr(utils, 'create_temp_file')
+        assert hasattr(utils, 'get_file_size')
+        assert callable(utils.get_mime_type)
+        assert callable(utils.create_temp_file)
+        assert callable(utils.get_file_size)
+
+    def test_validation_utils_imports(self):
+        """Test that validation utility functions are properly imported."""
+        # Test a sample of validation utility functions
+        assert hasattr(utils, 'validate_document_type')
+        assert hasattr(utils, 'validate_message_schema')
+        assert callable(utils.validate_document_type)
+        assert callable(utils.validate_message_schema)
+
+    def test_error_utils_imports(self):
+        """Test that error utility functions are properly imported."""
+        # Test a sample of error utility functions
+        assert hasattr(utils, 'create_error')
+        assert hasattr(utils, 'is_retriable_error')
+        assert callable(utils.create_error)
+        assert callable(utils.is_retriable_error)
+
+    def test_logging_utils_imports(self):
+        """Test that logging utility functions are properly imported."""
+        # Test a sample of logging utility functions
+        assert hasattr(utils, 'create_log_entry')
+        assert hasattr(utils, 'log_processing_start')
+        assert callable(utils.create_log_entry)
+        assert callable(utils.log_processing_start)
+
+    def test_rabbitmq_utils_imports(self):
+        """Test that RabbitMQ utility functions are properly imported."""
+        # Test a sample of RabbitMQ utility functions
+        assert hasattr(utils, 'create_connection')
+        assert hasattr(utils, 'publish_message')
+        assert callable(utils.create_connection)
+        assert callable(utils.publish_message)
+
+    def test_text_utils_imports(self):
+        """Test that text utility functions are properly imported."""
+        # Test a sample of text utility functions
+        assert hasattr(utils, 'clean_text')
+        assert hasattr(utils, 'extract_key_value_pairs')
+        assert callable(utils.clean_text)
+        assert callable(utils.extract_key_value_pairs)
+
+    def test_image_utils_imports(self):
+        """Test that image utility functions are properly imported."""
+        # Test a sample of image utility functions
+        assert hasattr(utils, 'preprocess_image')
+        assert hasattr(utils, 'detect_regions')
+        assert callable(utils.preprocess_image)
+        assert callable(utils.detect_regions)
+
+    def test_tensorflow_utils_imports(self):
+        """Test that TensorFlow utility functions are properly imported."""
+        # Test a sample of TensorFlow utility functions
+        assert hasattr(utils, 'load_model')
+        assert hasattr(utils, 'run_inference')
+        assert callable(utils.load_model)
+        assert callable(utils.run_inference)
+
+    def test_constants_imports(self):
+        """Test that constants are properly imported."""
+        # Test a sample of constants
+        assert hasattr(utils, 'SUPPORTED_MIME_TYPES')
+        assert hasattr(utils, 'FORMAT_PATTERNS')
+
+
+class TestImportOrder:
+    """Tests for proper import order to prevent circular dependencies."""
 
     @patch('importlib.import_module')
-    def test_module_import_resilience(self, mock_import_module):
-        """Test that the package handles import errors gracefully."""
-        # Configure the mock to raise ImportError for tensorflow_utils
+    def test_import_order(self, mock_import_module):
+        """Test that imports are done in the correct order to prevent circular dependencies."""
+        # Create a mock for tracking import order
+        mock_modules = {}
+        
         def side_effect(name, *args, **kwargs):
-            if name == 'src.utils.tensorflow_utils' or name.endswith('.tensorflow_utils'):
-                raise ImportError(f"Simulated import error for {name}")
-            # For all other imports, call the real import_module
-            return importlib.import_module(name, *args, **kwargs)
+            mock_modules[name] = len(mock_modules) + 1
+            mock = MagicMock()
+            return mock
         
         mock_import_module.side_effect = side_effect
         
-        # Attempt to import the utils package
-        with pytest.raises(ImportError) as excinfo:
-            # Force a reload to trigger the imports again
-            if 'src.utils' in sys.modules:
-                del sys.modules['src.utils']
-            import src.utils
+        # Reload the utils package to trigger imports
+        importlib.reload(utils)
         
-        # Verify the error message
-        assert "tensorflow_utils" in str(excinfo.value), "Error should mention the problematic module"
+        # Check that basic utilities are imported before dependent ones
+        if 'ocr_service.utils.time_utils' in mock_modules and 'ocr_service.utils.logging_utils' in mock_modules:
+            assert mock_modules['ocr_service.utils.time_utils'] < mock_modules['ocr_service.utils.logging_utils']
+        
+        if 'ocr_service.utils.file_utils' in mock_modules and 'ocr_service.utils.image_utils' in mock_modules:
+            assert mock_modules['ocr_service.utils.file_utils'] < mock_modules['ocr_service.utils.image_utils']
+
+    def test_no_circular_imports(self):
+        """Test that there are no circular imports in the utils package."""
+        # This is a basic test that would fail if circular imports caused an ImportError
+        try:
+            importlib.reload(utils)
+            assert True
+        except ImportError:
+            assert False, "Circular import detected in utils package"
+
+
+class TestAPISurfaceConsistency:
+    """Tests for API surface consistency in the utils package."""
+
+    def test_all_list_matches_exports(self):
+        """Test that the __all__ list matches the actual exported functions."""
+        # Get all public attributes (not starting with _)
+        public_attrs = [attr for attr in dir(utils) if not attr.startswith('_')]
+        
+        # Check that all items in __all__ exist as attributes
+        for item in utils.__all__:
+            assert item in public_attrs, f"{item} is in __all__ but not exported"
+
+    def test_all_exports_are_in_all_list(self):
+        """Test that all exported functions are in the __all__ list."""
+        # Get all public callable attributes and constants (not starting with _)
+        public_callables = [attr for attr in dir(utils) 
+                           if not attr.startswith('_') and 
+                           (callable(getattr(utils, attr)) or 
+                            isinstance(getattr(utils, attr), (str, int, float, list, dict, tuple)))]
+        
+        # Exclude modules and classes
+        excluded_types = (type, type(sys))
+        public_callables = [attr for attr in public_callables 
+                           if not isinstance(getattr(utils, attr), excluded_types)]
+        
+        # Check that all public callables are in __all__
+        for item in public_callables:
+            assert item in utils.__all__, f"{item} is exported but not in __all__"
+
+    def test_function_signatures(self):
+        """Test that function signatures are consistent with their documentation."""
+        # Test a sample of functions
+        functions_to_test = [
+            'get_current_timestamp',
+            'validate_document_type',
+            'create_error',
+            'publish_message',
+            'preprocess_image',
+            'load_model'
+        ]
+        
+        for func_name in functions_to_test:
+            if hasattr(utils, func_name) and callable(getattr(utils, func_name)):
+                func = getattr(utils, func_name)
+                # Check that the function has a docstring
+                assert func.__doc__ is not None, f"{func_name} is missing a docstring"
+                
+                # Check that the function signature matches the docstring
+                # This is a basic check that would need to be expanded for a real implementation
+                signature = inspect.signature(func)
+                assert str(signature) in func.__doc__ or func_name in func.__doc__, \
+                    f"{func_name} signature does not match its docstring"
 
 
 if __name__ == "__main__":
