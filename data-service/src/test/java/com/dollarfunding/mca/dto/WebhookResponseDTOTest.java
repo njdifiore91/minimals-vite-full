@@ -1,426 +1,427 @@
 package com.dollarfunding.mca.dto;
 
-import static org.junit.jupiter.api.Assertions.*;
-
-import java.time.LocalDateTime;
-
-import org.junit.jupiter.api.Test;
-
+import com.dollarfunding.mca.TestUtils;
 import com.dollarfunding.mca.entity.EventType;
 import com.dollarfunding.mca.entity.Webhook;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
+
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.UUID;
+import java.util.stream.Stream;
+
+import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Test class for {@link WebhookResponseDTO}.
+ * Test class for {@link WebhookResponseDTO} that validates the webhook configuration structure,
+ * JSON serialization/deserialization, and entity conversion.
  * 
- * This class tests the webhook response DTO functionality including:
- * - Validation of webhook configuration structure
- * - JSON serialization/deserialization
- * - Entity conversion
- * - Field masking for sensitive data
- * - Delivery status information
+ * This test suite ensures that the DTO properly represents webhook configurations,
+ * masks sensitive information appropriately, and includes delivery status information.
  */
+@DisplayName("Webhook Response DTO Tests")
 public class WebhookResponseDTOTest {
 
-    private final ObjectMapper objectMapper = new ObjectMapper()
-            .registerModule(new JavaTimeModule());
-
+    private ObjectMapper objectMapper;
+    
+    @BeforeEach
+    void setUp() {
+        objectMapper = new ObjectMapper();
+        objectMapper.registerModule(new JavaTimeModule());
+    }
+    
     /**
-     * Tests the creation of a WebhookResponseDTO using the builder pattern.
+     * Test data provider for different event types.
      */
-    @Test
-    public void testWebhookResponseDTOBuilder() {
-        // Given
-        Long id = 1L;
-        String endpointUrl = "https://example.com/webhook";
-        String eventType = EventType.APPLICATION_CREATED.name();
-        boolean active = true;
-        String secretKeyMasked = "abcd****";
-        LocalDateTime createdAt = LocalDateTime.now().minusDays(1);
-        LocalDateTime updatedAt = LocalDateTime.now();
-        LocalDateTime lastDeliveryAt = LocalDateTime.now().minusHours(1);
-        Boolean lastDeliverySuccess = true;
-        Integer lastDeliveryStatusCode = 200;
-        String lastDeliveryError = null;
-        Long successfulDeliveriesCount = 10L;
-        Long failedDeliveriesCount = 2L;
-        String signatureHeader = "X-Webhook-Signature";
-
-        // When
-        WebhookResponseDTO dto = WebhookResponseDTO.builder()
-                .id(id)
-                .endpointUrl(endpointUrl)
-                .eventType(eventType)
-                .active(active)
-                .secretKeyMasked(secretKeyMasked)
-                .createdAt(createdAt)
-                .updatedAt(updatedAt)
-                .lastDeliveryAt(lastDeliveryAt)
-                .lastDeliverySuccess(lastDeliverySuccess)
-                .lastDeliveryStatusCode(lastDeliveryStatusCode)
-                .lastDeliveryError(lastDeliveryError)
-                .successfulDeliveriesCount(successfulDeliveriesCount)
-                .failedDeliveriesCount(failedDeliveriesCount)
-                .signatureHeader(signatureHeader)
-                .build();
-
-        // Then
-        assertEquals(id, dto.getId());
-        assertEquals(endpointUrl, dto.getEndpointUrl());
-        assertEquals(eventType, dto.getEventType());
-        assertEquals(active, dto.isActive());
-        assertEquals(secretKeyMasked, dto.getSecretKeyMasked());
-        assertEquals(createdAt, dto.getCreatedAt());
-        assertEquals(updatedAt, dto.getUpdatedAt());
-        assertEquals(lastDeliveryAt, dto.getLastDeliveryAt());
-        assertEquals(lastDeliverySuccess, dto.getLastDeliverySuccess());
-        assertEquals(lastDeliveryStatusCode, dto.getLastDeliveryStatusCode());
-        assertEquals(lastDeliveryError, dto.getLastDeliveryError());
-        assertEquals(successfulDeliveriesCount, dto.getSuccessfulDeliveriesCount());
-        assertEquals(failedDeliveriesCount, dto.getFailedDeliveriesCount());
-        assertEquals(signatureHeader, dto.getSignatureHeader());
+    static Stream<Arguments> eventTypeProvider() {
+        return Stream.of(
+            Arguments.of(EventType.APPLICATION_CREATED, "APPLICATION_CREATED"),
+            Arguments.of(EventType.APPLICATION_UPDATED, "APPLICATION_UPDATED"),
+            Arguments.of(EventType.APPLICATION_APPROVED, "APPLICATION_APPROVED"),
+            Arguments.of(EventType.APPLICATION_REJECTED, "APPLICATION_REJECTED"),
+            Arguments.of(EventType.DOCUMENT_UPLOADED, "DOCUMENT_UPLOADED"),
+            Arguments.of(EventType.DOCUMENT_PROCESSED, "DOCUMENT_PROCESSED")
+        );
     }
 
-    /**
-     * Tests the conversion from a Webhook entity to a WebhookResponseDTO.
-     */
     @Test
-    public void testFromEntity() {
+    @DisplayName("Should create a valid DTO with default constructor")
+    void shouldCreateValidDTOWithDefaultConstructor() {
+        // Given/When
+        WebhookResponseDTO dto = new WebhookResponseDTO();
+        
+        // Then
+        assertNotNull(dto, "DTO should not be null");
+        assertNull(dto.getId(), "ID should be null");
+        assertNull(dto.getEndpointUrl(), "Endpoint URL should be null");
+        assertNull(dto.getEventType(), "Event type should be null");
+        assertNull(dto.getActive(), "Active status should be null");
+        assertNull(dto.getCreatedAt(), "Created at should be null");
+        assertNull(dto.getUpdatedAt(), "Updated at should be null");
+    }
+    
+    @Test
+    @DisplayName("Should create a valid DTO from Webhook entity")
+    void shouldCreateValidDTOFromWebhookEntity() {
         // Given
-        Webhook webhook = new Webhook();
-        webhook.setId(1L);
-        webhook.setEndpointUrl("https://example.com/webhook");
-        webhook.setEventType(EventType.APPLICATION_CREATED);
-        webhook.setActive(true);
-        webhook.setSecretKey("abcdefghijklmnopqrstuvwxyz123456"); // 32 characters
+        Webhook webhook = TestUtils.createRandomWebhook();
+        webhook.setMaxRetryAttempts(5);
+        webhook.setConsecutiveFailures(2);
+        webhook.setLastSuccessAt(LocalDateTime.now().minusDays(1));
+        webhook.setLastFailureAt(LocalDateTime.now().minusHours(2));
         
-        LocalDateTime createdAt = LocalDateTime.now().minusDays(1);
-        LocalDateTime updatedAt = LocalDateTime.now();
-        
-        // Use reflection to set the createdAt and updatedAt fields
-        try {
-            java.lang.reflect.Field createdAtField = Webhook.class.getDeclaredField("createdAt");
-            createdAtField.setAccessible(true);
-            createdAtField.set(webhook, createdAt);
-            
-            java.lang.reflect.Field updatedAtField = Webhook.class.getDeclaredField("updatedAt");
-            updatedAtField.setAccessible(true);
-            updatedAtField.set(webhook, updatedAt);
-        } catch (Exception e) {
-            fail("Failed to set createdAt and updatedAt fields: " + e.getMessage());
-        }
-        
-        webhook.setLastDeliverySuccess(true);
-        webhook.setLastDeliveryStatusCode(200);
-        webhook.setLastDeliveryError(null);
-        webhook.setSuccessfulDeliveriesCount(10L);
-        webhook.setFailedDeliveriesCount(2L);
-        webhook.setSignatureHeader("X-Webhook-Signature");
-        
-        // Set the last delivery attempt
-        LocalDateTime lastDeliveryAttempt = LocalDateTime.now().minusHours(1);
-        webhook.setLastDeliveryAttempt(lastDeliveryAttempt);
-
         // When
         WebhookResponseDTO dto = WebhookResponseDTO.fromEntity(webhook);
-
+        
         // Then
-        assertEquals(webhook.getId(), dto.getId());
-        assertEquals(webhook.getEndpointUrl(), dto.getEndpointUrl());
-        assertEquals(webhook.getEventType().name(), dto.getEventType());
-        assertEquals(webhook.isActive(), dto.isActive());
+        assertNotNull(dto, "DTO should not be null");
+        assertEquals(webhook.getId(), dto.getId(), "ID should match");
+        assertEquals(webhook.getEndpointUrl(), dto.getEndpointUrl(), "Endpoint URL should match");
+        assertEquals(webhook.getEventType(), dto.getEventType(), "Event type should match");
+        assertEquals(webhook.getActive(), dto.getActive(), "Active status should match");
+        assertEquals(webhook.getMaxRetryAttempts(), dto.getMaxRetryAttempts(), "Max retry attempts should match");
+        assertEquals(webhook.getFailedAttempts(), dto.getFailedAttempts(), "Failed attempts should match");
+        assertEquals(webhook.getCreatedAt(), dto.getCreatedAt(), "Created at should match");
+        assertEquals(webhook.getUpdatedAt(), dto.getUpdatedAt(), "Updated at should match");
         
-        // Check that the secret key is masked
-        assertNotNull(dto.getSecretKeyMasked());
-        assertTrue(dto.getSecretKeyMasked().startsWith("abcd"));
-        assertTrue(dto.getSecretKeyMasked().endsWith("****"));
-        
-        assertEquals(createdAt, dto.getCreatedAt());
-        assertEquals(updatedAt, dto.getUpdatedAt());
-        assertEquals(lastDeliveryAttempt, dto.getLastDeliveryAt());
-        assertEquals(webhook.getLastDeliverySuccess(), dto.getLastDeliverySuccess());
-        assertEquals(webhook.getLastDeliveryStatusCode(), dto.getLastDeliveryStatusCode());
-        assertEquals(webhook.getLastDeliveryError(), dto.getLastDeliveryError());
-        assertEquals(webhook.getSuccessfulDeliveriesCount(), dto.getSuccessfulDeliveriesCount());
-        assertEquals(webhook.getFailedDeliveriesCount(), dto.getFailedDeliveriesCount());
-        assertEquals(webhook.getSignatureHeader(), dto.getSignatureHeader());
+        // Check that secret key is masked
+        assertNotNull(dto.getMaskedSecretKey(), "Masked secret key should not be null");
+        assertNotEquals(webhook.getSecretKey(), dto.getMaskedSecretKey(), "Secret key should be masked");
+        assertTrue(dto.getMaskedSecretKey().contains("*"), "Masked secret key should contain asterisks");
     }
-
-    /**
-     * Tests the conversion from a null Webhook entity to a null WebhookResponseDTO.
-     */
+    
     @Test
-    public void testFromEntityWithNull() {
+    @DisplayName("Should return null when creating DTO from null entity")
+    void shouldReturnNullWhenCreatingDTOFromNullEntity() {
         // When
         WebhookResponseDTO dto = WebhookResponseDTO.fromEntity(null);
-
+        
         // Then
-        assertNull(dto);
+        assertNull(dto, "DTO should be null when entity is null");
     }
-
-    /**
-     * Tests the conversion from a list of Webhook entities to a list of WebhookResponseDTOs.
-     */
+    
     @Test
-    public void testFromEntities() {
+    @DisplayName("Should correctly mask secret key")
+    void shouldCorrectlyMaskSecretKey() {
         // Given
-        Webhook webhook1 = new Webhook();
-        webhook1.setId(1L);
-        webhook1.setEndpointUrl("https://example.com/webhook1");
-        webhook1.setEventType(EventType.APPLICATION_CREATED);
-        webhook1.setActive(true);
-        webhook1.setSecretKey("abcdefghijklmnopqrstuvwxyz123456");
-
-        Webhook webhook2 = new Webhook();
-        webhook2.setId(2L);
-        webhook2.setEndpointUrl("https://example.com/webhook2");
-        webhook2.setEventType(EventType.DOCUMENT_UPLOADED);
-        webhook2.setActive(false);
-        webhook2.setSecretKey("zyxwvutsrqponmlkjihgfedcba654321");
-
-        java.util.List<Webhook> webhooks = java.util.Arrays.asList(webhook1, webhook2);
-
+        Webhook webhook = new Webhook();
+        webhook.setSecretKey("abcdefghijklmnopqrstuvwxyz");
+        
         // When
-        java.util.List<WebhookResponseDTO> dtos = WebhookResponseDTO.fromEntities(webhooks);
-
+        WebhookResponseDTO dto = WebhookResponseDTO.fromEntity(webhook);
+        
         // Then
-        assertEquals(2, dtos.size());
-        assertEquals(webhook1.getId(), dtos.get(0).getId());
-        assertEquals(webhook1.getEndpointUrl(), dtos.get(0).getEndpointUrl());
-        assertEquals(webhook1.getEventType().name(), dtos.get(0).getEventType());
-        assertEquals(webhook1.isActive(), dtos.get(0).isActive());
-
-        assertEquals(webhook2.getId(), dtos.get(1).getId());
-        assertEquals(webhook2.getEndpointUrl(), dtos.get(1).getEndpointUrl());
-        assertEquals(webhook2.getEventType().name(), dtos.get(1).getEventType());
-        assertEquals(webhook2.isActive(), dtos.get(1).isActive());
+        assertNotNull(dto.getMaskedSecretKey(), "Masked secret key should not be null");
+        assertEquals("abcd**********wxyz", dto.getMaskedSecretKey(), "Secret key should be masked correctly");
+        
+        // Test with short key
+        webhook.setSecretKey("abc");
+        dto = WebhookResponseDTO.fromEntity(webhook);
+        assertEquals("a*****c", dto.getMaskedSecretKey(), "Short secret key should be masked correctly");
+        
+        // Test with null key
+        webhook.setSecretKey(null);
+        dto = WebhookResponseDTO.fromEntity(webhook);
+        assertNull(dto.getMaskedSecretKey(), "Masked secret key should be null when key is null");
     }
-
-    /**
-     * Tests the conversion from a null list of Webhook entities to an empty list of WebhookResponseDTOs.
-     */
-    @Test
-    public void testFromEntitiesWithNull() {
-        // When
-        java.util.List<WebhookResponseDTO> dtos = WebhookResponseDTO.fromEntities(null);
-
-        // Then
-        assertNotNull(dtos);
-        assertTrue(dtos.isEmpty());
-    }
-
-    /**
-     * Tests the JSON serialization of a WebhookResponseDTO.
-     */
-    @Test
-    public void testJsonSerialization() throws Exception {
+    
+    @ParameterizedTest
+    @DisplayName("Should correctly set and get event type")
+    @MethodSource("eventTypeProvider")
+    void shouldCorrectlySetAndGetEventType(EventType eventType, String expectedString) {
         // Given
-        WebhookResponseDTO dto = WebhookResponseDTO.builder()
-                .id(1L)
-                .endpointUrl("https://example.com/webhook")
-                .eventType(EventType.APPLICATION_CREATED.name())
-                .active(true)
-                .secretKeyMasked("abcd****")
-                .createdAt(LocalDateTime.of(2023, 1, 1, 12, 0))
-                .updatedAt(LocalDateTime.of(2023, 1, 2, 12, 0))
-                .lastDeliveryAt(LocalDateTime.of(2023, 1, 2, 10, 0))
-                .lastDeliverySuccess(true)
-                .lastDeliveryStatusCode(200)
-                .successfulDeliveriesCount(10L)
-                .failedDeliveriesCount(2L)
-                .signatureHeader("X-Webhook-Signature")
-                .build();
-
+        WebhookResponseDTO dto = new WebhookResponseDTO();
+        
+        // When
+        dto.setEventType(eventType);
+        
+        // Then
+        assertEquals(eventType, dto.getEventType(), "Event type should match");
+        assertEquals(expectedString, dto.getEventType().name(), "Event type name should match");
+    }
+    
+    @Test
+    @DisplayName("Should correctly set and get delivery status information")
+    void shouldCorrectlySetAndGetDeliveryStatusInformation() {
+        // Given
+        WebhookResponseDTO dto = new WebhookResponseDTO();
+        LocalDateTime now = LocalDateTime.now();
+        
+        // When
+        dto.setLastDeliveryStatus("SUCCESS");
+        dto.setLastDeliveryAttempt(now);
+        dto.setFailedAttempts(3);
+        dto.setLastDeliverySuccess(true);
+        dto.setLastDeliveryStatusCode(200);
+        dto.setLastDeliveryError(null);
+        dto.setSuccessfulDeliveriesCount(10L);
+        dto.setFailedDeliveriesCount(5L);
+        
+        // Then
+        assertEquals("SUCCESS", dto.getLastDeliveryStatus(), "Last delivery status should match");
+        assertEquals(now, dto.getLastDeliveryAttempt(), "Last delivery attempt should match");
+        assertEquals(3, dto.getFailedAttempts(), "Failed attempts should match");
+        assertTrue(dto.getLastDeliverySuccess(), "Last delivery success should match");
+        assertEquals(200, dto.getLastDeliveryStatusCode(), "Last delivery status code should match");
+        assertNull(dto.getLastDeliveryError(), "Last delivery error should be null");
+        assertEquals(10L, dto.getSuccessfulDeliveriesCount(), "Successful deliveries count should match");
+        assertEquals(5L, dto.getFailedDeliveriesCount(), "Failed deliveries count should match");
+    }
+    
+    @Test
+    @DisplayName("Should correctly calculate delivery status summary")
+    void shouldCorrectlyCalculateDeliveryStatusSummary() {
+        // Given
+        WebhookResponseDTO dto = new WebhookResponseDTO();
+        
+        // When/Then - No delivery attempt
+        assertEquals("Never triggered", dto.getDeliveryStatusSummary(), "Should indicate never triggered");
+        
+        // When - Successful delivery
+        LocalDateTime now = LocalDateTime.now();
+        dto.setLastDeliveryAttempt(now);
+        dto.setLastDeliverySuccess(true);
+        
+        // Then
+        assertTrue(dto.getDeliveryStatusSummary().startsWith("Last delivery successful at"), 
+                "Should indicate successful delivery");
+        
+        // When - Failed delivery
+        dto.setLastDeliverySuccess(false);
+        dto.setFailedAttempts(3);
+        
+        // Then
+        assertTrue(dto.getDeliveryStatusSummary().startsWith("Failed delivery (3 attempts)"), 
+                "Should indicate failed delivery with attempts");
+        
+        // When - Custom status
+        dto.setLastDeliveryStatus("PENDING");
+        dto.setFailedAttempts(0);
+        
+        // Then
+        assertEquals("PENDING", dto.getDeliveryStatusSummary(), "Should use custom status");
+    }
+    
+    @Test
+    @DisplayName("Should correctly calculate health status")
+    void shouldCorrectlyCalculateHealthStatus() {
+        // Given
+        WebhookResponseDTO dto = new WebhookResponseDTO();
+        
+        // When/Then - No delivery attempt
+        assertEquals("unknown", dto.getHealthStatus(), "Health status should be unknown");
+        
+        // When - Successful delivery
+        dto.setLastDeliveryAttempt(LocalDateTime.now());
+        dto.setLastDeliverySuccess(true);
+        
+        // Then
+        assertEquals("healthy", dto.getHealthStatus(), "Health status should be healthy");
+        
+        // When - Failed delivery but under max retries
+        dto.setLastDeliverySuccess(false);
+        dto.setFailedAttempts(2);
+        dto.setMaxRetryAttempts(5);
+        
+        // Then
+        assertEquals("warning", dto.getHealthStatus(), "Health status should be warning");
+        
+        // When - Failed delivery over max retries
+        dto.setFailedAttempts(5);
+        
+        // Then
+        assertEquals("error", dto.getHealthStatus(), "Health status should be error");
+    }
+    
+    @Test
+    @DisplayName("Should correctly format dates in JSON serialization")
+    void shouldCorrectlyFormatDatesInJsonSerialization() throws Exception {
+        // Given
+        WebhookResponseDTO dto = new WebhookResponseDTO();
+        LocalDateTime now = LocalDateTime.now();
+        dto.setCreatedAt(now);
+        dto.setUpdatedAt(now);
+        dto.setLastDeliveryAttempt(now);
+        
         // When
         String json = objectMapper.writeValueAsString(dto);
-
+        
         // Then
-        assertTrue(json.contains("\"id\":1"));
-        assertTrue(json.contains("\"endpoint_url\":\"https://example.com/webhook\""));
-        assertTrue(json.contains("\"event_type\":\"APPLICATION_CREATED\""));
-        assertTrue(json.contains("\"active\":true"));
-        assertTrue(json.contains("\"secret_key_masked\":\"abcd****\""));
-        assertTrue(json.contains("\"created_at\":\"2023-01-01T12:00:00.000Z\""));
-        assertTrue(json.contains("\"updated_at\":\"2023-01-02T12:00:00.000Z\""));
-        assertTrue(json.contains("\"last_delivery_at\":\"2023-01-02T10:00:00.000Z\""));
-        assertTrue(json.contains("\"last_delivery_success\":true"));
-        assertTrue(json.contains("\"last_delivery_status_code\":200"));
-        assertTrue(json.contains("\"successful_deliveries_count\":10"));
-        assertTrue(json.contains("\"failed_deliveries_count\":2"));
-        assertTrue(json.contains("\"signature_header\":\"X-Webhook-Signature\""));
+        String expectedDateFormat = now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS"));
+        assertTrue(json.contains("\"created_at\":\"" + expectedDateFormat + "\""), "JSON should contain formatted created_at");
+        assertTrue(json.contains("\"updated_at\":\"" + expectedDateFormat + "\""), "JSON should contain formatted updated_at");
+        assertTrue(json.contains("\"last_delivery_attempt\":\"" + expectedDateFormat + "\""), 
+                "JSON should contain formatted last_delivery_attempt");
     }
-
-    /**
-     * Tests the JSON deserialization of a WebhookResponseDTO.
-     */
+    
     @Test
-    public void testJsonDeserialization() throws Exception {
+    @DisplayName("Should correctly serialize to JSON")
+    void shouldCorrectlySerializeToJson() throws Exception {
         // Given
-        String json = "{\"id\":1,\"endpoint_url\":\"https://example.com/webhook\",\"event_type\":\"APPLICATION_CREATED\",\"active\":true,\"secret_key_masked\":\"abcd****\",\"created_at\":\"2023-01-01T12:00:00.000Z\",\"updated_at\":\"2023-01-02T12:00:00.000Z\",\"last_delivery_at\":\"2023-01-02T10:00:00.000Z\",\"last_delivery_success\":true,\"last_delivery_status_code\":200,\"successful_deliveries_count\":10,\"failed_deliveries_count\":2,\"signature_header\":\"X-Webhook-Signature\"}";
-
+        WebhookResponseDTO dto = new WebhookResponseDTO();
+        dto.setId(1L);
+        dto.setEndpointUrl("https://example.com/webhook");
+        dto.setEventType(EventType.APPLICATION_CREATED);
+        dto.setActive(true);
+        dto.setMaxRetryAttempts(3);
+        dto.setLastDeliveryStatus("SUCCESS");
+        dto.setLastDeliverySuccess(true);
+        dto.setLastDeliveryStatusCode(200);
+        dto.setSuccessfulDeliveriesCount(10L);
+        dto.setFailedDeliveriesCount(2L);
+        dto.setSignatureHeader("X-Webhook-Signature");
+        dto.setMaskedSecretKey("abcd*****wxyz");
+        
+        LocalDateTime now = LocalDateTime.now();
+        dto.setCreatedAt(now);
+        dto.setUpdatedAt(now);
+        dto.setLastDeliveryAttempt(now);
+        
+        // When
+        String json = objectMapper.writeValueAsString(dto);
+        
+        // Then
+        assertTrue(json.contains("\"id\":1"), "JSON should contain id");
+        assertTrue(json.contains("\"endpoint_url\":\"https://example.com/webhook\""), "JSON should contain endpoint_url");
+        assertTrue(json.contains("\"event_type\":\"APPLICATION_CREATED\""), "JSON should contain event_type");
+        assertTrue(json.contains("\"active\":true"), "JSON should contain active");
+        assertTrue(json.contains("\"max_retry_attempts\":3"), "JSON should contain max_retry_attempts");
+        assertTrue(json.contains("\"last_delivery_status\":\"SUCCESS\""), "JSON should contain last_delivery_status");
+        assertTrue(json.contains("\"last_delivery_success\":true"), "JSON should contain last_delivery_success");
+        assertTrue(json.contains("\"last_delivery_status_code\":200"), "JSON should contain last_delivery_status_code");
+        assertTrue(json.contains("\"successful_deliveries_count\":10"), "JSON should contain successful_deliveries_count");
+        assertTrue(json.contains("\"failed_deliveries_count\":2"), "JSON should contain failed_deliveries_count");
+        assertTrue(json.contains("\"signature_header\":\"X-Webhook-Signature\""), "JSON should contain signature_header");
+        assertTrue(json.contains("\"masked_secret_key\":\"abcd*****wxyz\""), "JSON should contain masked_secret_key");
+        assertTrue(json.contains("\"delivery_status_summary\":"), "JSON should contain delivery_status_summary");
+        assertTrue(json.contains("\"health_status\":"), "JSON should contain health_status");
+    }
+    
+    @Test
+    @DisplayName("Should correctly deserialize from JSON")
+    void shouldCorrectlyDeserializeFromJson() throws Exception {
+        // Given
+        String createdAt = "2023-01-01T12:00:00.000";
+        String updatedAt = "2023-01-02T12:00:00.000";
+        String lastDeliveryAttempt = "2023-01-03T12:00:00.000";
+        
+        String json = "{"
+                + "\"id\":1,"
+                + "\"endpoint_url\":\"https://example.com/webhook\","
+                + "\"event_type\":\"APPLICATION_CREATED\","
+                + "\"active\":true,"
+                + "\"max_retry_attempts\":3,"
+                + "\"last_delivery_status\":\"SUCCESS\","
+                + "\"last_delivery_attempt\":\"" + lastDeliveryAttempt + "\","
+                + "\"failed_attempts\":0,"
+                + "\"last_delivery_success\":true,"
+                + "\"last_delivery_status_code\":200,"
+                + "\"successful_deliveries_count\":10,"
+                + "\"failed_deliveries_count\":2,"
+                + "\"signature_header\":\"X-Webhook-Signature\","
+                + "\"created_at\":\"" + createdAt + "\","
+                + "\"updated_at\":\"" + updatedAt + "\","
+                + "\"masked_secret_key\":\"abcd*****wxyz\""
+                + "}";
+        
         // When
         WebhookResponseDTO dto = objectMapper.readValue(json, WebhookResponseDTO.class);
-
+        
         // Then
-        assertEquals(1L, dto.getId());
-        assertEquals("https://example.com/webhook", dto.getEndpointUrl());
-        assertEquals("APPLICATION_CREATED", dto.getEventType());
-        assertTrue(dto.isActive());
-        assertEquals("abcd****", dto.getSecretKeyMasked());
-        assertEquals(LocalDateTime.of(2023, 1, 1, 12, 0), dto.getCreatedAt());
-        assertEquals(LocalDateTime.of(2023, 1, 2, 12, 0), dto.getUpdatedAt());
-        assertEquals(LocalDateTime.of(2023, 1, 2, 10, 0), dto.getLastDeliveryAt());
-        assertTrue(dto.getLastDeliverySuccess());
-        assertEquals(200, dto.getLastDeliveryStatusCode());
-        assertEquals(10L, dto.getSuccessfulDeliveriesCount());
-        assertEquals(2L, dto.getFailedDeliveriesCount());
-        assertEquals("X-Webhook-Signature", dto.getSignatureHeader());
+        assertEquals(1L, dto.getId(), "ID should match");
+        assertEquals("https://example.com/webhook", dto.getEndpointUrl(), "Endpoint URL should match");
+        assertEquals(EventType.APPLICATION_CREATED, dto.getEventType(), "Event type should match");
+        assertTrue(dto.getActive(), "Active status should match");
+        assertEquals(3, dto.getMaxRetryAttempts(), "Max retry attempts should match");
+        assertEquals("SUCCESS", dto.getLastDeliveryStatus(), "Last delivery status should match");
+        assertEquals(0, dto.getFailedAttempts(), "Failed attempts should match");
+        assertTrue(dto.getLastDeliverySuccess(), "Last delivery success should match");
+        assertEquals(200, dto.getLastDeliveryStatusCode(), "Last delivery status code should match");
+        assertEquals(10L, dto.getSuccessfulDeliveriesCount(), "Successful deliveries count should match");
+        assertEquals(2L, dto.getFailedDeliveriesCount(), "Failed deliveries count should match");
+        assertEquals("X-Webhook-Signature", dto.getSignatureHeader(), "Signature header should match");
+        assertEquals("abcd*****wxyz", dto.getMaskedSecretKey(), "Masked secret key should match");
+        
+        // Check date parsing
+        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS");
+        LocalDateTime expectedCreatedAt = LocalDateTime.parse(createdAt, formatter);
+        LocalDateTime expectedUpdatedAt = LocalDateTime.parse(updatedAt, formatter);
+        LocalDateTime expectedLastDeliveryAttempt = LocalDateTime.parse(lastDeliveryAttempt, formatter);
+        assertEquals(expectedCreatedAt, dto.getCreatedAt(), "Created at should match");
+        assertEquals(expectedUpdatedAt, dto.getUpdatedAt(), "Updated at should match");
+        assertEquals(expectedLastDeliveryAttempt, dto.getLastDeliveryAttempt(), "Last delivery attempt should match");
     }
-
-    /**
-     * Tests the masking of the secret key in the WebhookResponseDTO.
-     */
+    
     @Test
-    public void testSecretKeyMasking() {
+    @DisplayName("Should handle null values in JSON deserialization")
+    void shouldHandleNullValuesInJsonDeserialization() throws Exception {
         // Given
-        Webhook webhook = new Webhook();
-        webhook.setSecretKey("abcdefghijklmnopqrstuvwxyz123456"); // 32 characters
-
+        String json = "{"
+                + "\"id\":1,"
+                + "\"endpoint_url\":\"https://example.com/webhook\","
+                + "\"event_type\":null,"
+                + "\"active\":null,"
+                + "\"max_retry_attempts\":null,"
+                + "\"last_delivery_status\":null,"
+                + "\"last_delivery_attempt\":null,"
+                + "\"failed_attempts\":null,"
+                + "\"last_delivery_success\":null,"
+                + "\"last_delivery_status_code\":null,"
+                + "\"successful_deliveries_count\":null,"
+                + "\"failed_deliveries_count\":null,"
+                + "\"signature_header\":null,"
+                + "\"created_at\":null,"
+                + "\"updated_at\":null,"
+                + "\"masked_secret_key\":null"
+                + "}";
+        
         // When
-        WebhookResponseDTO dto = WebhookResponseDTO.fromEntity(webhook);
-
+        WebhookResponseDTO dto = objectMapper.readValue(json, WebhookResponseDTO.class);
+        
         // Then
-        assertNotNull(dto.getSecretKeyMasked());
-        assertEquals("abcd****", dto.getSecretKeyMasked());
+        assertEquals(1L, dto.getId(), "ID should match");
+        assertEquals("https://example.com/webhook", dto.getEndpointUrl(), "Endpoint URL should match");
+        assertNull(dto.getEventType(), "Event type should be null");
+        assertNull(dto.getActive(), "Active status should be null");
+        assertNull(dto.getMaxRetryAttempts(), "Max retry attempts should be null");
+        assertNull(dto.getLastDeliveryStatus(), "Last delivery status should be null");
+        assertNull(dto.getLastDeliveryAttempt(), "Last delivery attempt should be null");
+        assertNull(dto.getFailedAttempts(), "Failed attempts should be null");
+        assertNull(dto.getLastDeliverySuccess(), "Last delivery success should be null");
+        assertNull(dto.getLastDeliveryStatusCode(), "Last delivery status code should be null");
+        assertNull(dto.getSuccessfulDeliveriesCount(), "Successful deliveries count should be null");
+        assertNull(dto.getFailedDeliveriesCount(), "Failed deliveries count should be null");
+        assertNull(dto.getSignatureHeader(), "Signature header should be null");
+        assertNull(dto.getCreatedAt(), "Created at should be null");
+        assertNull(dto.getUpdatedAt(), "Updated at should be null");
+        assertNull(dto.getMaskedSecretKey(), "Masked secret key should be null");
     }
-
-    /**
-     * Tests the masking of a short secret key in the WebhookResponseDTO.
-     */
+    
     @Test
-    public void testShortSecretKeyMasking() {
+    @DisplayName("Should correctly implement toString method")
+    void shouldCorrectlyImplementToStringMethod() {
         // Given
-        Webhook webhook = new Webhook();
-        webhook.setSecretKey("abc"); // 3 characters
-
+        WebhookResponseDTO dto = new WebhookResponseDTO();
+        dto.setId(1L);
+        dto.setEndpointUrl("https://example.com/webhook");
+        dto.setEventType(EventType.APPLICATION_CREATED);
+        dto.setActive(true);
+        
         // When
-        WebhookResponseDTO dto = WebhookResponseDTO.fromEntity(webhook);
-
+        String toString = dto.toString();
+        
         // Then
-        assertNotNull(dto.getSecretKeyMasked());
-        assertEquals("abc*****", dto.getSecretKeyMasked());
-    }
-
-    /**
-     * Tests the handling of a null secret key in the WebhookResponseDTO.
-     */
-    @Test
-    public void testNullSecretKeyMasking() {
-        // Given
-        Webhook webhook = new Webhook();
-        webhook.setSecretKey(null);
-
-        // When
-        WebhookResponseDTO dto = WebhookResponseDTO.fromEntity(webhook);
-
-        // Then
-        assertNull(dto.getSecretKeyMasked());
-    }
-
-    /**
-     * Tests the handling of an empty secret key in the WebhookResponseDTO.
-     */
-    @Test
-    public void testEmptySecretKeyMasking() {
-        // Given
-        Webhook webhook = new Webhook();
-        webhook.setSecretKey("");
-
-        // When
-        WebhookResponseDTO dto = WebhookResponseDTO.fromEntity(webhook);
-
-        // Then
-        assertNull(dto.getSecretKeyMasked());
-    }
-
-    /**
-     * Tests the delivery status information in the WebhookResponseDTO.
-     */
-    @Test
-    public void testDeliveryStatusInformation() {
-        // Given
-        Webhook webhook = new Webhook();
-        webhook.setLastDeliverySuccess(true);
-        webhook.setLastDeliveryStatusCode(200);
-        webhook.setLastDeliveryError(null);
-        webhook.setSuccessfulDeliveriesCount(10L);
-        webhook.setFailedDeliveriesCount(2L);
-        LocalDateTime lastDeliveryAttempt = LocalDateTime.now().minusHours(1);
-        webhook.setLastDeliveryAttempt(lastDeliveryAttempt);
-
-        // When
-        WebhookResponseDTO dto = WebhookResponseDTO.fromEntity(webhook);
-
-        // Then
-        assertEquals(lastDeliveryAttempt, dto.getLastDeliveryAt());
-        assertTrue(dto.getLastDeliverySuccess());
-        assertEquals(200, dto.getLastDeliveryStatusCode());
-        assertNull(dto.getLastDeliveryError());
-        assertEquals(10L, dto.getSuccessfulDeliveriesCount());
-        assertEquals(2L, dto.getFailedDeliveriesCount());
-    }
-
-    /**
-     * Tests the delivery status information with error in the WebhookResponseDTO.
-     */
-    @Test
-    public void testDeliveryStatusWithError() {
-        // Given
-        Webhook webhook = new Webhook();
-        webhook.setLastDeliverySuccess(false);
-        webhook.setLastDeliveryStatusCode(500);
-        webhook.setLastDeliveryError("Internal Server Error");
-        webhook.setSuccessfulDeliveriesCount(10L);
-        webhook.setFailedDeliveriesCount(3L);
-        LocalDateTime lastDeliveryAttempt = LocalDateTime.now().minusHours(1);
-        webhook.setLastDeliveryAttempt(lastDeliveryAttempt);
-
-        // When
-        WebhookResponseDTO dto = WebhookResponseDTO.fromEntity(webhook);
-
-        // Then
-        assertEquals(lastDeliveryAttempt, dto.getLastDeliveryAt());
-        assertFalse(dto.getLastDeliverySuccess());
-        assertEquals(500, dto.getLastDeliveryStatusCode());
-        assertEquals("Internal Server Error", dto.getLastDeliveryError());
-        assertEquals(10L, dto.getSuccessfulDeliveriesCount());
-        assertEquals(3L, dto.getFailedDeliveriesCount());
-    }
-
-    /**
-     * Tests the handling of null delivery status information in the WebhookResponseDTO.
-     */
-    @Test
-    public void testNullDeliveryStatusInformation() {
-        // Given
-        Webhook webhook = new Webhook();
-        webhook.setLastDeliverySuccess(null);
-        webhook.setLastDeliveryStatusCode(null);
-        webhook.setLastDeliveryError(null);
-        webhook.setSuccessfulDeliveriesCount(null);
-        webhook.setFailedDeliveriesCount(null);
-        webhook.setLastDeliveryAttempt(null);
-
-        // When
-        WebhookResponseDTO dto = WebhookResponseDTO.fromEntity(webhook);
-
-        // Then
-        assertNull(dto.getLastDeliveryAt());
-        assertNull(dto.getLastDeliverySuccess());
-        assertNull(dto.getLastDeliveryStatusCode());
-        assertNull(dto.getLastDeliveryError());
-        assertNull(dto.getSuccessfulDeliveriesCount());
-        assertNull(dto.getFailedDeliveriesCount());
+        assertNotNull(toString, "toString should not be null");
+        assertTrue(toString.contains("id=1"), "toString should contain id");
+        assertTrue(toString.contains("endpointUrl='https://example.com/webhook'"), "toString should contain endpointUrl");
+        assertTrue(toString.contains("eventType=APPLICATION_CREATED"), "toString should contain eventType");
+        assertTrue(toString.contains("active=true"), "toString should contain active");
     }
 }
