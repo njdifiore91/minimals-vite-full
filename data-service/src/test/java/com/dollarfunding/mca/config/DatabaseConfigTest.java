@@ -1,466 +1,456 @@
 package com.dollarfunding.mca.config;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assertions.assertSame;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
-
-import java.lang.reflect.Field;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Properties;
-
-import javax.sql.DataSource;
-
+import com.zaxxer.hikari.HikariDataSource;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
-import org.mockito.Spy;
+import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.boot.autoconfigure.jdbc.DataSourceProperties;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
+import org.springframework.core.env.Environment;
 import org.springframework.jdbc.datasource.LazyConnectionDataSourceProxy;
 import org.springframework.jdbc.datasource.lookup.AbstractRoutingDataSource;
-import org.springframework.orm.jpa.JpaTransactionManager;
-import org.springframework.orm.jpa.LocalContainerEntityManagerFactoryBean;
-import org.springframework.orm.jpa.vendor.HibernateJpaVendorAdapter;
+import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
-import com.zaxxer.hikari.HikariDataSource;
+import javax.sql.DataSource;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.util.List;
+import java.util.Map;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.*;
 
 /**
  * Unit tests for the {@link DatabaseConfig} class.
  * 
- * These tests verify that the PostgreSQL database connection is properly configured with:
- * - Primary database for write operations
- * - Read replicas for read operations to improve performance
- * - HikariCP connection pool with optimized settings
- * - Transaction management with appropriate isolation levels
- * - JPA/Hibernate properties for efficient database operations
+ * These tests verify the proper configuration of PostgreSQL database connections
+ * with primary and read replica support, connection pooling settings, read replica
+ * routing, and transaction management configuration.
  */
 @ExtendWith(MockitoExtension.class)
-@DisplayName("Database Configuration Tests")
+@TestPropertySource(properties = {
+    "spring.datasource.url=jdbc:postgresql://primary-db:5432/mca_application_db",
+    "spring.datasource.username=mca_app_user",
+    "spring.datasource.password=test_password",
+    "spring.datasource.driver-class-name=org.postgresql.Driver",
+    "spring.datasource.hikari.maximum-pool-size=10",
+    "spring.datasource.hikari.minimum-idle=5",
+    "spring.datasource.hikari.idle-timeout=30000",
+    "spring.datasource.hikari.connection-timeout=30000",
+    "spring.datasource.hikari.max-lifetime=2000000",
+    "spring.datasource.hikari.auto-commit=false",
+    "spring.datasource.hikari.pool-name=TestHikariCP",
+    "spring.datasource.hikari.read-only-replicas=true",
+    "spring.datasource.hikari.replica-urls=jdbc:postgresql://replica1:5432/mca_application_db,jdbc:postgresql://replica2:5432/mca_application_db"
+})
 public class DatabaseConfigTest {
+
+    @Mock
+    private Environment environment;
 
     @InjectMocks
     private DatabaseConfig databaseConfig;
-    
-    @Spy
-    private DataSourceProperties primaryDataSourceProperties = new DataSourceProperties();
-    
-    @Spy
-    private DataSourceProperties replicaDataSourceProperties = new DataSourceProperties();
-    
-    @Mock
-    private HikariDataSource primaryDataSource;
-    
+
     @BeforeEach
-    public void setUp() {
-        // Configure primary data source properties
-        primaryDataSourceProperties.setUrl("jdbc:postgresql://primary-db:5432/mca");
-        primaryDataSourceProperties.setUsername("mca_user");
-        primaryDataSourceProperties.setPassword("password");
-        primaryDataSourceProperties.setDriverClassName("org.postgresql.Driver");
-        
-        // Configure primary HikariCP data source
-        when(primaryDataSource.getMaximumPoolSize()).thenReturn(10);
-        when(primaryDataSource.getMinimumIdle()).thenReturn(5);
-        when(primaryDataSource.getIdleTimeout()).thenReturn(300000L);
-        when(primaryDataSource.getMaxLifetime()).thenReturn(1800000L);
-        when(primaryDataSource.getConnectionTimeout()).thenReturn(30000L);
-        when(primaryDataSource.getPoolName()).thenReturn("PrimaryHikariPool");
+    public void setup() {
+        // Set up required properties using reflection since @TestPropertySource doesn't work with @InjectMocks
+        ReflectionTestUtils.setField(databaseConfig, "primaryDbUrl", "jdbc:postgresql://primary-db:5432/mca_application_db");
+        ReflectionTestUtils.setField(databaseConfig, "username", "mca_app_user");
+        ReflectionTestUtils.setField(databaseConfig, "password", "test_password");
+        ReflectionTestUtils.setField(databaseConfig, "driverClassName", "org.postgresql.Driver");
+        ReflectionTestUtils.setField(databaseConfig, "maximumPoolSize", 10);
+        ReflectionTestUtils.setField(databaseConfig, "minimumIdle", 5);
+        ReflectionTestUtils.setField(databaseConfig, "idleTimeout", 30000L);
+        ReflectionTestUtils.setField(databaseConfig, "connectionTimeout", 30000L);
+        ReflectionTestUtils.setField(databaseConfig, "maxLifetime", 2000000L);
+        ReflectionTestUtils.setField(databaseConfig, "autoCommit", false);
+        ReflectionTestUtils.setField(databaseConfig, "poolName", "TestHikariCP");
+        ReflectionTestUtils.setField(databaseConfig, "readOnlyReplicas", true);
+        ReflectionTestUtils.setField(databaseConfig, "replicaUrls", "jdbc:postgresql://replica1:5432/mca_application_db,jdbc:postgresql://replica2:5432/mca_application_db");
+
+        // Mock environment properties for JPA configuration
+        when(environment.getProperty("spring.jpa.properties.hibernate.format_sql", "true")).thenReturn("true");
+        when(environment.getProperty("spring.jpa.properties.hibernate.jdbc.batch_size", Integer.class, 50)).thenReturn(50);
+        when(environment.getProperty("spring.jpa.properties.hibernate.order_inserts", "true")).thenReturn("true");
+        when(environment.getProperty("spring.jpa.properties.hibernate.order_updates", "true")).thenReturn("true");
+        when(environment.getProperty("spring.jpa.properties.hibernate.cache.use_second_level_cache", "false")).thenReturn("false");
+        when(environment.getProperty("spring.jpa.properties.hibernate.connection.provider_disables_autocommit", "true")).thenReturn("true");
+        when(environment.getProperty("spring.jpa.properties.hibernate.query.in_clause_parameter_padding", "true")).thenReturn("true");
+        when(environment.getProperty("spring.jpa.properties.hibernate.query.fail_on_pagination_over_collection_fetch", "true")).thenReturn("true");
     }
 
-    /**
-     * Tests that the primary data source properties are properly configured.
-     * 
-     * Verifies:
-     * - The properties are not null
-     * - The URL is set correctly
-     * - The username is set correctly
-     * - The password is set correctly
-     * - The driver class name is set correctly
-     */
     @Test
-    @DisplayName("Primary DataSource Properties should be properly configured")
-    public void testPrimaryDataSourceProperties() {
-        // Execute the method under test
-        DataSourceProperties properties = databaseConfig.primaryDataSourceProperties();
-        
-        // Verify the properties
-        assertNotNull(properties);
-        assertEquals("jdbc:postgresql://primary-db:5432/mca", properties.getUrl());
-        assertEquals("mca_user", properties.getUsername());
-        assertEquals("password", properties.getPassword());
-        assertEquals("org.postgresql.Driver", properties.getDriverClassName());
-    }
-
-    /**
-     * Tests that the primary data source is properly configured with HikariCP.
-     * 
-     * Verifies:
-     * - The data source is a HikariDataSource
-     * - The pool name is set correctly
-     * - The connection pool settings are applied correctly
-     */
-    @Test
-    @DisplayName("Primary DataSource should be configured with HikariCP")
+    @DisplayName("Test primary data source configuration with HikariCP")
     public void testPrimaryDataSource() {
-        // Mock the behavior of primaryDataSourceProperties
-        when(primaryDataSourceProperties.initializeDataSourceBuilder()).thenReturn(new DataSourceProperties.DataSourceBuilder());
-        
-        // Create a mock HikariDataSource that will be returned by the builder
-        HikariDataSource mockHikariDataSource = mock(HikariDataSource.class);
-        
-        // Mock the behavior of the builder
-        DataSourceProperties.DataSourceBuilder builder = primaryDataSourceProperties.initializeDataSourceBuilder();
-        ReflectionTestUtils.setField(builder, "type", HikariDataSource.class);
-        ReflectionTestUtils.setField(builder, "result", mockHikariDataSource);
-        
-        // Execute the method under test
-        HikariDataSource dataSource = databaseConfig.primaryDataSource();
-        
-        // Verify the data source
-        assertNotNull(dataSource);
-        assertEquals(mockHikariDataSource, dataSource);
+        // When
+        DataSource dataSource = databaseConfig.primaryDataSource();
+
+        // Then
+        assertNotNull(dataSource, "Primary data source should not be null");
+        assertTrue(dataSource instanceof HikariDataSource, "Primary data source should be a HikariDataSource");
+
+        HikariDataSource hikariDataSource = (HikariDataSource) dataSource;
+        assertEquals("jdbc:postgresql://primary-db:5432/mca_application_db", hikariDataSource.getJdbcUrl(), "JDBC URL should match");
+        assertEquals("mca_app_user", hikariDataSource.getUsername(), "Username should match");
+        assertEquals("test_password", hikariDataSource.getPassword(), "Password should match");
+        assertEquals("org.postgresql.Driver", hikariDataSource.getDriverClassName(), "Driver class name should match");
+        assertEquals(10, hikariDataSource.getMaximumPoolSize(), "Maximum pool size should match");
+        assertEquals(5, hikariDataSource.getMinimumIdle(), "Minimum idle should match");
+        assertEquals(30000, hikariDataSource.getIdleTimeout(), "Idle timeout should match");
+        assertEquals(30000, hikariDataSource.getConnectionTimeout(), "Connection timeout should match");
+        assertEquals(2000000, hikariDataSource.getMaxLifetime(), "Max lifetime should match");
+        assertFalse(hikariDataSource.isAutoCommit(), "Auto commit should be false");
+        assertEquals("TestHikariCP-Primary", hikariDataSource.getPoolName(), "Pool name should match");
+
+        // Verify PostgreSQL specific properties
+        assertEquals("true", hikariDataSource.getDataSourceProperties().getProperty("cachePrepStmts"), "cachePrepStmts should be true");
+        assertEquals("250", hikariDataSource.getDataSourceProperties().getProperty("prepStmtCacheSize"), "prepStmtCacheSize should be 250");
+        assertEquals("2048", hikariDataSource.getDataSourceProperties().getProperty("prepStmtCacheSqlLimit"), "prepStmtCacheSqlLimit should be 2048");
+        assertEquals("true", hikariDataSource.getDataSourceProperties().getProperty("useServerPrepStmts"), "useServerPrepStmts should be true");
+
+        // Verify transaction isolation level
+        assertEquals("TRANSACTION_READ_COMMITTED", hikariDataSource.getTransactionIsolation(), "Transaction isolation level should be READ COMMITTED");
     }
 
-    /**
-     * Tests that the read replica data sources are properly configured.
-     * 
-     * Verifies:
-     * - The correct number of replica data sources are created
-     * - Each replica data source is configured correctly
-     * - Each replica data source is marked as read-only
-     */
     @Test
-    @DisplayName("Read Replica DataSources should be properly configured")
-    public void testReadReplicaDataSources() {
-        // Create test replica nodes
-        List<Map<String, String>> replicaNodes = new ArrayList<>();
-        
-        Map<String, String> replica1 = new HashMap<>();
-        replica1.put("url", "jdbc:postgresql://replica1:5432/mca");
-        replica1.put("username", "replica_user");
-        replica1.put("password", "replica_password");
-        replicaNodes.add(replica1);
-        
-        Map<String, String> replica2 = new HashMap<>();
-        replica2.put("url", "jdbc:postgresql://replica2:5432/mca");
-        replica2.put("username", "replica_user");
-        replica2.put("password", "replica_password");
-        replicaNodes.add(replica2);
-        
-        // Execute the method under test
-        Map<String, DataSource> replicaDataSources = databaseConfig.readReplicaDataSources(replicaNodes, true);
-        
-        // Verify the replica data sources
-        assertNotNull(replicaDataSources);
-        assertEquals(2, replicaDataSources.size());
-        
-        // Verify each replica data source
-        for (int i = 0; i < 2; i++) {
-            String key = "replica-" + i;
-            assertTrue(replicaDataSources.containsKey(key));
+    @DisplayName("Test read replica data sources configuration")
+    public void testReplicaDataSources() {
+        // When
+        List<DataSource> replicaDataSources = databaseConfig.replicaDataSources();
+
+        // Then
+        assertNotNull(replicaDataSources, "Replica data sources should not be null");
+        assertEquals(2, replicaDataSources.size(), "Should have 2 replica data sources");
+
+        for (int i = 0; i < replicaDataSources.size(); i++) {
+            DataSource dataSource = replicaDataSources.get(i);
+            assertTrue(dataSource instanceof HikariDataSource, "Replica data source should be a HikariDataSource");
+
+            HikariDataSource hikariDataSource = (HikariDataSource) dataSource;
+            assertTrue(hikariDataSource.getJdbcUrl().startsWith("jdbc:postgresql://replica"), "JDBC URL should be for a replica");
+            assertEquals("mca_app_user", hikariDataSource.getUsername(), "Username should match");
+            assertEquals("test_password", hikariDataSource.getPassword(), "Password should match");
+            assertEquals("org.postgresql.Driver", hikariDataSource.getDriverClassName(), "Driver class name should match");
+            assertEquals(10, hikariDataSource.getMaximumPoolSize(), "Maximum pool size should match");
+            assertEquals(5, hikariDataSource.getMinimumIdle(), "Minimum idle should match");
+            assertEquals(30000, hikariDataSource.getIdleTimeout(), "Idle timeout should match");
+            assertEquals(30000, hikariDataSource.getConnectionTimeout(), "Connection timeout should match");
+            assertEquals(2000000, hikariDataSource.getMaxLifetime(), "Max lifetime should match");
+            assertFalse(hikariDataSource.isAutoCommit(), "Auto commit should be false");
+            assertTrue(hikariDataSource.getPoolName().contains("TestHikariCP-Replica"), "Pool name should contain 'TestHikariCP-Replica'");
             
-            DataSource replicaDataSource = replicaDataSources.get(key);
-            assertTrue(replicaDataSource instanceof HikariDataSource);
-            
-            HikariDataSource hikariDataSource = (HikariDataSource) replicaDataSource;
-            assertEquals("jdbc:postgresql://replica" + (i+1) + ":5432/mca", hikariDataSource.getJdbcUrl());
-            assertEquals("replica_user", hikariDataSource.getUsername());
-            assertEquals("replica_password", hikariDataSource.getPassword());
-            assertEquals("ReplicaHikariPool-" + i, hikariDataSource.getPoolName());
-            assertTrue(hikariDataSource.isReadOnly());
+            // Verify read-only flag
+            assertTrue(hikariDataSource.isReadOnly(), "Replica should be read-only");
+
+            // Verify PostgreSQL specific properties
+            assertEquals("true", hikariDataSource.getDataSourceProperties().getProperty("cachePrepStmts"), "cachePrepStmts should be true");
+            assertEquals("250", hikariDataSource.getDataSourceProperties().getProperty("prepStmtCacheSize"), "prepStmtCacheSize should be 250");
+            assertEquals("2048", hikariDataSource.getDataSourceProperties().getProperty("prepStmtCacheSqlLimit"), "prepStmtCacheSqlLimit should be 2048");
+            assertEquals("true", hikariDataSource.getDataSourceProperties().getProperty("useServerPrepStmts"), "useServerPrepStmts should be true");
+
+            // Verify transaction isolation level
+            assertEquals("TRANSACTION_READ_COMMITTED", hikariDataSource.getTransactionIsolation(), "Transaction isolation level should be READ COMMITTED");
         }
     }
 
-    /**
-     * Tests that the routing data source is properly configured to route read/write operations
-     * to the appropriate data source.
-     * 
-     * Verifies:
-     * - The routing data source is an AbstractRoutingDataSource
-     * - The target data sources map contains the primary and replica data sources
-     * - The default target data source is the primary data source
-     * - The lookup key is determined correctly based on the operation type
-     */
     @Test
-    @DisplayName("Routing DataSource should route operations to the appropriate data source")
+    @DisplayName("Test routing data source configuration")
     public void testRoutingDataSource() throws Exception {
-        // Create mock data sources
-        DataSource mockPrimaryDataSource = mock(DataSource.class);
-        
-        Map<String, DataSource> mockReplicaDataSources = new HashMap<>();
-        mockReplicaDataSources.put("replica-0", mock(DataSource.class));
-        mockReplicaDataSources.put("replica-1", mock(DataSource.class));
-        
-        // Execute the method under test
-        AbstractRoutingDataSource routingDataSource = databaseConfig.routingDataSource(
-                mockPrimaryDataSource, mockReplicaDataSources);
-        
-        // Verify the routing data source
-        assertNotNull(routingDataSource);
-        
-        // Get the target data sources map using reflection
+        // Given
+        DataSource primaryDataSource = databaseConfig.primaryDataSource();
+        List<DataSource> replicaDataSources = databaseConfig.replicaDataSources();
+
+        // When
+        DataSource routingDataSource = databaseConfig.routingDataSource(primaryDataSource, replicaDataSources);
+
+        // Then
+        assertNotNull(routingDataSource, "Routing data source should not be null");
+        assertTrue(routingDataSource instanceof DatabaseConfig.RoutingDataSource, "Should be a RoutingDataSource");
+
+        // Verify target data sources using reflection
         Field targetDataSourcesField = AbstractRoutingDataSource.class.getDeclaredField("targetDataSources");
         targetDataSourcesField.setAccessible(true);
-        @SuppressWarnings("unchecked")
         Map<Object, Object> targetDataSources = (Map<Object, Object>) targetDataSourcesField.get(routingDataSource);
-        
-        // Verify the target data sources
-        assertNotNull(targetDataSources);
-        assertEquals(3, targetDataSources.size());
-        assertTrue(targetDataSources.containsKey("primary"));
-        assertTrue(targetDataSources.containsKey("replica-0"));
-        assertTrue(targetDataSources.containsKey("replica-1"));
-        
-        // Get the default target data source using reflection
+
+        assertNotNull(targetDataSources, "Target data sources should not be null");
+        assertEquals(3, targetDataSources.size(), "Should have 3 target data sources (1 primary + 2 replicas)");
+        assertTrue(targetDataSources.containsKey(DatabaseConfig.DbType.PRIMARY), "Should contain PRIMARY key");
+        assertTrue(targetDataSources.containsKey("REPLICA_0"), "Should contain REPLICA_0 key");
+        assertTrue(targetDataSources.containsKey("REPLICA_1"), "Should contain REPLICA_1 key");
+
+        // Verify default target data source using reflection
         Field defaultTargetDataSourceField = AbstractRoutingDataSource.class.getDeclaredField("defaultTargetDataSource");
         defaultTargetDataSourceField.setAccessible(true);
         Object defaultTargetDataSource = defaultTargetDataSourceField.get(routingDataSource);
-        
-        // Verify the default target data source
-        assertNotNull(defaultTargetDataSource);
-        assertSame(mockPrimaryDataSource, defaultTargetDataSource);
-        
-        // Test the lookup key determination for write operations
-        DatabaseConfig.setCurrentOperation(DatabaseConfig.OperationType.WRITE);
-        Object lookupKey = ReflectionTestUtils.invokeMethod(routingDataSource, "determineCurrentLookupKey");
-        assertEquals("primary", lookupKey);
-        
-        // Test the lookup key determination for read operations
-        // Note: We can't fully test the round-robin selection since it depends on System.nanoTime()
-        DatabaseConfig.setCurrentOperation(DatabaseConfig.OperationType.READ);
-        lookupKey = ReflectionTestUtils.invokeMethod(routingDataSource, "determineCurrentLookupKey");
-        assertTrue(lookupKey.toString().startsWith("replica-"));
+
+        assertNotNull(defaultTargetDataSource, "Default target data source should not be null");
+        assertSame(primaryDataSource, defaultTargetDataSource, "Default target data source should be the primary data source");
+
+        // Verify replica count using reflection
+        Field replicaCountField = DatabaseConfig.RoutingDataSource.class.getDeclaredField("replicaCount");
+        replicaCountField.setAccessible(true);
+        int replicaCount = (int) replicaCountField.get(routingDataSource);
+
+        assertEquals(2, replicaCount, "Replica count should be 2");
     }
 
-    /**
-     * Tests that the lazy connection data source proxy is properly configured.
-     * 
-     * Verifies:
-     * - The proxy is a LazyConnectionDataSourceProxy
-     * - The target data source is the routing data source
-     */
     @Test
-    @DisplayName("Lazy Connection DataSource Proxy should be properly configured")
-    public void testLazyConnectionDataSource() throws Exception {
-        // Create a mock routing data source
-        AbstractRoutingDataSource mockRoutingDataSource = mock(AbstractRoutingDataSource.class);
-        
-        // Execute the method under test
-        LazyConnectionDataSourceProxy lazyConnectionDataSource = 
-                databaseConfig.lazyConnectionDataSource(mockRoutingDataSource);
-        
-        // Verify the lazy connection data source proxy
-        assertNotNull(lazyConnectionDataSource);
-        
-        // Get the target data source using reflection
-        Field targetDataSourceField = LazyConnectionDataSourceProxy.class.getDeclaredField("targetDataSource");
-        targetDataSourceField.setAccessible(true);
-        Object targetDataSource = targetDataSourceField.get(lazyConnectionDataSource);
-        
-        // Verify the target data source
-        assertNotNull(targetDataSource);
-        assertSame(mockRoutingDataSource, targetDataSource);
+    @DisplayName("Test routing logic for read-only transactions")
+    public void testRoutingLogicForReadOnlyTransactions() throws Exception {
+        // Given
+        DataSource primaryDataSource = databaseConfig.primaryDataSource();
+        List<DataSource> replicaDataSources = databaseConfig.replicaDataSources();
+        DatabaseConfig.RoutingDataSource routingDataSource = 
+            (DatabaseConfig.RoutingDataSource) databaseConfig.routingDataSource(primaryDataSource, replicaDataSources);
+
+        // Mock TransactionSynchronizationManager for read-only transaction
+        try (MockedStatic<TransactionSynchronizationManager> mockedStatic = Mockito.mockStatic(TransactionSynchronizationManager.class)) {
+            mockedStatic.when(TransactionSynchronizationManager::isCurrentTransactionReadOnly).thenReturn(true);
+
+            // When - First call
+            Object lookupKey1 = routingDataSource.determineCurrentLookupKey();
+            
+            // Then - First call should return REPLICA_0 (first replica in round-robin)
+            assertEquals("REPLICA_0", lookupKey1, "First lookup key should be REPLICA_0");
+
+            // When - Second call
+            Object lookupKey2 = routingDataSource.determineCurrentLookupKey();
+            
+            // Then - Second call should return REPLICA_1 (second replica in round-robin)
+            assertEquals("REPLICA_1", lookupKey2, "Second lookup key should be REPLICA_1");
+
+            // When - Third call
+            Object lookupKey3 = routingDataSource.determineCurrentLookupKey();
+            
+            // Then - Third call should return REPLICA_0 again (round-robin wraps around)
+            assertEquals("REPLICA_0", lookupKey3, "Third lookup key should be REPLICA_0 again");
+        }
     }
 
-    /**
-     * Tests that the final data source is properly configured.
-     * 
-     * Verifies:
-     * - The data source is the lazy connection data source proxy
-     */
     @Test
-    @DisplayName("Final DataSource should be the lazy connection data source proxy")
-    public void testDataSource() {
-        // Create a mock lazy connection data source proxy
-        LazyConnectionDataSourceProxy mockLazyConnectionDataSource = mock(LazyConnectionDataSourceProxy.class);
-        
-        // Execute the method under test
-        DataSource dataSource = databaseConfig.dataSource(mockLazyConnectionDataSource);
-        
-        // Verify the data source
-        assertNotNull(dataSource);
-        assertSame(mockLazyConnectionDataSource, dataSource);
+    @DisplayName("Test routing logic for write transactions")
+    public void testRoutingLogicForWriteTransactions() throws Exception {
+        // Given
+        DataSource primaryDataSource = databaseConfig.primaryDataSource();
+        List<DataSource> replicaDataSources = databaseConfig.replicaDataSources();
+        DatabaseConfig.RoutingDataSource routingDataSource = 
+            (DatabaseConfig.RoutingDataSource) databaseConfig.routingDataSource(primaryDataSource, replicaDataSources);
+
+        // Mock TransactionSynchronizationManager for write transaction (not read-only)
+        try (MockedStatic<TransactionSynchronizationManager> mockedStatic = Mockito.mockStatic(TransactionSynchronizationManager.class)) {
+            mockedStatic.when(TransactionSynchronizationManager::isCurrentTransactionReadOnly).thenReturn(false);
+
+            // When
+            Object lookupKey = routingDataSource.determineCurrentLookupKey();
+            
+            // Then
+            assertEquals(DatabaseConfig.DbType.PRIMARY, lookupKey, "Lookup key should be PRIMARY for write transactions");
+        }
     }
 
-    /**
-     * Tests that the entity manager factory is properly configured with the correct JPA properties.
-     * 
-     * Verifies:
-     * - The entity manager factory is a LocalContainerEntityManagerFactoryBean
-     * - The data source is set correctly
-     * - The packages to scan are set correctly
-     * - The JPA vendor adapter is a HibernateJpaVendorAdapter
-     * - The JPA properties are set correctly
-     */
     @Test
-    @DisplayName("Entity Manager Factory should be configured with correct JPA properties")
-    public void testEntityManagerFactory() throws Exception {
-        // Create a mock data source
-        DataSource mockDataSource = mock(DataSource.class);
-        
-        // Execute the method under test
-        LocalContainerEntityManagerFactoryBean entityManagerFactory = 
-                databaseConfig.entityManagerFactory(mockDataSource);
-        
-        // Verify the entity manager factory
-        assertNotNull(entityManagerFactory);
-        
-        // Verify the data source
-        Field dataSourceField = LocalContainerEntityManagerFactoryBean.class.getDeclaredField("dataSource");
-        dataSourceField.setAccessible(true);
-        Object dataSource = dataSourceField.get(entityManagerFactory);
-        assertNotNull(dataSource);
-        assertSame(mockDataSource, dataSource);
-        
-        // Verify the packages to scan
-        Field packagesToScanField = LocalContainerEntityManagerFactoryBean.class.getDeclaredField("packagesToScan");
-        packagesToScanField.setAccessible(true);
-        String[] packagesToScan = (String[]) packagesToScanField.get(entityManagerFactory);
-        assertNotNull(packagesToScan);
-        assertEquals(1, packagesToScan.length);
-        assertEquals("com.dollarfunding.mca.entity", packagesToScan[0]);
-        
-        // Verify the JPA vendor adapter
-        Field jpaVendorAdapterField = LocalContainerEntityManagerFactoryBean.class.getDeclaredField("jpaVendorAdapter");
-        jpaVendorAdapterField.setAccessible(true);
-        Object jpaVendorAdapter = jpaVendorAdapterField.get(entityManagerFactory);
-        assertNotNull(jpaVendorAdapter);
-        assertTrue(jpaVendorAdapter instanceof HibernateJpaVendorAdapter);
-        
-        // Verify the JPA properties
-        Field jpaPropertiesField = LocalContainerEntityManagerFactoryBean.class.getDeclaredField("jpaProperties");
-        jpaPropertiesField.setAccessible(true);
-        Properties jpaProperties = (Properties) jpaPropertiesField.get(entityManagerFactory);
-        assertNotNull(jpaProperties);
-        
-        // Verify specific JPA properties
-        assertEquals("org.hibernate.dialect.PostgreSQLDialect", jpaProperties.getProperty("hibernate.dialect"));
-        assertEquals("50", jpaProperties.getProperty("hibernate.jdbc.batch_size"));
-        assertEquals("true", jpaProperties.getProperty("hibernate.order_inserts"));
-        assertEquals("true", jpaProperties.getProperty("hibernate.order_updates"));
-        assertEquals("UTC", jpaProperties.getProperty("hibernate.jdbc.time_zone"));
-        assertEquals("true", jpaProperties.getProperty("hibernate.connection.provider_disables_autocommit"));
-        assertEquals("false", jpaProperties.getProperty("hibernate.cache.use_second_level_cache"));
-        assertEquals("false", jpaProperties.getProperty("hibernate.cache.use_query_cache"));
-        assertEquals("true", jpaProperties.getProperty("hibernate.jdbc.use_get_generated_keys"));
+    @DisplayName("Test routing with no replicas available")
+    public void testRoutingWithNoReplicas() throws Exception {
+        // Given
+        DataSource primaryDataSource = databaseConfig.primaryDataSource();
+        List<DataSource> emptyReplicaList = List.of(); // Empty list to simulate no replicas
+        DatabaseConfig.RoutingDataSource routingDataSource = 
+            (DatabaseConfig.RoutingDataSource) databaseConfig.routingDataSource(primaryDataSource, emptyReplicaList);
+
+        // Verify target data sources using reflection
+        Field targetDataSourcesField = AbstractRoutingDataSource.class.getDeclaredField("targetDataSources");
+        targetDataSourcesField.setAccessible(true);
+        Map<Object, Object> targetDataSources = (Map<Object, Object>) targetDataSourcesField.get(routingDataSource);
+
+        // Then
+        assertEquals(2, targetDataSources.size(), "Should have 2 target data sources (PRIMARY and REPLICA both pointing to primary)");
+        assertTrue(targetDataSources.containsKey(DatabaseConfig.DbType.PRIMARY), "Should contain PRIMARY key");
+        assertTrue(targetDataSources.containsKey(DatabaseConfig.DbType.REPLICA), "Should contain REPLICA key");
+        assertSame(targetDataSources.get(DatabaseConfig.DbType.PRIMARY), targetDataSources.get(DatabaseConfig.DbType.REPLICA), 
+                "PRIMARY and REPLICA should point to the same data source when no replicas are available");
+
+        // Mock TransactionSynchronizationManager for read-only transaction
+        try (MockedStatic<TransactionSynchronizationManager> mockedStatic = Mockito.mockStatic(TransactionSynchronizationManager.class)) {
+            mockedStatic.when(TransactionSynchronizationManager::isCurrentTransactionReadOnly).thenReturn(true);
+
+            // When
+            Object lookupKey = routingDataSource.determineCurrentLookupKey();
+            
+            // Then
+            assertEquals(DatabaseConfig.DbType.REPLICA, lookupKey, "Lookup key should be REPLICA even when no replicas are available");
+        }
     }
 
-    /**
-     * Tests that the transaction manager is properly configured.
-     * 
-     * Verifies:
-     * - The transaction manager is a JpaTransactionManager
-     * - The entity manager factory is set correctly
-     */
     @Test
-    @DisplayName("Transaction Manager should be properly configured")
-    public void testTransactionManager() throws Exception {
-        // Create a mock entity manager factory
-        LocalContainerEntityManagerFactoryBean mockEntityManagerFactory = mock(LocalContainerEntityManagerFactoryBean.class);
-        Object mockEntityManagerFactoryObject = mock(Object.class);
-        when(mockEntityManagerFactory.getObject()).thenReturn(mockEntityManagerFactoryObject);
-        
-        // Execute the method under test
-        PlatformTransactionManager transactionManager = databaseConfig.transactionManager(mockEntityManagerFactory);
-        
-        // Verify the transaction manager
-        assertNotNull(transactionManager);
-        assertTrue(transactionManager instanceof JpaTransactionManager);
-        
-        // Verify the entity manager factory
-        JpaTransactionManager jpaTransactionManager = (JpaTransactionManager) transactionManager;
-        assertSame(mockEntityManagerFactoryObject, jpaTransactionManager.getEntityManagerFactory());
+    @DisplayName("Test routing with single replica")
+    public void testRoutingWithSingleReplica() throws Exception {
+        // Given
+        DataSource primaryDataSource = databaseConfig.primaryDataSource();
+        // Create a list with just one replica
+        List<DataSource> singleReplicaList = List.of(databaseConfig.replicaDataSources().get(0));
+        DatabaseConfig.RoutingDataSource routingDataSource = 
+            (DatabaseConfig.RoutingDataSource) databaseConfig.routingDataSource(primaryDataSource, singleReplicaList);
+
+        // Verify target data sources using reflection
+        Field targetDataSourcesField = AbstractRoutingDataSource.class.getDeclaredField("targetDataSources");
+        targetDataSourcesField.setAccessible(true);
+        Map<Object, Object> targetDataSources = (Map<Object, Object>) targetDataSourcesField.get(routingDataSource);
+
+        // Then
+        assertEquals(2, targetDataSources.size(), "Should have 2 target data sources (PRIMARY and REPLICA)");
+        assertTrue(targetDataSources.containsKey(DatabaseConfig.DbType.PRIMARY), "Should contain PRIMARY key");
+        assertTrue(targetDataSources.containsKey(DatabaseConfig.DbType.REPLICA), "Should contain REPLICA key");
+        assertNotSame(targetDataSources.get(DatabaseConfig.DbType.PRIMARY), targetDataSources.get(DatabaseConfig.DbType.REPLICA), 
+                "PRIMARY and REPLICA should point to different data sources");
+
+        // Verify replica count using reflection
+        Field replicaCountField = DatabaseConfig.RoutingDataSource.class.getDeclaredField("replicaCount");
+        replicaCountField.setAccessible(true);
+        int replicaCount = (int) replicaCountField.get(routingDataSource);
+
+        assertEquals(1, replicaCount, "Replica count should be 1");
+
+        // Mock TransactionSynchronizationManager for read-only transaction
+        try (MockedStatic<TransactionSynchronizationManager> mockedStatic = Mockito.mockStatic(TransactionSynchronizationManager.class)) {
+            mockedStatic.when(TransactionSynchronizationManager::isCurrentTransactionReadOnly).thenReturn(true);
+
+            // When
+            Object lookupKey = routingDataSource.determineCurrentLookupKey();
+            
+            // Then
+            assertEquals(DatabaseConfig.DbType.REPLICA, lookupKey, "Lookup key should be REPLICA for single replica");
+        }
     }
 
-    /**
-     * Tests that the production-specific database configuration is properly applied.
-     * 
-     * Verifies:
-     * - The production-specific HikariCP settings are applied correctly
-     */
     @Test
-    @DisplayName("Production Database Config should apply production-specific settings")
-    public void testProductionDatabaseConfig() {
-        // Create an instance of the production database config
-        DatabaseConfig.ProductionDatabaseConfig productionConfig = new DatabaseConfig.ProductionDatabaseConfig();
-        
-        // Create a mock HikariDataSource
-        HikariDataSource mockDataSource = mock(HikariDataSource.class);
-        
-        // Execute the method under test
-        HikariDataSource configuredDataSource = productionConfig.productionPrimaryDataSource(mockDataSource);
-        
-        // Verify the data source
-        assertNotNull(configuredDataSource);
-        assertSame(mockDataSource, configuredDataSource);
-        
-        // Verify that the production-specific settings were applied
-        // Note: We can't verify the actual values since the method just returns the input data source
-        // In a real scenario, we would need to verify that the setters were called with the correct values
+    @DisplayName("Test lazy connection data source proxy")
+    public void testLazyConnectionDataSourceProxy() {
+        // Given
+        DataSource primaryDataSource = databaseConfig.primaryDataSource();
+        List<DataSource> replicaDataSources = databaseConfig.replicaDataSources();
+        DataSource routingDataSource = databaseConfig.routingDataSource(primaryDataSource, replicaDataSources);
+
+        // When
+        DataSource lazyDataSource = databaseConfig.dataSource(routingDataSource);
+
+        // Then
+        assertNotNull(lazyDataSource, "Lazy data source should not be null");
+        assertTrue(lazyDataSource instanceof LazyConnectionDataSourceProxy, "Should be a LazyConnectionDataSourceProxy");
+
+        LazyConnectionDataSourceProxy lazyProxy = (LazyConnectionDataSourceProxy) lazyDataSource;
+        assertSame(routingDataSource, lazyProxy.getTargetDataSource(), "Target data source should be the routing data source");
     }
 
-    /**
-     * Tests that the development-specific database configuration is properly applied.
-     * 
-     * Verifies:
-     * - The development-specific HikariCP settings are applied correctly
-     */
     @Test
-    @DisplayName("Development Database Config should apply development-specific settings")
-    public void testDevelopmentDatabaseConfig() {
-        // Create an instance of the development database config
-        DatabaseConfig.DevelopmentDatabaseConfig developmentConfig = new DatabaseConfig.DevelopmentDatabaseConfig();
-        
-        // Create a mock HikariDataSource
-        HikariDataSource mockDataSource = mock(HikariDataSource.class);
-        
-        // Execute the method under test
-        HikariDataSource configuredDataSource = developmentConfig.developmentPrimaryDataSource(mockDataSource);
-        
-        // Verify the data source
-        assertNotNull(configuredDataSource);
-        assertSame(mockDataSource, configuredDataSource);
-        
-        // Verify that the development-specific settings were applied
-        // Note: We can't verify the actual values since the method just returns the input data source
-        // In a real scenario, we would need to verify that the setters were called with the correct values
+    @DisplayName("Test transaction manager configuration")
+    public void testTransactionManager() {
+        // Given
+        DataSource primaryDataSource = databaseConfig.primaryDataSource();
+        List<DataSource> replicaDataSources = databaseConfig.replicaDataSources();
+        DataSource routingDataSource = databaseConfig.routingDataSource(primaryDataSource, replicaDataSources);
+        DataSource lazyDataSource = databaseConfig.dataSource(routingDataSource);
+
+        // When
+        PlatformTransactionManager transactionManager = databaseConfig.transactionManager(lazyDataSource);
+
+        // Then
+        assertNotNull(transactionManager, "Transaction manager should not be null");
+        assertTrue(transactionManager instanceof org.springframework.jdbc.datasource.DataSourceTransactionManager, 
+                "Should be a DataSourceTransactionManager");
+
+        org.springframework.jdbc.datasource.DataSourceTransactionManager dsTransactionManager = 
+                (org.springframework.jdbc.datasource.DataSourceTransactionManager) transactionManager;
+        assertSame(lazyDataSource, dsTransactionManager.getDataSource(), "Data source should be the lazy data source");
     }
 
-    /**
-     * Tests the thread-local operation type management.
-     * 
-     * Verifies:
-     * - The default operation type is WRITE
-     * - The operation type can be set and retrieved correctly
-     * - The operation type can be cleared
-     */
     @Test
-    @DisplayName("Thread-local operation type should be managed correctly")
-    public void testThreadLocalOperationTypeManagement() {
-        // Verify the default operation type
-        assertEquals(DatabaseConfig.OperationType.WRITE, DatabaseConfig.getCurrentOperation());
+    @DisplayName("Test JPA properties configuration")
+    public void testJpaProperties() {
+        // When
+        Map<String, Object> jpaProperties = databaseConfig.jpaProperties();
+
+        // Then
+        assertNotNull(jpaProperties, "JPA properties should not be null");
+        assertEquals("org.hibernate.dialect.PostgreSQLDialect", jpaProperties.get("hibernate.dialect"), 
+                "Hibernate dialect should be PostgreSQLDialect");
+        assertEquals("true", jpaProperties.get("hibernate.format_sql"), "format_sql should be true");
+        assertEquals(50, jpaProperties.get("hibernate.jdbc.batch_size"), "batch_size should be 50");
+        assertEquals("true", jpaProperties.get("hibernate.order_inserts"), "order_inserts should be true");
+        assertEquals("true", jpaProperties.get("hibernate.order_updates"), "order_updates should be true");
+        assertEquals("UTC", jpaProperties.get("hibernate.jdbc.time_zone"), "time_zone should be UTC");
+        assertEquals("true", jpaProperties.get("hibernate.connection.provider_disables_autocommit"), 
+                "provider_disables_autocommit should be true");
+        assertEquals("true", jpaProperties.get("hibernate.query.in_clause_parameter_padding"), 
+                "in_clause_parameter_padding should be true");
+        assertEquals("true", jpaProperties.get("hibernate.query.fail_on_pagination_over_collection_fetch"), 
+                "fail_on_pagination_over_collection_fetch should be true");
+
+        // Verify second-level cache is not enabled by default
+        assertFalse(jpaProperties.containsKey("hibernate.cache.use_second_level_cache"), 
+                "Second-level cache should not be enabled by default");
+    }
+
+    @Test
+    @DisplayName("Test JPA properties with second-level cache enabled")
+    public void testJpaPropertiesWithSecondLevelCache() {
+        // Given
+        when(environment.getProperty("spring.jpa.properties.hibernate.cache.use_second_level_cache", "false")).thenReturn("true");
+        when(environment.getProperty("spring.jpa.properties.hibernate.cache.use_query_cache", "false")).thenReturn("true");
+        when(environment.getProperty("spring.jpa.properties.hibernate.cache.region.factory_class", 
+                "org.hibernate.cache.jcache.JCacheRegionFactory"))
+                .thenReturn("org.hibernate.cache.jcache.JCacheRegionFactory");
+
+        // When
+        Map<String, Object> jpaProperties = databaseConfig.jpaProperties();
+
+        // Then
+        assertNotNull(jpaProperties, "JPA properties should not be null");
+        assertEquals("true", jpaProperties.get("hibernate.cache.use_second_level_cache"), 
+                "Second-level cache should be enabled");
+        assertEquals("true", jpaProperties.get("hibernate.cache.use_query_cache"), 
+                "Query cache should be enabled");
+        assertEquals("org.hibernate.cache.jcache.JCacheRegionFactory", jpaProperties.get("hibernate.cache.region.factory_class"), 
+                "Cache region factory should be JCacheRegionFactory");
+    }
+
+    @Test
+    @DisplayName("Test ReadOnlyOperation aspect")
+    public void testReadOnlyOperationAspect() throws Throwable {
+        // Given
+        DatabaseConfig.ReadOnlyOperationAspect aspect = databaseConfig.readOnlyOperationAspect();
+        assertNotNull(aspect, "ReadOnlyOperationAspect should not be null");
+
+        // Create a mock ProceedingJoinPoint
+        ProceedingJoinPoint joinPoint = mock(ProceedingJoinPoint.class);
+        when(joinPoint.proceed()).thenReturn("test result");
+
+        // When
+        Object result = aspect.enforceReadOnly(joinPoint);
+
+        // Then
+        assertEquals("test result", result, "Result should match the mock result");
+        verify(joinPoint, times(1)).proceed();
+
+        // Note: We can't easily test that the transaction is read-only without a full Spring context,
+        // but we can verify that the method is annotated with @Transactional(readOnly = true)
+        Method enforceReadOnlyMethod = DatabaseConfig.ReadOnlyOperationAspect.class.getDeclaredMethod("enforceReadOnly", ProceedingJoinPoint.class);
+        org.springframework.transaction.annotation.Transactional transactionalAnnotation = 
+                enforceReadOnlyMethod.getAnnotation(org.springframework.transaction.annotation.Transactional.class);
         
-        // Set the operation type to READ
-        DatabaseConfig.setCurrentOperation(DatabaseConfig.OperationType.READ);
-        
-        // Verify the operation type was set correctly
-        assertEquals(DatabaseConfig.OperationType.READ, DatabaseConfig.getCurrentOperation());
-        
-        // Clear the operation type
-        DatabaseConfig.clearCurrentOperation();
-        
-        // Verify the operation type was reset to the default
-        assertEquals(DatabaseConfig.OperationType.WRITE, DatabaseConfig.getCurrentOperation());
+        assertNotNull(transactionalAnnotation, "Method should be annotated with @Transactional");
+        assertTrue(transactionalAnnotation.readOnly(), "Transaction should be read-only");
+        assertEquals(Propagation.REQUIRED, transactionalAnnotation.propagation(), "Propagation should be REQUIRED");
     }
 }
