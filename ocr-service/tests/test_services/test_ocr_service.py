@@ -4,677 +4,790 @@
 """
 Unit tests for the OCR Service module.
 
-This module contains tests for the OCR Service, which is responsible for
-extracting text from documents using TensorFlow models. The tests verify
-model loading, document type detection, OCR strategy selection, and text
-extraction accuracy for both typed and handwritten documents.
+This module contains tests for the OCR Service, which is responsible for extracting text
+from documents using TensorFlow models. The tests verify model loading, document type detection,
+OCR strategy selection, and text extraction accuracy for both typed and handwritten documents.
 
-The tests ensure that the OCR service correctly processes documents with
-GPU acceleration and meets the 99% data extraction accuracy requirement.
+The OCR Service must meet the following requirements:
+- Extract data from documents using TensorFlow models
+- Achieve 99% data extraction accuracy
+- Use GPU acceleration for performance
+- Apply appropriate OCR model based on document type
+- Support both typed and handwritten text extraction
+- Process applications in under 5 minutes from receipt to completion
 """
 
 import os
 import time
 import pytest
 import numpy as np
-from unittest.mock import MagicMock, patch, ANY
-from pathlib import Path
+from unittest.mock import MagicMock, patch, PropertyMock
 
-# Import the OCR service and related types
-from ocr_service.src.services.ocr_service import OCRService
-from ocr_service.src.types.documents import Document, DocumentType, ProcessingStatus
-from ocr_service.src.types.models import OCRModelType, ModelResult
-from ocr_service.src.types.extraction import ExtractedData, ConfidenceScore
-from ocr_service.src.types.errors import ServiceError, ErrorCategory, Result
-from ocr_service.src.config import app_config, tensorflow_config
-from ocr_service.src.models.model_factory import ModelFactory
+# Import the module to test
+from services.ocr_service import OCRService
+from types.models import OCRModelType, ModelParameters, ModelResult
+from types.extraction import ExtractedData, ExtractedField, ConfidenceScore
+from types.errors import ServiceError, Result
+from config import tensorflow_config
 
 
-# Test OCR Service Initialization
-class TestOCRServiceInitialization:
-    """Tests for OCR Service initialization and configuration."""
+class TestOCRService:
+    """Test suite for the OCR Service."""
 
-    def test_initialization_with_gpu(self, mock_tensorflow):
-        """Test that OCR service initializes correctly with GPU available."""
-        # Mock GPU availability
-        with patch('ocr_service.src.utils.tensorflow_utils.setup_gpu_environment', return_value=True):
-            with patch('ocr_service.src.utils.tensorflow_utils.get_gpu_info', return_value="Tesla T4, 16GB"):
-                # Initialize OCR service
-                service = OCRService()
-                
-                # Verify service is initialized correctly
-                assert service.gpu_available is True
-                assert service.model_factory is not None
-                assert service.tf_config == tensorflow_config
-
-    def test_initialization_without_gpu(self, mock_tensorflow):
-        """Test that OCR service initializes correctly without GPU."""
-        # Mock GPU unavailability
-        with patch('ocr_service.src.utils.tensorflow_utils.setup_gpu_environment', return_value=False):
-            # Initialize OCR service
+    @pytest.fixture
+    def ocr_service(self, mock_tensorflow_import, mock_typed_text_model, 
+                   mock_handwritten_text_model, mock_hybrid_recognition_model):
+        """Create an OCR service instance with mocked models for testing."""
+        with patch('services.ocr_service.ModelFactory') as mock_factory:
+            # Configure the mock factory to return our mock models
+            factory_instance = mock_factory.return_value
+            factory_instance.get_model.side_effect = lambda model_type: {
+                OCRModelType.TYPED: mock_typed_text_model,
+                OCRModelType.HANDWRITTEN: mock_handwritten_text_model,
+                OCRModelType.HYBRID: mock_hybrid_recognition_model
+            }.get(model_type)
+            
+            # Create the OCR service
             service = OCRService()
             
-            # Verify service is initialized correctly
-            assert service.gpu_available is False
-            assert service.model_factory is not None
-            assert service.tf_config == tensorflow_config
+            # Verify the service initialized correctly
+            assert service.typed_model == mock_typed_text_model
+            assert service.handwritten_model == mock_handwritten_text_model
+            assert service.hybrid_model == mock_hybrid_recognition_model
+            
+            return service
 
-    def test_initialization_gpu_required_but_unavailable(self, mock_tensorflow):
-        """Test that OCR service raises error when GPU is required but unavailable."""
-        # Mock GPU unavailability
-        with patch('ocr_service.src.utils.tensorflow_utils.setup_gpu_environment', return_value=False):
-            # Mock config to require GPU
-            with patch.object(tensorflow_config, 'require_gpu', True):
-                # Verify service initialization raises error
-                with pytest.raises(ServiceError) as excinfo:
-                    OCRService()
+    def test_initialization(self, mock_tensorflow_import):
+        """Test that the OCR service initializes correctly."""
+        with patch('services.ocr_service.ModelFactory') as mock_factory:
+            # Configure the mock factory
+            factory_instance = mock_factory.return_value
+            factory_instance.get_model.return_value = MagicMock()
+            
+            # Create the OCR service
+            service = OCRService()
+            
+            # Verify initialization steps were performed
+            assert mock_factory.called
+            assert factory_instance.get_model.call_count == 3  # Called for each model type
+            assert service.logger is not None
+
+    def test_gpu_configuration(self, mock_tensorflow_import):
+        """Test that GPU configuration is applied correctly."""
+        with patch('services.ocr_service.ModelFactory'):
+            with patch.object(tensorflow_config, 'GPU_CONFIG', {
+                'enable_gpu': True,
+                'allow_memory_growth': True,
+                'memory_limit_mb': 4096,
+                'visible_devices': [0]
+            }):
+                # Create the OCR service
+                service = OCRService()
                 
-                # Verify error details
-                assert excinfo.value.category == ErrorCategory.CONFIGURATION
-                assert "GPU acceleration required" in str(excinfo.value)
+                # Verify GPU configuration was applied
+                mock_tensorflow = mock_tensorflow_import
+                assert mock_tensorflow.config.experimental.set_memory_growth.called
+                assert mock_tensorflow.config.set_visible_devices.called
 
-    def test_model_preloading(self, mock_tensorflow, mock_model_factory):
-        """Test that OCR service preloads models during initialization."""
-        # Initialize OCR service
-        service = OCRService()
+    def test_model_loading(self, mock_tensorflow_import):
+        """Test that models are loaded correctly during initialization."""
+        with patch('services.ocr_service.ModelFactory') as mock_factory:
+            # Configure the mock factory
+            factory_instance = mock_factory.return_value
+            mock_typed_model = MagicMock()
+            mock_handwritten_model = MagicMock()
+            mock_hybrid_model = MagicMock()
+            
+            factory_instance.get_model.side_effect = lambda model_type: {
+                OCRModelType.TYPED: mock_typed_model,
+                OCRModelType.HANDWRITTEN: mock_handwritten_model,
+                OCRModelType.HYBRID: mock_hybrid_model
+            }.get(model_type)
+            
+            # Create the OCR service
+            service = OCRService()
+            
+            # Verify models were loaded
+            assert service.typed_model == mock_typed_model
+            assert service.handwritten_model == mock_handwritten_model
+            assert service.hybrid_model == mock_hybrid_model
+            
+            # Verify warm-up was performed
+            assert mock_typed_model.extract_text.called
+            assert mock_handwritten_model.extract_text.called
+            assert mock_hybrid_model.extract_text.called
+
+    def test_model_warm_up(self, ocr_service):
+        """Test that models are warmed up during initialization."""
+        # Verify that extract_text was called on each model during initialization
+        assert ocr_service.typed_model.extract_text.called
+        assert ocr_service.handwritten_model.extract_text.called
+        assert ocr_service.hybrid_model.extract_text.called
+
+    def test_detect_document_type_typed(self, ocr_service):
+        """Test document type detection for typed documents."""
+        # Mock the tensorflow_utils.detect_text_type function
+        with patch('services.ocr_service.tensorflow_utils.detect_text_type') as mock_detect:
+            # Configure the mock to return a typed document result
+            mock_detect.return_value = {
+                'typed_percentage': 90.0,
+                'handwritten_percentage': 5.0
+            }
+            
+            # Call the method
+            image = np.zeros((300, 300, 3), dtype=np.uint8)  # Dummy image
+            result = ocr_service.detect_document_type(image)
+            
+            # Verify the result
+            assert result == OCRModelType.TYPED
+            assert mock_detect.called
+
+    def test_detect_document_type_handwritten(self, ocr_service):
+        """Test document type detection for handwritten documents."""
+        # Mock the tensorflow_utils.detect_text_type function
+        with patch('services.ocr_service.tensorflow_utils.detect_text_type') as mock_detect:
+            # Configure the mock to return a handwritten document result
+            mock_detect.return_value = {
+                'typed_percentage': 5.0,
+                'handwritten_percentage': 90.0
+            }
+            
+            # Call the method
+            image = np.zeros((300, 300, 3), dtype=np.uint8)  # Dummy image
+            result = ocr_service.detect_document_type(image)
+            
+            # Verify the result
+            assert result == OCRModelType.HANDWRITTEN
+            assert mock_detect.called
+
+    def test_detect_document_type_hybrid(self, ocr_service):
+        """Test document type detection for hybrid documents."""
+        # Mock the tensorflow_utils.detect_text_type function
+        with patch('services.ocr_service.tensorflow_utils.detect_text_type') as mock_detect:
+            # Configure the mock to return a hybrid document result
+            mock_detect.return_value = {
+                'typed_percentage': 60.0,
+                'handwritten_percentage': 40.0
+            }
+            
+            # Call the method
+            image = np.zeros((300, 300, 3), dtype=np.uint8)  # Dummy image
+            result = ocr_service.detect_document_type(image)
+            
+            # Verify the result
+            assert result == OCRModelType.HYBRID
+            assert mock_detect.called
+
+    def test_detect_document_type_error(self, ocr_service):
+        """Test document type detection error handling."""
+        # Mock the tensorflow_utils.detect_text_type function to raise an exception
+        with patch('services.ocr_service.tensorflow_utils.detect_text_type') as mock_detect:
+            mock_detect.side_effect = Exception("Detection error")
+            
+            # Call the method
+            image = np.zeros((300, 300, 3), dtype=np.uint8)  # Dummy image
+            result = ocr_service.detect_document_type(image)
+            
+            # Verify the result defaults to HYBRID on error
+            assert result == OCRModelType.HYBRID
+            assert mock_detect.called
+
+    def test_select_model(self, ocr_service):
+        """Test model selection based on document type."""
+        # Test typed model selection
+        model = ocr_service.select_model(OCRModelType.TYPED)
+        assert model == ocr_service.typed_model
         
-        # Verify model factory's get_model was called for each model type
-        assert mock_model_factory.get_model.call_count >= len(OCRModelType)
+        # Test handwritten model selection
+        model = ocr_service.select_model(OCRModelType.HANDWRITTEN)
+        assert model == ocr_service.handwritten_model
         
-        # Verify each model type was loaded
-        for model_type in OCRModelType:
-            mock_model_factory.get_model.assert_any_call(model_type)
+        # Test hybrid model selection
+        model = ocr_service.select_model(OCRModelType.HYBRID)
+        assert model == ocr_service.hybrid_model
 
-
-# Test Document Processing
-class TestDocumentProcessing:
-    """Tests for document processing functionality."""
-
-    def test_process_document_success(self, mock_tensorflow, mock_model_factory, sample_document):
+    def test_process_document_success(self, ocr_service, mock_document_bytes):
         """Test successful document processing."""
-        # Create mock model result
-        mock_result = MagicMock()
-        mock_result.extracted_fields = [
-            MagicMock(name="business_name", value="Acme Corp", confidence=0.95),
-            MagicMock(name="tax_id", value="12-3456789", confidence=0.92)
-        ]
-        mock_result.average_confidence = 0.94
-        mock_result.model_type = OCRModelType.TYPED
-        mock_result.processing_time = 1.5
-        mock_result.metadata = {}
-        
-        # Mock model to return successful result
-        mock_model = MagicMock()
-        mock_model.extract_text.return_value = mock_result
-        mock_model_factory.get_model.return_value = mock_model
-        
-        # Initialize OCR service
-        service = OCRService()
-        
-        # Process document
-        result = service.process_document(sample_document)
-        
-        # Verify result is successful
-        assert result.is_success()
-        extracted_data, processing_time = result.value
-        
-        # Verify extracted data
-        assert extracted_data.document_id == sample_document.metadata.document_id
-        assert extracted_data.average_confidence >= 0.9
-        assert len(extracted_data.fields) >= 2
-        assert "business_name" in extracted_data.fields
-        assert "tax_id" in extracted_data.fields
-        assert processing_time > 0
-        
-        # Verify document status was updated
-        assert sample_document.processing_status == ProcessingStatus.COMPLETED
-
-    def test_process_document_error(self, mock_tensorflow, mock_model_factory, sample_document):
-        """Test document processing with error."""
-        # Mock model to raise exception
-        mock_model = MagicMock()
-        mock_model.extract_text.side_effect = Exception("Test error")
-        mock_model_factory.get_model.return_value = mock_model
-        
-        # Initialize OCR service
-        service = OCRService()
-        
-        # Process document
-        result = service.process_document(sample_document)
-        
-        # Verify result is failure
-        assert result.is_failure()
-        error = result.error
-        
-        # Verify error details
-        assert error.category == ErrorCategory.PROCESSING
-        assert "Test error" in error.message
-        assert error.details["document_id"] == sample_document.metadata.document_id
-        
-        # Verify document status was updated to error
-        assert sample_document.processing_status == ProcessingStatus.ERROR
-
-    def test_document_preprocessing(self, mock_tensorflow, sample_document):
-        """Test document preprocessing."""
-        # Mock image_utils functions
-        with patch('ocr_service.src.utils.image_utils.convert_to_image') as mock_convert:
-            with patch('ocr_service.src.utils.image_utils.assess_image_quality', return_value=0.85) as mock_assess:
-                with patch('ocr_service.src.utils.image_utils.preprocess_for_ocr') as mock_preprocess:
-                    # Initialize OCR service
-                    service = OCRService()
+        # Mock dependencies
+        with patch('services.ocr_service.image_utils.convert_document_to_image') as mock_convert:
+            with patch('services.ocr_service.image_utils.preprocess_image') as mock_preprocess:
+                # Configure mocks
+                mock_image = np.zeros((300, 300, 3), dtype=np.uint8)  # Dummy image
+                mock_convert.return_value = mock_image
+                mock_preprocess.return_value = mock_image
+                
+                # Mock detect_document_type to return TYPED
+                with patch.object(ocr_service, 'detect_document_type', return_value=OCRModelType.TYPED):
+                    # Configure the typed model to return a successful result
+                    extraction_result = MagicMock()
+                    ocr_service.typed_model.extract_text.return_value = extraction_result
                     
-                    # Call _preprocess_document directly
-                    service._preprocess_document(sample_document)
+                    # Mock the remaining processing steps
+                    with patch.object(ocr_service, '_apply_structure_recognition') as mock_structure:
+                        with patch.object(ocr_service, '_extract_fields') as mock_extract:
+                            with patch.object(ocr_service, '_score_field_confidence') as mock_score:
+                                with patch.object(ocr_service, '_format_extraction_result') as mock_format:
+                                    # Configure the mocks
+                                    structured_data = {'structured': True}
+                                    extracted_fields = [{'field': 'value'}]
+                                    scored_fields = [{'field': 'value', 'confidence': 0.95}]
+                                    result = ExtractedData(fields=scored_fields, metadata={'document_id': 'test'})
+                                    
+                                    mock_structure.return_value = structured_data
+                                    mock_extract.return_value = extracted_fields
+                                    mock_score.return_value = scored_fields
+                                    mock_format.return_value = result
+                                    
+                                    # Call the method
+                                    metadata = {'request_id': 'req-123', 'document_type': 'application_form'}
+                                    process_result = ocr_service.process_document(mock_document_bytes, metadata)
+                                    
+                                    # Verify the result
+                                    assert process_result.is_success()
+                                    assert process_result.value() == result
+                                    assert mock_convert.called
+                                    assert mock_preprocess.called
+                                    assert ocr_service.typed_model.extract_text.called
+                                    assert mock_structure.called
+                                    assert mock_extract.called
+                                    assert mock_score.called
+                                    assert mock_format.called
+
+    def test_process_document_with_classification(self, ocr_service, mock_document_bytes):
+        """Test document processing with classification from metadata."""
+        # Mock dependencies
+        with patch('services.ocr_service.image_utils.convert_document_to_image') as mock_convert:
+            with patch('services.ocr_service.image_utils.preprocess_image') as mock_preprocess:
+                # Configure mocks
+                mock_image = np.zeros((300, 300, 3), dtype=np.uint8)  # Dummy image
+                mock_convert.return_value = mock_image
+                mock_preprocess.return_value = mock_image
+                
+                # Mock detect_document_type (should not be called in this test)
+                detect_spy = patch.object(ocr_service, 'detect_document_type')
+                mock_detect = detect_spy.start()
+                
+                # Configure the handwritten model to return a successful result
+                extraction_result = MagicMock()
+                ocr_service.handwritten_model.extract_text.return_value = extraction_result
+                
+                # Mock the remaining processing steps
+                with patch.object(ocr_service, '_apply_structure_recognition') as mock_structure:
+                    with patch.object(ocr_service, '_extract_fields') as mock_extract:
+                        with patch.object(ocr_service, '_score_field_confidence') as mock_score:
+                            with patch.object(ocr_service, '_format_extraction_result') as mock_format:
+                                # Configure the mocks
+                                structured_data = {'structured': True}
+                                extracted_fields = [{'field': 'value'}]
+                                scored_fields = [{'field': 'value', 'confidence': 0.95}]
+                                result = ExtractedData(fields=scored_fields, metadata={'document_id': 'test'})
+                                
+                                mock_structure.return_value = structured_data
+                                mock_extract.return_value = extracted_fields
+                                mock_score.return_value = scored_fields
+                                mock_format.return_value = result
+                                
+                                # Call the method with classification in metadata
+                                metadata = {
+                                    'request_id': 'req-123', 
+                                    'document_type': 'application_form',
+                                    'classification': 'handwritten'  # This should select the handwritten model
+                                }
+                                process_result = ocr_service.process_document(mock_document_bytes, metadata)
+                                
+                                # Verify the result
+                                assert process_result.is_success()
+                                assert process_result.value() == result
+                                assert not mock_detect.called  # detect_document_type should not be called
+                                assert ocr_service.handwritten_model.extract_text.called
+                                
+                                # Clean up the spy
+                                detect_spy.stop()
+
+    def test_process_document_conversion_error(self, ocr_service, mock_document_bytes):
+        """Test document processing with document conversion error."""
+        # Mock dependencies
+        with patch('services.ocr_service.image_utils.convert_document_to_image') as mock_convert:
+            # Configure mock to return None (conversion failure)
+            mock_convert.return_value = None
+            
+            # Call the method
+            metadata = {'request_id': 'req-123', 'document_type': 'application_form'}
+            process_result = ocr_service.process_document(mock_document_bytes, metadata)
+            
+            # Verify the result
+            assert process_result.is_failure()
+            assert process_result.error().code == "DOCUMENT_CONVERSION_ERROR"
+            assert mock_convert.called
+
+    def test_process_document_extraction_error(self, ocr_service, mock_document_bytes):
+        """Test document processing with extraction error."""
+        # Mock dependencies
+        with patch('services.ocr_service.image_utils.convert_document_to_image') as mock_convert:
+            with patch('services.ocr_service.image_utils.preprocess_image') as mock_preprocess:
+                # Configure mocks
+                mock_image = np.zeros((300, 300, 3), dtype=np.uint8)  # Dummy image
+                mock_convert.return_value = mock_image
+                mock_preprocess.return_value = mock_image
+                
+                # Mock detect_document_type to return TYPED
+                with patch.object(ocr_service, 'detect_document_type', return_value=OCRModelType.TYPED):
+                    # Configure the typed model to raise an exception
+                    ocr_service.typed_model.extract_text.side_effect = Exception("Extraction error")
                     
-                    # Verify image conversion was called
-                    mock_convert.assert_called_once_with(
-                        sample_document.content, 
-                        sample_document.metadata.mime_type
-                    )
+                    # Call the method
+                    metadata = {'request_id': 'req-123', 'document_type': 'application_form'}
+                    process_result = ocr_service.process_document(mock_document_bytes, metadata)
                     
-                    # Verify image quality assessment was called
-                    mock_assess.assert_called_once()
-                    
-                    # Verify preprocessing was called with appropriate options
-                    mock_preprocess.assert_called_once()
+                    # Verify the result
+                    assert process_result.is_failure()
+                    assert process_result.error().code == "DOCUMENT_PROCESSING_ERROR"
+                    assert mock_convert.called
+                    assert mock_preprocess.called
+                    assert ocr_service.typed_model.extract_text.called
 
-    def test_preprocessing_error_handling(self, mock_tensorflow, sample_document):
-        """Test error handling during document preprocessing."""
-        # Mock image_utils.convert_to_image to raise exception
-        with patch('ocr_service.src.utils.image_utils.convert_to_image', 
-                  side_effect=Exception("Invalid image format")):
-            # Initialize OCR service
-            service = OCRService()
+    def test_apply_structure_recognition(self, ocr_service):
+        """Test structure recognition for different document types."""
+        # Mock tensorflow_utils functions
+        with patch('services.ocr_service.tensorflow_utils.recognize_application_form_structure') as mock_app_form:
+            with patch('services.ocr_service.tensorflow_utils.recognize_tax_document_structure') as mock_tax:
+                with patch('services.ocr_service.tensorflow_utils.recognize_bank_statement_structure') as mock_bank:
+                    with patch('services.ocr_service.tensorflow_utils.recognize_identity_document_structure') as mock_id:
+                        with patch('services.ocr_service.tensorflow_utils.recognize_generic_structure') as mock_generic:
+                            # Configure mocks
+                            mock_app_form.return_value = {'type': 'application_form'}
+                            mock_tax.return_value = {'type': 'tax_document'}
+                            mock_bank.return_value = {'type': 'bank_statement'}
+                            mock_id.return_value = {'type': 'identity_document'}
+                            mock_generic.return_value = {'type': 'generic'}
+                            
+                            extraction_result = {'raw': 'data'}
+                            
+                            # Test application form
+                            result = ocr_service._apply_structure_recognition(
+                                extraction_result, {'document_type': 'application_form'}
+                            )
+                            assert result == {'type': 'application_form'}
+                            assert mock_app_form.called
+                            
+                            # Test tax document
+                            result = ocr_service._apply_structure_recognition(
+                                extraction_result, {'document_type': 'tax_document'}
+                            )
+                            assert result == {'type': 'tax_document'}
+                            assert mock_tax.called
+                            
+                            # Test bank statement
+                            result = ocr_service._apply_structure_recognition(
+                                extraction_result, {'document_type': 'bank_statement'}
+                            )
+                            assert result == {'type': 'bank_statement'}
+                            assert mock_bank.called
+                            
+                            # Test identity document
+                            result = ocr_service._apply_structure_recognition(
+                                extraction_result, {'document_type': 'identity_document'}
+                            )
+                            assert result == {'type': 'identity_document'}
+                            assert mock_id.called
+                            
+                            # Test unknown document type
+                            result = ocr_service._apply_structure_recognition(
+                                extraction_result, {'document_type': 'unknown'}
+                            )
+                            assert result == {'type': 'generic'}
+                            assert mock_generic.called
+
+    def test_apply_structure_recognition_error(self, ocr_service):
+        """Test structure recognition error handling."""
+        # Mock tensorflow_utils function to raise an exception
+        with patch('services.ocr_service.tensorflow_utils.recognize_application_form_structure') as mock_app_form:
+            mock_app_form.side_effect = Exception("Structure recognition error")
             
-            # Verify preprocessing raises ServiceError
-            with pytest.raises(ServiceError) as excinfo:
-                service._preprocess_document(sample_document)
+            extraction_result = {'raw': 'data'}
             
-            # Verify error details
-            assert excinfo.value.category == ErrorCategory.PREPROCESSING
-            assert "Invalid image format" in str(excinfo.value)
-            assert excinfo.value.details["document_id"] == sample_document.metadata.document_id
-
-
-# Test Model Type Determination
-class TestModelTypeDetermination:
-    """Tests for OCR model type determination based on document content."""
-
-    def test_determine_model_type_from_document_type(self, mock_tensorflow):
-        """Test model type determination based on document type."""
-        # Initialize OCR service
-        service = OCRService()
-        
-        # Test with different document types
-        test_cases = [
-            (DocumentType.APPLICATION, OCRModelType.HYBRID),
-            (DocumentType.ID_DOCUMENT, OCRModelType.HYBRID),
-            (DocumentType.TAX_RETURN, OCRModelType.TYPED),
-            (DocumentType.BANK_STATEMENT, OCRModelType.TYPED),
-            (DocumentType.PAY_STUB, OCRModelType.TYPED)
-        ]
-        
-        # Mock always_analyze_content to False to use document type prediction
-        with patch.object(service.tf_config, 'always_analyze_content', False):
-            for doc_type, expected_model_type in test_cases:
-                # Create a mock image
-                mock_image = np.zeros((100, 100, 3), dtype=np.uint8)
-                
-                # Determine model type
-                model_type = service._determine_model_type(mock_image, doc_type)
-                
-                # Verify model type matches expected
-                assert model_type == expected_model_type, \
-                    f"Document type {doc_type} should use model type {expected_model_type}"
-
-    def test_determine_model_type_from_content_analysis(self, mock_tensorflow):
-        """Test model type determination based on content analysis."""
-        # Initialize OCR service
-        service = OCRService()
-        
-        # Test cases with different content characteristics
-        test_cases = [
-            # (has_typed, has_handwritten, confidence, expected_model_type)
-            (True, False, 0.9, OCRModelType.TYPED),
-            (False, True, 0.9, OCRModelType.HANDWRITTEN),
-            (True, True, 0.9, OCRModelType.HYBRID),
-            # Low confidence case
-            (True, False, 0.5, OCRModelType.TYPED)  # Should use document type prediction
-        ]
-        
-        # Mock tensorflow_utils.detect_text_types
-        for has_typed, has_handwritten, confidence, expected_model_type in test_cases:
-            with patch('ocr_service.src.utils.tensorflow_utils.detect_text_types', 
-                      return_value=(has_typed, has_handwritten, confidence)):
-                # Create a mock image
-                mock_image = np.zeros((100, 100, 3), dtype=np.uint8)
-                
-                # Force content analysis
-                with patch.object(service.tf_config, 'always_analyze_content', True):
-                    # Determine model type
-                    model_type = service._determine_model_type(mock_image, DocumentType.APPLICATION)
-                    
-                    # Verify model type matches expected
-                    assert model_type == expected_model_type, \
-                        f"Content with typed={has_typed}, handwritten={has_handwritten}, " \
-                        f"confidence={confidence} should use model type {expected_model_type}"
-
-    def test_model_type_override_with_high_confidence(self, mock_tensorflow):
-        """Test that high-confidence content detection overrides document type prediction."""
-        # Initialize OCR service
-        service = OCRService()
-        
-        # Mock document type that would normally use TYPED
-        doc_type = DocumentType.TAX_RETURN
-        
-        # Mock content detection to find handwriting with high confidence
-        with patch('ocr_service.src.utils.tensorflow_utils.detect_text_types', 
-                  return_value=(False, True, 0.95)):
-            # Create a mock image
-            mock_image = np.zeros((100, 100, 3), dtype=np.uint8)
-            
-            # Set confidence threshold lower than detection confidence
-            with patch.object(service.tf_config, 'text_type_confidence_threshold', 0.9):
-                # Determine model type
-                model_type = service._determine_model_type(mock_image, doc_type)
-                
-                # Verify high-confidence detection overrides document type prediction
-                assert model_type == OCRModelType.HANDWRITTEN, \
-                    "High-confidence content detection should override document type prediction"
-
-
-# Test Text Extraction
-class TestTextExtraction:
-    """Tests for text extraction functionality."""
-
-    def test_extract_text_success(self, mock_tensorflow, mock_model_factory, sample_document):
-        """Test successful text extraction."""
-        # Create mock model result
-        mock_result = MagicMock()
-        mock_result.extracted_fields = [
-            MagicMock(name="business_name", value="Acme Corp", confidence=0.95),
-            MagicMock(name="tax_id", value="12-3456789", confidence=0.92)
-        ]
-        mock_result.average_confidence = 0.94
-        
-        # Mock model to return successful result
-        mock_model = MagicMock()
-        mock_model.extract_text.return_value = mock_result
-        
-        # Initialize OCR service
-        service = OCRService()
-        
-        # Mock preprocessed image
-        mock_image = np.zeros((100, 100, 3), dtype=np.uint8)
-        
-        # Extract text
-        result = service._extract_text(mock_model, mock_image, sample_document)
-        
-        # Verify model.extract_text was called with correct parameters
-        mock_model.extract_text.assert_called_once_with(
-            mock_image, 
-            document_type=sample_document.document_type,
-            context=ANY
-        )
-        
-        # Verify result matches mock result
-        assert result == mock_result
-
-    def test_extract_text_with_retry(self, mock_tensorflow, mock_model_factory, sample_document):
-        """Test text extraction with retry logic."""
-        # Create mock model result
-        mock_result = MagicMock()
-        mock_result.extracted_fields = [
-            MagicMock(name="business_name", value="Acme Corp", confidence=0.95)
-        ]
-        mock_result.average_confidence = 0.95
-        
-        # Mock model to fail first, then succeed
-        mock_model = MagicMock()
-        mock_model.extract_text.side_effect = [
-            ServiceError("Temporary error", ErrorCategory.EXTRACTION),
-            mock_result
-        ]
-        
-        # Initialize OCR service
-        service = OCRService()
-        
-        # Mock preprocessed image
-        mock_image = np.zeros((100, 100, 3), dtype=np.uint8)
-        
-        # Extract text (should retry and succeed)
-        result = service._extract_text(mock_model, mock_image, sample_document)
-        
-        # Verify model.extract_text was called twice
-        assert mock_model.extract_text.call_count == 2
-        
-        # Verify result matches mock result
-        assert result == mock_result
-
-    def test_extract_text_gpu_fallback(self, mock_tensorflow, mock_model_factory, sample_document):
-        """Test fallback to CPU when GPU memory error occurs."""
-        # Create mock model result
-        mock_result = MagicMock()
-        mock_result.extracted_fields = [
-            MagicMock(name="business_name", value="Acme Corp", confidence=0.95)
-        ]
-        mock_result.average_confidence = 0.95
-        
-        # Mock model to fail with GPU error, then succeed with CPU
-        mock_model = MagicMock()
-        mock_model.extract_text.side_effect = [
-            Exception("CUDA out of memory"),  # GPU error
-            mock_result  # CPU success
-        ]
-        
-        # Mock GPU-related functions
-        with patch('ocr_service.src.utils.tensorflow_utils.is_gpu_memory_error', return_value=True):
-            with patch('ocr_service.src.utils.tensorflow_utils.cpu_only_context'):
-                # Initialize OCR service with GPU available
-                service = OCRService()
-                service.gpu_available = True
-                
-                # Mock preprocessed image
-                mock_image = np.zeros((100, 100, 3), dtype=np.uint8)
-                
-                # Extract text (should fall back to CPU and succeed)
-                result = service._extract_text(mock_model, mock_image, sample_document)
-                
-                # Verify model.extract_text was called twice
-                assert mock_model.extract_text.call_count == 2
-                
-                # Verify result matches mock result
-                assert result == mock_result
-
-
-# Test Result Formatting
-class TestResultFormatting:
-    """Tests for extraction result formatting."""
-
-    def test_format_extraction_results(self, mock_tensorflow, sample_document):
-        """Test formatting of extraction results."""
-        # Create mock model result
-        mock_result = MagicMock()
-        mock_result.extracted_fields = [
-            MagicMock(name="business_name", value="Acme Corp", confidence=0.95),
-            MagicMock(name="tax_id", value="12-3456789", confidence=0.92),
-            MagicMock(name="address", value="123 Main St", confidence=0.85),
-            MagicMock(name="phone", value="555-123-4567", confidence=0.65)  # Low confidence
-        ]
-        mock_result.average_confidence = 0.85
-        mock_result.model_type = OCRModelType.TYPED
-        mock_result.processing_time = 1.5
-        mock_result.metadata = {}
-        
-        # Initialize OCR service
-        service = OCRService()
-        
-        # Format extraction results
-        extracted_data = service._format_extraction_results(mock_result, sample_document)
-        
-        # Verify basic metadata
-        assert extracted_data.document_id == sample_document.metadata.document_id
-        assert extracted_data.document_type == sample_document.document_type.name
-        assert extracted_data.average_confidence == mock_result.average_confidence
-        assert len(extracted_data.fields) == 4
-        
-        # Verify fields were formatted correctly
-        assert "business_name" in extracted_data.fields
-        assert extracted_data.fields["business_name"]["value"] == "Acme Corp"
-        assert extracted_data.fields["business_name"]["confidence"] == 0.95
-        assert extracted_data.fields["business_name"]["requires_review"] is False
-        
-        # Verify low confidence field is flagged for review
-        assert "phone" in extracted_data.fields
-        assert extracted_data.fields["phone"]["requires_review"] is True
-
-    def test_normalize_field_value(self, mock_tensorflow):
-        """Test normalization of field values."""
-        # Initialize OCR service
-        service = OCRService()
-        
-        # Test cases for different field types
-        test_cases = [
-            # (field_name, raw_value, expected_normalized_value)
-            ("application_date", "01/15/2023", "01/15/2023"),  # Date field
-            ("total_amount", "$1,234.56", "1234.56"),  # Amount field
-            ("ssn", "123-45-6789", "123456789"),  # SSN field
-            ("phone_number", "(555) 123-4567", "5551234567"),  # Phone field
-            ("ein", "12-3456789", "123456789"),  # EIN field
-            ("business_name", "  Acme Corp  ", "Acme Corp")  # Text field (trimmed)
-        ]
-        
-        # Test each case
-        for field_name, raw_value, expected in test_cases:
-            normalized = service._normalize_field_value(raw_value, field_name, DocumentType.APPLICATION)
-            assert normalized == expected, \
-                f"Field {field_name} with value '{raw_value}' should normalize to '{expected}'"
-
-    def test_determine_if_review_required(self, mock_tensorflow):
-        """Test determination of whether human review is required."""
-        # Initialize OCR service
-        service = OCRService()
-        
-        # Create test extracted data with varying confidence levels
-        extracted_data = MagicMock()
-        extracted_data.average_confidence = 0.85
-        extracted_data.fields = {
-            "business_name": {"confidence": 0.95, "requires_review": False},
-            "tax_id": {"confidence": 0.92, "requires_review": False},
-            "address": {"confidence": 0.85, "requires_review": False},
-            "phone": {"confidence": 0.65, "requires_review": True}  # Low confidence
-        }
-        
-        # Test cases
-        test_cases = [
-            # (document_type, expected_review_required, reason)
-            (DocumentType.APPLICATION, True, "Critical field has low confidence"),
-            (DocumentType.OTHER, False, "No critical fields for OTHER type"),
-            (None, True, "Unknown document type requires review")
-        ]
-        
-        # Test each case
-        for doc_type, expected, reason in test_cases:
-            requires_review = service._determine_if_review_required(extracted_data, doc_type)
-            assert requires_review == expected, reason
-
-
-# Test Performance and Accuracy
-class TestPerformanceAndAccuracy:
-    """Tests for performance and accuracy requirements."""
-
-    def test_processing_time_logging(self, mock_tensorflow, mock_model_factory, sample_document):
-        """Test that processing time is logged and evaluated against requirements."""
-        # Create mock model result
-        mock_result = MagicMock()
-        mock_result.extracted_fields = [
-            MagicMock(name="business_name", value="Acme Corp", confidence=0.95)
-        ]
-        mock_result.average_confidence = 0.95
-        mock_result.model_type = OCRModelType.TYPED
-        mock_result.processing_time = 1.5
-        mock_result.metadata = {}
-        
-        # Mock model to return successful result
-        mock_model = MagicMock()
-        mock_model.extract_text.return_value = mock_result
-        mock_model_factory.get_model.return_value = mock_model
-        
-        # Mock logging
-        with patch('ocr_service.src.services.ocr_service.logging') as mock_logging:
-            # Initialize OCR service
-            service = OCRService()
-            
-            # Process document
-            result = service.process_document(sample_document)
-            
-            # Verify processing time was logged
-            assert any("processing time" in str(call) for call in mock_logging.info.call_args_list)
-            
-            # Verify warning is logged if processing time exceeds target
-            with patch.object(app_config, 'max_processing_time_seconds', 0.1):  # Set low threshold
-                service.process_document(sample_document)
-                assert any("exceeded target time" in str(call) for call in mock_logging.warning.call_args_list)
-
-    @pytest.mark.slow
-    def test_gpu_acceleration_performance(self, mock_tensorflow, mock_model_factory, sample_document):
-        """Test that GPU acceleration improves performance."""
-        # Skip if not running performance tests
-        pytest.skip("Performance test skipped in regular test runs")
-        
-        # Create real OCR service (not mocked)
-        with patch('ocr_service.src.utils.tensorflow_utils.setup_gpu_environment') as mock_setup_gpu:
-            # Test with GPU disabled
-            mock_setup_gpu.return_value = False
-            cpu_service = OCRService()
-            
-            # Process document with CPU and measure time
-            start_time = time.time()
-            cpu_service.process_document(sample_document)
-            cpu_time = time.time() - start_time
-            
-            # Test with GPU enabled
-            mock_setup_gpu.return_value = True
-            gpu_service = OCRService()
-            
-            # Process document with GPU and measure time
-            start_time = time.time()
-            gpu_service.process_document(sample_document)
-            gpu_time = time.time() - start_time
-            
-            # Verify GPU is faster than CPU
-            assert gpu_time < cpu_time, "GPU processing should be faster than CPU processing"
-
-    def test_accuracy_metrics_logging(self, mock_tensorflow, mock_model_factory, sample_document):
-        """Test that accuracy metrics are logged and evaluated against requirements."""
-        # Create mock model result with high confidence
-        high_confidence_result = MagicMock()
-        high_confidence_result.extracted_fields = [
-            MagicMock(name="field1", value="value1", confidence=0.98),
-            MagicMock(name="field2", value="value2", confidence=0.97)
-        ]
-        high_confidence_result.average_confidence = 0.975
-        high_confidence_result.model_type = OCRModelType.TYPED
-        high_confidence_result.metadata = {}
-        
-        # Create mock model result with low confidence
-        low_confidence_result = MagicMock()
-        low_confidence_result.extracted_fields = [
-            MagicMock(name="field1", value="value1", confidence=0.65),
-            MagicMock(name="field2", value="value2", confidence=0.70)
-        ]
-        low_confidence_result.average_confidence = 0.675
-        low_confidence_result.model_type = OCRModelType.TYPED
-        low_confidence_result.metadata = {}
-        
-        # Mock model factory
-        mock_model = MagicMock()
-        mock_model_factory.get_model.return_value = mock_model
-        
-        # Mock logging
-        with patch('ocr_service.src.services.ocr_service.logging') as mock_logging:
-            with patch('ocr_service.src.utils.logging_utils.log_metrics') as mock_log_metrics:
-                # Initialize OCR service
-                service = OCRService()
-                
-                # Test with high confidence result
-                mock_model.extract_text.return_value = high_confidence_result
-                service.process_document(sample_document)
-                
-                # Verify accuracy metrics were logged
-                assert mock_log_metrics.called
-                assert any("average_confidence" in str(call) for call in mock_log_metrics.call_args_list)
-                
-                # Test with low confidence result
-                mock_model.extract_text.return_value = low_confidence_result
-                service.process_document(sample_document)
-                
-                # Verify warning is logged for low confidence
-                assert any("extraction confidence" in str(call) for call in mock_logging.warning.call_args_list)
-
-    @pytest.mark.parametrize("confidence,expected_review", [
-        (0.99, False),  # High confidence, no review needed
-        (0.85, False),   # Good confidence, no review needed
-        (0.75, True),    # Moderate confidence, review needed
-        (0.60, True)     # Low confidence, review needed
-    ])
-    def test_confidence_threshold_for_review(self, mock_tensorflow, confidence, expected_review):
-        """Test that documents are flagged for review based on confidence threshold."""
-        # Initialize OCR service
-        service = OCRService()
-        
-        # Set confidence threshold
-        with patch.object(service.tf_config, 'document_confidence_threshold', 0.80):
-            # Create mock extracted data
-            extracted_data = MagicMock()
-            extracted_data.average_confidence = confidence
-            extracted_data.fields = {}
-            
-            # Determine if review is required
-            requires_review = service._determine_if_review_required(extracted_data, DocumentType.OTHER)
-            
-            # Verify review requirement matches expected
-            assert requires_review == expected_review, \
-                f"Confidence {confidence} should {'require' if expected_review else 'not require'} review"
-
-
-# Test Integration with Other Services
-class TestServiceIntegration:
-    """Tests for integration with other services."""
-
-    def test_log_performance_metrics(self, mock_tensorflow, sample_document):
-        """Test logging of performance metrics for monitoring."""
-        # Initialize OCR service
-        service = OCRService()
-        
-        # Create mock extracted data
-        extracted_data = MagicMock()
-        extracted_data.average_confidence = 0.92
-        extracted_data.fields = {
-            "field1": {"requires_review": False},
-            "field2": {"requires_review": True}
-        }
-        extracted_data.metadata = {"model_type": "TYPED"}
-        
-        # Mock logging_utils.log_metrics
-        with patch('ocr_service.src.utils.logging_utils.log_metrics') as mock_log_metrics:
-            # Log performance metrics
-            service._log_performance_metrics(sample_document, 1.5, extracted_data)
-            
-            # Verify log_metrics was called with correct parameters
-            mock_log_metrics.assert_called_once_with("ocr_processing", ANY)
-            
-            # Verify metrics include required fields
-            metrics = mock_log_metrics.call_args[0][1]
-            assert "processing_time" in metrics
-            assert "average_confidence" in metrics
-            assert "document_id" in metrics
-            assert "document_type" in metrics
-            
-            # Verify GPU metrics are included if GPU is available
-            if service.gpu_available:
-                assert "gpu_utilization" in metrics
-
-    def test_record_model_performance_metrics(self, mock_tensorflow):
-        """Test recording of model performance metrics for optimization."""
-        # Initialize OCR service
-        service = OCRService()
-        
-        # Mock logging
-        with patch('ocr_service.src.services.ocr_service.logging') as mock_logging:
-            # Record model performance metrics
-            service._record_model_performance_metrics(
-                DocumentType.APPLICATION,
-                "TYPED",
-                {"average_confidence": 0.92, "low_confidence_fields": 1, "total_fields": 10},
-                {"processing_time": 1.5, "fields_per_second": 6.67, "meets_sla": True}
+            # Test error handling
+            result = ocr_service._apply_structure_recognition(
+                extraction_result, {'document_type': 'application_form'}
             )
             
-            # Verify metrics were logged
-            assert mock_logging.debug.called
-            assert any("Model performance metrics" in str(call) for call in mock_logging.debug.call_args_list)
+            # Should return the original extraction result on error
+            assert result == extraction_result
+            assert mock_app_form.called
 
+    def test_extract_fields(self, ocr_service):
+        """Test field extraction for different document types."""
+        # Mock text_utils functions
+        with patch('services.ocr_service.text_utils.extract_application_form_fields') as mock_app_form:
+            with patch('services.ocr_service.text_utils.extract_tax_document_fields') as mock_tax:
+                with patch('services.ocr_service.text_utils.extract_bank_statement_fields') as mock_bank:
+                    with patch('services.ocr_service.text_utils.extract_identity_document_fields') as mock_id:
+                        with patch('services.ocr_service.text_utils.extract_generic_fields') as mock_generic:
+                            # Configure mocks
+                            mock_app_form.return_value = [{'field_id': 'app_field'}]
+                            mock_tax.return_value = [{'field_id': 'tax_field'}]
+                            mock_bank.return_value = [{'field_id': 'bank_field'}]
+                            mock_id.return_value = [{'field_id': 'id_field'}]
+                            mock_generic.return_value = [{'field_id': 'generic_field'}]
+                            
+                            structured_data = {'structured': True}
+                            
+                            # Test application form
+                            result = ocr_service._extract_fields(
+                                structured_data, {'document_type': 'application_form'}
+                            )
+                            assert result == [{'field_id': 'app_field'}]
+                            assert mock_app_form.called
+                            
+                            # Test tax document
+                            result = ocr_service._extract_fields(
+                                structured_data, {'document_type': 'tax_document'}
+                            )
+                            assert result == [{'field_id': 'tax_field'}]
+                            assert mock_tax.called
+                            
+                            # Test bank statement
+                            result = ocr_service._extract_fields(
+                                structured_data, {'document_type': 'bank_statement'}
+                            )
+                            assert result == [{'field_id': 'bank_field'}]
+                            assert mock_bank.called
+                            
+                            # Test identity document
+                            result = ocr_service._extract_fields(
+                                structured_data, {'document_type': 'identity_document'}
+                            )
+                            assert result == [{'field_id': 'id_field'}]
+                            assert mock_id.called
+                            
+                            # Test unknown document type
+                            result = ocr_service._extract_fields(
+                                structured_data, {'document_type': 'unknown'}
+                            )
+                            assert result == [{'field_id': 'generic_field'}]
+                            assert mock_generic.called
 
-# Main test execution
-if __name__ == "__main__":
-    pytest.main(['-xvs', __file__])
+    def test_extract_fields_error(self, ocr_service):
+        """Test field extraction error handling."""
+        # Mock text_utils function to raise an exception
+        with patch('services.ocr_service.text_utils.extract_application_form_fields') as mock_app_form:
+            mock_app_form.side_effect = Exception("Field extraction error")
+            
+            structured_data = {'structured': True}
+            
+            # Test error handling
+            result = ocr_service._extract_fields(
+                structured_data, {'document_type': 'application_form'}
+            )
+            
+            # Should return an empty list on error
+            assert result == []
+            assert mock_app_form.called
+
+    def test_score_field_confidence(self, ocr_service):
+        """Test confidence scoring for extracted fields."""
+        # Mock tensorflow_utils.calculate_field_confidence
+        with patch('services.ocr_service.tensorflow_utils.calculate_field_confidence') as mock_calc:
+            # Configure mock to return different confidence scores
+            mock_calc.side_effect = [0.95, 0.65, 0.85]
+            
+            # Create test fields
+            extracted_fields = [
+                ExtractedField(
+                    field_id="field1",
+                    field_type="text",
+                    value="Value 1",
+                    location={"page": 0, "top": 0.1, "left": 0.1, "bottom": 0.2, "right": 0.5},
+                    metadata={}
+                ),
+                ExtractedField(
+                    field_id="field2",
+                    field_type="number",
+                    value="12345",
+                    location={"page": 0, "top": 0.3, "left": 0.1, "bottom": 0.4, "right": 0.5},
+                    metadata={}
+                ),
+                ExtractedField(
+                    field_id="field3",
+                    field_type="date",
+                    value="2023-01-15",
+                    location={"page": 0, "top": 0.5, "left": 0.1, "bottom": 0.6, "right": 0.5},
+                    metadata={}
+                )
+            ]
+            
+            # Configure tensorflow_config.CONFIDENCE_THRESHOLD
+            with patch.object(tensorflow_config, 'CONFIDENCE_THRESHOLD', 0.75):
+                # Call the method
+                result = ocr_service._score_field_confidence(extracted_fields)
+                
+                # Verify the result
+                assert len(result) == 3
+                assert result[0].confidence.value == 0.95
+                assert result[1].confidence.value == 0.65
+                assert result[2].confidence.value == 0.85
+                
+                # Verify low confidence field is flagged
+                assert not result[0].metadata.get('requires_review', False)
+                assert result[1].metadata.get('requires_review', False)
+                assert not result[2].metadata.get('requires_review', False)
+                
+                # Verify mock was called for each field
+                assert mock_calc.call_count == 3
+
+    def test_score_field_confidence_error(self, ocr_service):
+        """Test confidence scoring error handling."""
+        # Mock tensorflow_utils.calculate_field_confidence to raise an exception
+        with patch('services.ocr_service.tensorflow_utils.calculate_field_confidence') as mock_calc:
+            mock_calc.side_effect = Exception("Confidence calculation error")
+            
+            # Create test fields
+            extracted_fields = [
+                ExtractedField(
+                    field_id="field1",
+                    field_type="text",
+                    value="Value 1",
+                    location={"page": 0, "top": 0.1, "left": 0.1, "bottom": 0.2, "right": 0.5},
+                    metadata={}
+                )
+            ]
+            
+            # Call the method
+            result = ocr_service._score_field_confidence(extracted_fields)
+            
+            # Verify the result
+            assert len(result) == 1
+            assert result[0].confidence == 0.5  # Default mid-range confidence
+            assert result[0].metadata.get('requires_review', False)  # Should be flagged for review
+            
+            # Verify mock was called
+            assert mock_calc.called
+
+    def test_format_extraction_result(self, ocr_service):
+        """Test formatting of extraction results."""
+        # Mock time_utils.get_iso_timestamp
+        with patch('services.ocr_service.time_utils.get_iso_timestamp') as mock_timestamp:
+            # Configure mock
+            mock_timestamp.return_value = "2023-05-23T12:34:56Z"
+            
+            # Configure app_config.VERSION
+            with patch.object(ocr_service, 'app_config') as mock_config:
+                mock_config.VERSION = "1.2.3"
+                
+                # Create test fields
+                scored_fields = [
+                    ExtractedField(
+                        field_id="field1",
+                        field_type="text",
+                        value="Value 1",
+                        confidence=ConfidenceScore(0.95),
+                        location={"page": 0, "top": 0.1, "left": 0.1, "bottom": 0.2, "right": 0.5},
+                        metadata={}
+                    ),
+                    ExtractedField(
+                        field_id="field2",
+                        field_type="number",
+                        value="12345",
+                        confidence=ConfidenceScore(0.65),
+                        location={"page": 0, "top": 0.3, "left": 0.1, "bottom": 0.4, "right": 0.5},
+                        metadata={"requires_review": True}
+                    )
+                ]
+                
+                # Create metadata
+                metadata = {
+                    "document_id": "doc-123",
+                    "request_id": "req-456",
+                    "document_type": "application_form"
+                }
+                
+                # Call the method
+                result = ocr_service._format_extraction_result(scored_fields, metadata)
+                
+                # Verify the result
+                assert result.fields == scored_fields
+                assert result.metadata["document_id"] == "doc-123"
+                assert result.metadata["request_id"] == "req-456"
+                assert result.metadata["document_type"] == "application_form"
+                assert result.metadata["extraction_timestamp"] == "2023-05-23T12:34:56Z"
+                assert result.metadata["ocr_service_version"] == "1.2.3"
+                assert result.metadata["requires_review"] == True  # One field requires review
+                assert result.metadata["overall_confidence"] == 0.8  # Average of 0.95 and 0.65
+                
+                # Verify mock was called
+                assert mock_timestamp.called
+
+    def test_format_extraction_result_error(self, ocr_service):
+        """Test extraction result formatting error handling."""
+        # Mock time_utils.get_iso_timestamp
+        with patch('services.ocr_service.time_utils.get_iso_timestamp') as mock_timestamp:
+            # Configure mock to raise an exception
+            mock_timestamp.side_effect = Exception("Timestamp error")
+            
+            # Configure app_config.VERSION
+            with patch.object(ocr_service, 'app_config') as mock_config:
+                mock_config.VERSION = "1.2.3"
+                
+                # Create test fields
+                scored_fields = [
+                    ExtractedField(
+                        field_id="field1",
+                        field_type="text",
+                        value="Value 1",
+                        confidence=ConfidenceScore(0.95),
+                        location={"page": 0, "top": 0.1, "left": 0.1, "bottom": 0.2, "right": 0.5},
+                        metadata={}
+                    )
+                ]
+                
+                # Create metadata
+                metadata = {
+                    "document_id": "doc-123",
+                    "request_id": "req-456",
+                    "document_type": "application_form"
+                }
+                
+                # Call the method
+                result = ocr_service._format_extraction_result(scored_fields, metadata)
+                
+                # Verify the result contains error information
+                assert result.fields == scored_fields
+                assert result.metadata["document_id"] == "doc-123"
+                assert result.metadata["request_id"] == "req-456"
+                assert "error" in result.metadata
+                assert result.metadata["requires_review"] == True  # Should require review due to error
+                
+                # Verify mock was called
+                assert mock_timestamp.called
+
+    def test_get_service_status(self, ocr_service):
+        """Test service status reporting."""
+        # Mock tensorflow_utils.get_gpu_info
+        with patch('services.ocr_service.tensorflow_utils.get_gpu_info') as mock_gpu_info:
+            # Configure mock
+            mock_gpu_info.return_value = {
+                "gpus": ["GPU 0", "GPU 1"],
+                "memory_usage": {"GPU 0": "4GB", "GPU 1": "6GB"}
+            }
+            
+            # Mock time_utils.get_iso_timestamp
+            with patch('services.ocr_service.time_utils.get_iso_timestamp') as mock_timestamp:
+                # Configure mock
+                mock_timestamp.return_value = "2023-05-23T12:34:56Z"
+                
+                # Configure app_config.VERSION
+                with patch.object(ocr_service, 'app_config') as mock_config:
+                    mock_config.VERSION = "1.2.3"
+                    
+                    # Call the method
+                    status = ocr_service.get_service_status()
+                    
+                    # Verify the result
+                    assert status["service"] == "ocr-service"
+                    assert status["version"] == "1.2.3"
+                    assert status["status"] == "healthy"
+                    assert status["gpu_available"] == True
+                    assert status["gpu_info"] == {
+                        "gpus": ["GPU 0", "GPU 1"],
+                        "memory_usage": {"GPU 0": "4GB", "GPU 1": "6GB"}
+                    }
+                    assert status["models_loaded"] == True
+                    assert status["timestamp"] == "2023-05-23T12:34:56Z"
+                    
+                    # Verify mocks were called
+                    assert mock_gpu_info.called
+                    assert mock_timestamp.called
+
+    def test_performance_requirements(self, ocr_service, mock_document_bytes):
+        """Test that document processing meets performance requirements."""
+        # Mock dependencies
+        with patch('services.ocr_service.image_utils.convert_document_to_image') as mock_convert:
+            with patch('services.ocr_service.image_utils.preprocess_image') as mock_preprocess:
+                # Configure mocks
+                mock_image = np.zeros((300, 300, 3), dtype=np.uint8)  # Dummy image
+                mock_convert.return_value = mock_image
+                mock_preprocess.return_value = mock_image
+                
+                # Mock detect_document_type to return TYPED
+                with patch.object(ocr_service, 'detect_document_type', return_value=OCRModelType.TYPED):
+                    # Configure the typed model to return a successful result
+                    extraction_result = MagicMock()
+                    ocr_service.typed_model.extract_text.return_value = extraction_result
+                    
+                    # Mock the remaining processing steps
+                    with patch.object(ocr_service, '_apply_structure_recognition') as mock_structure:
+                        with patch.object(ocr_service, '_extract_fields') as mock_extract:
+                            with patch.object(ocr_service, '_score_field_confidence') as mock_score:
+                                with patch.object(ocr_service, '_format_extraction_result') as mock_format:
+                                    # Configure the mocks
+                                    structured_data = {'structured': True}
+                                    extracted_fields = [{'field': 'value'}]
+                                    scored_fields = [{'field': 'value', 'confidence': 0.95}]
+                                    result = ExtractedData(fields=scored_fields, metadata={'document_id': 'test'})
+                                    
+                                    mock_structure.return_value = structured_data
+                                    mock_extract.return_value = extracted_fields
+                                    mock_score.return_value = scored_fields
+                                    mock_format.return_value = result
+                                    
+                                    # Call the method and measure time
+                                    start_time = time.time()
+                                    metadata = {'request_id': 'req-123', 'document_type': 'application_form'}
+                                    process_result = ocr_service.process_document(mock_document_bytes, metadata)
+                                    end_time = time.time()
+                                    
+                                    # Calculate processing time
+                                    processing_time = end_time - start_time
+                                    
+                                    # Verify the result
+                                    assert process_result.is_success()
+                                    
+                                    # Verify processing time is under 5 minutes (300 seconds)
+                                    # In a real test, we would use a more realistic threshold,
+                                    # but for this mock test, we'll just verify it's under 300 seconds
+                                    assert processing_time < 300, f"Processing time {processing_time} exceeds 5 minutes"
+
+    def test_accuracy_requirements(self, ocr_service):
+        """Test that OCR accuracy meets the 99% requirement."""
+        # This test would normally use real documents with known ground truth,
+        # but for this mock test, we'll verify the confidence scoring mechanism
+        
+        # Create test fields with high confidence (>= 99%)
+        extracted_fields = [
+            ExtractedField(
+                field_id="field1",
+                field_type="text",
+                value="Value 1",
+                location={"page": 0, "top": 0.1, "left": 0.1, "bottom": 0.2, "right": 0.5},
+                metadata={}
+            ),
+            ExtractedField(
+                field_id="field2",
+                field_type="number",
+                value="12345",
+                location={"page": 0, "top": 0.3, "left": 0.1, "bottom": 0.4, "right": 0.5},
+                metadata={}
+            )
+        ]
+        
+        # Mock tensorflow_utils.calculate_field_confidence to return high confidence
+        with patch('services.ocr_service.tensorflow_utils.calculate_field_confidence') as mock_calc:
+            # Configure mock to return 99% confidence
+            mock_calc.return_value = 0.99
+            
+            # Call the method
+            result = ocr_service._score_field_confidence(extracted_fields)
+            
+            # Verify the result
+            assert len(result) == 2
+            assert result[0].confidence.value == 0.99
+            assert result[1].confidence.value == 0.99
+            
+            # Calculate overall accuracy
+            overall_accuracy = sum(field.confidence.value for field in result) / len(result)
+            
+            # Verify accuracy meets the 99% requirement
+            assert overall_accuracy >= 0.99, f"Overall accuracy {overall_accuracy} is below 99%"
+            
+            # Verify mock was called for each field
+            assert mock_calc.call_count == 2
