@@ -1,522 +1,573 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
 """
-Logging utilities for the OCR Service.
+Logging Utilities for OCR Service
 
 This module provides utility functions for structured logging in the OCR Service.
 It exports functions for creating contextual log entries, formatting log messages,
-and handling different log levels. It's essential for consistent logging across
-the service and integrates with the logger configuration.
+and handling different log levels. These utilities ensure consistent logging
+across the service and integrate with the logger configuration.
+
+Features:
+- Contextual logging with request ID tracking
+- Structured log formatting for machine readability
+- Error logging with stack traces
+- Log level filtering based on environment
+- Performance logging utilities
+
+Usage:
+    from utils.logging_utils import get_logger, log_info, log_error
+    
+    # Get a logger for the current module
+    logger = get_logger(__name__)
+    
+    # Log an informational message
+    log_info(logger, "Processing document", document_id="doc123")
+    
+    # Log an error with exception information
+    try:
+        process_document("doc123")
+    except Exception as e:
+        log_error(logger, "Failed to process document", document_id="doc123", exc_info=e)
 """
 
+import inspect
 import json
 import logging
-import os
 import sys
-import threading
+import time
 import traceback
 import uuid
-from contextlib import contextmanager
 from datetime import datetime
+from functools import wraps
 from typing import Any, Callable, Dict, List, Optional, Union
 
-# Define log levels
-LOG_LEVEL_MAP = {
-    "DEBUG": logging.DEBUG,
-    "INFO": logging.INFO,
-    "WARNING": logging.WARNING,
-    "ERROR": logging.ERROR,
-    "CRITICAL": logging.CRITICAL,
-}
-
-# Thread-local storage for request context
-_request_context = threading.local()
-
-
-class JsonFormatter(logging.Formatter):
-    """Custom formatter that outputs logs in JSON format for machine readability."""
-
-    def __init__(self, **kwargs):
-        """Initialize the JSON formatter with optional fields to include."""
-        self.default_fields = kwargs
-        super().__init__()
-
-    def format(self, record: logging.LogRecord) -> str:
-        """Format the log record as a JSON string.
-
-        Args:
-            record: The log record to format
-
-        Returns:
-            A JSON string representation of the log record
-        """
-        log_data = {
-            "timestamp": datetime.utcnow().isoformat() + "Z",
-            "level": record.levelname,
-            "message": record.getMessage(),
-            "logger": record.name,
-            "module": record.module,
-            "function": record.funcName,
-            "line": record.lineno,
-            "process_id": record.process,
-            "thread_id": record.thread,
-            "service": "ocr-service",
-        }
-
-        # Add request_id if available
-        request_id = get_request_id()
-        if request_id:
-            log_data["request_id"] = request_id
-
-        # Add default fields
-        log_data.update(self.default_fields)
-
-        # Add extra fields from the record
-        if hasattr(record, "extra") and record.extra:
-            log_data.update(record.extra)
-
-        # Add exception info if available
-        if record.exc_info:
-            log_data["exception"] = {
-                "type": record.exc_info[0].__name__,
-                "message": str(record.exc_info[1]),
-                "traceback": self.formatException(record.exc_info),
-            }
-
-        # Add stack info if available
-        if record.stack_info:
-            log_data["stack_info"] = self.formatStack(record.stack_info)
-
-        return json.dumps(log_data)
+# Import context variables from logging_config
+try:
+    from ..config.logging_config import request_id_var, user_id_var, set_request_context, clear_request_context
+except ImportError:
+    # Fallback if config module is not available
+    from contextvars import ContextVar
+    request_id_var: ContextVar[str] = ContextVar('request_id', default='')
+    user_id_var: ContextVar[str] = ContextVar('user_id', default='')
+    
+    def set_request_context(request_id: str, user_id: Optional[str] = None) -> None:
+        request_id_var.set(request_id)
+        if user_id:
+            user_id_var.set(user_id)
+    
+    def clear_request_context() -> None:
+        request_id_var.set('')
+        user_id_var.set('')
 
 
-class ContextAdapter(logging.LoggerAdapter):
-    """Logger adapter that adds context information to log records."""
-
-    def process(self, msg, kwargs):
-        """Process the log message and add context information.
-
-        Args:
-            msg: The log message
-            kwargs: Additional keyword arguments
-
-        Returns:
-            Tuple of (msg, kwargs) with context information added
-        """
-        # Ensure 'extra' exists in kwargs
-        if "extra" not in kwargs:
-            kwargs["extra"] = {}
-
-        # Add request_id to extra if available
-        request_id = get_request_id()
-        if request_id:
-            kwargs["extra"]["request_id"] = request_id
-
-        # Add any additional context from the adapter
-        if hasattr(self, "extra") and self.extra:
-            kwargs["extra"].update(self.extra)
-
-        return msg, kwargs
-
-
-def get_request_id() -> Optional[str]:
-    """Get the current request ID from thread-local storage.
-
-    Returns:
-        The current request ID or None if not set
+def get_logger(name: str) -> logging.Logger:
     """
-    return getattr(_request_context, "request_id", None)
+    Get a logger with the specified name.
+    
+    This is a convenience function that wraps logging.getLogger() to ensure
+    consistent logger naming throughout the application.
+    
+    Args:
+        name: The name of the logger, typically __name__ of the calling module
+        
+    Returns:
+        logging.Logger: The logger instance
+    """
+    return logging.getLogger(name)
 
 
-def set_request_id(request_id: Optional[str] = None) -> str:
-    """Set the request ID in thread-local storage.
+def generate_request_id() -> str:
+    """
+    Generate a unique request ID for tracking requests across the system.
+    
+    Returns:
+        str: A unique request ID
+    """
+    return str(uuid.uuid4())
 
+
+def with_request_context(request_id: Optional[str] = None, user_id: Optional[str] = None) -> Callable:
+    """
+    Decorator to set request context for the duration of a function call.
+    
+    This decorator sets the request_id and user_id in the context variables
+    for the duration of the decorated function, and clears them afterward.
+    
     Args:
         request_id: The request ID to set, or None to generate a new one
-
+        user_id: The user ID to set, or None if not available
+        
     Returns:
-        The request ID that was set
+        Callable: A decorator function
     """
-    if request_id is None:
-        request_id = str(uuid.uuid4())
-    _request_context.request_id = request_id
-    return request_id
+    def decorator(func: Callable) -> Callable:
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            # Generate or use provided request ID
+            _request_id = request_id or generate_request_id()
+            
+            # Set request context
+            set_request_context(_request_id, user_id)
+            
+            try:
+                # Call the decorated function
+                return func(*args, **kwargs)
+            finally:
+                # Clear request context
+                clear_request_context()
+                
+        return wrapper
+    return decorator
 
 
-def clear_request_id() -> None:
-    """Clear the request ID from thread-local storage."""
-    if hasattr(_request_context, "request_id"):
-        delattr(_request_context, "request_id")
-
-
-@contextmanager
-def request_context(request_id: Optional[str] = None) -> None:
-    """Context manager for setting and clearing request ID.
-
-    Args:
-        request_id: The request ID to set, or None to generate a new one
-
-    Yields:
-        None
+def log_with_context(logger: logging.Logger, level: int, msg: str, *args, **kwargs) -> None:
     """
-    previous_id = get_request_id()
-    try:
-        set_request_id(request_id)
-        yield
-    finally:
-        if previous_id:
-            set_request_id(previous_id)
-        else:
-            clear_request_id()
-
-
-def configure_logger(
-    name: str,
-    level: Union[str, int] = "INFO",
-    json_format: bool = True,
-    console_output: bool = True,
-    log_file: Optional[str] = None,
-    extra_fields: Optional[Dict[str, Any]] = None,
-) -> logging.Logger:
-    """Configure a logger with the specified settings.
-
-    Args:
-        name: The name of the logger
-        level: The log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-        json_format: Whether to use JSON formatting
-        console_output: Whether to output logs to the console
-        log_file: Path to a log file, or None for no file output
-        extra_fields: Additional fields to include in every log entry
-
-    Returns:
-        A configured logger instance
-    """
-    # Convert string level to int if needed
-    if isinstance(level, str):
-        level = LOG_LEVEL_MAP.get(level.upper(), logging.INFO)
-
-    # Get or create the logger
-    logger = logging.getLogger(name)
-    logger.setLevel(level)
-    logger.propagate = False
-
-    # Clear existing handlers
-    for handler in logger.handlers[:]:  # Make a copy of the list
-        logger.removeHandler(handler)
-
-    # Create formatter
-    if json_format:
-        formatter = JsonFormatter(**(extra_fields or {}))
-    else:
-        formatter = logging.Formatter(
-            "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-        )
-
-    # Add console handler if requested
-    if console_output:
-        console_handler = logging.StreamHandler(sys.stdout)
-        console_handler.setFormatter(formatter)
-        logger.addHandler(console_handler)
-
-    # Add file handler if requested
-    if log_file:
-        file_handler = logging.FileHandler(log_file)
-        file_handler.setFormatter(formatter)
-        logger.addHandler(file_handler)
-
-    # Wrap logger with context adapter
-    return ContextAdapter(logger, extra_fields or {})
-
-
-def get_logger(
-    name: str, extra_context: Optional[Dict[str, Any]] = None
-) -> logging.LoggerAdapter:
-    """Get a logger with the specified name and context.
-
-    This is a convenience function that gets a logger from the logging system
-    and wraps it with a ContextAdapter to add context information.
-
-    Args:
-        name: The name of the logger
-        extra_context: Additional context to include in log entries
-
-    Returns:
-        A logger adapter with context information
-    """
-    logger = logging.getLogger(name)
-    return ContextAdapter(logger, extra_context or {})
-
-
-def log_exception(
-    logger: Union[logging.Logger, logging.LoggerAdapter],
-    message: str,
-    exc_info: Optional[tuple] = None,
-    level: int = logging.ERROR,
-    extra: Optional[Dict[str, Any]] = None,
-) -> None:
-    """Log an exception with full traceback.
-
+    Log a message with the specified level and additional context information.
+    
+    This function adds context information to the log message, including
+    the request ID, user ID, and any additional keyword arguments.
+    
     Args:
         logger: The logger to use
-        message: The log message
-        exc_info: Exception info tuple from sys.exc_info(), or None to use current exception
-        level: The log level to use
-        extra: Additional context to include in the log entry
+        level: The log level (e.g., logging.INFO, logging.ERROR)
+        msg: The log message
+        *args: Additional positional arguments for the log message
+        **kwargs: Additional keyword arguments to include in the log context
+        
+    Keyword Args:
+        exc_info: Exception information to include in the log
+        stack_info: Whether to include stack information
+        extra: Additional context information
     """
-    if exc_info is None:
+    # Extract special keyword arguments
+    exc_info = kwargs.pop('exc_info', None)
+    stack_info = kwargs.pop('stack_info', False)
+    extra = kwargs.pop('extra', {})
+    
+    # Add remaining keyword arguments to extra context
+    for key, value in kwargs.items():
+        extra[key] = value
+    
+    # Log the message with context
+    logger.log(level, msg, *args, exc_info=exc_info, stack_info=stack_info, extra=extra)
+
+
+def log_debug(logger: logging.Logger, msg: str, *args, **kwargs) -> None:
+    """
+    Log a DEBUG level message with context information.
+    
+    Args:
+        logger: The logger to use
+        msg: The log message
+        *args: Additional positional arguments for the log message
+        **kwargs: Additional keyword arguments to include in the log context
+    """
+    log_with_context(logger, logging.DEBUG, msg, *args, **kwargs)
+
+
+def log_info(logger: logging.Logger, msg: str, *args, **kwargs) -> None:
+    """
+    Log an INFO level message with context information.
+    
+    Args:
+        logger: The logger to use
+        msg: The log message
+        *args: Additional positional arguments for the log message
+        **kwargs: Additional keyword arguments to include in the log context
+    """
+    log_with_context(logger, logging.INFO, msg, *args, **kwargs)
+
+
+def log_warning(logger: logging.Logger, msg: str, *args, **kwargs) -> None:
+    """
+    Log a WARNING level message with context information.
+    
+    Args:
+        logger: The logger to use
+        msg: The log message
+        *args: Additional positional arguments for the log message
+        **kwargs: Additional keyword arguments to include in the log context
+    """
+    log_with_context(logger, logging.WARNING, msg, *args, **kwargs)
+
+
+def log_error(logger: logging.Logger, msg: str, *args, **kwargs) -> None:
+    """
+    Log an ERROR level message with context information.
+    
+    Args:
+        logger: The logger to use
+        msg: The log message
+        *args: Additional positional arguments for the log message
+        **kwargs: Additional keyword arguments to include in the log context
+        
+    Keyword Args:
+        exc_info: Exception information to include in the log. If True, the current exception
+                 information is used. If an exception, that exception's information is used.
+    """
+    log_with_context(logger, logging.ERROR, msg, *args, **kwargs)
+
+
+def log_critical(logger: logging.Logger, msg: str, *args, **kwargs) -> None:
+    """
+    Log a CRITICAL level message with context information.
+    
+    Args:
+        logger: The logger to use
+        msg: The log message
+        *args: Additional positional arguments for the log message
+        **kwargs: Additional keyword arguments to include in the log context
+        
+    Keyword Args:
+        exc_info: Exception information to include in the log. If True, the current exception
+                 information is used. If an exception, that exception's information is used.
+    """
+    log_with_context(logger, logging.CRITICAL, msg, *args, **kwargs)
+
+
+def log_exception(logger: logging.Logger, msg: str, *args, **kwargs) -> None:
+    """
+    Log an exception with context information.
+    
+    This function logs an ERROR level message with the current exception information.
+    It should be called from an exception handler.
+    
+    Args:
+        logger: The logger to use
+        msg: The log message
+        *args: Additional positional arguments for the log message
+        **kwargs: Additional keyword arguments to include in the log context
+    """
+    kwargs['exc_info'] = True
+    log_error(logger, msg, *args, **kwargs)
+
+
+def format_exception(exc_info: Optional[Union[bool, BaseException, tuple]] = None) -> str:
+    """
+    Format exception information as a string.
+    
+    Args:
+        exc_info: Exception information to format. If None or True, the current exception
+                 information is used. If an exception, that exception's information is used.
+                 
+    Returns:
+        str: The formatted exception information
+    """
+    if exc_info is None or exc_info is True:
         exc_info = sys.exc_info()
-
-    if extra is None:
-        extra = {}
-
-    # Add exception details to extra
+    elif isinstance(exc_info, BaseException):
+        exc_info = (type(exc_info), exc_info, exc_info.__traceback__)
+        
     if exc_info and exc_info[0] is not None:
-        extra["exception_type"] = exc_info[0].__name__
-        extra["exception_message"] = str(exc_info[1])
-
-    # Log with exception info
-    logger.log(level, message, exc_info=exc_info, extra=extra)
+        return ''.join(traceback.format_exception(*exc_info))
+    return ''
 
 
-def log_with_context(
-    logger: Union[logging.Logger, logging.LoggerAdapter],
-    level: int,
-    message: str,
-    context: Optional[Dict[str, Any]] = None,
-) -> None:
-    """Log a message with additional context.
-
+def log_function_entry_exit(logger: logging.Logger, level: int = logging.DEBUG) -> Callable:
+    """
+    Decorator to log function entry and exit with parameters and return value.
+    
+    This decorator logs when a function is called and when it returns or raises an exception.
+    It includes the function parameters and return value in the log messages.
+    
     Args:
         logger: The logger to use
-        level: The log level to use
-        message: The log message
-        context: Additional context to include in the log entry
-    """
-    logger.log(level, message, extra=context)
-
-
-def get_environment_log_level() -> int:
-    """Get the log level from the environment or default to INFO.
-
+        level: The log level to use for entry and exit logs
+        
     Returns:
-        The log level as an integer
+        Callable: A decorator function
     """
-    log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
-    return LOG_LEVEL_MAP.get(log_level, logging.INFO)
-
-
-def setup_root_logger(
-    level: Optional[Union[str, int]] = None,
-    json_format: bool = True,
-    service_name: str = "ocr-service",
-) -> logging.Logger:
-    """Set up the root logger with the specified configuration.
-
-    Args:
-        level: The log level to use, or None to use the environment log level
-        json_format: Whether to use JSON formatting
-        service_name: The name of the service to include in log entries
-
-    Returns:
-        The configured root logger
-    """
-    if level is None:
-        level = get_environment_log_level()
-
-    return configure_logger(
-        name="root",
-        level=level,
-        json_format=json_format,
-        console_output=True,
-        extra_fields={"service": service_name},
-    )
-
-
-def log_function_call(
-    logger: Union[logging.Logger, logging.LoggerAdapter],
-    level: int = logging.DEBUG,
-) -> Callable:
-    """Decorator to log function calls with arguments and return values.
-
-    Args:
-        logger: The logger to use
-        level: The log level to use
-
-    Returns:
-        A decorator function
-    """
-
-    def decorator(func):
+    def decorator(func: Callable) -> Callable:
+        @wraps(func)
         def wrapper(*args, **kwargs):
-            func_name = func.__name__
-            module_name = func.__module__
-
-            # Log function call with arguments
-            arg_str = ", ".join(
-                [str(arg) for arg in args]
-                + [f"{k}={v}" for k, v in kwargs.items()]
-            )
-            logger.log(
-                level,
-                f"Calling {module_name}.{func_name}({arg_str})",
-                extra={"function_call": {"name": func_name, "module": module_name}},
-            )
-
-            try:
-                # Call the function
-                result = func(*args, **kwargs)
-
-                # Log the result
-                logger.log(
-                    level,
-                    f"{module_name}.{func_name} returned: {result}",
-                    extra={
-                        "function_return": {
-                            "name": func_name,
-                            "module": module_name,
-                            "result": str(result),
-                        }
-                    },
-                )
-
-                return result
-            except Exception as e:
-                # Log the exception
-                log_exception(
-                    logger,
-                    f"{module_name}.{func_name} raised exception: {str(e)}",
-                    extra={
-                        "function_exception": {
-                            "name": func_name,
-                            "module": module_name,
-                        }
-                    },
-                )
-                raise
-
-        return wrapper
-
-    return decorator
-
-
-def log_execution_time(
-    logger: Union[logging.Logger, logging.LoggerAdapter],
-    level: int = logging.DEBUG,
-) -> Callable:
-    """Decorator to log function execution time.
-
-    Args:
-        logger: The logger to use
-        level: The log level to use
-
-    Returns:
-        A decorator function
-    """
-    import time
-
-    def decorator(func):
-        def wrapper(*args, **kwargs):
-            func_name = func.__name__
-            module_name = func.__module__
-
-            # Record start time
+            # Get function signature
+            sig = inspect.signature(func)
+            bound_args = sig.bind(*args, **kwargs)
+            bound_args.apply_defaults()
+            
+            # Format arguments for logging, excluding self/cls for methods
+            arg_str = ', '.join(f"{k}={repr(v)}" for k, v in bound_args.arguments.items()
+                               if k not in ('self', 'cls'))
+            
+            # Log function entry
+            log_with_context(logger, level, f"Entering {func.__name__}({arg_str})")
+            
             start_time = time.time()
-
             try:
                 # Call the function
                 result = func(*args, **kwargs)
-
-                # Calculate execution time
-                execution_time = time.time() - start_time
-
-                # Log execution time
-                logger.log(
-                    level,
-                    f"{module_name}.{func_name} executed in {execution_time:.6f} seconds",
-                    extra={
-                        "execution_time": {
-                            "name": func_name,
-                            "module": module_name,
-                            "seconds": execution_time,
-                        }
-                    },
-                )
-
+                
+                # Log function exit with result
+                elapsed = time.time() - start_time
+                log_with_context(logger, level, 
+                               f"Exiting {func.__name__}: returned {repr(result)} in {elapsed:.6f}s")
+                
                 return result
             except Exception as e:
-                # Calculate execution time even for exceptions
-                execution_time = time.time() - start_time
-
-                # Log execution time with exception
-                logger.log(
-                    logging.ERROR,
-                    f"{module_name}.{func_name} failed after {execution_time:.6f} seconds: {str(e)}",
-                    extra={
-                        "execution_time": {
-                            "name": func_name,
-                            "module": module_name,
-                            "seconds": execution_time,
-                            "error": str(e),
-                        }
-                    },
-                )
+                # Log function exit with exception
+                elapsed = time.time() - start_time
+                log_with_context(logger, logging.ERROR,
+                               f"Exception in {func.__name__} after {elapsed:.6f}s: {str(e)}",
+                               exc_info=e)
                 raise
-
+                
         return wrapper
-
     return decorator
 
 
-def format_stack_trace(stack_trace: List[str]) -> str:
-    """Format a stack trace for logging.
-
-    Args:
-        stack_trace: The stack trace as a list of strings
-
-    Returns:
-        A formatted stack trace string
+def log_performance(logger: logging.Logger, operation_name: str, level: int = logging.DEBUG) -> Callable:
     """
-    return "\n".join(stack_trace)
-
-
-def get_current_stack_trace() -> str:
-    """Get the current stack trace as a formatted string.
-
-    Returns:
-        A formatted stack trace string
-    """
-    stack = traceback.format_stack()
-    # Remove the last two frames (this function and its caller)
-    return format_stack_trace(stack[:-2])
-
-
-def log_critical_error(
-    logger: Union[logging.Logger, logging.LoggerAdapter],
-    message: str,
-    exc_info: Optional[tuple] = None,
-    extra: Optional[Dict[str, Any]] = None,
-) -> None:
-    """Log a critical error with full context and notify monitoring systems.
-
+    Context manager and decorator for logging the performance of an operation.
+    
+    This can be used as a context manager or a decorator to log the time taken
+    by an operation or function.
+    
     Args:
         logger: The logger to use
-        message: The log message
-        exc_info: Exception info tuple from sys.exc_info(), or None to use current exception
-        extra: Additional context to include in the log entry
+        operation_name: The name of the operation being timed
+        level: The log level to use for the performance log
+        
+    Returns:
+        Callable: A decorator function when used as a decorator
+        
+    Example as context manager:
+        with log_performance(logger, "document_processing"):
+            process_document(doc)
+            
+    Example as decorator:
+        @log_performance(logger, "document_processing")
+        def process_document(doc):
+            # Process the document
     """
-    if exc_info is None and sys.exc_info()[0] is not None:
-        exc_info = sys.exc_info()
+    class LogPerformanceContext:
+        def __init__(self):
+            self.start_time = None
+            
+        def __enter__(self):
+            self.start_time = time.time()
+            return self
+            
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            elapsed = time.time() - self.start_time
+            if exc_type is not None:
+                # Operation failed
+                log_with_context(logger, logging.ERROR,
+                               f"{operation_name} failed after {elapsed:.6f}s: {str(exc_val)}",
+                               exc_info=(exc_type, exc_val, exc_tb))
+            else:
+                # Operation succeeded
+                log_with_context(logger, level,
+                               f"{operation_name} completed in {elapsed:.6f}s")
+            return False  # Don't suppress exceptions
+    
+    def decorator(func: Callable) -> Callable:
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            with LogPerformanceContext():
+                return func(*args, **kwargs)
+        return wrapper
+    
+    # When used as a decorator
+    if callable(operation_name):
+        func = operation_name
+        operation_name = func.__name__
+        return decorator(func)
+    
+    # When used as a context manager
+    return LogPerformanceContext()
 
-    if extra is None:
-        extra = {}
 
-    # Add alert flag for monitoring systems
-    extra["alert"] = True
-    extra["stack_trace"] = get_current_stack_trace()
+def log_method_calls(logger: logging.Logger, level: int = logging.DEBUG) -> Callable:
+    """
+    Class decorator to log all method calls for a class.
+    
+    This decorator applies the log_function_entry_exit decorator to all methods
+    of a class, excluding special methods (those starting with '__').
+    
+    Args:
+        logger: The logger to use
+        level: The log level to use for method call logs
+        
+    Returns:
+        Callable: A decorator function
+        
+    Example:
+        @log_method_calls(logger)
+        class DocumentProcessor:
+            def process(self, document):
+                # Process the document
+    """
+    def decorator(cls: type) -> type:
+        for name, method in inspect.getmembers(cls, inspect.isfunction):
+            # Skip special methods
+            if not name.startswith('__'):
+                setattr(cls, name, log_function_entry_exit(logger, level)(method))
+        return cls
+    return decorator
 
-    # Log with exception info
-    logger.critical(message, exc_info=exc_info, extra=extra)
 
-    # Here you could add additional alerting mechanisms
-    # such as sending an email, SMS, or calling a webhook
+def sanitize_log_data(data: Dict[str, Any], sensitive_keys: List[str] = None) -> Dict[str, Any]:
+    """
+    Sanitize log data by removing or masking sensitive information.
+    
+    Args:
+        data: The data to sanitize
+        sensitive_keys: A list of keys to mask in the data. If None, a default list is used.
+        
+    Returns:
+        Dict[str, Any]: The sanitized data
+    """
+    if sensitive_keys is None:
+        sensitive_keys = [
+            'password', 'token', 'api_key', 'secret', 'credential',
+            'ssn', 'social_security', 'credit_card', 'card_number',
+            'authorization', 'access_token', 'refresh_token'
+        ]
+    
+    # Create a copy of the data to avoid modifying the original
+    sanitized = {}
+    
+    for key, value in data.items():
+        # Check if the key is sensitive
+        is_sensitive = any(sk.lower() in key.lower() for sk in sensitive_keys)
+        
+        if is_sensitive:
+            # Mask sensitive values
+            if isinstance(value, str):
+                sanitized[key] = '********'
+            else:
+                sanitized[key] = '[REDACTED]'
+        elif isinstance(value, dict):
+            # Recursively sanitize nested dictionaries
+            sanitized[key] = sanitize_log_data(value, sensitive_keys)
+        elif isinstance(value, list):
+            # Sanitize lists of dictionaries
+            if value and isinstance(value[0], dict):
+                sanitized[key] = [sanitize_log_data(item, sensitive_keys) if isinstance(item, dict) else item
+                                for item in value]
+            else:
+                sanitized[key] = value
+        else:
+            # Pass through non-sensitive values
+            sanitized[key] = value
+    
+    return sanitized
+
+
+def log_structured_data(logger: logging.Logger, level: int, msg: str, data: Dict[str, Any],
+                      sanitize: bool = True, sensitive_keys: List[str] = None, **kwargs) -> None:
+    """
+    Log structured data with the specified level.
+    
+    This function logs a message with structured data, optionally sanitizing
+    sensitive information before logging.
+    
+    Args:
+        logger: The logger to use
+        level: The log level
+        msg: The log message
+        data: The structured data to log
+        sanitize: Whether to sanitize sensitive information
+        sensitive_keys: A list of keys to mask in the data
+        **kwargs: Additional keyword arguments to include in the log context
+    """
+    # Sanitize data if requested
+    if sanitize:
+        data = sanitize_log_data(data, sensitive_keys)
+    
+    # Add data to extra context
+    extra = kwargs.pop('extra', {})
+    extra['data'] = data
+    
+    # Log the message with structured data
+    log_with_context(logger, level, msg, extra=extra, **kwargs)
+
+
+def configure_logger_for_module(module_name: str) -> logging.Logger:
+    """
+    Configure and return a logger for a specific module.
+    
+    This function configures a logger with the appropriate name and returns it.
+    It's a convenience function for modules to get a properly configured logger.
+    
+    Args:
+        module_name: The name of the module, typically __name__
+        
+    Returns:
+        logging.Logger: The configured logger
+    """
+    # Get the logger
+    logger = logging.getLogger(module_name)
+    
+    # Return the configured logger
+    return logger
+
+
+def log_ocr_result(logger: logging.Logger, document_id: str, confidence: float,
+                 extracted_text: str, processing_time: float, **kwargs) -> None:
+    """
+    Log OCR processing result with structured data.
+    
+    This function logs the result of OCR processing with structured data,
+    including document ID, confidence score, and processing time.
+    
+    Args:
+        logger: The logger to use
+        document_id: The ID of the processed document
+        confidence: The confidence score of the OCR result
+        extracted_text: The extracted text (may be truncated for logging)
+        processing_time: The time taken to process the document in seconds
+        **kwargs: Additional keyword arguments to include in the log context
+    """
+    # Prepare structured data
+    data = {
+        'document_id': document_id,
+        'confidence': confidence,
+        'extracted_text_length': len(extracted_text),
+        'extracted_text_preview': extracted_text[:100] + '...' if len(extracted_text) > 100 else extracted_text,
+        'processing_time': processing_time
+    }
+    
+    # Add additional data
+    data.update(kwargs)
+    
+    # Log the result
+    log_structured_data(logger, logging.INFO, f"OCR processing completed for document {document_id}",
+                       data=data)
+
+
+def log_ocr_error(logger: logging.Logger, document_id: str, error: Exception,
+                processing_time: float = None, **kwargs) -> None:
+    """
+    Log OCR processing error with structured data.
+    
+    This function logs an error that occurred during OCR processing with
+    structured data, including document ID and error details.
+    
+    Args:
+        logger: The logger to use
+        document_id: The ID of the processed document
+        error: The error that occurred
+        processing_time: The time taken before the error occurred in seconds
+        **kwargs: Additional keyword arguments to include in the log context
+    """
+    # Prepare structured data
+    data = {
+        'document_id': document_id,
+        'error_type': type(error).__name__,
+        'error_message': str(error)
+    }
+    
+    # Add processing time if available
+    if processing_time is not None:
+        data['processing_time'] = processing_time
+    
+    # Add additional data
+    data.update(kwargs)
+    
+    # Log the error
+    log_structured_data(logger, logging.ERROR,
+                       f"OCR processing failed for document {document_id}: {str(error)}",
+                       data=data, exc_info=error)
