@@ -1,156 +1,153 @@
 package com.dollarfunding.mca.exception;
 
+import com.dollarfunding.mca.util.Constants;
 import org.springframework.http.HttpStatus;
 
 /**
  * Exception thrown when errors occur during document processing operations.
+ * <p>
  * This exception is used by document-related services to indicate failures in document
- * storage, retrieval, or classification.
+ * storage, retrieval, or classification. It extends BaseException with a default HTTP
+ * status code of 500 (Internal Server Error) and provides details about the document
+ * and processing stage.
+ * </p>
  */
 public class DocumentProcessingException extends BaseException {
 
-    private final String documentId;
+    private final Long documentId;
     private final String processingStage;
-    private final String documentType;
 
     /**
-     * Constructs a new DocumentProcessingException with the specified detail message.
+     * Constructs a new DocumentProcessingException with the specified message.
      *
      * @param message the detail message
      */
     public DocumentProcessingException(String message) {
-        super(message, HttpStatus.INTERNAL_SERVER_ERROR.value());
-        this.documentId = null;
-        this.processingStage = null;
-        this.documentType = null;
+        this(message, null, null);
     }
 
     /**
-     * Constructs a new DocumentProcessingException with the specified detail message and document ID.
+     * Constructs a new DocumentProcessingException with the specified message and cause.
+     *
+     * @param message the detail message
+     * @param cause   the cause of this exception
+     */
+    public DocumentProcessingException(String message, Throwable cause) {
+        this(message, cause, null, null);
+    }
+
+    /**
+     * Constructs a new DocumentProcessingException with the specified message and document ID.
      *
      * @param message    the detail message
      * @param documentId the ID of the document that failed processing
      */
-    public DocumentProcessingException(String message, String documentId) {
-        super(message, HttpStatus.INTERNAL_SERVER_ERROR.value());
-        this.documentId = documentId;
-        this.processingStage = null;
-        this.documentType = null;
+    public DocumentProcessingException(String message, Long documentId) {
+        this(message, documentId, null);
     }
 
     /**
-     * Constructs a new DocumentProcessingException with the specified detail message, document ID, and processing stage.
+     * Constructs a new DocumentProcessingException with the specified message, document ID, and processing stage.
      *
      * @param message         the detail message
      * @param documentId      the ID of the document that failed processing
      * @param processingStage the stage of processing where the failure occurred
      */
-    public DocumentProcessingException(String message, String documentId, String processingStage) {
-        super(message, HttpStatus.INTERNAL_SERVER_ERROR.value());
+    public DocumentProcessingException(String message, Long documentId, String processingStage) {
+        super(message, HttpStatus.INTERNAL_SERVER_ERROR, Constants.ErrorCode.DOCUMENT_PROCESSING_ERROR);
         this.documentId = documentId;
         this.processingStage = processingStage;
-        this.documentType = null;
     }
 
     /**
-     * Constructs a new DocumentProcessingException with the specified detail message, document ID, processing stage, and document type.
+     * Constructs a new DocumentProcessingException with the specified message, cause, document ID, and processing stage.
      *
      * @param message         the detail message
+     * @param cause           the cause of this exception
      * @param documentId      the ID of the document that failed processing
      * @param processingStage the stage of processing where the failure occurred
-     * @param documentType    the type of document being processed
      */
-    public DocumentProcessingException(String message, String documentId, String processingStage, String documentType) {
-        super(message, HttpStatus.INTERNAL_SERVER_ERROR.value());
+    public DocumentProcessingException(String message, Throwable cause, Long documentId, String processingStage) {
+        super(message, cause, HttpStatus.INTERNAL_SERVER_ERROR, Constants.ErrorCode.DOCUMENT_PROCESSING_ERROR);
         this.documentId = documentId;
         this.processingStage = processingStage;
-        this.documentType = documentType;
     }
 
     /**
-     * Constructs a new DocumentProcessingException with the specified detail message, cause, document ID, processing stage, and document type.
+     * Returns the ID of the document that failed processing.
      *
-     * @param message         the detail message
-     * @param cause           the cause of the exception
-     * @param documentId      the ID of the document that failed processing
-     * @param processingStage the stage of processing where the failure occurred
-     * @param documentType    the type of document being processed
+     * @return the document ID, or null if not available
      */
-    public DocumentProcessingException(String message, Throwable cause, String documentId, String processingStage, String documentType) {
-        super(message, cause, HttpStatus.INTERNAL_SERVER_ERROR.value());
-        this.documentId = documentId;
-        this.processingStage = processingStage;
-        this.documentType = documentType;
-    }
-
-    /**
-     * Gets the ID of the document that failed processing.
-     *
-     * @return the document ID, or null if not specified
-     */
-    public String getDocumentId() {
+    public Long getDocumentId() {
         return documentId;
     }
 
     /**
-     * Gets the stage of processing where the failure occurred.
+     * Returns the stage of processing where the failure occurred.
      *
-     * @return the processing stage, or null if not specified
+     * @return the processing stage, or null if not available
      */
     public String getProcessingStage() {
         return processingStage;
     }
 
     /**
-     * Gets the type of document being processed.
+     * Creates a new DocumentProcessingException for a storage error.
      *
-     * @return the document type, or null if not specified
+     * @param message    the detail message
+     * @param documentId the ID of the document
+     * @param cause      the cause of this exception
+     * @return a new DocumentProcessingException
      */
-    public String getDocumentType() {
-        return documentType;
+    public static DocumentProcessingException storageError(String message, Long documentId, Throwable cause) {
+        return new DocumentProcessingException(message, cause, documentId, "storage");
     }
 
     /**
-     * Determines if the document processing can be retried based on the processing stage and error type.
+     * Creates a new DocumentProcessingException for a retrieval error.
      *
-     * @return true if the document processing should be retried, false otherwise
+     * @param message    the detail message
+     * @param documentId the ID of the document
+     * @param cause      the cause of this exception
+     * @return a new DocumentProcessingException
      */
-    public boolean isRetriable() {
-        // If the processing stage is null, assume it's retriable
-        if (processingStage == null) {
-            return true;
-        }
-        
-        // Define non-retriable stages
-        // For example, if the document is corrupted or has invalid format, it's not retriable
-        if (processingStage.equals("VALIDATION") || processingStage.equals("FORMAT_CHECK")) {
-            return false;
-        }
-        
-        // Otherwise, it's retriable
-        return true;
+    public static DocumentProcessingException retrievalError(String message, Long documentId, Throwable cause) {
+        return new DocumentProcessingException(message, cause, documentId, "retrieval");
     }
 
     /**
-     * {@inheritDoc}
+     * Creates a new DocumentProcessingException for a classification error.
+     *
+     * @param message    the detail message
+     * @param documentId the ID of the document
+     * @param cause      the cause of this exception
+     * @return a new DocumentProcessingException
      */
-    @Override
-    public String toString() {
-        StringBuilder sb = new StringBuilder("DocumentProcessingException: ");
-        sb.append(getMessage());
-        
-        if (documentId != null) {
-            sb.append(", documentId='").append(documentId).append('\'');
-        }
-        
-        if (processingStage != null) {
-            sb.append(", processingStage='").append(processingStage).append('\'');
-        }
-        
-        if (documentType != null) {
-            sb.append(", documentType='").append(documentType).append('\'');
-        }
-        
-        return sb.toString();
+    public static DocumentProcessingException classificationError(String message, Long documentId, Throwable cause) {
+        return new DocumentProcessingException(message, cause, documentId, "classification");
+    }
+
+    /**
+     * Creates a new DocumentProcessingException for an OCR extraction error.
+     *
+     * @param message    the detail message
+     * @param documentId the ID of the document
+     * @param cause      the cause of this exception
+     * @return a new DocumentProcessingException
+     */
+    public static DocumentProcessingException ocrExtractionError(String message, Long documentId, Throwable cause) {
+        return new DocumentProcessingException(message, cause, documentId, "ocr_extraction");
+    }
+
+    /**
+     * Creates a new DocumentProcessingException for a validation error.
+     *
+     * @param message    the detail message
+     * @param documentId the ID of the document
+     * @param cause      the cause of this exception
+     * @return a new DocumentProcessingException
+     */
+    public static DocumentProcessingException validationError(String message, Long documentId, Throwable cause) {
+        return new DocumentProcessingException(message, cause, documentId, "validation");
     }
 }
