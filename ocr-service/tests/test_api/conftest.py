@@ -1,778 +1,664 @@
-"""Pytest fixtures and utilities for OCR Service API tests.
-
-This module provides shared test fixtures and utilities for testing the OCR Service API endpoints.
-It includes fixtures for the FastAPI TestClient, mocks for dependencies (RabbitMQ, S3, GPU),
-and helper functions for validating response schemas against OpenAPI specifications.
-
-Fixtures:
-    app: FastAPI application instance for testing
-    client: TestClient for making requests to the API
-    mock_rabbitmq: Mock RabbitMQ connection for testing message queue integration
-    mock_s3: Mock S3 storage client for testing document storage
-    mock_gpu_available: Mock GPU availability for testing readiness checks
-    auth_token: JWT token for testing secured endpoints
-    validate_response: Helper function for validating response schemas
-
-Example:
-    def test_health_endpoint(client):
-        response = client.get("/health/liveness")
-        assert response.status_code == 200
-        assert response.json()["status"] == "ok"
-"""
-
 import json
 import os
 import pytest
 import uuid
 from datetime import datetime, timedelta
-from typing import Dict, Any, List, Optional, Callable, Union
 from unittest.mock import MagicMock, patch
-
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from jsonschema import validate, ValidationError
-import jwt
+from fastapi import FastAPI
+from pydantic import BaseModel, ValidationError
+from typing import Dict, List, Any, Optional, Union
 
-# Import the main application and router
-# We'll use a try/except block to handle potential import errors during testing
-try:
-    from src.main import app as ocr_app
-except ImportError:
-    # For tests, we'll create a minimal FastAPI app if the main app can't be imported
-    from fastapi import FastAPI
-    from src.api.router import router
-    
-    ocr_app = FastAPI(title="OCR Service", description="OCR Service API", version="1.0.0")
-    ocr_app.include_router(router)
-
-# Path to OpenAPI schema files for validation
-OPENAPI_SCHEMA_DIR = os.path.join(os.path.dirname(__file__), "../test_data/schemas")
-
-# Ensure the schema directory exists
-os.makedirs(OPENAPI_SCHEMA_DIR, exist_ok=True)
-
-# Mock configuration values for testing
-TEST_CONFIG = {
-    "app": {
-        "name": "ocr-service",
-        "version": "1.0.0",
-        "environment": "test",
-        "debug": True,
-        "port": 8000,
-    },
-    "rabbitmq": {
-        "host": "localhost",
-        "port": 5672,
-        "username": "guest",
-        "password": "guest",
-        "exchange": "mca.documents",
-        "queue": "data-extraction",
-        "routing_key": "ocr",
-        "use_tls": True,
-    },
-    "s3": {
-        "endpoint": "http://localhost:9000",
-        "bucket": "mca-documents-test",
-        "region": "us-east-1",
-        "access_key": "test-access-key",
-        "secret_key": "test-secret-key",
-        "use_ssl": True,
-        "encryption": "AES256",
-    },
-    "tensorflow": {
-        "model_path": "/models",
-        "gpu_memory_limit": 4096,
-        "confidence_threshold": 0.75,
-        "use_gpu": True,
-    },
-    "logging": {
-        "level": "DEBUG",
-        "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    },
-}
-
-# Sample document types for testing
-DOCUMENT_TYPES = [
-    "APPLICATION",
-    "TAX_RETURN",
-    "BANK_STATEMENT",
-    "PAY_STUB",
-    "ID_DOCUMENT",
-    "OTHER",
-]
-
-# Sample OCR model types for testing
-MODEL_TYPES = [
-    "TYPED",
-    "HANDWRITTEN",
-    "HYBRID",
-]
-
-# Sample processing statuses for testing
-PROCESSING_STATUSES = [
-    "PENDING",
-    "PROCESSING",
-    "COMPLETED",
-    "FAILED",
-    "NEEDS_REVIEW",
-]
+# Import the necessary modules from the OCR service
+# These imports will be adjusted based on the actual structure of the OCR service
+from src.app import create_app
+from src.api import router as api_router
+from src.config import app_config, rabbitmq_config, s3_config, tensorflow_config
 
 
-@pytest.fixture
-def app() -> FastAPI:
-    """Fixture that provides the FastAPI application for testing.
-    
-    Returns:
-        FastAPI: The FastAPI application instance.
+# Constants for testing
+TEST_JWT_SECRET = "test_secret_key"
+TEST_DOCUMENT_ID = "test-doc-123"
+TEST_APPLICATION_ID = "test-app-456"
+TEST_BUCKET_NAME = "mca-documents-test"
+
+
+# Helper function to create a test JWT token
+def create_test_token(user_id: str = "test-user", role: str = "operations", expires_delta: timedelta = None) -> str:
     """
-    # Apply test configuration patches
-    with patch("src.config.app_config.get_config", return_value=TEST_CONFIG):
-        # Return the FastAPI app instance
-        return ocr_app
-
-
-@pytest.fixture
-def client(app: FastAPI) -> TestClient:
-    """Fixture that provides a FastAPI TestClient for making requests to the API.
+    Create a test JWT token for authentication in tests.
     
     Args:
-        app: The FastAPI application instance.
+        user_id: The user ID to include in the token
+        role: The role to assign to the user (operations or admin)
+        expires_delta: Optional expiration time delta
         
     Returns:
-        TestClient: A TestClient instance for making requests to the API.
+        A JWT token string
+    """
+    import jwt
+    from datetime import datetime, timedelta
+    
+    expires_delta = expires_delta or timedelta(minutes=15)
+    expire = datetime.utcnow() + expires_delta
+    
+    payload = {
+        "sub": user_id,
+        "role": role,
+        "exp": expire,
+        "iat": datetime.utcnow(),
+        "jti": str(uuid.uuid4())
+    }
+    
+    encoded_jwt = jwt.encode(payload, TEST_JWT_SECRET, algorithm="HS256")
+    return encoded_jwt
+
+
+# Mock classes for dependencies
+class MockRabbitMQConnection:
+    """
+    Mock RabbitMQ connection for testing message queue integration.
+    """
+    def __init__(self):
+        self.connected = True
+        self.messages = []
+        self.channel = MagicMock()
+        self.connection = MagicMock()
+        
+    def publish_message(self, exchange: str, routing_key: str, message: Dict[str, Any]) -> bool:
+        """
+        Mock publishing a message to RabbitMQ.
+        
+        Args:
+            exchange: The exchange to publish to
+            routing_key: The routing key for the message
+            message: The message to publish
+            
+        Returns:
+            True if successful
+        """
+        self.messages.append({
+            "exchange": exchange,
+            "routing_key": routing_key,
+            "message": message,
+            "timestamp": datetime.utcnow().isoformat()
+        })
+        return True
+    
+    def get_messages(self) -> List[Dict[str, Any]]:
+        """
+        Get all published messages.
+        
+        Returns:
+            List of published messages
+        """
+        return self.messages
+    
+    def is_connected(self) -> bool:
+        """
+        Check if the connection is active.
+        
+        Returns:
+            Connection status
+        """
+        return self.connected
+    
+    def disconnect(self):
+        """
+        Simulate disconnection.
+        """
+        self.connected = False
+        
+    def reconnect(self):
+        """
+        Simulate reconnection.
+        """
+        self.connected = True
+
+
+class MockS3Client:
+    """
+    Mock S3 client for testing document storage.
+    """
+    def __init__(self):
+        self.connected = True
+        self.objects = {}
+        self.buckets = [TEST_BUCKET_NAME]
+        
+    def upload_file(self, file_path: str, bucket: str, key: str) -> bool:
+        """
+        Mock uploading a file to S3.
+        
+        Args:
+            file_path: Path to the file to upload
+            bucket: Bucket to upload to
+            key: Object key in the bucket
+            
+        Returns:
+            True if successful
+        """
+        if bucket not in self.buckets:
+            return False
+        
+        self.objects[f"{bucket}/{key}"] = {
+            "content": f"Mock content for {key}",
+            "metadata": {
+                "ContentType": "application/pdf",
+                "ContentLength": 12345,
+                "LastModified": datetime.utcnow().isoformat()
+            }
+        }
+        return True
+    
+    def download_file(self, bucket: str, key: str, download_path: str) -> bool:
+        """
+        Mock downloading a file from S3.
+        
+        Args:
+            bucket: Bucket to download from
+            key: Object key in the bucket
+            download_path: Path to save the downloaded file
+            
+        Returns:
+            True if successful
+        """
+        if bucket not in self.buckets:
+            return False
+        
+        object_key = f"{bucket}/{key}"
+        if object_key not in self.objects:
+            return False
+        
+        # In a real test, we would write to the download_path
+        # Here we just simulate success
+        return True
+    
+    def get_object_metadata(self, bucket: str, key: str) -> Dict[str, Any]:
+        """
+        Mock getting object metadata from S3.
+        
+        Args:
+            bucket: Bucket containing the object
+            key: Object key in the bucket
+            
+        Returns:
+            Object metadata
+        """
+        object_key = f"{bucket}/{key}"
+        if object_key in self.objects:
+            return self.objects[object_key]["metadata"]
+        return {}
+    
+    def is_connected(self) -> bool:
+        """
+        Check if the connection is active.
+        
+        Returns:
+            Connection status
+        """
+        return self.connected
+    
+    def disconnect(self):
+        """
+        Simulate disconnection.
+        """
+        self.connected = False
+        
+    def reconnect(self):
+        """
+        Simulate reconnection.
+        """
+        self.connected = True
+
+
+class MockGPUManager:
+    """
+    Mock GPU manager for testing GPU availability.
+    """
+    def __init__(self, available: bool = True, memory_gb: float = 16.0):
+        self.available = available
+        self.memory_gb = memory_gb
+        self.utilization = 0.0
+        
+    def is_gpu_available(self) -> bool:
+        """
+        Check if GPU is available.
+        
+        Returns:
+            GPU availability status
+        """
+        return self.available
+    
+    def get_gpu_memory(self) -> float:
+        """
+        Get available GPU memory in GB.
+        
+        Returns:
+            Available GPU memory in GB
+        """
+        return self.memory_gb
+    
+    def get_gpu_utilization(self) -> float:
+        """
+        Get GPU utilization percentage.
+        
+        Returns:
+            GPU utilization percentage
+        """
+        return self.utilization
+    
+    def set_gpu_available(self, available: bool):
+        """
+        Set GPU availability for testing.
+        
+        Args:
+            available: GPU availability status
+        """
+        self.available = available
+    
+    def set_gpu_memory(self, memory_gb: float):
+        """
+        Set available GPU memory for testing.
+        
+        Args:
+            memory_gb: Available GPU memory in GB
+        """
+        self.memory_gb = memory_gb
+    
+    def set_gpu_utilization(self, utilization: float):
+        """
+        Set GPU utilization for testing.
+        
+        Args:
+            utilization: GPU utilization percentage
+        """
+        self.utilization = utilization
+
+
+# Schema validation helper
+def validate_response_schema(response_data: Dict[str, Any], schema_class: BaseModel) -> bool:
+    """
+    Validate response data against a Pydantic schema.
+    
+    Args:
+        response_data: Response data to validate
+        schema_class: Pydantic schema class to validate against
+        
+    Returns:
+        True if validation succeeds, False otherwise
+    """
+    try:
+        schema_class.parse_obj(response_data)
+        return True
+    except ValidationError:
+        return False
+
+
+# OpenAPI schema validation helper
+def validate_against_openapi(response_data: Dict[str, Any], schema_name: str, openapi_path: str = None) -> bool:
+    """
+    Validate response data against an OpenAPI schema.
+    
+    Args:
+        response_data: Response data to validate
+        schema_name: Name of the schema in the OpenAPI specification
+        openapi_path: Path to the OpenAPI specification file
+        
+    Returns:
+        True if validation succeeds, False otherwise
+    """
+    from jsonschema import validate, ValidationError
+    
+    # Default to the project's OpenAPI specification if not provided
+    openapi_path = openapi_path or os.path.join(os.path.dirname(__file__), "../../openapi.json")
+    
+    try:
+        with open(openapi_path, "r") as f:
+            openapi_spec = json.load(f)
+            
+        schema = openapi_spec.get("components", {}).get("schemas", {}).get(schema_name)
+        if not schema:
+            return False
+        
+        validate(instance=response_data, schema=schema)
+        return True
+    except (FileNotFoundError, json.JSONDecodeError, ValidationError):
+        return False
+
+
+# Pytest fixtures
+@pytest.fixture
+def mock_rabbitmq():
+    """
+    Fixture providing a mock RabbitMQ connection.
+    
+    Returns:
+        MockRabbitMQConnection instance
+    """
+    return MockRabbitMQConnection()
+
+
+@pytest.fixture
+def mock_s3():
+    """
+    Fixture providing a mock S3 client.
+    
+    Returns:
+        MockS3Client instance
+    """
+    return MockS3Client()
+
+
+@pytest.fixture
+def mock_gpu():
+    """
+    Fixture providing a mock GPU manager.
+    
+    Returns:
+        MockGPUManager instance
+    """
+    return MockGPUManager()
+
+
+@pytest.fixture
+def app(mock_rabbitmq, mock_s3, mock_gpu):
+    """
+    Fixture providing a FastAPI application instance with mocked dependencies.
+    
+    Args:
+        mock_rabbitmq: Mock RabbitMQ connection
+        mock_s3: Mock S3 client
+        mock_gpu: Mock GPU manager
+        
+    Returns:
+        FastAPI application instance
+    """
+    # Create a test configuration
+    test_config = {
+        "APP_ENV": "test",
+        "APP_NAME": "ocr-service-test",
+        "APP_VERSION": "0.1.0-test",
+        "LOG_LEVEL": "DEBUG",
+        "API_PREFIX": "/api/v1",
+        "JWT_SECRET": TEST_JWT_SECRET,
+        "JWT_ALGORITHM": "HS256",
+        "RABBITMQ_HOST": "localhost",
+        "RABBITMQ_PORT": 5672,
+        "RABBITMQ_USER": "guest",
+        "RABBITMQ_PASSWORD": "guest",
+        "RABBITMQ_EXCHANGE": "mca.documents",
+        "RABBITMQ_QUEUE": "data-extraction",
+        "S3_ENDPOINT": "localhost:9000",
+        "S3_ACCESS_KEY": "minioadmin",
+        "S3_SECRET_KEY": "minioadmin",
+        "S3_BUCKET": TEST_BUCKET_NAME,
+        "S3_SECURE": False,
+        "TENSORFLOW_MODEL_PATH": "/tmp/models",
+        "TENSORFLOW_GPU_MEMORY_LIMIT": 8,
+        "OCR_CONFIDENCE_THRESHOLD": 0.75
+    }
+    
+    # Patch the configuration and dependencies
+    with patch.dict(os.environ, test_config), \
+         patch("src.app.create_rabbitmq_connection", return_value=mock_rabbitmq), \
+         patch("src.app.create_s3_client", return_value=mock_s3), \
+         patch("src.app.check_gpu_availability", return_value=True), \
+         patch("src.app.load_tensorflow_models", return_value=True):
+        
+        # Create the application
+        app = create_app()
+        
+        # Add test-specific middleware or configuration here if needed
+        return app
+
+
+@pytest.fixture
+def client(app):
+    """
+    Fixture providing a FastAPI TestClient instance.
+    
+    Args:
+        app: FastAPI application instance
+        
+    Returns:
+        FastAPI TestClient instance
     """
     return TestClient(app)
 
 
 @pytest.fixture
-def mock_rabbitmq():
-    """Fixture that provides a mock RabbitMQ connection for testing message queue integration.
-    
-    This mock simulates the behavior of the RabbitMQ connection, allowing tests to verify
-    that messages are published and consumed correctly without requiring a real RabbitMQ instance.
+def auth_headers():
+    """
+    Fixture providing authentication headers with a valid JWT token.
     
     Returns:
-        MagicMock: A mock RabbitMQ connection with methods for publishing and consuming messages.
+        Dict with Authorization header
     """
-    # Create a mock RabbitMQ connection
-    mock_connection = MagicMock()
-    mock_channel = MagicMock()
-    mock_connection.channel.return_value = mock_channel
-    
-    # Mock the basic_publish method to track published messages
-    published_messages = []
-    
-    def mock_basic_publish(exchange, routing_key, body, properties=None):
-        published_messages.append({
-            "exchange": exchange,
-            "routing_key": routing_key,
-            "body": json.loads(body) if isinstance(body, (str, bytes)) else body,
-            "properties": properties,
-        })
-    
-    mock_channel.basic_publish.side_effect = mock_basic_publish
-    
-    # Add the published messages to the mock for assertion in tests
-    mock_connection.published_messages = published_messages
-    
-    # Mock the basic_consume method
-    def mock_basic_consume(queue, on_message_callback, auto_ack=False):
-        mock_connection.consume_callback = on_message_callback
-        return "consumer_tag"
-    
-    mock_channel.basic_consume.side_effect = mock_basic_consume
-    
-    # Add a method to simulate receiving a message
-    def simulate_message(body, properties=None, delivery_tag="test_delivery_tag"):
-        method = MagicMock()
-        method.delivery_tag = delivery_tag
-        
-        if properties is None:
-            properties = MagicMock()
-            properties.content_type = "application/json"
-        
-        # Convert dict to JSON string if needed
-        if isinstance(body, dict):
-            body = json.dumps(body).encode()
-        elif isinstance(body, str):
-            body = body.encode()
-        
-        mock_connection.consume_callback(mock_channel, method, properties, body)
-    
-    mock_connection.simulate_message = simulate_message
-    
-    # Apply the patch and yield the mock
-    with patch("src.services.rabbitmq_service.get_connection", return_value=mock_connection):
-        yield mock_connection
+    token = create_test_token()
+    return {"Authorization": f"Bearer {token}"}
 
 
 @pytest.fixture
-def mock_s3():
-    """Fixture that provides a mock S3 storage client for testing document storage.
-    
-    This mock simulates the behavior of the S3 client, allowing tests to verify that
-    documents are stored and retrieved correctly without requiring a real S3 instance.
+def admin_auth_headers():
+    """
+    Fixture providing authentication headers with a valid admin JWT token.
     
     Returns:
-        MagicMock: A mock S3 client with methods for storing and retrieving documents.
+        Dict with Authorization header for admin role
     """
-    # Create a mock S3 client
-    mock_client = MagicMock()
-    
-    # Create an in-memory storage for objects
-    storage = {}
-    
-    # Mock the put_object method
-    def mock_put_object(Bucket, Key, Body, **kwargs):
-        storage[(Bucket, Key)] = {
-            "Body": Body,
-            "Metadata": kwargs.get("Metadata", {}),
-            "ContentType": kwargs.get("ContentType", "application/octet-stream"),
-            "ServerSideEncryption": kwargs.get("ServerSideEncryption"),
-        }
-        return {"ETag": f"\"{uuid.uuid4()}\"", "VersionId": str(uuid.uuid4())}
-    
-    mock_client.put_object.side_effect = mock_put_object
-    
-    # Mock the get_object method
-    def mock_get_object(Bucket, Key, **kwargs):
-        if (Bucket, Key) not in storage:
-            # Simulate NoSuchKey error
-            error = Exception("NoSuchKey")
-            error.response = {"Error": {"Code": "NoSuchKey"}}
-            raise error
-        
-        obj = storage[(Bucket, Key)]
-        
-        # Create a file-like object for the Body
-        body = MagicMock()
-        body.read.return_value = obj["Body"]
-        
-        return {
-            "Body": body,
-            "Metadata": obj["Metadata"],
-            "ContentType": obj["ContentType"],
-            "ServerSideEncryption": obj["ServerSideEncryption"],
-        }
-    
-    mock_client.get_object.side_effect = mock_get_object
-    
-    # Mock the list_objects_v2 method
-    def mock_list_objects_v2(Bucket, Prefix=None, **kwargs):
-        keys = []
-        for (bucket, key) in storage.keys():
-            if bucket == Bucket and (Prefix is None or key.startswith(Prefix)):
-                keys.append({"Key": key})
-        
-        return {"Contents": keys}
-    
-    mock_client.list_objects_v2.side_effect = mock_list_objects_v2
-    
-    # Mock the delete_object method
-    def mock_delete_object(Bucket, Key, **kwargs):
-        if (Bucket, Key) in storage:
-            del storage[(Bucket, Key)]
-        return {}
-    
-    mock_client.delete_object.side_effect = mock_delete_object
-    
-    # Add the storage to the mock for direct access in tests
-    mock_client.storage = storage
-    
-    # Apply the patch and yield the mock
-    with patch("src.services.s3_service.get_client", return_value=mock_client):
-        yield mock_client
+    token = create_test_token(role="admin")
+    return {"Authorization": f"Bearer {token}"}
 
 
 @pytest.fixture
-def mock_gpu_available():
-    """Fixture that provides a mock for GPU availability testing.
-    
-    This mock simulates the availability of a GPU for TensorFlow processing,
-    allowing tests to verify that the readiness probe correctly checks for GPU availability.
+def expired_auth_headers():
+    """
+    Fixture providing authentication headers with an expired JWT token.
     
     Returns:
-        bool: True if GPU is available, False otherwise.
+        Dict with Authorization header containing expired token
     """
-    # By default, simulate that GPU is available
-    gpu_available = True
-    
-    # Apply the patch and yield the mock
-    with patch("src.services.tensorflow_service.is_gpu_available", return_value=gpu_available):
-        yield gpu_available
+    token = create_test_token(expires_delta=timedelta(minutes=-15))
+    return {"Authorization": f"Bearer {token}"}
 
 
 @pytest.fixture
-def mock_gpu_unavailable():
-    """Fixture that provides a mock for GPU unavailability testing.
-    
-    This mock simulates the unavailability of a GPU for TensorFlow processing,
-    allowing tests to verify that the readiness probe correctly handles GPU unavailability.
-    
-    Returns:
-        bool: False to indicate GPU is not available.
+def sample_document_metadata():
     """
-    # Simulate that GPU is not available
-    gpu_available = False
-    
-    # Apply the patch and yield the mock
-    with patch("src.services.tensorflow_service.is_gpu_available", return_value=gpu_available):
-        yield gpu_available
-
-
-@pytest.fixture
-def auth_token(request):
-    """Fixture that provides a JWT token for testing secured endpoints.
-    
-    This fixture generates a valid JWT token with the specified role for testing
-    endpoints that require authentication and authorization.
-    
-    Args:
-        request: The pytest request object, which can include a 'role' parameter.
-        
-    Returns:
-        str: A valid JWT token for the specified role.
-    """
-    # Get the role from the request or default to 'operations_staff'
-    role = getattr(request, "param", "operations_staff")
-    
-    # Define the token payload
-    payload = {
-        "sub": f"test-user-{uuid.uuid4()}",
-        "name": "Test User",
-        "email": "test@dollarfunding.com",
-        "roles": [role],
-        "iat": datetime.utcnow(),
-        "exp": datetime.utcnow() + timedelta(hours=1),
-    }
-    
-    # Generate the token with a test secret key
-    token = jwt.encode(payload, "test-secret-key", algorithm="HS256")
-    
-    # Apply the patch to the JWT verification function
-    with patch("src.services.auth_service.verify_token", return_value=payload):
-        yield token
-
-
-@pytest.fixture
-def sample_document():
-    """Fixture that provides a sample document for testing OCR processing.
-    
-    This fixture creates a sample document with metadata and content for testing
-    OCR processing endpoints.
+    Fixture providing sample document metadata for testing.
     
     Returns:
-        dict: A sample document with metadata and content.
+        Dict with document metadata
     """
     return {
-        "document_id": str(uuid.uuid4()),
-        "application_id": str(uuid.uuid4()),
-        "filename": "test_document.pdf",
-        "content_type": "application/pdf",
-        "size": 12345,
-        "document_type": "APPLICATION",
+        "document_id": TEST_DOCUMENT_ID,
+        "application_id": TEST_APPLICATION_ID,
+        "document_type": "bank_statement",
+        "file_name": "bank_statement.pdf",
+        "file_size": 12345,
+        "mime_type": "application/pdf",
         "upload_date": datetime.utcnow().isoformat(),
-        "status": "PENDING",
-        "metadata": {
-            "pages": 2,
-            "has_signature": True,
-            "is_complete": True,
+        "classification": {
+            "document_type": "bank_statement",
+            "confidence": 0.95,
+            "page_count": 3
         },
+        "storage_path": f"{TEST_BUCKET_NAME}/{TEST_APPLICATION_ID}/{TEST_DOCUMENT_ID}.pdf"
     }
 
 
 @pytest.fixture
-def sample_ocr_result():
-    """Fixture that provides a sample OCR result for testing.
-    
-    This fixture creates a sample OCR result with extracted fields and confidence scores
-    for testing OCR processing endpoints.
+def sample_ocr_results():
+    """
+    Fixture providing sample OCR results for testing.
     
     Returns:
-        dict: A sample OCR result with extracted fields and confidence scores.
+        Dict with OCR extraction results
     """
     return {
-        "document_id": str(uuid.uuid4()),
-        "processing_time": 1.23,
-        "model_type": "TYPED",
+        "document_id": TEST_DOCUMENT_ID,
+        "application_id": TEST_APPLICATION_ID,
+        "processing_time": 2.45,  # seconds
+        "extraction_date": datetime.utcnow().isoformat(),
+        "document_type": "bank_statement",
         "extracted_data": {
-            "fields": {
-                "business_name": {
-                    "value": "Acme Corporation",
-                    "confidence": 0.98,
-                    "location": {"page": 1, "top": 100, "left": 100, "width": 200, "height": 30},
-                },
-                "tax_id": {
-                    "value": "12-3456789",
-                    "confidence": 0.95,
-                    "location": {"page": 1, "top": 150, "left": 100, "width": 150, "height": 30},
-                },
-                "address": {
-                    "value": "123 Main St, Anytown, CA 12345",
-                    "confidence": 0.92,
-                    "location": {"page": 1, "top": 200, "left": 100, "width": 300, "height": 30},
-                },
-                "requested_amount": {
-                    "value": "50000",
-                    "confidence": 0.97,
-                    "location": {"page": 1, "top": 250, "left": 100, "width": 100, "height": 30},
-                },
-                "signature": {
-                    "value": "John Smith",
-                    "confidence": 0.85,
-                    "location": {"page": 2, "top": 500, "left": 400, "width": 200, "height": 50},
-                },
+            "account_holder": {
+                "value": "ACME CORPORATION",
+                "confidence": 0.98
             },
-            "tables": [
-                {
-                    "name": "revenue_table",
-                    "location": {"page": 1, "top": 300, "left": 100, "width": 400, "height": 200},
-                    "confidence": 0.90,
-                    "data": [
-                        ["Month", "Revenue", "Expenses", "Profit"],
-                        ["January", "10000", "8000", "2000"],
-                        ["February", "12000", "9000", "3000"],
-                        ["March", "15000", "10000", "5000"],
-                    ],
-                }
-            ],
+            "account_number": {
+                "value": "123456789",
+                "confidence": 0.95
+            },
+            "bank_name": {
+                "value": "FIRST NATIONAL BANK",
+                "confidence": 0.99
+            },
+            "statement_date": {
+                "value": "2023-01-15",
+                "confidence": 0.92
+            },
+            "opening_balance": {
+                "value": "5000.00",
+                "confidence": 0.88
+            },
+            "closing_balance": {
+                "value": "6250.75",
+                "confidence": 0.89
+            },
+            "transactions": {
+                "value": [
+                    {
+                        "date": "2023-01-03",
+                        "description": "DEPOSIT",
+                        "amount": "1500.00",
+                        "type": "credit"
+                    },
+                    {
+                        "date": "2023-01-10",
+                        "description": "WITHDRAWAL ATM",
+                        "amount": "300.00",
+                        "type": "debit"
+                    },
+                    {
+                        "date": "2023-01-12",
+                        "description": "PAYMENT RECEIVED",
+                        "amount": "750.75",
+                        "type": "credit"
+                    }
+                ],
+                "confidence": 0.85
+            }
         },
-        "needs_review": False,
-        "low_confidence_fields": [],
-        "processing_status": "COMPLETED",
-        "completion_time": datetime.utcnow().isoformat(),
+        "page_count": 3,
+        "overall_confidence": 0.92,
+        "processing_status": "completed",
+        "error": None
     }
 
 
 @pytest.fixture
-def sample_ocr_result_with_low_confidence():
-    """Fixture that provides a sample OCR result with low confidence fields for testing.
-    
-    This fixture creates a sample OCR result with some fields having low confidence scores,
-    which should trigger a review by a human operator.
+def sample_metrics_data():
+    """
+    Fixture providing sample metrics data for testing.
     
     Returns:
-        dict: A sample OCR result with low confidence fields.
+        Dict with service metrics
     """
     return {
-        "document_id": str(uuid.uuid4()),
-        "processing_time": 1.45,
-        "model_type": "HYBRID",
-        "extracted_data": {
-            "fields": {
-                "business_name": {
-                    "value": "Acme Corporation",
-                    "confidence": 0.98,
-                    "location": {"page": 1, "top": 100, "left": 100, "width": 200, "height": 30},
-                },
-                "tax_id": {
-                    "value": "12-3456789",
-                    "confidence": 0.65,  # Low confidence
-                    "location": {"page": 1, "top": 150, "left": 100, "width": 150, "height": 30},
-                },
-                "address": {
-                    "value": "123 Main St, Anytown, CA 12345",
-                    "confidence": 0.92,
-                    "location": {"page": 1, "top": 200, "left": 100, "width": 300, "height": 30},
-                },
-                "requested_amount": {
-                    "value": "50000",
-                    "confidence": 0.97,
-                    "location": {"page": 1, "top": 250, "left": 100, "width": 100, "height": 30},
-                },
-                "signature": {
-                    "value": "John Smith",
-                    "confidence": 0.55,  # Low confidence
-                    "location": {"page": 2, "top": 500, "left": 400, "width": 200, "height": 50},
-                },
-            },
-            "tables": [
-                {
-                    "name": "revenue_table",
-                    "location": {"page": 1, "top": 300, "left": 100, "width": 400, "height": 200},
-                    "confidence": 0.90,
-                    "data": [
-                        ["Month", "Revenue", "Expenses", "Profit"],
-                        ["January", "10000", "8000", "2000"],
-                        ["February", "12000", "9000", "3000"],
-                        ["March", "15000", "10000", "5000"],
-                    ],
-                }
-            ],
+        "service": "ocr-service",
+        "version": "0.1.0-test",
+        "timestamp": datetime.utcnow().isoformat(),
+        "uptime": 3600,  # seconds
+        "ocr_metrics": {
+            "documents_processed": 150,
+            "documents_failed": 3,
+            "average_processing_time": 2.3,  # seconds
+            "average_confidence": 0.94,
+            "accuracy": 0.99
         },
-        "needs_review": True,
-        "low_confidence_fields": ["tax_id", "signature"],
-        "processing_status": "NEEDS_REVIEW",
-        "completion_time": datetime.utcnow().isoformat(),
-    }
-
-
-def load_schema(schema_name: str) -> Dict[str, Any]:
-    """Load an OpenAPI schema from the schema directory.
-    
-    Args:
-        schema_name: The name of the schema file to load.
-        
-    Returns:
-        Dict[str, Any]: The loaded schema as a dictionary.
-        
-    Raises:
-        FileNotFoundError: If the schema file does not exist.
-    """
-    schema_path = os.path.join(OPENAPI_SCHEMA_DIR, f"{schema_name}.json")
-    
-    # If the schema file doesn't exist, create a minimal schema for testing
-    if not os.path.exists(schema_path):
-        # Create a directory for the schema if it doesn't exist
-        os.makedirs(os.path.dirname(schema_path), exist_ok=True)
-        
-        # Create a minimal schema based on the schema name
-        if schema_name == "health":
-            schema = {
-                "type": "object",
-                "required": ["status"],
-                "properties": {
-                    "status": {"type": "string", "enum": ["ok", "error"]},
-                    "details": {"type": "object"},
-                    "timestamp": {"type": "string", "format": "date-time"},
-                },
-            }
-        elif schema_name == "ocr_result":
-            schema = {
-                "type": "object",
-                "required": ["document_id", "extracted_data", "processing_status"],
-                "properties": {
-                    "document_id": {"type": "string", "format": "uuid"},
-                    "processing_time": {"type": "number"},
-                    "model_type": {"type": "string", "enum": MODEL_TYPES},
-                    "extracted_data": {"type": "object"},
-                    "needs_review": {"type": "boolean"},
-                    "low_confidence_fields": {"type": "array", "items": {"type": "string"}},
-                    "processing_status": {"type": "string", "enum": PROCESSING_STATUSES},
-                    "completion_time": {"type": "string", "format": "date-time"},
-                },
-            }
-        elif schema_name == "document":
-            schema = {
-                "type": "object",
-                "required": ["document_id", "filename", "document_type", "status"],
-                "properties": {
-                    "document_id": {"type": "string", "format": "uuid"},
-                    "application_id": {"type": "string", "format": "uuid"},
-                    "filename": {"type": "string"},
-                    "content_type": {"type": "string"},
-                    "size": {"type": "integer"},
-                    "document_type": {"type": "string", "enum": DOCUMENT_TYPES},
-                    "upload_date": {"type": "string", "format": "date-time"},
-                    "status": {"type": "string", "enum": PROCESSING_STATUSES},
-                    "metadata": {"type": "object"},
-                },
-            }
-        elif schema_name == "metrics":
-            schema = {
-                "type": "object",
-                "required": ["metrics"],
-                "properties": {
-                    "metrics": {
-                        "type": "object",
-                        "properties": {
-                            "ocr_accuracy": {"type": "number"},
-                            "processing_time_avg": {"type": "number"},
-                            "queue_depth": {"type": "integer"},
-                            "documents_processed": {"type": "integer"},
-                            "documents_pending": {"type": "integer"},
-                            "documents_failed": {"type": "integer"},
-                            "cpu_usage": {"type": "number"},
-                            "gpu_usage": {"type": "number"},
-                            "memory_usage": {"type": "number"},
-                        },
-                    },
-                    "timestamp": {"type": "string", "format": "date-time"},
-                },
-            }
-        else:
-            # Generic schema for unknown schema names
-            schema = {
-                "type": "object",
-                "properties": {
-                    "status": {"type": "string"},
-                },
-            }
-        
-        # Write the schema to the file
-        with open(schema_path, "w") as f:
-            json.dump(schema, f, indent=2)
-    
-    # Load the schema from the file
-    with open(schema_path, "r") as f:
-        return json.load(f)
-
-
-@pytest.fixture
-def validate_response():
-    """Fixture that provides a function for validating response schemas against OpenAPI specifications.
-    
-    This fixture returns a function that validates a response against a schema,
-    making it easy to verify that API responses conform to the expected format.
-    
-    Returns:
-        Callable: A function for validating response schemas.
-    """
-    def _validate_response(response_data: Dict[str, Any], schema_name: str) -> bool:
-        """Validate a response against an OpenAPI schema.
-        
-        Args:
-            response_data: The response data to validate.
-            schema_name: The name of the schema to validate against.
-            
-        Returns:
-            bool: True if the response is valid, False otherwise.
-            
-        Raises:
-            ValidationError: If the response does not conform to the schema.
-        """
-        schema = load_schema(schema_name)
-        validate(instance=response_data, schema=schema)
-        return True
-    
-    return _validate_response
-
-
-@pytest.fixture
-def mock_tensorflow_service():
-    """Fixture that provides a mock TensorFlow service for testing OCR processing.
-    
-    This mock simulates the behavior of the TensorFlow service, allowing tests to verify
-    that OCR processing works correctly without requiring a real TensorFlow instance.
-    
-    Returns:
-        MagicMock: A mock TensorFlow service with methods for OCR processing.
-    """
-    # Create a mock TensorFlow service
-    mock_service = MagicMock()
-    
-    # Mock the process_document method
-    def mock_process_document(document_id, document_type, content):
-        # Return a sample OCR result based on the document type
-        if document_type == "APPLICATION":
-            return {
-                "document_id": document_id,
-                "processing_time": 1.23,
-                "model_type": "TYPED",
-                "extracted_data": {
-                    "fields": {
-                        "business_name": {
-                            "value": "Acme Corporation",
-                            "confidence": 0.98,
-                        },
-                        "tax_id": {
-                            "value": "12-3456789",
-                            "confidence": 0.95,
-                        },
-                    },
-                },
-                "needs_review": False,
-                "low_confidence_fields": [],
-                "processing_status": "COMPLETED",
-            }
-        elif document_type == "ID_DOCUMENT":
-            return {
-                "document_id": document_id,
-                "processing_time": 1.45,
-                "model_type": "HYBRID",
-                "extracted_data": {
-                    "fields": {
-                        "name": {
-                            "value": "John Smith",
-                            "confidence": 0.92,
-                        },
-                        "id_number": {
-                            "value": "X123456",
-                            "confidence": 0.65,  # Low confidence
-                        },
-                    },
-                },
-                "needs_review": True,
-                "low_confidence_fields": ["id_number"],
-                "processing_status": "NEEDS_REVIEW",
-            }
-        else:
-            return {
-                "document_id": document_id,
-                "processing_time": 1.0,
-                "model_type": "TYPED",
-                "extracted_data": {
-                    "fields": {},
-                },
-                "needs_review": False,
-                "low_confidence_fields": [],
-                "processing_status": "COMPLETED",
-            }
-    
-    mock_service.process_document.side_effect = mock_process_document
-    
-    # Apply the patch and yield the mock
-    with patch("src.services.tensorflow_service.process_document", side_effect=mock_process_document):
-        yield mock_service
-
-
-@pytest.fixture
-def mock_metrics_service():
-    """Fixture that provides a mock metrics service for testing status endpoints.
-    
-    This mock simulates the behavior of the metrics service, allowing tests to verify
-    that status endpoints correctly report service metrics.
-    
-    Returns:
-        MagicMock: A mock metrics service with methods for retrieving metrics.
-    """
-    # Create a mock metrics service
-    mock_service = MagicMock()
-    
-    # Mock the get_metrics method
-    def mock_get_metrics():
-        return {
-            "ocr_accuracy": 0.99,  # 99% accuracy as specified in section 0.1.1
-            "processing_time_avg": 1.5,  # Average processing time in seconds
-            "queue_depth": 5,  # Current queue depth
-            "documents_processed": 1000,  # Total documents processed
-            "documents_pending": 10,  # Documents pending processing
-            "documents_failed": 5,  # Documents that failed processing
-            "cpu_usage": 45.2,  # CPU usage percentage
-            "gpu_usage": 78.5,  # GPU usage percentage
-            "memory_usage": 62.3,  # Memory usage percentage
+        "queue_metrics": {
+            "queue_depth": 5,
+            "messages_processed": 147,
+            "messages_failed": 2,
+            "average_queue_time": 1.2  # seconds
+        },
+        "resource_metrics": {
+            "cpu_usage": 45.2,  # percentage
+            "memory_usage": 1.2,  # GB
+            "gpu_memory_usage": 6.5,  # GB
+            "gpu_utilization": 78.3  # percentage
         }
-    
-    mock_service.get_metrics.side_effect = mock_get_metrics
-    
-    # Apply the patch and yield the mock
-    with patch("src.services.metrics_service.get_metrics", side_effect=mock_get_metrics):
-        yield mock_service
+    }
 
 
 # Helper functions for tests
-
-def create_test_document(document_type: str = "APPLICATION") -> Dict[str, Any]:
-    """Create a test document with the specified document type.
+def get_test_document_path(document_type: str, filename: str) -> str:
+    """
+    Get the path to a test document file.
     
     Args:
-        document_type: The type of document to create.
+        document_type: Type of document (e.g., 'typed_documents', 'handwritten_documents')
+        filename: Name of the test document file
         
     Returns:
-        Dict[str, Any]: A test document with the specified document type.
+        Absolute path to the test document file
     """
-    return {
-        "document_id": str(uuid.uuid4()),
-        "application_id": str(uuid.uuid4()),
-        "filename": f"test_{document_type.lower()}.pdf",
-        "content_type": "application/pdf",
-        "size": 12345,
-        "document_type": document_type,
-        "upload_date": datetime.utcnow().isoformat(),
-        "status": "PENDING",
+    base_dir = os.path.dirname(os.path.dirname(__file__))
+    return os.path.join(base_dir, "test_data", document_type, filename)
+
+
+def setup_test_document(mock_s3: MockS3Client, document_metadata: Dict[str, Any]) -> bool:
+    """
+    Set up a test document in the mock S3 storage.
+    
+    Args:
+        mock_s3: Mock S3 client
+        document_metadata: Document metadata
+        
+    Returns:
+        True if successful
+    """
+    bucket = document_metadata["storage_path"].split("/")[0]
+    key = "/".join(document_metadata["storage_path"].split("/")[1:])
+    
+    # Add the document to the mock S3 storage
+    mock_s3.objects[f"{bucket}/{key}"] = {
+        "content": f"Mock content for {key}",
         "metadata": {
-            "pages": 2,
-            "has_signature": True,
-            "is_complete": True,
-        },
+            "ContentType": document_metadata["mime_type"],
+            "ContentLength": document_metadata["file_size"],
+            "LastModified": document_metadata["upload_date"]
+        }
     }
+    
+    return True
+
+
+def setup_test_message(mock_rabbitmq: MockRabbitMQConnection, document_metadata: Dict[str, Any]) -> bool:
+    """
+    Set up a test message in the mock RabbitMQ queue.
+    
+    Args:
+        mock_rabbitmq: Mock RabbitMQ connection
+        document_metadata: Document metadata
+        
+    Returns:
+        True if successful
+    """
+    # Create a message for the document
+    message = {
+        "event_type": "document.classified",
+        "document": document_metadata,
+        "timestamp": datetime.utcnow().isoformat(),
+        "correlation_id": str(uuid.uuid4())
+    }
+    
+    # Add the message to the mock RabbitMQ queue
+    mock_rabbitmq.publish_message(
+        exchange=rabbitmq_config.RABBITMQ_EXCHANGE,
+        routing_key="document.classified",
+        message=message
+    )
+    
+    return True
