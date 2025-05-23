@@ -4,639 +4,569 @@
 """
 Time utilities for the OCR Service.
 
-This module provides utility functions for timestamp generation, date comparison,
-duration calculation, and time formatting. It's essential for consistent timestamp
-handling in logs, message publishing, and document metadata.
-
-Functions:
-    get_current_timestamp: Get the current timestamp in ISO 8601 format
-    format_datetime: Format a datetime object to a string with a specified template
-    format_date: Format a date object to a string with a specified template
-    format_time: Format a time object to a string with a specified template
-    format_timestamp: Convert a datetime object to a Unix timestamp
-    format_time_to_now: Get the time difference from now as a human-readable string
-    is_date_between: Check if a date is between two other dates
-    is_date_after: Check if a date is after another date
-    is_same_date: Check if two dates are the same
-    add_time: Add a duration to the current time
-    subtract_time: Subtract a duration from the current time
-    parse_iso_datetime: Parse an ISO 8601 datetime string
-    calculate_processing_time: Calculate the processing time between two timestamps
-    calculate_document_age: Calculate the age of a document
-    is_valid_date: Check if a date is valid
-    get_date_range_label: Get a formatted date range label
-
-Requirements:
-    - OCR Service must update document metadata with processing timestamps
-    - Service must implement comprehensive logging with timestamps
-    - Messages must be serialized in standardized JSON format with consistent date handling
+This module provides functions for timestamp generation, date comparison,
+duration calculation, and time formatting. It's essential for consistent
+timestamp handling in logs, message publishing, and document metadata.
 """
 
 import datetime
 import time
-from typing import Any, Dict, Optional, Tuple, Union
-from dateutil import parser
-import pytz
+from typing import Optional, Union, Dict, Any, Tuple, List
+from dateutil import parser, tz
+from dateutil.relativedelta import relativedelta
 
-# Default timezone (UTC)
-DEFAULT_TIMEZONE = pytz.UTC
+# Type aliases for clarity
+Timestamp = Union[datetime.datetime, str, int, float]
+DurationDict = Dict[str, int]
 
-# Format patterns
+# Constants for formatting patterns
 FORMAT_PATTERNS = {
-    "datetime": "%d %b %Y %I:%M %p",  # 17 Apr 2022 12:00 AM
-    "date": "%d %b %Y",  # 17 Apr 2022
-    "time": "%I:%M %p",  # 12:00 AM
-    "iso8601": "%Y-%m-%dT%H:%M:%S.%fZ",  # 2022-04-17T12:00:00.000Z
-    "iso8601_with_tz": "%Y-%m-%dT%H:%M:%S%z",  # 2022-04-17T12:00:00+00:00
-    "log_timestamp": "%Y-%m-%d %H:%M:%S.%f",  # 2022-04-17 12:00:00.000
-    "split": {
-        "datetime": "%d/%m/%Y %I:%M %p",  # 17/04/2022 12:00 AM
-        "date": "%d/%m/%Y",  # 17/04/2022
+    'datetime': '%d %b %Y %I:%M %p',  # 17 Apr 2022 12:00 AM
+    'date': '%d %b %Y',                # 17 Apr 2022
+    'time': '%I:%M %p',                # 12:00 AM
+    'iso8601': '%Y-%m-%dT%H:%M:%S.%f%z',  # 2022-04-17T12:00:00.000000+0000
+    'split': {
+        'datetime': '%d/%m/%Y %I:%M %p',  # 17/04/2022 12:00 AM
+        'date': '%d/%m/%Y',              # 17/04/2022
     },
-    "param_case": {
-        "datetime": "%d-%m-%Y %I:%M %p",  # 17-04-2022 12:00 AM
-        "date": "%d-%m-%Y",  # 17-04-2022
+    'param_case': {
+        'datetime': '%d-%m-%Y %I:%M %p',  # 17-04-2022 12:00 AM
+        'date': '%d-%m-%Y',              # 17-04-2022
     },
+    'log': '%Y-%m-%d %H:%M:%S.%f',     # 2022-04-17 12:00:00.000000
 }
 
-# Type definitions
-DateType = Union[datetime.datetime, datetime.date, str, int, float, None]
 
-
-def is_valid_date(date: DateType) -> bool:
+def is_valid_date(date: Timestamp) -> bool:
     """
     Check if a date is valid.
     
     Args:
-        date: The date to check. Can be a datetime object, string, timestamp, or None.
+        date: The date to check, can be a datetime object, string, or timestamp
         
     Returns:
-        bool: True if the date is valid, False otherwise.
+        bool: True if the date is valid, False otherwise
     """
     if date is None:
         return False
     
     try:
-        if isinstance(date, (datetime.datetime, datetime.date)):
-            return True
-        elif isinstance(date, str):
-            parser.parse(date)
-            return True
-        elif isinstance(date, (int, float)):
+        if isinstance(date, (int, float)):
+            # Convert timestamp to datetime
             datetime.datetime.fromtimestamp(date)
-            return True
-        return False
+        elif isinstance(date, str):
+            # Parse string to datetime
+            parser.parse(date)
+        elif isinstance(date, datetime.datetime):
+            # Already a datetime object
+            pass
+        else:
+            return False
+        return True
     except (ValueError, TypeError, OverflowError):
         return False
 
 
-def _ensure_datetime(date: DateType) -> Optional[datetime.datetime]:
+def to_datetime(date: Timestamp) -> Optional[datetime.datetime]:
     """
     Convert various date formats to a datetime object.
     
     Args:
-        date: The date to convert. Can be a datetime object, string, timestamp, or None.
+        date: The date to convert, can be a datetime object, string, or timestamp
         
     Returns:
-        datetime.datetime: The converted datetime object, or None if the date is invalid.
+        datetime.datetime or None: The converted datetime object, or None if invalid
     """
     if not is_valid_date(date):
         return None
     
     if isinstance(date, datetime.datetime):
         return date
-    elif isinstance(date, datetime.date):
-        return datetime.datetime.combine(date, datetime.time.min)
-    elif isinstance(date, str):
-        return parser.parse(date)
     elif isinstance(date, (int, float)):
         return datetime.datetime.fromtimestamp(date)
+    elif isinstance(date, str):
+        return parser.parse(date)
     
     return None
 
 
-def get_current_timestamp(timezone: Optional[pytz.timezone] = None) -> str:
+def get_current_timestamp() -> datetime.datetime:
     """
-    Get the current timestamp in ISO 8601 format.
+    Get the current timestamp with timezone information.
     
-    Args:
-        timezone: The timezone to use. Defaults to UTC.
-        
     Returns:
-        str: The current timestamp in ISO 8601 format.
+        datetime.datetime: Current datetime with timezone
     """
-    tz = timezone or DEFAULT_TIMEZONE
-    now = datetime.datetime.now(tz)
-    return now.strftime(FORMAT_PATTERNS["iso8601"])
+    return datetime.datetime.now(tz.tzlocal())
 
 
-def format_datetime(date: DateType, template: Optional[str] = None) -> str:
+def get_utc_timestamp() -> datetime.datetime:
     """
-    Format a datetime object to a string with a specified template.
+    Get the current UTC timestamp.
+    
+    Returns:
+        datetime.datetime: Current UTC datetime
+    """
+    return datetime.datetime.now(tz.UTC)
+
+
+def format_datetime(date: Timestamp, template: Optional[str] = None) -> str:
+    """
+    Format a date as a datetime string.
     
     Args:
-        date: The date to format. Can be a datetime object, string, timestamp, or None.
-        template: The format template to use. Defaults to FORMAT_PATTERNS["datetime"].
+        date: The date to format
+        template: Optional format template
         
     Returns:
-        str: The formatted datetime string, or "Invalid date" if the date is invalid.
+        str: Formatted datetime string or 'Invalid date' if invalid
     """
-    dt = _ensure_datetime(date)
+    dt = to_datetime(date)
     if dt is None:
-        return "Invalid date"
+        return 'Invalid date'
     
-    return dt.strftime(template or FORMAT_PATTERNS["datetime"])
+    template = template or FORMAT_PATTERNS['datetime']
+    return dt.strftime(template)
 
 
-def format_date(date: DateType, template: Optional[str] = None) -> str:
+def format_date(date: Timestamp, template: Optional[str] = None) -> str:
     """
-    Format a date object to a string with a specified template.
+    Format a date as a date string (without time).
     
     Args:
-        date: The date to format. Can be a datetime object, string, timestamp, or None.
-        template: The format template to use. Defaults to FORMAT_PATTERNS["date"].
+        date: The date to format
+        template: Optional format template
         
     Returns:
-        str: The formatted date string, or "Invalid date" if the date is invalid.
+        str: Formatted date string or 'Invalid date' if invalid
     """
-    dt = _ensure_datetime(date)
+    dt = to_datetime(date)
     if dt is None:
-        return "Invalid date"
+        return 'Invalid date'
     
-    return dt.strftime(template or FORMAT_PATTERNS["date"])
+    template = template or FORMAT_PATTERNS['date']
+    return dt.strftime(template)
 
 
-def format_time(date: DateType, template: Optional[str] = None) -> str:
+def format_time(date: Timestamp, template: Optional[str] = None) -> str:
     """
-    Format a time object to a string with a specified template.
+    Format a date as a time string (without date).
     
     Args:
-        date: The date to format. Can be a datetime object, string, timestamp, or None.
-        template: The format template to use. Defaults to FORMAT_PATTERNS["time"].
+        date: The date to format
+        template: Optional format template
         
     Returns:
-        str: The formatted time string, or "Invalid date" if the date is invalid.
+        str: Formatted time string or 'Invalid date' if invalid
     """
-    dt = _ensure_datetime(date)
+    dt = to_datetime(date)
     if dt is None:
-        return "Invalid date"
+        return 'Invalid date'
     
-    return dt.strftime(template or FORMAT_PATTERNS["time"])
+    template = template or FORMAT_PATTERNS['time']
+    return dt.strftime(template)
 
 
-def format_timestamp(date: DateType) -> Union[int, str]:
+def format_iso8601(date: Timestamp) -> str:
     """
-    Convert a datetime object to a Unix timestamp.
+    Format a date as an ISO 8601 string.
     
     Args:
-        date: The date to convert. Can be a datetime object, string, timestamp, or None.
+        date: The date to format
         
     Returns:
-        int: The Unix timestamp, or "Invalid date" if the date is invalid.
+        str: ISO 8601 formatted string or 'Invalid date' if invalid
     """
-    dt = _ensure_datetime(date)
+    dt = to_datetime(date)
     if dt is None:
-        return "Invalid date"
+        return 'Invalid date'
     
-    return int(dt.timestamp())
-
-
-def format_time_to_now(date: DateType) -> str:
-    """
-    Get the time difference from now as a human-readable string.
-    
-    Args:
-        date: The date to compare. Can be a datetime object, string, timestamp, or None.
-        
-    Returns:
-        str: The time difference as a human-readable string, or "Invalid date" if the date is invalid.
-    """
-    dt = _ensure_datetime(date)
-    if dt is None:
-        return "Invalid date"
-    
-    now = datetime.datetime.now(DEFAULT_TIMEZONE)
+    # Ensure timezone information is present
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=DEFAULT_TIMEZONE)
+        dt = dt.replace(tzinfo=tz.UTC)
     
-    diff = now - dt
-    
-    # Convert to a human-readable string
-    seconds = diff.total_seconds()
-    if seconds < 60:
-        return "a few seconds"
-    elif seconds < 3600:
-        minutes = int(seconds / 60)
-        return f"{minutes} minute{'s' if minutes != 1 else ''}"
-    elif seconds < 86400:
-        hours = int(seconds / 3600)
-        return f"{hours} hour{'s' if hours != 1 else ''}"
-    elif seconds < 604800:
-        days = int(seconds / 86400)
-        return f"{days} day{'s' if days != 1 else ''}"
-    elif seconds < 2592000:
-        weeks = int(seconds / 604800)
-        return f"{weeks} week{'s' if weeks != 1 else ''}"
-    elif seconds < 31536000:
-        months = int(seconds / 2592000)
-        return f"{months} month{'s' if months != 1 else ''}"
-    else:
-        years = int(seconds / 31536000)
-        return f"{years} year{'s' if years != 1 else ''}"
+    return dt.isoformat()
 
 
-def is_date_between(
-    input_date: DateType, start_date: DateType, end_date: DateType
+def get_timestamp_ms(date: Optional[Timestamp] = None) -> int:
+    """
+    Get a timestamp in milliseconds.
+    
+    Args:
+        date: Optional date to convert, defaults to current time
+        
+    Returns:
+        int: Timestamp in milliseconds
+    """
+    if date is None:
+        return int(time.time() * 1000)
+    
+    dt = to_datetime(date)
+    if dt is None:
+        return 0
+    
+    return int(dt.timestamp() * 1000)
+
+
+def is_between(
+    input_date: Timestamp,
+    start_date: Timestamp,
+    end_date: Timestamp
 ) -> bool:
     """
-    Check if a date is between two other dates.
+    Check if a date is between two other dates (inclusive).
     
     Args:
-        input_date: The date to check. Can be a datetime object, string, timestamp, or None.
-        start_date: The start date. Can be a datetime object, string, timestamp, or None.
-        end_date: The end date. Can be a datetime object, string, timestamp, or None.
+        input_date: The date to check
+        start_date: The start date of the range
+        end_date: The end date of the range
         
     Returns:
-        bool: True if the input date is between the start and end dates, False otherwise.
+        bool: True if the date is between start and end, False otherwise
     """
-    input_dt = _ensure_datetime(input_date)
-    start_dt = _ensure_datetime(start_date)
-    end_dt = _ensure_datetime(end_date)
+    input_dt = to_datetime(input_date)
+    start_dt = to_datetime(start_date)
+    end_dt = to_datetime(end_date)
     
-    if input_dt is None or start_dt is None or end_dt is None:
+    if None in (input_dt, start_dt, end_dt):
         return False
     
     return start_dt <= input_dt <= end_dt
 
 
-def is_date_after(start_date: DateType, end_date: DateType) -> bool:
+def is_after(date1: Timestamp, date2: Timestamp) -> bool:
     """
-    Check if a date is after another date.
+    Check if date1 is after date2.
     
     Args:
-        start_date: The start date. Can be a datetime object, string, timestamp, or None.
-        end_date: The end date. Can be a datetime object, string, timestamp, or None.
+        date1: The first date
+        date2: The second date
         
     Returns:
-        bool: True if the start date is after the end date, False otherwise.
+        bool: True if date1 is after date2, False otherwise
     """
-    start_dt = _ensure_datetime(start_date)
-    end_dt = _ensure_datetime(end_date)
+    dt1 = to_datetime(date1)
+    dt2 = to_datetime(date2)
     
-    if start_dt is None or end_dt is None:
+    if None in (dt1, dt2):
         return False
     
-    return start_dt > end_dt
+    return dt1 > dt2
 
 
-def is_same_date(
-    start_date: DateType, end_date: DateType, unit_to_compare: str = "year"
+def is_same(
+    date1: Timestamp,
+    date2: Timestamp,
+    unit: str = 'day'
 ) -> bool:
     """
-    Check if two dates are the same based on a specified unit.
+    Check if two dates are the same at the specified unit level.
     
     Args:
-        start_date: The start date. Can be a datetime object, string, timestamp, or None.
-        end_date: The end date. Can be a datetime object, string, timestamp, or None.
-        unit_to_compare: The unit to compare. Can be "year", "month", "day", "hour", "minute", or "second".
+        date1: The first date
+        date2: The second date
+        unit: The unit to compare ('year', 'month', 'day', 'hour', 'minute', 'second')
         
     Returns:
-        bool: True if the dates are the same based on the specified unit, False otherwise.
+        bool: True if dates are the same at the specified unit, False otherwise
     """
-    start_dt = _ensure_datetime(start_date)
-    end_dt = _ensure_datetime(end_date)
+    dt1 = to_datetime(date1)
+    dt2 = to_datetime(date2)
     
-    if start_dt is None or end_dt is None:
+    if None in (dt1, dt2):
         return False
     
-    if unit_to_compare == "year":
-        return start_dt.year == end_dt.year
-    elif unit_to_compare == "month":
-        return (start_dt.year, start_dt.month) == (end_dt.year, end_dt.month)
-    elif unit_to_compare == "day":
-        return (start_dt.year, start_dt.month, start_dt.day) == (end_dt.year, end_dt.month, end_dt.day)
-    elif unit_to_compare == "hour":
-        return (
-            start_dt.year, start_dt.month, start_dt.day, start_dt.hour
-        ) == (
-            end_dt.year, end_dt.month, end_dt.day, end_dt.hour
-        )
-    elif unit_to_compare == "minute":
-        return (
-            start_dt.year, start_dt.month, start_dt.day, start_dt.hour, start_dt.minute
-        ) == (
-            end_dt.year, end_dt.month, end_dt.day, end_dt.hour, end_dt.minute
-        )
-    elif unit_to_compare == "second":
-        return (
-            start_dt.year, start_dt.month, start_dt.day, start_dt.hour, start_dt.minute, start_dt.second
-        ) == (
-            end_dt.year, end_dt.month, end_dt.day, end_dt.hour, end_dt.minute, end_dt.second
-        )
-    
-    return False
+    if unit == 'year':
+        return dt1.year == dt2.year
+    elif unit == 'month':
+        return (dt1.year, dt1.month) == (dt2.year, dt2.month)
+    elif unit == 'day':
+        return (dt1.year, dt1.month, dt1.day) == (dt2.year, dt2.month, dt2.day)
+    elif unit == 'hour':
+        return (dt1.year, dt1.month, dt1.day, dt1.hour) == (dt2.year, dt2.month, dt2.day, dt2.hour)
+    elif unit == 'minute':
+        return (dt1.year, dt1.month, dt1.day, dt1.hour, dt1.minute) == \
+               (dt2.year, dt2.month, dt2.day, dt2.hour, dt2.minute)
+    elif unit == 'second':
+        return (dt1.year, dt1.month, dt1.day, dt1.hour, dt1.minute, dt1.second) == \
+               (dt2.year, dt2.month, dt2.day, dt2.hour, dt2.minute, dt2.second)
+    else:
+        return False
 
 
-def get_date_range_label(
-    start_date: DateType, end_date: DateType, initial: bool = False
+def format_date_range(
+    start_date: Timestamp,
+    end_date: Timestamp,
+    initial: bool = False
 ) -> str:
     """
-    Get a formatted date range label.
+    Format a date range as a string.
     
     Args:
-        start_date: The start date. Can be a datetime object, string, timestamp, or None.
-        end_date: The end date. Can be a datetime object, string, timestamp, or None.
-        initial: Whether to return the initial format without optimization.
+        start_date: The start date
+        end_date: The end date
+        initial: If True, always show full range format
         
     Returns:
-        str: The formatted date range label, or "Invalid date" if either date is invalid.
+        str: Formatted date range or 'Invalid date' if invalid
     """
-    start_dt = _ensure_datetime(start_date)
-    end_dt = _ensure_datetime(end_date)
+    start_dt = to_datetime(start_date)
+    end_dt = to_datetime(end_date)
     
-    if start_dt is None or end_dt is None or is_date_after(start_dt, end_dt):
-        return "Invalid date"
+    if None in (start_dt, end_dt) or start_dt > end_dt:
+        return 'Invalid date'
     
+    # Default full range format
     label = f"{format_date(start_dt)} - {format_date(end_dt)}"
     
     if initial:
         return label
     
-    is_same_year = is_same_date(start_dt, end_dt, "year")
-    is_same_month = is_same_date(start_dt, end_dt, "month")
-    is_same_day = is_same_date(start_dt, end_dt, "day")
+    # Check if dates are in the same year/month/day
+    same_year = is_same(start_dt, end_dt, 'year')
+    same_month = is_same(start_dt, end_dt, 'month')
+    same_day = is_same(start_dt, end_dt, 'day')
     
-    if is_same_year and not is_same_month:
-        label = f"{format_date(start_dt, '%d %b')} - {format_date(end_dt)}"
-    elif is_same_year and is_same_month and not is_same_day:
-        label = f"{format_date(start_dt, '%d')} - {format_date(end_dt)}"
-    elif is_same_year and is_same_month and is_same_day:
-        label = f"{format_date(end_dt)}"
+    if same_year and not same_month:
+        # Same year, different months: "25 Apr - 26 May 2022"
+        label = f"{start_dt.strftime('%d %b')} - {end_dt.strftime('%d %b %Y')}"
+    elif same_year and same_month and not same_day:
+        # Same year and month, different days: "25 - 26 Apr 2022"
+        label = f"{start_dt.strftime('%d')} - {end_dt.strftime('%d %b %Y')}"
+    elif same_day:
+        # Same day: just show one date: "26 Apr 2022"
+        label = format_date(end_dt)
     
     return label
 
 
-def add_time(
-    years: int = 0,
-    months: int = 0,
-    days: int = 0,
-    hours: int = 0,
-    minutes: int = 0,
-    seconds: int = 0,
-    milliseconds: int = 0,
-    base_date: Optional[DateType] = None,
-) -> str:
+def add_time(duration: DurationDict) -> datetime.datetime:
     """
-    Add a duration to a date and return the result in ISO 8601 format.
+    Add a duration to the current time.
     
     Args:
-        years: The number of years to add.
-        months: The number of months to add.
-        days: The number of days to add.
-        hours: The number of hours to add.
-        minutes: The number of minutes to add.
-        seconds: The number of seconds to add.
-        milliseconds: The number of milliseconds to add.
-        base_date: The base date to add to. Defaults to the current time.
+        duration: Dictionary with duration components
+                 (years, months, days, hours, minutes, seconds, microseconds)
         
     Returns:
-        str: The resulting date in ISO 8601 format.
+        datetime.datetime: Current time plus the specified duration
     """
-    if base_date is None:
-        dt = datetime.datetime.now(DEFAULT_TIMEZONE)
+    now = datetime.datetime.now(tz.tzlocal())
+    delta = relativedelta(
+        years=duration.get('years', 0),
+        months=duration.get('months', 0),
+        days=duration.get('days', 0),
+        hours=duration.get('hours', 0),
+        minutes=duration.get('minutes', 0),
+        seconds=duration.get('seconds', 0),
+        microseconds=duration.get('microseconds', 0)
+    )
+    return now + delta
+
+
+def subtract_time(duration: DurationDict) -> datetime.datetime:
+    """
+    Subtract a duration from the current time.
+    
+    Args:
+        duration: Dictionary with duration components
+                 (years, months, days, hours, minutes, seconds, microseconds)
+        
+    Returns:
+        datetime.datetime: Current time minus the specified duration
+    """
+    now = datetime.datetime.now(tz.tzlocal())
+    delta = relativedelta(
+        years=duration.get('years', 0),
+        months=duration.get('months', 0),
+        days=duration.get('days', 0),
+        hours=duration.get('hours', 0),
+        minutes=duration.get('minutes', 0),
+        seconds=duration.get('seconds', 0),
+        microseconds=duration.get('microseconds', 0)
+    )
+    return now - delta
+
+
+def calculate_duration(start_time: Timestamp, end_time: Optional[Timestamp] = None) -> float:
+    """
+    Calculate the duration between two timestamps in seconds.
+    If end_time is not provided, the current time is used.
+    
+    Args:
+        start_time: The start timestamp
+        end_time: The end timestamp (optional, defaults to current time)
+        
+    Returns:
+        float: Duration in seconds
+    """
+    start_dt = to_datetime(start_time)
+    if start_dt is None:
+        return 0.0
+    
+    if end_time is None:
+        end_dt = datetime.datetime.now(tz.tzlocal())
     else:
-        dt = _ensure_datetime(base_date)
-        if dt is None:
-            dt = datetime.datetime.now(DEFAULT_TIMEZONE)
-        elif dt.tzinfo is None:
-            dt = dt.replace(tzinfo=DEFAULT_TIMEZONE)
-    
-    # Add years and months
-    if years != 0 or months != 0:
-        month = dt.month - 1 + months + years * 12
-        year = dt.year + month // 12
-        month = month % 12 + 1
-        day = min(dt.day, [31, 29 if year % 4 == 0 and (year % 100 != 0 or year % 400 == 0) else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1])
-        dt = dt.replace(year=year, month=month, day=day)
-    
-    # Add days, hours, minutes, seconds, and milliseconds
-    dt = dt + datetime.timedelta(
-        days=days,
-        hours=hours,
-        minutes=minutes,
-        seconds=seconds,
-        milliseconds=milliseconds,
-    )
-    
-    return dt.strftime(FORMAT_PATTERNS["iso8601_with_tz"])
-
-
-def subtract_time(
-    years: int = 0,
-    months: int = 0,
-    days: int = 0,
-    hours: int = 0,
-    minutes: int = 0,
-    seconds: int = 0,
-    milliseconds: int = 0,
-    base_date: Optional[DateType] = None,
-) -> str:
-    """
-    Subtract a duration from a date and return the result in ISO 8601 format.
-    
-    Args:
-        years: The number of years to subtract.
-        months: The number of months to subtract.
-        days: The number of days to subtract.
-        hours: The number of hours to subtract.
-        minutes: The number of minutes to subtract.
-        seconds: The number of seconds to subtract.
-        milliseconds: The number of milliseconds to subtract.
-        base_date: The base date to subtract from. Defaults to the current time.
-        
-    Returns:
-        str: The resulting date in ISO 8601 format.
-    """
-    return add_time(
-        years=-years,
-        months=-months,
-        days=-days,
-        hours=-hours,
-        minutes=-minutes,
-        seconds=-seconds,
-        milliseconds=-milliseconds,
-        base_date=base_date,
-    )
-
-
-def parse_iso_datetime(date_string: str) -> Optional[datetime.datetime]:
-    """
-    Parse an ISO 8601 datetime string.
-    
-    Args:
-        date_string: The ISO 8601 datetime string to parse.
-        
-    Returns:
-        datetime.datetime: The parsed datetime object, or None if the string is invalid.
-    """
-    try:
-        return parser.parse(date_string)
-    except (ValueError, TypeError):
-        return None
-
-
-def calculate_processing_time(start_time: DateType, end_time: DateType) -> Dict[str, Any]:
-    """
-    Calculate the processing time between two timestamps.
-    
-    Args:
-        start_time: The start time. Can be a datetime object, string, timestamp, or None.
-        end_time: The end time. Can be a datetime object, string, timestamp, or None.
-        
-    Returns:
-        Dict[str, Any]: A dictionary containing the processing time in various formats.
-    """
-    start_dt = _ensure_datetime(start_time)
-    end_dt = _ensure_datetime(end_time)
-    
-    if start_dt is None or end_dt is None:
-        return {
-            "valid": False,
-            "error": "Invalid date",
-            "seconds": 0,
-            "milliseconds": 0,
-            "formatted": "0s",
-        }
+        end_dt = to_datetime(end_time)
+        if end_dt is None:
+            return 0.0
     
     # Ensure both datetimes have timezone information
     if start_dt.tzinfo is None:
-        start_dt = start_dt.replace(tzinfo=DEFAULT_TIMEZONE)
+        start_dt = start_dt.replace(tzinfo=tz.UTC)
     if end_dt.tzinfo is None:
-        end_dt = end_dt.replace(tzinfo=DEFAULT_TIMEZONE)
+        end_dt = end_dt.replace(tzinfo=tz.UTC)
     
-    diff = end_dt - start_dt
-    seconds = diff.total_seconds()
-    milliseconds = int(seconds * 1000)
-    
-    # Format the duration
-    if seconds < 1:
-        formatted = f"{milliseconds}ms"
-    elif seconds < 60:
-        formatted = f"{seconds:.1f}s"
-    elif seconds < 3600:
-        minutes = int(seconds / 60)
-        remaining_seconds = seconds % 60
-        formatted = f"{minutes}m {remaining_seconds:.1f}s"
-    else:
-        hours = int(seconds / 3600)
-        remaining_seconds = seconds % 3600
-        minutes = int(remaining_seconds / 60)
-        remaining_seconds = remaining_seconds % 60
-        formatted = f"{hours}h {minutes}m {remaining_seconds:.1f}s"
-    
-    return {
-        "valid": True,
-        "seconds": seconds,
-        "milliseconds": milliseconds,
-        "formatted": formatted,
-    }
+    return (end_dt - start_dt).total_seconds()
 
 
-def calculate_document_age(document_date: DateType) -> Dict[str, Any]:
+def calculate_processing_time(start_time: Timestamp, end_time: Optional[Timestamp] = None) -> Dict[str, Any]:
     """
-    Calculate the age of a document.
+    Calculate processing time metrics between two timestamps.
     
     Args:
-        document_date: The document date. Can be a datetime object, string, timestamp, or None.
+        start_time: The start timestamp
+        end_time: The end timestamp (optional, defaults to current time)
         
     Returns:
-        Dict[str, Any]: A dictionary containing the document age in various formats.
+        Dict: Dictionary containing processing time metrics
+              (total_seconds, formatted_time, start_iso, end_iso)
     """
-    doc_dt = _ensure_datetime(document_date)
-    
-    if doc_dt is None:
+    start_dt = to_datetime(start_time)
+    if start_dt is None:
         return {
-            "valid": False,
-            "error": "Invalid date",
-            "days": 0,
-            "formatted": "Unknown",
+            'total_seconds': 0.0,
+            'formatted_time': '0s',
+            'start_iso': 'Invalid date',
+            'end_iso': 'Invalid date'
         }
     
-    # Ensure the datetime has timezone information
-    if doc_dt.tzinfo is None:
-        doc_dt = doc_dt.replace(tzinfo=DEFAULT_TIMEZONE)
-    
-    now = datetime.datetime.now(DEFAULT_TIMEZONE)
-    diff = now - doc_dt
-    days = diff.days
-    
-    # Format the age
-    if days < 1:
-        hours = int(diff.total_seconds() / 3600)
-        if hours < 1:
-            minutes = int(diff.total_seconds() / 60)
-            formatted = f"{minutes} minute{'s' if minutes != 1 else ''}"
-        else:
-            formatted = f"{hours} hour{'s' if hours != 1 else ''}"
-    elif days < 30:
-        formatted = f"{days} day{'s' if days != 1 else ''}"
-    elif days < 365:
-        months = days // 30
-        formatted = f"{months} month{'s' if months != 1 else ''}"
+    if end_time is None:
+        end_dt = datetime.datetime.now(tz.tzlocal())
     else:
-        years = days // 365
-        remaining_days = days % 365
-        months = remaining_days // 30
-        if months > 0:
-            formatted = f"{years} year{'s' if years != 1 else ''} {months} month{'s' if months != 1 else ''}"
-        else:
-            formatted = f"{years} year{'s' if years != 1 else ''}"
+        end_dt = to_datetime(end_time)
+        if end_dt is None:
+            return {
+                'total_seconds': 0.0,
+                'formatted_time': '0s',
+                'start_iso': format_iso8601(start_dt),
+                'end_iso': 'Invalid date'
+            }
+    
+    # Ensure both datetimes have timezone information
+    if start_dt.tzinfo is None:
+        start_dt = start_dt.replace(tzinfo=tz.UTC)
+    if end_dt.tzinfo is None:
+        end_dt = end_dt.replace(tzinfo=tz.UTC)
+    
+    total_seconds = (end_dt - start_dt).total_seconds()
+    
+    # Format the duration in a human-readable way
+    minutes, seconds = divmod(total_seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    
+    if hours > 0:
+        formatted_time = f"{int(hours)}h {int(minutes)}m {int(seconds)}s"
+    elif minutes > 0:
+        formatted_time = f"{int(minutes)}m {int(seconds)}s"
+    else:
+        formatted_time = f"{seconds:.2f}s"
     
     return {
-        "valid": True,
-        "days": days,
-        "formatted": formatted,
+        'total_seconds': total_seconds,
+        'formatted_time': formatted_time,
+        'start_iso': format_iso8601(start_dt),
+        'end_iso': format_iso8601(end_dt)
     }
 
 
-def get_processing_timestamp() -> Tuple[str, int]:
+def calculate_age(date: Timestamp) -> str:
     """
-    Get a timestamp for processing operations with both ISO format and Unix timestamp.
+    Calculate the age (time ago) of a timestamp in a human-readable format.
     
+    Args:
+        date: The timestamp to calculate age for
+        
     Returns:
-        Tuple[str, int]: A tuple containing the ISO 8601 timestamp and Unix timestamp.
+        str: Human-readable age (e.g., "2 hours ago", "5 minutes ago")
     """
-    now = datetime.datetime.now(DEFAULT_TIMEZONE)
-    iso_timestamp = now.strftime(FORMAT_PATTERNS["iso8601"])
-    unix_timestamp = int(now.timestamp())
+    dt = to_datetime(date)
+    if dt is None:
+        return 'Invalid date'
     
-    return iso_timestamp, unix_timestamp
+    # Ensure datetime has timezone information
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=tz.UTC)
+    
+    now = datetime.datetime.now(dt.tzinfo)
+    delta = now - dt
+    
+    # Calculate the time difference
+    seconds = delta.total_seconds()
+    
+    if seconds < 60:
+        return 'just now' if seconds < 10 else f"{int(seconds)} seconds ago"
+    
+    minutes = seconds / 60
+    if minutes < 60:
+        return f"{int(minutes)} minute{'s' if int(minutes) != 1 else ''} ago"
+    
+    hours = minutes / 60
+    if hours < 24:
+        return f"{int(hours)} hour{'s' if int(hours) != 1 else ''} ago"
+    
+    days = hours / 24
+    if days < 7:
+        return f"{int(days)} day{'s' if int(days) != 1 else ''} ago"
+    
+    weeks = days / 7
+    if weeks < 4:
+        return f"{int(weeks)} week{'s' if int(weeks) != 1 else ''} ago"
+    
+    months = days / 30.44  # Average days per month
+    if months < 12:
+        return f"{int(months)} month{'s' if int(months) != 1 else ''} ago"
+    
+    years = days / 365.25  # Account for leap years
+    return f"{int(years)} year{'s' if int(years) != 1 else ''} ago"
 
 
 def get_log_timestamp() -> str:
     """
-    Get a timestamp for logging purposes.
+    Get a formatted timestamp for logging purposes.
     
     Returns:
-        str: The current timestamp in log format.
+        str: Formatted timestamp for logs
     """
-    now = datetime.datetime.now(DEFAULT_TIMEZONE)
-    return now.strftime(FORMAT_PATTERNS["log_timestamp"])
+    return datetime.datetime.now().strftime(FORMAT_PATTERNS['log'])
 
 
-def get_expiry_timestamp(ttl_seconds: int) -> Tuple[str, int]:
+def get_document_processing_metadata(start_time: Timestamp) -> Dict[str, str]:
     """
-    Calculate an expiry timestamp based on a TTL in seconds.
+    Generate document processing metadata with timestamps.
     
     Args:
-        ttl_seconds: The time-to-live in seconds.
+        start_time: The start timestamp of processing
         
     Returns:
-        Tuple[str, int]: A tuple containing the ISO 8601 expiry timestamp and Unix timestamp.
+        Dict: Dictionary containing processing metadata with timestamps
     """
-    now = datetime.datetime.now(DEFAULT_TIMEZONE)
-    expiry = now + datetime.timedelta(seconds=ttl_seconds)
-    iso_timestamp = expiry.strftime(FORMAT_PATTERNS["iso8601"])
-    unix_timestamp = int(expiry.timestamp())
+    now = datetime.datetime.now(tz.tzlocal())
+    start_dt = to_datetime(start_time)
     
-    return iso_timestamp, unix_timestamp
+    if start_dt is None:
+        start_dt = now
+    
+    # Ensure datetime has timezone information
+    if start_dt.tzinfo is None:
+        start_dt = start_dt.replace(tzinfo=tz.tzlocal())
+    
+    processing_time = calculate_processing_time(start_dt, now)
+    
+    return {
+        'processing_started': format_iso8601(start_dt),
+        'processing_completed': format_iso8601(now),
+        'processing_duration_seconds': str(processing_time['total_seconds']),
+        'processing_duration_formatted': processing_time['formatted_time'],
+        'timestamp': format_iso8601(now)
+    }
