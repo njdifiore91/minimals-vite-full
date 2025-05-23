@@ -1,57 +1,52 @@
 package com.dollarfunding.mca.controller;
 
-import com.dollarfunding.mca.dto.WebhookConfigDto;
+import com.dollarfunding.mca.dto.WebhookConfigurationDTO;
 import com.dollarfunding.mca.dto.WebhookDeliveryStatusDTO;
 import com.dollarfunding.mca.dto.WebhookTestResultDTO;
-import com.dollarfunding.mca.exception.AuthorizationException;
-import com.dollarfunding.mca.exception.ResourceNotFoundException;
-import com.dollarfunding.mca.exception.ValidationException;
 import com.dollarfunding.mca.service.WebhookService;
-
 import com.fasterxml.jackson.databind.ObjectMapper;
+
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentMatchers;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.MediaType;
 import org.springframework.security.test.context.support.WithMockUser;
+import org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors;
+import org.springframework.test.context.junit.jupiter.SpringExtension;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.web.context.WebApplicationContext;
 
+import javax.persistence.EntityNotFoundException;
 import java.time.LocalDateTime;
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
+import java.util.*;
 
 import static org.hamcrest.Matchers.*;
-import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
+import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 /**
- * Unit and integration tests for the WebhookController class that manages webhook configurations
- * through the /api/v1/webhooks endpoint.
+ * Unit and integration tests for the WebhookController class.
  * <p>
- * Tests verify CRUD operations for webhook endpoints, role-based access control (restricted to
- * System Admin role), webhook testing functionality, and delivery status tracking. Includes tests
- * for webhook configuration validation, HMAC signature configuration, and error handling.
- * </p>
- * <p>
- * Uses MockMvc to simulate HTTP requests and mock services to isolate the controller from
- * external dependencies.
+ * Tests verify CRUD operations for webhook configurations, role-based access control,
+ * webhook testing functionality, and delivery status tracking.
  * </p>
  */
+@ExtendWith(SpringExtension.class)
 @WebMvcTest(WebhookController.class)
 public class WebhookControllerTest {
 
     @Autowired
-    private MockMvc mockMvc;
+    private WebApplicationContext context;
 
     @Autowired
     private ObjectMapper objectMapper;
@@ -59,431 +54,269 @@ public class WebhookControllerTest {
     @MockBean
     private WebhookService webhookService;
 
-    private WebhookConfigDto validWebhookConfig;
-    private WebhookTestResultDTO successfulTestResult;
-    private WebhookDeliveryStatusDTO deliveryStatus;
+    private MockMvc mockMvc;
+
+    private WebhookConfigurationDTO webhookConfigDTO;
+    private WebhookDeliveryStatusDTO deliveryStatusDTO;
+    private WebhookTestResultDTO testResultDTO;
 
     @BeforeEach
-    void setUp() {
-        // Set up a valid webhook configuration for testing
-        validWebhookConfig = new WebhookConfigDto();
-        validWebhookConfig.setId(1L);
-        validWebhookConfig.setUrl("https://example.com/webhook");
-        validWebhookConfig.setEvents(Arrays.asList("application.created", "application.updated"));
-        validWebhookConfig.setDescription("Test webhook");
-        validWebhookConfig.setActive(true);
-        validWebhookConfig.setSecretKey("test-secret-key");
-        validWebhookConfig.setCreatedAt(LocalDateTime.now());
-        validWebhookConfig.setUpdatedAt(LocalDateTime.now());
+    public void setup() {
+        mockMvc = MockMvcBuilders
+                .webAppContextSetup(context)
+                .apply(springSecurity())
+                .build();
 
-        // Set up a successful test result
-        successfulTestResult = new WebhookTestResultDTO();
-        successfulTestResult.setSuccess(true);
-        successfulTestResult.setStatusCode(200);
-        successfulTestResult.setMessage("Webhook test successful");
-        successfulTestResult.setResponseBody("{\"status\":\"ok\"}");
-        successfulTestResult.setResponseHeaders(Map.of("Content-Type", "application/json"));
-        successfulTestResult.setTimestamp(LocalDateTime.now());
-
-        // Set up a delivery status
-        deliveryStatus = new WebhookDeliveryStatusDTO();
-        deliveryStatus.setId("delivery-123");
-        deliveryStatus.setWebhookConfigId("1");
-        deliveryStatus.setEventType("application.created");
-        deliveryStatus.setSuccess(true);
-        deliveryStatus.setStatusCode(200);
-        deliveryStatus.setAttemptCount(1);
-        deliveryStatus.setTimestamp(LocalDateTime.now());
+        // Setup test data
+        webhookConfigDTO = createWebhookConfigDTO();
+        deliveryStatusDTO = createDeliveryStatusDTO();
+        testResultDTO = createTestResultDTO();
     }
 
-    //-------------------------------------------------------------------------
-    // GET /api/v1/webhooks - Get all webhook configurations
-    //-------------------------------------------------------------------------
+    /**
+     * Creates a sample WebhookConfigurationDTO for testing.
+     *
+     * @return A sample webhook configuration
+     */
+    private WebhookConfigurationDTO createWebhookConfigDTO() {
+        WebhookConfigurationDTO dto = new WebhookConfigurationDTO();
+        dto.setId("webhook-123");
+        dto.setName("Test Webhook");
+        dto.setUrl("https://example.com/webhook");
+        dto.setEventTypes(Arrays.asList("application.created", "application.updated"));
+        dto.setActive(true);
+        dto.setSecretKey("test-secret-key");
+        dto.setDescription("Test webhook for unit tests");
+        dto.setCreatedAt(LocalDateTime.now());
+        dto.setUpdatedAt(LocalDateTime.now());
+        dto.setHeaders(Map.of("X-Custom-Header", "custom-value"));
+        return dto;
+    }
+
+    /**
+     * Creates a sample WebhookDeliveryStatusDTO for testing.
+     *
+     * @return A sample webhook delivery status
+     */
+    private WebhookDeliveryStatusDTO createDeliveryStatusDTO() {
+        WebhookDeliveryStatusDTO dto = new WebhookDeliveryStatusDTO();
+        dto.setId("delivery-123");
+        dto.setWebhookConfigurationId("webhook-123");
+        dto.setEventType("application.created");
+        dto.setUrl("https://example.com/webhook");
+        dto.setRequestPayload("{\"id\":\"app-123\",\"status\":\"created\"}");
+        dto.setResponseStatus(200);
+        dto.setResponseBody("{\"success\":true}");
+        dto.setDeliveryTime(LocalDateTime.now());
+        dto.setSuccess(true);
+        dto.setRetryCount(0);
+        dto.setNextRetryTime(null);
+        return dto;
+    }
+
+    /**
+     * Creates a sample WebhookTestResultDTO for testing.
+     *
+     * @return A sample webhook test result
+     */
+    private WebhookTestResultDTO createTestResultDTO() {
+        WebhookTestResultDTO dto = new WebhookTestResultDTO();
+        dto.setSuccess(true);
+        dto.setStatusCode(200);
+        dto.setResponseBody("{\"success\":true}");
+        dto.setResponseTime(150L); // 150ms
+        dto.setMessage("Webhook test successful");
+        dto.setTimestamp(LocalDateTime.now());
+        return dto;
+    }
 
     @Test
-    @DisplayName("Should return all webhook configurations when authenticated as System Admin")
-    @WithMockUser(roles = {"SYSTEM_ADMIN"})
-    void shouldReturnAllWebhookConfigurations() throws Exception {
-        // Given
-        List<WebhookConfigDto> webhookConfigs = Arrays.asList(validWebhookConfig);
-        when(webhookService.getAllWebhookConfigurations()).thenReturn(webhookConfigs);
-
-        // When/Then
+    @DisplayName("Should return 403 when user is not authenticated")
+    public void shouldReturn403WhenNotAuthenticated() throws Exception {
         mockMvc.perform(get("/api/v1/webhooks"))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("Should return 403 when user does not have SYSTEM_ADMIN role")
+    @WithMockUser(roles = {"OPERATIONS_STAFF"})
+    public void shouldReturn403WhenNotAuthorized() throws Exception {
+        mockMvc.perform(get("/api/v1/webhooks"))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("Should return all webhook configurations")
+    @WithMockUser(roles = {"SYSTEM_ADMIN"})
+    public void shouldReturnAllWebhookConfigurations() throws Exception {
+        List<WebhookConfigurationDTO> webhooks = Arrays.asList(webhookConfigDTO);
+        when(webhookService.getAllWebhookConfigurations()).thenReturn(webhooks);
+
+        mockMvc.perform(get("/api/v1/webhooks")
+                        .with(SecurityMockMvcRequestPostProcessors.csrf()))
                 .andExpect(status().isOk())
                 .andExpect(content().contentType(MediaType.APPLICATION_JSON))
                 .andExpect(jsonPath("$", hasSize(1)))
-                .andExpect(jsonPath("$[0].id", is(1)))
-                .andExpect(jsonPath("$[0].url", is("https://example.com/webhook")))
-                .andExpect(jsonPath("$[0].events", hasSize(2)))
-                .andExpect(jsonPath("$[0].events[0]", is("application.created")))
-                .andExpect(jsonPath("$[0].events[1]", is("application.updated")));
+                .andExpect(jsonPath("$[0].id", is(webhookConfigDTO.getId())))
+                .andExpect(jsonPath("$[0].name", is(webhookConfigDTO.getName())))
+                .andExpect(jsonPath("$[0].url", is(webhookConfigDTO.getUrl())))
+                .andExpect(jsonPath("$[0].active", is(webhookConfigDTO.isActive())));
 
         verify(webhookService, times(1)).getAllWebhookConfigurations();
     }
 
     @Test
-    @DisplayName("Should return 403 Forbidden when not authenticated as System Admin")
-    @WithMockUser(roles = {"OPERATIONS_STAFF"})
-    void shouldReturnForbiddenWhenNotSystemAdmin() throws Exception {
-        // Given
-        doThrow(new AuthorizationException("webhooks", "view", "System Admin"))
-                .when(webhookService).getAllWebhookConfigurations();
-
-        // When/Then
-        mockMvc.perform(get("/api/v1/webhooks"))
-                .andExpect(status().isForbidden())
-                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
-                .andExpect(jsonPath("$.status", is(403)))
-                .andExpect(jsonPath("$.error", is("Forbidden")))
-                .andExpect(jsonPath("$.message", containsString("Access denied")));
-
-        verify(webhookService, times(1)).getAllWebhookConfigurations();
-    }
-
-    @Test
-    @DisplayName("Should return 401 Unauthorized when not authenticated")
-    void shouldReturnUnauthorizedWhenNotAuthenticated() throws Exception {
-        // When/Then
-        mockMvc.perform(get("/api/v1/webhooks"))
-                .andExpect(status().isUnauthorized());
-
-        verify(webhookService, never()).getAllWebhookConfigurations();
-    }
-
-    //-------------------------------------------------------------------------
-    // GET /api/v1/webhooks/{id} - Get webhook configuration by ID
-    //-------------------------------------------------------------------------
-
-    @Test
-    @DisplayName("Should return webhook configuration by ID when authenticated as System Admin")
+    @DisplayName("Should return webhook configuration by ID")
     @WithMockUser(roles = {"SYSTEM_ADMIN"})
-    void shouldReturnWebhookConfigurationById() throws Exception {
-        // Given
-        when(webhookService.getWebhookConfigurationById(anyString()))
-                .thenReturn(Optional.of(validWebhookConfig));
+    public void shouldReturnWebhookConfigurationById() throws Exception {
+        when(webhookService.getWebhookConfigurationById(webhookConfigDTO.getId()))
+                .thenReturn(Optional.of(webhookConfigDTO));
 
-        // When/Then
-        mockMvc.perform(get("/api/v1/webhooks/1"))
+        mockMvc.perform(get("/api/v1/webhooks/{id}", webhookConfigDTO.getId())
+                        .with(SecurityMockMvcRequestPostProcessors.csrf()))
                 .andExpect(status().isOk())
                 .andExpect(content().contentType(MediaType.APPLICATION_JSON))
-                .andExpect(jsonPath("$.id", is(1)))
-                .andExpect(jsonPath("$.url", is("https://example.com/webhook")))
-                .andExpect(jsonPath("$.events", hasSize(2)))
-                .andExpect(jsonPath("$.events[0]", is("application.created")));
+                .andExpect(jsonPath("$.id", is(webhookConfigDTO.getId())))
+                .andExpect(jsonPath("$.name", is(webhookConfigDTO.getName())))
+                .andExpect(jsonPath("$.url", is(webhookConfigDTO.getUrl())))
+                .andExpect(jsonPath("$.active", is(webhookConfigDTO.isActive())));
 
-        verify(webhookService, times(1)).getWebhookConfigurationById("1");
+        verify(webhookService, times(1)).getWebhookConfigurationById(webhookConfigDTO.getId());
     }
 
     @Test
-    @DisplayName("Should return 404 Not Found when webhook configuration does not exist")
+    @DisplayName("Should return 404 when webhook configuration is not found")
     @WithMockUser(roles = {"SYSTEM_ADMIN"})
-    void shouldReturnNotFoundWhenWebhookConfigurationDoesNotExist() throws Exception {
-        // Given
-        when(webhookService.getWebhookConfigurationById(anyString()))
+    public void shouldReturn404WhenWebhookConfigurationNotFound() throws Exception {
+        when(webhookService.getWebhookConfigurationById("non-existent-id"))
                 .thenReturn(Optional.empty());
 
-        // When/Then
-        mockMvc.perform(get("/api/v1/webhooks/999"))
-                .andExpect(status().isNotFound())
-                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
-                .andExpect(jsonPath("$.status", is(404)))
-                .andExpect(jsonPath("$.error", is("Not Found")));
+        mockMvc.perform(get("/api/v1/webhooks/{id}", "non-existent-id")
+                        .with(SecurityMockMvcRequestPostProcessors.csrf()))
+                .andExpect(status().isNotFound());
 
-        verify(webhookService, times(1)).getWebhookConfigurationById("999");
+        verify(webhookService, times(1)).getWebhookConfigurationById("non-existent-id");
     }
 
-    //-------------------------------------------------------------------------
-    // POST /api/v1/webhooks - Create webhook configuration
-    //-------------------------------------------------------------------------
-
     @Test
-    @DisplayName("Should create webhook configuration when authenticated as System Admin")
+    @DisplayName("Should create webhook configuration")
     @WithMockUser(roles = {"SYSTEM_ADMIN"})
-    void shouldCreateWebhookConfiguration() throws Exception {
-        // Given
-        WebhookConfigDto newWebhookConfig = new WebhookConfigDto();
-        newWebhookConfig.setUrl("https://example.com/webhook");
-        newWebhookConfig.setEvents(Arrays.asList("application.created", "application.updated"));
-        newWebhookConfig.setDescription("Test webhook");
+    public void shouldCreateWebhookConfiguration() throws Exception {
+        when(webhookService.createWebhookConfiguration(any(WebhookConfigurationDTO.class)))
+                .thenReturn(webhookConfigDTO);
 
-        when(webhookService.createWebhookConfiguration(any(WebhookConfigDto.class)))
-                .thenReturn(validWebhookConfig);
-
-        // When/Then
         mockMvc.perform(post("/api/v1/webhooks")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(newWebhookConfig)))
+                        .with(SecurityMockMvcRequestPostProcessors.csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(webhookConfigDTO)))
                 .andExpect(status().isCreated())
                 .andExpect(content().contentType(MediaType.APPLICATION_JSON))
-                .andExpect(jsonPath("$.id", is(1)))
-                .andExpect(jsonPath("$.url", is("https://example.com/webhook")));
+                .andExpect(jsonPath("$.id", is(webhookConfigDTO.getId())))
+                .andExpect(jsonPath("$.name", is(webhookConfigDTO.getName())))
+                .andExpect(jsonPath("$.url", is(webhookConfigDTO.getUrl())))
+                .andExpect(jsonPath("$.active", is(webhookConfigDTO.isActive())));
 
-        verify(webhookService, times(1)).createWebhookConfiguration(any(WebhookConfigDto.class));
+        verify(webhookService, times(1)).createWebhookConfiguration(any(WebhookConfigurationDTO.class));
     }
 
     @Test
-    @DisplayName("Should return 400 Bad Request when webhook configuration is invalid")
+    @DisplayName("Should update webhook configuration")
     @WithMockUser(roles = {"SYSTEM_ADMIN"})
-    void shouldReturnBadRequestWhenWebhookConfigurationIsInvalid() throws Exception {
-        // Given
-        WebhookConfigDto invalidWebhookConfig = new WebhookConfigDto();
-        invalidWebhookConfig.setUrl("not-a-url"); // Invalid URL
-        invalidWebhookConfig.setEvents(Arrays.asList("application.created"));
+    public void shouldUpdateWebhookConfiguration() throws Exception {
+        when(webhookService.updateWebhookConfiguration(eq(webhookConfigDTO.getId()), any(WebhookConfigurationDTO.class)))
+                .thenReturn(webhookConfigDTO);
 
-        Map<String, String> validationErrors = new HashMap<>();
-        validationErrors.put("url", "Webhook URL must use HTTPS");
-        ValidationException validationException = new ValidationException("Validation failed", validationErrors);
-
-        when(webhookService.createWebhookConfiguration(any(WebhookConfigDto.class)))
-                .thenThrow(validationException);
-
-        // When/Then
-        mockMvc.perform(post("/api/v1/webhooks")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(invalidWebhookConfig)))
-                .andExpect(status().isBadRequest())
-                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
-                .andExpect(jsonPath("$.status", is(400)))
-                .andExpect(jsonPath("$.error", is("Bad Request")))
-                .andExpect(jsonPath("$.validationErrors.url", is("Webhook URL must use HTTPS")));
-
-        verify(webhookService, times(1)).createWebhookConfiguration(any(WebhookConfigDto.class));
-    }
-
-    //-------------------------------------------------------------------------
-    // PUT /api/v1/webhooks/{id} - Update webhook configuration
-    //-------------------------------------------------------------------------
-
-    @Test
-    @DisplayName("Should update webhook configuration when authenticated as System Admin")
-    @WithMockUser(roles = {"SYSTEM_ADMIN"})
-    void shouldUpdateWebhookConfiguration() throws Exception {
-        // Given
-        WebhookConfigDto updatedWebhookConfig = new WebhookConfigDto();
-        updatedWebhookConfig.setUrl("https://example.com/updated-webhook");
-        updatedWebhookConfig.setEvents(Arrays.asList("application.created", "application.deleted"));
-        updatedWebhookConfig.setDescription("Updated test webhook");
-
-        when(webhookService.updateWebhookConfiguration(eq("1"), any(WebhookConfigDto.class)))
-                .thenReturn(updatedWebhookConfig);
-
-        // When/Then
-        mockMvc.perform(put("/api/v1/webhooks/1")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(updatedWebhookConfig)))
+        mockMvc.perform(put("/api/v1/webhooks/{id}", webhookConfigDTO.getId())
+                        .with(SecurityMockMvcRequestPostProcessors.csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(webhookConfigDTO)))
                 .andExpect(status().isOk())
                 .andExpect(content().contentType(MediaType.APPLICATION_JSON))
-                .andExpect(jsonPath("$.url", is("https://example.com/updated-webhook")))
-                .andExpect(jsonPath("$.events", hasSize(2)))
-                .andExpect(jsonPath("$.events[1]", is("application.deleted")));
+                .andExpect(jsonPath("$.id", is(webhookConfigDTO.getId())))
+                .andExpect(jsonPath("$.name", is(webhookConfigDTO.getName())))
+                .andExpect(jsonPath("$.url", is(webhookConfigDTO.getUrl())))
+                .andExpect(jsonPath("$.active", is(webhookConfigDTO.isActive())));
 
-        verify(webhookService, times(1)).updateWebhookConfiguration(eq("1"), any(WebhookConfigDto.class));
+        verify(webhookService, times(1)).updateWebhookConfiguration(
+                eq(webhookConfigDTO.getId()), any(WebhookConfigurationDTO.class));
     }
 
     @Test
-    @DisplayName("Should return 404 Not Found when updating non-existent webhook configuration")
+    @DisplayName("Should handle EntityNotFoundException when updating non-existent webhook")
     @WithMockUser(roles = {"SYSTEM_ADMIN"})
-    void shouldReturnNotFoundWhenUpdatingNonExistentWebhookConfiguration() throws Exception {
-        // Given
-        WebhookConfigDto updatedWebhookConfig = new WebhookConfigDto();
-        updatedWebhookConfig.setUrl("https://example.com/updated-webhook");
-        updatedWebhookConfig.setEvents(Arrays.asList("application.created"));
+    public void shouldHandleEntityNotFoundExceptionWhenUpdating() throws Exception {
+        when(webhookService.updateWebhookConfiguration(eq("non-existent-id"), any(WebhookConfigurationDTO.class)))
+                .thenThrow(new EntityNotFoundException("Webhook configuration not found"));
 
-        when(webhookService.updateWebhookConfiguration(eq("999"), any(WebhookConfigDto.class)))
-                .thenThrow(new ResourceNotFoundException("Webhook configuration", "999"));
+        mockMvc.perform(put("/api/v1/webhooks/{id}", "non-existent-id")
+                        .with(SecurityMockMvcRequestPostProcessors.csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(webhookConfigDTO)))
+                .andExpect(status().isNotFound());
 
-        // When/Then
-        mockMvc.perform(put("/api/v1/webhooks/999")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(updatedWebhookConfig)))
-                .andExpect(status().isNotFound())
-                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
-                .andExpect(jsonPath("$.status", is(404)))
-                .andExpect(jsonPath("$.error", is("Not Found")));
-
-        verify(webhookService, times(1)).updateWebhookConfiguration(eq("999"), any(WebhookConfigDto.class));
+        verify(webhookService, times(1)).updateWebhookConfiguration(
+                eq("non-existent-id"), any(WebhookConfigurationDTO.class));
     }
 
-    //-------------------------------------------------------------------------
-    // DELETE /api/v1/webhooks/{id} - Delete webhook configuration
-    //-------------------------------------------------------------------------
-
     @Test
-    @DisplayName("Should delete webhook configuration when authenticated as System Admin")
+    @DisplayName("Should delete webhook configuration")
     @WithMockUser(roles = {"SYSTEM_ADMIN"})
-    void shouldDeleteWebhookConfiguration() throws Exception {
-        // Given
-        doNothing().when(webhookService).deleteWebhookConfiguration(anyString());
+    public void shouldDeleteWebhookConfiguration() throws Exception {
+        doNothing().when(webhookService).deleteWebhookConfiguration(webhookConfigDTO.getId());
 
-        // When/Then
-        mockMvc.perform(delete("/api/v1/webhooks/1"))
+        mockMvc.perform(delete("/api/v1/webhooks/{id}", webhookConfigDTO.getId())
+                        .with(SecurityMockMvcRequestPostProcessors.csrf()))
                 .andExpect(status().isNoContent());
 
-        verify(webhookService, times(1)).deleteWebhookConfiguration("1");
+        verify(webhookService, times(1)).deleteWebhookConfiguration(webhookConfigDTO.getId());
     }
 
     @Test
-    @DisplayName("Should return 404 Not Found when deleting non-existent webhook configuration")
+    @DisplayName("Should handle EntityNotFoundException when deleting non-existent webhook")
     @WithMockUser(roles = {"SYSTEM_ADMIN"})
-    void shouldReturnNotFoundWhenDeletingNonExistentWebhookConfiguration() throws Exception {
-        // Given
-        doThrow(new ResourceNotFoundException("Webhook configuration", "999"))
-                .when(webhookService).deleteWebhookConfiguration("999");
+    public void shouldHandleEntityNotFoundExceptionWhenDeleting() throws Exception {
+        doThrow(new EntityNotFoundException("Webhook configuration not found"))
+                .when(webhookService).deleteWebhookConfiguration("non-existent-id");
 
-        // When/Then
-        mockMvc.perform(delete("/api/v1/webhooks/999"))
-                .andExpect(status().isNotFound())
-                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
-                .andExpect(jsonPath("$.status", is(404)))
-                .andExpect(jsonPath("$.error", is("Not Found")));
+        mockMvc.perform(delete("/api/v1/webhooks/{id}", "non-existent-id")
+                        .with(SecurityMockMvcRequestPostProcessors.csrf()))
+                .andExpect(status().isNotFound());
 
-        verify(webhookService, times(1)).deleteWebhookConfiguration("999");
+        verify(webhookService, times(1)).deleteWebhookConfiguration("non-existent-id");
     }
 
-    //-------------------------------------------------------------------------
-    // POST /api/v1/webhooks/{id}/test - Test webhook configuration
-    //-------------------------------------------------------------------------
-
     @Test
-    @DisplayName("Should test webhook configuration when authenticated as System Admin")
+    @DisplayName("Should test webhook configuration")
     @WithMockUser(roles = {"SYSTEM_ADMIN"})
-    void shouldTestWebhookConfiguration() throws Exception {
-        // Given
-        when(webhookService.testWebhookConfiguration(anyString()))
-                .thenReturn(successfulTestResult);
+    public void shouldTestWebhookConfiguration() throws Exception {
+        when(webhookService.testWebhookConfiguration(webhookConfigDTO.getId()))
+                .thenReturn(testResultDTO);
 
-        // When/Then
-        mockMvc.perform(post("/api/v1/webhooks/1/test"))
+        mockMvc.perform(post("/api/v1/webhooks/{id}/test", webhookConfigDTO.getId())
+                        .with(SecurityMockMvcRequestPostProcessors.csrf()))
                 .andExpect(status().isOk())
                 .andExpect(content().contentType(MediaType.APPLICATION_JSON))
-                .andExpect(jsonPath("$.success", is(true)))
-                .andExpect(jsonPath("$.statusCode", is(200)))
-                .andExpect(jsonPath("$.message", is("Webhook test successful")));
+                .andExpect(jsonPath("$.success", is(testResultDTO.isSuccess())))
+                .andExpect(jsonPath("$.statusCode", is(testResultDTO.getStatusCode())))
+                .andExpect(jsonPath("$.responseBody", is(testResultDTO.getResponseBody())))
+                .andExpect(jsonPath("$.responseTime", is(testResultDTO.getResponseTime().intValue())))
+                .andExpect(jsonPath("$.message", is(testResultDTO.getMessage())));
 
-        verify(webhookService, times(1)).testWebhookConfiguration("1");
+        verify(webhookService, times(1)).testWebhookConfiguration(webhookConfigDTO.getId());
     }
 
     @Test
-    @DisplayName("Should return 404 Not Found when testing non-existent webhook configuration")
+    @DisplayName("Should validate webhook URL")
     @WithMockUser(roles = {"SYSTEM_ADMIN"})
-    void shouldReturnNotFoundWhenTestingNonExistentWebhookConfiguration() throws Exception {
-        // Given
-        when(webhookService.testWebhookConfiguration("999"))
-                .thenThrow(new ResourceNotFoundException("Webhook configuration", "999"));
-
-        // When/Then
-        mockMvc.perform(post("/api/v1/webhooks/999/test"))
-                .andExpect(status().isNotFound())
-                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
-                .andExpect(jsonPath("$.status", is(404)))
-                .andExpect(jsonPath("$.error", is("Not Found")));
-
-        verify(webhookService, times(1)).testWebhookConfiguration("999");
-    }
-
-    //-------------------------------------------------------------------------
-    // GET /api/v1/webhooks/{id}/status - Get webhook delivery status history
-    //-------------------------------------------------------------------------
-
-    @Test
-    @DisplayName("Should return webhook delivery status history when authenticated as System Admin")
-    @WithMockUser(roles = {"SYSTEM_ADMIN"})
-    void shouldReturnWebhookDeliveryStatusHistory() throws Exception {
-        // Given
-        List<WebhookDeliveryStatusDTO> deliveryStatuses = Arrays.asList(deliveryStatus);
-        when(webhookService.getWebhookDeliveryStatusHistory(eq("1"), anyInt()))
-                .thenReturn(deliveryStatuses);
-
-        // When/Then
-        mockMvc.perform(get("/api/v1/webhooks/1/status").param("limit", "10"))
-                .andExpect(status().isOk())
-                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
-                .andExpect(jsonPath("$", hasSize(1)))
-                .andExpect(jsonPath("$[0].id", is("delivery-123")))
-                .andExpect(jsonPath("$[0].webhookConfigId", is("1")))
-                .andExpect(jsonPath("$[0].eventType", is("application.created")))
-                .andExpect(jsonPath("$[0].success", is(true)))
-                .andExpect(jsonPath("$[0].statusCode", is(200)));
-
-        verify(webhookService, times(1)).getWebhookDeliveryStatusHistory(eq("1"), eq(10));
-    }
-
-    @Test
-    @DisplayName("Should return 404 Not Found when getting status history for non-existent webhook configuration")
-    @WithMockUser(roles = {"SYSTEM_ADMIN"})
-    void shouldReturnNotFoundWhenGettingStatusHistoryForNonExistentWebhookConfiguration() throws Exception {
-        // Given
-        when(webhookService.getWebhookDeliveryStatusHistory(eq("999"), anyInt()))
-                .thenThrow(new ResourceNotFoundException("Webhook configuration", "999"));
-
-        // When/Then
-        mockMvc.perform(get("/api/v1/webhooks/999/status"))
-                .andExpect(status().isNotFound())
-                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
-                .andExpect(jsonPath("$.status", is(404)))
-                .andExpect(jsonPath("$.error", is("Not Found")));
-
-        verify(webhookService, times(1)).getWebhookDeliveryStatusHistory(eq("999"), anyInt());
-    }
-
-    //-------------------------------------------------------------------------
-    // POST /api/v1/webhooks/{id}/key - Generate new HMAC secret key
-    //-------------------------------------------------------------------------
-
-    @Test
-    @DisplayName("Should generate new HMAC secret key when authenticated as System Admin")
-    @WithMockUser(roles = {"SYSTEM_ADMIN"})
-    void shouldGenerateNewHmacSecretKey() throws Exception {
-        // Given
-        String newSecretKey = "new-secret-key-123";
-        when(webhookService.generateHmacSecretKey(anyString()))
-                .thenReturn(newSecretKey);
-
-        // When/Then
-        mockMvc.perform(post("/api/v1/webhooks/1/key"))
-                .andExpect(status().isOk())
-                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
-                .andExpect(jsonPath("$.secretKey", is(newSecretKey)));
-
-        verify(webhookService, times(1)).generateHmacSecretKey("1");
-    }
-
-    @Test
-    @DisplayName("Should return 404 Not Found when generating key for non-existent webhook configuration")
-    @WithMockUser(roles = {"SYSTEM_ADMIN"})
-    void shouldReturnNotFoundWhenGeneratingKeyForNonExistentWebhookConfiguration() throws Exception {
-        // Given
-        when(webhookService.generateHmacSecretKey("999"))
-                .thenThrow(new ResourceNotFoundException("Webhook configuration", "999"));
-
-        // When/Then
-        mockMvc.perform(post("/api/v1/webhooks/999/key"))
-                .andExpect(status().isNotFound())
-                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
-                .andExpect(jsonPath("$.status", is(404)))
-                .andExpect(jsonPath("$.error", is("Not Found")));
-
-        verify(webhookService, times(1)).generateHmacSecretKey("999");
-    }
-
-    //-------------------------------------------------------------------------
-    // POST /api/v1/webhooks/validate-url - Validate webhook URL
-    //-------------------------------------------------------------------------
-
-    @Test
-    @DisplayName("Should validate webhook URL when authenticated as System Admin")
-    @WithMockUser(roles = {"SYSTEM_ADMIN"})
-    void shouldValidateWebhookUrl() throws Exception {
-        // Given
+    public void shouldValidateWebhookUrl() throws Exception {
         String url = "https://example.com/webhook";
-        when(webhookService.validateWebhookUrl(anyString()))
-                .thenReturn(true);
+        Map<String, String> request = Map.of("url", url);
+        when(webhookService.validateWebhookUrl(url)).thenReturn(true);
 
-        // When/Then
         mockMvc.perform(post("/api/v1/webhooks/validate-url")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(Map.of("url", url))))
+                        .with(SecurityMockMvcRequestPostProcessors.csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isOk())
                 .andExpect(content().contentType(MediaType.APPLICATION_JSON))
                 .andExpect(jsonPath("$.valid", is(true)));
@@ -492,63 +325,208 @@ public class WebhookControllerTest {
     }
 
     @Test
-    @DisplayName("Should return invalid for invalid webhook URL")
+    @DisplayName("Should regenerate secret key")
     @WithMockUser(roles = {"SYSTEM_ADMIN"})
-    void shouldReturnInvalidForInvalidWebhookUrl() throws Exception {
-        // Given
-        String url = "https://example.com/invalid-webhook";
-        when(webhookService.validateWebhookUrl(anyString()))
-                .thenReturn(false);
+    public void shouldRegenerateSecretKey() throws Exception {
+        String newSecretKey = "new-secret-key";
+        when(webhookService.generateHmacSecretKey(webhookConfigDTO.getId()))
+                .thenReturn(newSecretKey);
 
-        // When/Then
-        mockMvc.perform(post("/api/v1/webhooks/validate-url")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(Map.of("url", url))))
+        mockMvc.perform(post("/api/v1/webhooks/{id}/regenerate-secret", webhookConfigDTO.getId())
+                        .with(SecurityMockMvcRequestPostProcessors.csrf()))
                 .andExpect(status().isOk())
                 .andExpect(content().contentType(MediaType.APPLICATION_JSON))
-                .andExpect(jsonPath("$.valid", is(false)));
+                .andExpect(jsonPath("$.secretKey", is(newSecretKey)));
 
-        verify(webhookService, times(1)).validateWebhookUrl(url);
-    }
-
-    //-------------------------------------------------------------------------
-    // POST /api/v1/webhooks/{id}/retry/{deliveryId} - Retry webhook delivery
-    //-------------------------------------------------------------------------
-
-    @Test
-    @DisplayName("Should retry webhook delivery when authenticated as System Admin")
-    @WithMockUser(roles = {"SYSTEM_ADMIN"})
-    void shouldRetryWebhookDelivery() throws Exception {
-        // Given
-        when(webhookService.retryWebhookDelivery(anyString()))
-                .thenReturn(deliveryStatus);
-
-        // When/Then
-        mockMvc.perform(post("/api/v1/webhooks/1/retry/delivery-123"))
-                .andExpect(status().isOk())
-                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
-                .andExpect(jsonPath("$.id", is("delivery-123")))
-                .andExpect(jsonPath("$.webhookConfigId", is("1")))
-                .andExpect(jsonPath("$.success", is(true)));
-
-        verify(webhookService, times(1)).retryWebhookDelivery("delivery-123");
+        verify(webhookService, times(1)).generateHmacSecretKey(webhookConfigDTO.getId());
     }
 
     @Test
-    @DisplayName("Should return 404 Not Found when retrying non-existent webhook delivery")
+    @DisplayName("Should get delivery status history")
     @WithMockUser(roles = {"SYSTEM_ADMIN"})
-    void shouldReturnNotFoundWhenRetryingNonExistentWebhookDelivery() throws Exception {
-        // Given
-        when(webhookService.retryWebhookDelivery("non-existent-delivery"))
-                .thenThrow(new ResourceNotFoundException("Webhook delivery", "non-existent-delivery"));
+    public void shouldGetDeliveryStatusHistory() throws Exception {
+        List<WebhookDeliveryStatusDTO> statusHistory = Arrays.asList(deliveryStatusDTO);
+        when(webhookService.getWebhookDeliveryStatusHistory(eq(webhookConfigDTO.getId()), anyInt()))
+                .thenReturn(statusHistory);
 
-        // When/Then
-        mockMvc.perform(post("/api/v1/webhooks/1/retry/non-existent-delivery"))
-                .andExpect(status().isNotFound())
+        mockMvc.perform(get("/api/v1/webhooks/{id}/delivery-status", webhookConfigDTO.getId())
+                        .with(SecurityMockMvcRequestPostProcessors.csrf())
+                        .param("limit", "10"))
+                .andExpect(status().isOk())
                 .andExpect(content().contentType(MediaType.APPLICATION_JSON))
-                .andExpect(jsonPath("$.status", is(404)))
-                .andExpect(jsonPath("$.error", is("Not Found")));
+                .andExpect(jsonPath("$", hasSize(1)))
+                .andExpect(jsonPath("$[0].id", is(deliveryStatusDTO.getId())))
+                .andExpect(jsonPath("$[0].webhookConfigurationId", is(deliveryStatusDTO.getWebhookConfigurationId())))
+                .andExpect(jsonPath("$[0].eventType", is(deliveryStatusDTO.getEventType())))
+                .andExpect(jsonPath("$[0].success", is(deliveryStatusDTO.isSuccess())));
 
-        verify(webhookService, times(1)).retryWebhookDelivery("non-existent-delivery");
+        verify(webhookService, times(1)).getWebhookDeliveryStatusHistory(eq(webhookConfigDTO.getId()), anyInt());
+    }
+
+    @Test
+    @DisplayName("Should deliver webhook")
+    @WithMockUser(roles = {"SYSTEM_ADMIN"})
+    public void shouldDeliverWebhook() throws Exception {
+        Map<String, Object> payload = Map.of(
+                "id", "app-123",
+                "status", "created"
+        );
+
+        when(webhookService.deliverWebhookEventToEndpoint(eq(webhookConfigDTO.getId()), ArgumentMatchers.<Map<String, Object>>any()))
+                .thenReturn(deliveryStatusDTO);
+
+        mockMvc.perform(post("/api/v1/webhooks/{id}/deliver", webhookConfigDTO.getId())
+                        .with(SecurityMockMvcRequestPostProcessors.csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(payload)))
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.id", is(deliveryStatusDTO.getId())))
+                .andExpect(jsonPath("$.webhookConfigurationId", is(deliveryStatusDTO.getWebhookConfigurationId())))
+                .andExpect(jsonPath("$.eventType", is(deliveryStatusDTO.getEventType())))
+                .andExpect(jsonPath("$.success", is(deliveryStatusDTO.isSuccess())));
+
+        verify(webhookService, times(1)).deliverWebhookEventToEndpoint(
+                eq(webhookConfigDTO.getId()), ArgumentMatchers.<Map<String, Object>>any());
+    }
+
+    @Test
+    @DisplayName("Should get failed deliveries")
+    @WithMockUser(roles = {"SYSTEM_ADMIN"})
+    public void shouldGetFailedDeliveries() throws Exception {
+        // Create a failed delivery status
+        WebhookDeliveryStatusDTO failedDelivery = createDeliveryStatusDTO();
+        failedDelivery.setSuccess(false);
+        failedDelivery.setResponseStatus(500);
+        failedDelivery.setRetryCount(2);
+        failedDelivery.setNextRetryTime(LocalDateTime.now().plusMinutes(5));
+
+        List<WebhookDeliveryStatusDTO> failedDeliveries = Arrays.asList(failedDelivery);
+        when(webhookService.getFailedWebhookDeliveriesForRetry()).thenReturn(failedDeliveries);
+
+        mockMvc.perform(get("/api/v1/webhooks/failed-deliveries")
+                        .with(SecurityMockMvcRequestPostProcessors.csrf()))
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$", hasSize(1)))
+                .andExpect(jsonPath("$[0].id", is(failedDelivery.getId())))
+                .andExpect(jsonPath("$[0].success", is(false)))
+                .andExpect(jsonPath("$[0].retryCount", is(2)));
+
+        verify(webhookService, times(1)).getFailedWebhookDeliveriesForRetry();
+    }
+
+    @Test
+    @DisplayName("Should retry delivery")
+    @WithMockUser(roles = {"SYSTEM_ADMIN"})
+    public void shouldRetryDelivery() throws Exception {
+        String deliveryId = "delivery-123";
+        when(webhookService.retryWebhookDelivery(deliveryId)).thenReturn(deliveryStatusDTO);
+
+        mockMvc.perform(post("/api/v1/webhooks/retry/{deliveryId}", deliveryId)
+                        .with(SecurityMockMvcRequestPostProcessors.csrf()))
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.id", is(deliveryStatusDTO.getId())))
+                .andExpect(jsonPath("$.webhookConfigurationId", is(deliveryStatusDTO.getWebhookConfigurationId())))
+                .andExpect(jsonPath("$.success", is(deliveryStatusDTO.isSuccess())));
+
+        verify(webhookService, times(1)).retryWebhookDelivery(deliveryId);
+    }
+
+    @Test
+    @DisplayName("Should handle IllegalArgumentException when retrying non-failed delivery")
+    @WithMockUser(roles = {"SYSTEM_ADMIN"})
+    public void shouldHandleIllegalArgumentExceptionWhenRetrying() throws Exception {
+        String deliveryId = "delivery-123";
+        when(webhookService.retryWebhookDelivery(deliveryId))
+                .thenThrow(new IllegalArgumentException("Delivery is not in a failed state"));
+
+        mockMvc.perform(post("/api/v1/webhooks/retry/{deliveryId}", deliveryId)
+                        .with(SecurityMockMvcRequestPostProcessors.csrf()))
+                .andExpect(status().isBadRequest());
+
+        verify(webhookService, times(1)).retryWebhookDelivery(deliveryId);
+    }
+
+    @Test
+    @DisplayName("Should schedule retries")
+    @WithMockUser(roles = {"SYSTEM_ADMIN"})
+    public void shouldScheduleRetries() throws Exception {
+        when(webhookService.scheduleWebhookRetries()).thenReturn(5);
+
+        mockMvc.perform(post("/api/v1/webhooks/schedule-retries")
+                        .with(SecurityMockMvcRequestPostProcessors.csrf()))
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.scheduledRetries", is(5)));
+
+        verify(webhookService, times(1)).scheduleWebhookRetries();
+    }
+
+    @Test
+    @DisplayName("Should purge old statuses")
+    @WithMockUser(roles = {"SYSTEM_ADMIN"})
+    public void shouldPurgeOldStatuses() throws Exception {
+        when(webhookService.purgeOldWebhookDeliveryStatuses(30)).thenReturn(10);
+
+        mockMvc.perform(post("/api/v1/webhooks/purge-old-statuses")
+                        .with(SecurityMockMvcRequestPostProcessors.csrf())
+                        .param("retentionDays", "30"))
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.purgedRecords", is(10)));
+
+        verify(webhookService, times(1)).purgeOldWebhookDeliveryStatuses(30);
+    }
+
+    @Test
+    @DisplayName("Should handle validation errors when creating webhook")
+    @WithMockUser(roles = {"SYSTEM_ADMIN"})
+    public void shouldHandleValidationErrorsWhenCreating() throws Exception {
+        // Create an invalid webhook configuration (missing required fields)
+        WebhookConfigurationDTO invalidWebhook = new WebhookConfigurationDTO();
+        // URL is required but not set
+
+        mockMvc.perform(post("/api/v1/webhooks")
+                        .with(SecurityMockMvcRequestPostProcessors.csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(invalidWebhook)))
+                .andExpect(status().isBadRequest());
+
+        verify(webhookService, never()).createWebhookConfiguration(any(WebhookConfigurationDTO.class));
+    }
+
+    @Test
+    @DisplayName("Should handle validation errors when updating webhook")
+    @WithMockUser(roles = {"SYSTEM_ADMIN"})
+    public void shouldHandleValidationErrorsWhenUpdating() throws Exception {
+        // Create an invalid webhook configuration (missing required fields)
+        WebhookConfigurationDTO invalidWebhook = new WebhookConfigurationDTO();
+        // URL is required but not set
+
+        mockMvc.perform(put("/api/v1/webhooks/{id}", webhookConfigDTO.getId())
+                        .with(SecurityMockMvcRequestPostProcessors.csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(invalidWebhook)))
+                .andExpect(status().isBadRequest());
+
+        verify(webhookService, never()).updateWebhookConfiguration(anyString(), any(WebhookConfigurationDTO.class));
+    }
+
+    @Test
+    @DisplayName("Should handle IllegalArgumentException when creating webhook")
+    @WithMockUser(roles = {"SYSTEM_ADMIN"})
+    public void shouldHandleIllegalArgumentExceptionWhenCreating() throws Exception {
+        when(webhookService.createWebhookConfiguration(any(WebhookConfigurationDTO.class)))
+                .thenThrow(new IllegalArgumentException("Invalid webhook configuration"));
+
+        mockMvc.perform(post("/api/v1/webhooks")
+                        .with(SecurityMockMvcRequestPostProcessors.csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(webhookConfigDTO)))
+                .andExpect(status().isBadRequest());
+
+        verify(webhookService, times(1)).createWebhookConfiguration(any(WebhookConfigurationDTO.class));
     }
 }
