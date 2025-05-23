@@ -3,22 +3,24 @@ package com.dollarfunding.mca.entity;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.Arrays;
+import java.util.Map;
+import java.util.Optional;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.NullAndEmptySource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 /**
  * Unit tests for the {@link EventType} enum.
  * <p>
  * These tests verify the behavior of the EventType enum, including:
- * - Enum constants and their descriptions
+ * - Enum constants and their display names and descriptions
+ * - Methods for finding event types by name
  * - Conversion methods for serialization and deserialization
- * - Validation methods
- * - Event categorization methods
- * - Payload type determination
+ * - Sample payload generation for different event types
  * </p>
  */
 public class EventTypeTest {
@@ -31,6 +33,14 @@ public class EventTypeTest {
 
     @ParameterizedTest
     @EnumSource(EventType.class)
+    @DisplayName("Should have non-null display name for each enum constant")
+    public void shouldHaveNonNullDisplayName(EventType eventType) {
+        assertNotNull(eventType.getDisplayName(), "Display name should not be null");
+        assertFalse(eventType.getDisplayName().isEmpty(), "Display name should not be empty");
+    }
+
+    @ParameterizedTest
+    @EnumSource(EventType.class)
     @DisplayName("Should have non-null description for each enum constant")
     public void shouldHaveNonNullDescription(EventType eventType) {
         assertNotNull(eventType.getDescription(), "Description should not be null");
@@ -38,123 +48,192 @@ public class EventTypeTest {
     }
 
     @Test
+    @DisplayName("Should have correct display names for each enum constant")
+    public void shouldHaveCorrectDisplayNames() {
+        assertEquals("Application Created", EventType.APPLICATION_CREATED.getDisplayName());
+        assertEquals("Application Updated", EventType.APPLICATION_UPDATED.getDisplayName());
+        assertEquals("Application Approved", EventType.APPLICATION_APPROVED.getDisplayName());
+        assertEquals("Application Rejected", EventType.APPLICATION_REJECTED.getDisplayName());
+        assertEquals("Document Uploaded", EventType.DOCUMENT_UPLOADED.getDisplayName());
+        assertEquals("Document Processed", EventType.DOCUMENT_PROCESSED.getDisplayName());
+    }
+
+    @Test
     @DisplayName("Should have correct descriptions for each enum constant")
     public void shouldHaveCorrectDescriptions() {
-        assertEquals("Application Created", EventType.APPLICATION_CREATED.getDescription());
-        assertEquals("Application Updated", EventType.APPLICATION_UPDATED.getDescription());
-        assertEquals("Application Approved", EventType.APPLICATION_APPROVED.getDescription());
-        assertEquals("Application Rejected", EventType.APPLICATION_REJECTED.getDescription());
-        assertEquals("Document Uploaded", EventType.DOCUMENT_UPLOADED.getDescription());
-        assertEquals("Document Processed", EventType.DOCUMENT_PROCESSED.getDescription());
+        assertEquals("Triggered when a new application is created in the system", 
+                EventType.APPLICATION_CREATED.getDescription());
+        assertEquals("Triggered when an existing application is updated", 
+                EventType.APPLICATION_UPDATED.getDescription());
+        assertEquals("Triggered when an application is approved", 
+                EventType.APPLICATION_APPROVED.getDescription());
+        assertEquals("Triggered when an application is rejected", 
+                EventType.APPLICATION_REJECTED.getDescription());
+        assertEquals("Triggered when a new document is uploaded to the system", 
+                EventType.DOCUMENT_UPLOADED.getDescription());
+        assertEquals("Triggered when a document has been processed by the OCR service", 
+                EventType.DOCUMENT_PROCESSED.getDescription());
     }
 
     @ParameterizedTest
     @EnumSource(EventType.class)
-    @DisplayName("getValue() should return the enum name for JSON serialization")
-    public void getValue_ShouldReturnEnumName(EventType eventType) {
-        assertEquals(eventType.name(), eventType.getValue(), 
-                "getValue() should return the enum name for JSON serialization");
-    }
-
-    @ParameterizedTest
-    @EnumSource(EventType.class)
-    @DisplayName("fromValue() should correctly deserialize from string")
-    public void fromValue_ShouldDeserializeCorrectly(EventType eventType) {
-        String value = eventType.name();
-        EventType result = EventType.fromValue(value);
-        assertEquals(eventType, result, "fromValue() should return the correct enum constant");
-    }
-
-    @Test
-    @DisplayName("fromValue() should throw IllegalArgumentException for invalid value")
-    public void fromValue_ShouldThrowExceptionForInvalidValue() {
-        assertThrows(IllegalArgumentException.class, () -> EventType.fromValue("INVALID_EVENT_TYPE"),
-                "fromValue() should throw IllegalArgumentException for invalid value");
-    }
-
-    @ParameterizedTest
-    @EnumSource(EventType.class)
-    @DisplayName("fromValueSafe() should correctly deserialize from string")
-    public void fromValueSafe_ShouldDeserializeCorrectly(EventType eventType) {
-        String value = eventType.name();
-        var result = EventType.fromValueSafe(value);
-        assertTrue(result.isPresent(), "fromValueSafe() should return a non-empty Optional for valid value");
-        assertEquals(eventType, result.get(), "fromValueSafe() should return the correct enum constant");
-    }
-
-    @Test
-    @DisplayName("fromValueSafe() should return empty Optional for invalid value")
-    public void fromValueSafe_ShouldReturnEmptyOptionalForInvalidValue() {
-        var result = EventType.fromValueSafe("INVALID_EVENT_TYPE");
-        assertFalse(result.isPresent(), "fromValueSafe() should return an empty Optional for invalid value");
-    }
-
-    @ParameterizedTest
-    @EnumSource(EventType.class)
-    @DisplayName("isValid() should return true for valid enum names")
-    public void isValid_ShouldReturnTrueForValidNames(EventType eventType) {
-        String value = eventType.name();
-        assertTrue(EventType.isValid(value), "isValid() should return true for valid enum names");
-    }
-
-    @Test
-    @DisplayName("isValid() should return false for invalid enum names")
-    public void isValid_ShouldReturnFalseForInvalidNames() {
-        assertFalse(EventType.isValid("INVALID_EVENT_TYPE"), 
-                "isValid() should return false for invalid enum names");
-        assertFalse(EventType.isValid(null), 
-                "isValid() should return false for null value");
-        assertFalse(EventType.isValid(""), 
-                "isValid() should return false for empty string");
-    }
-
-    @Test
-    @DisplayName("isApplicationEvent() should correctly identify application events")
-    public void isApplicationEvent_ShouldIdentifyApplicationEvents() {
-        assertTrue(EventType.APPLICATION_CREATED.isApplicationEvent());
-        assertTrue(EventType.APPLICATION_UPDATED.isApplicationEvent());
-        assertTrue(EventType.APPLICATION_APPROVED.isApplicationEvent());
-        assertTrue(EventType.APPLICATION_REJECTED.isApplicationEvent());
-        assertFalse(EventType.DOCUMENT_UPLOADED.isApplicationEvent());
-        assertFalse(EventType.DOCUMENT_PROCESSED.isApplicationEvent());
-    }
-
-    @Test
-    @DisplayName("isDocumentEvent() should correctly identify document events")
-    public void isDocumentEvent_ShouldIdentifyDocumentEvents() {
-        assertFalse(EventType.APPLICATION_CREATED.isDocumentEvent());
-        assertFalse(EventType.APPLICATION_UPDATED.isDocumentEvent());
-        assertFalse(EventType.APPLICATION_APPROVED.isDocumentEvent());
-        assertFalse(EventType.APPLICATION_REJECTED.isDocumentEvent());
-        assertTrue(EventType.DOCUMENT_UPLOADED.isDocumentEvent());
-        assertTrue(EventType.DOCUMENT_PROCESSED.isDocumentEvent());
-    }
-
-    @Test
-    @DisplayName("getPayloadType() should return correct payload type for each event")
-    public void getPayloadType_ShouldReturnCorrectType() {
-        // Application events should return "application" payload type
-        assertEquals("application", EventType.APPLICATION_CREATED.getPayloadType());
-        assertEquals("application", EventType.APPLICATION_UPDATED.getPayloadType());
-        assertEquals("application", EventType.APPLICATION_APPROVED.getPayloadType());
-        assertEquals("application", EventType.APPLICATION_REJECTED.getPayloadType());
+    @DisplayName("fromString() should find enum constant by name")
+    public void fromString_ShouldFindEnumConstantByName(EventType eventType) {
+        String name = eventType.name();
+        Optional<EventType> result = EventType.fromString(name);
         
-        // Document events should return "document" payload type
-        assertEquals("document", EventType.DOCUMENT_UPLOADED.getPayloadType());
-        assertEquals("document", EventType.DOCUMENT_PROCESSED.getPayloadType());
+        assertTrue(result.isPresent(), "fromString() should find the enum constant");
+        assertEquals(eventType, result.get(), "fromString() should return the correct enum constant");
     }
 
     @ParameterizedTest
     @EnumSource(EventType.class)
-    @DisplayName("toString() should include name and description")
-    public void toString_ShouldIncludeNameAndDescription(EventType eventType) {
-        String result = eventType.toString();
-        assertTrue(result.contains(eventType.name()), 
-                "toString() should include the enum name");
-        assertTrue(result.contains(eventType.getDescription()), 
-                "toString() should include the description");
-        assertTrue(result.contains("(") && result.contains(")"), 
-                "toString() should format with parentheses");
+    @DisplayName("fromString() should find enum constant by name (case-insensitive)")
+    public void fromString_ShouldBeCaseInsensitive(EventType eventType) {
+        String lowerCaseName = eventType.name().toLowerCase();
+        Optional<EventType> result = EventType.fromString(lowerCaseName);
+        
+        assertTrue(result.isPresent(), "fromString() should find the enum constant (case-insensitive)");
+        assertEquals(eventType, result.get(), "fromString() should return the correct enum constant");
+    }
+
+    @ParameterizedTest
+    @NullAndEmptySource
+    @ValueSource(strings = {"INVALID_EVENT_TYPE", "unknown"})
+    @DisplayName("fromString() should return empty Optional for invalid name")
+    public void fromString_ShouldReturnEmptyOptionalForInvalidName(String invalidName) {
+        Optional<EventType> result = EventType.fromString(invalidName);
+        assertFalse(result.isPresent(), "fromString() should return an empty Optional for invalid name");
+    }
+
+    @ParameterizedTest
+    @EnumSource(EventType.class)
+    @DisplayName("isValid() should return true for valid event type names")
+    public void isValid_ShouldReturnTrueForValidNames(EventType eventType) {
+        String name = eventType.name();
+        assertTrue(EventType.isValid(name), "isValid() should return true for valid event type name");
+        
+        // Test case-insensitivity
+        String lowerCaseName = name.toLowerCase();
+        assertTrue(EventType.isValid(lowerCaseName), "isValid() should be case-insensitive");
+    }
+
+    @ParameterizedTest
+    @NullAndEmptySource
+    @ValueSource(strings = {"INVALID_EVENT_TYPE", "unknown"})
+    @DisplayName("isValid() should return false for invalid event type names")
+    public void isValid_ShouldReturnFalseForInvalidNames(String invalidName) {
+        assertFalse(EventType.isValid(invalidName), "isValid() should return false for invalid event type name");
+    }
+
+    @Test
+    @DisplayName("toEventString() should convert enum name to lowercase with dots")
+    public void toEventString_ShouldConvertEnumNameToLowercaseWithDots() {
+        assertEquals("application.created", EventType.APPLICATION_CREATED.toEventString());
+        assertEquals("application.updated", EventType.APPLICATION_UPDATED.toEventString());
+        assertEquals("application.approved", EventType.APPLICATION_APPROVED.toEventString());
+        assertEquals("application.rejected", EventType.APPLICATION_REJECTED.toEventString());
+        assertEquals("document.uploaded", EventType.DOCUMENT_UPLOADED.toEventString());
+        assertEquals("document.processed", EventType.DOCUMENT_PROCESSED.toEventString());
+    }
+
+    @ParameterizedTest
+    @EnumSource(EventType.class)
+    @DisplayName("toString() should return the enum name")
+    public void toString_ShouldReturnEnumName(EventType eventType) {
+        assertEquals(eventType.name(), eventType.toString(), 
+                "toString() should return the enum name");
+    }
+
+    @Test
+    @DisplayName("generateSamplePayload() should return non-null payload for all event types")
+    public void generateSamplePayload_ShouldReturnNonNullPayload() {
+        for (EventType eventType : EventType.values()) {
+            Map<String, Object> payload = eventType.generateSamplePayload();
+            assertNotNull(payload, "Sample payload should not be null");
+            assertFalse(payload.isEmpty(), "Sample payload should not be empty");
+        }
+    }
+
+    @Test
+    @DisplayName("Application event payloads should have correct structure")
+    public void applicationEventPayloads_ShouldHaveCorrectStructure() {
+        EventType[] applicationEvents = {
+            EventType.APPLICATION_CREATED,
+            EventType.APPLICATION_UPDATED,
+            EventType.APPLICATION_APPROVED,
+            EventType.APPLICATION_REJECTED
+        };
+        
+        for (EventType eventType : applicationEvents) {
+            Map<String, Object> payload = eventType.generateSamplePayload();
+            
+            // Check top-level fields
+            assertTrue(payload.containsKey("event_type"), "Payload should contain event_type");
+            assertTrue(payload.containsKey("event_id"), "Payload should contain event_id");
+            assertTrue(payload.containsKey("timestamp"), "Payload should contain timestamp");
+            assertTrue(payload.containsKey("data"), "Payload should contain data");
+            
+            // Check event_type value
+            assertEquals(eventType.name(), payload.get("event_type"), 
+                    "event_type should match the enum name");
+            
+            // Check data structure
+            @SuppressWarnings("unchecked")
+            Map<String, Object> data = (Map<String, Object>) payload.get("data");
+            assertTrue(data.containsKey("application_id"), "Data should contain application_id");
+            assertTrue(data.containsKey("status"), "Data should contain status");
+            assertTrue(data.containsKey("merchant"), "Data should contain merchant");
+            
+            // Check merchant structure
+            @SuppressWarnings("unchecked")
+            Map<String, Object> merchant = (Map<String, Object>) data.get("merchant");
+            assertTrue(merchant.containsKey("legal_name"), "Merchant should contain legal_name");
+            assertTrue(merchant.containsKey("dba_name"), "Merchant should contain dba_name");
+            assertTrue(merchant.containsKey("industry"), "Merchant should contain industry");
+        }
+    }
+
+    @Test
+    @DisplayName("Document event payloads should have correct structure")
+    public void documentEventPayloads_ShouldHaveCorrectStructure() {
+        EventType[] documentEvents = {
+            EventType.DOCUMENT_UPLOADED,
+            EventType.DOCUMENT_PROCESSED
+        };
+        
+        for (EventType eventType : documentEvents) {
+            Map<String, Object> payload = eventType.generateSamplePayload();
+            
+            // Check top-level fields
+            assertTrue(payload.containsKey("event_type"), "Payload should contain event_type");
+            assertTrue(payload.containsKey("event_id"), "Payload should contain event_id");
+            assertTrue(payload.containsKey("timestamp"), "Payload should contain timestamp");
+            assertTrue(payload.containsKey("data"), "Payload should contain data");
+            
+            // Check event_type value
+            assertEquals(eventType.name(), payload.get("event_type"), 
+                    "event_type should match the enum name");
+            
+            // Check data structure
+            @SuppressWarnings("unchecked")
+            Map<String, Object> data = (Map<String, Object>) payload.get("data");
+            assertTrue(data.containsKey("document_id"), "Data should contain document_id");
+            assertTrue(data.containsKey("application_id"), "Data should contain application_id");
+            assertTrue(data.containsKey("document_type"), "Data should contain document_type");
+            assertTrue(data.containsKey("status"), "Data should contain status");
+            
+            // Check confidence_score for DOCUMENT_PROCESSED
+            if (eventType == EventType.DOCUMENT_PROCESSED) {
+                assertTrue(data.containsKey("confidence_score"), 
+                        "DOCUMENT_PROCESSED should contain confidence_score");
+                assertNotNull(data.get("confidence_score"), 
+                        "confidence_score should not be null for DOCUMENT_PROCESSED");
+            } else {
+                assertEquals(null, data.get("confidence_score"), 
+                        "confidence_score should be null for DOCUMENT_UPLOADED");
+            }
+        }
     }
 
     @Test
@@ -166,6 +245,17 @@ public class EventTypeTest {
                 .distinct()
                 .count(), 
                 "All enum constants should have unique names");
+    }
+
+    @Test
+    @DisplayName("All enum display names should be unique")
+    public void allEnumDisplayNamesShouldBeUnique() {
+        EventType[] values = EventType.values();
+        assertEquals(values.length, Arrays.stream(values)
+                .map(EventType::getDisplayName)
+                .distinct()
+                .count(), 
+                "All enum constants should have unique display names");
     }
 
     @Test
