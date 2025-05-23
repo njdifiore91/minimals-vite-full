@@ -1,452 +1,561 @@
-# IAM roles, policies, and service accounts shared across all environments
-# This file defines global IAM resources needed by various services to interact with cloud resources
+# IAM Roles and Policies for MCA Application Processing System
+# This file defines global IAM resources shared across all environments
 
-# -----------------------------------------------------------------------------
-# IAM Roles for Kubernetes Service Accounts (IRSA)
-# These roles enable Kubernetes service accounts to assume AWS IAM roles
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------------------------------------------------
+# PROVIDER CONFIGURATION
+# ---------------------------------------------------------------------------------------------------------------------
+provider "aws" {
+  alias = "global"
+  region = var.global_region
+}
 
-# OIDC Provider for EKS clusters to enable IAM roles for service accounts
-resource "aws_iam_openid_connect_provider" "eks_oidc_provider" {
-  url             = var.eks_oidc_provider_url
-  client_id_list  = ["sts.amazonaws.com"]
-  thumbprint_list = var.eks_oidc_thumbprints
+# ---------------------------------------------------------------------------------------------------------------------
+# VARIABLES
+# ---------------------------------------------------------------------------------------------------------------------
+variable "global_region" {
+  description = "The AWS region for global resources"
+  type        = string
+  default     = "us-east-1"
+}
 
-  tags = {
-    Name        = "${var.organization_prefix}-eks-oidc-provider"
-    Environment = "global"
-    Terraform   = "true"
+variable "environment_account_ids" {
+  description = "Map of environment names to AWS account IDs"
+  type        = map(string)
+  default = {
+    development = "111111111111"
+    staging     = "222222222222"
+    production  = "333333333333"
   }
 }
 
-# -----------------------------------------------------------------------------
-# Cross-Account IAM Roles
-# These roles allow access between different environment accounts
-# -----------------------------------------------------------------------------
+variable "s3_bucket_names" {
+  description = "Map of environment names to S3 bucket names"
+  type        = map(string)
+  default = {
+    development = "mca-documents-development"
+    staging     = "mca-documents-staging"
+    production  = "mca-documents-production"
+  }
+}
 
-# Role that allows the CI/CD pipeline to deploy to all environments
-resource "aws_iam_role" "cicd_deployment_role" {
-  name = "${var.organization_prefix}-cicd-deployment-role"
+variable "jwt_token_expiry" {
+  description = "JWT token expiry time in seconds"
+  type        = number
+  default     = 3600  # 60 minutes as specified in the technical requirements
+}
+
+variable "jwt_algorithm" {
+  description = "JWT signing algorithm"
+  type        = string
+  default     = "RS256"  # As specified in the technical requirements
+}
+
+# ---------------------------------------------------------------------------------------------------------------------
+# IAM ROLES FOR KUBERNETES SERVICE ACCOUNTS (IRSA)
+# ---------------------------------------------------------------------------------------------------------------------
+
+# OIDC Provider for EKS clusters
+resource "aws_iam_openid_connect_provider" "eks_oidc_provider" {
+  for_each = var.environment_account_ids
+  
+  client_id_list  = ["sts.amazonaws.com"]
+  thumbprint_list = ["9e99a48a9960b14926bb7f3b02e22da2b0ab7280"] # This should be updated with actual thumbprints
+  url             = "https://oidc.eks.${each.key}.amazonaws.com"
+}
+
+# ---------------------------------------------------------------------------------------------------------------------
+# DOCUMENT SERVICE IAM ROLE
+# ---------------------------------------------------------------------------------------------------------------------
+
+# IAM policy for Document Service to access S3 buckets
+data "aws_iam_policy_document" "document_service_s3_policy" {
+  statement {
+    sid    = "AllowDocumentServiceS3Access"
+    effect = "Allow"
+    actions = [
+      "s3:GetObject",
+      "s3:PutObject",
+      "s3:DeleteObject",
+      "s3:ListBucket"
+    ]
+    resources = [
+      for bucket_name in values(var.s3_bucket_names) : 
+        "arn:aws:s3:::${bucket_name}/*"
+    ]
+  }
+  
+  statement {
+    sid    = "AllowDocumentServiceS3BucketList"
+    effect = "Allow"
+    actions = [
+      "s3:ListBucket"
+    ]
+    resources = [
+      for bucket_name in values(var.s3_bucket_names) : 
+        "arn:aws:s3:::${bucket_name}"
+    ]
+  }
+}
+
+# IAM role for Document Service
+resource "aws_iam_role" "document_service_role" {
+  for_each = var.environment_account_ids
+  
+  name = "document-service-role-${each.key}"
   
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
       {
-        Action = "sts:AssumeRole"
         Effect = "Allow"
         Principal = {
-          AWS = var.cicd_account_arns
+          Federated = aws_iam_openid_connect_provider.eks_oidc_provider[each.key].arn
+        }
+        Action = "sts:AssumeRoleWithWebIdentity"
+        Condition = {
+          StringEquals = {
+            "${replace(aws_iam_openid_connect_provider.eks_oidc_provider[each.key].url, "https://", "")}:sub": "system:serviceaccount:document-service:document-service-sa"
+          }
         }
       }
     ]
   })
-
+  
   tags = {
-    Name        = "${var.organization_prefix}-cicd-deployment-role"
-    Environment = "global"
-    Terraform   = "true"
+    Environment = each.key
+    Service     = "document-service"
   }
 }
 
-# Policy for CI/CD deployment role with permissions to deploy to all environments
-resource "aws_iam_policy" "cicd_deployment_policy" {
-  name        = "${var.organization_prefix}-cicd-deployment-policy"
-  description = "Policy for CI/CD pipeline to deploy to all environments"
+# Attach S3 policy to Document Service role
+resource "aws_iam_role_policy" "document_service_s3_policy_attachment" {
+  for_each = var.environment_account_ids
   
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Action = [
-          "eks:DescribeCluster",
-          "eks:ListClusters",
-          "ecr:GetAuthorizationToken",
-          "ecr:BatchCheckLayerAvailability",
-          "ecr:GetDownloadUrlForLayer",
-          "ecr:BatchGetImage",
-          "ecr:InitiateLayerUpload",
-          "ecr:UploadLayerPart",
-          "ecr:CompleteLayerUpload",
-          "ecr:PutImage"
-        ]
-        Effect   = "Allow"
-        Resource = "*"
-      },
-      {
-        Action = [
-          "s3:GetObject",
-          "s3:PutObject",
-          "s3:ListBucket"
-        ]
-        Effect   = "Allow"
-        Resource = [
-          "arn:aws:s3:::${var.organization_prefix}-*-artifacts/*",
-          "arn:aws:s3:::${var.organization_prefix}-*-artifacts"
-        ]
-      }
+  name   = "document-service-s3-policy-${each.key}"
+  role   = aws_iam_role.document_service_role[each.key].id
+  policy = data.aws_iam_policy_document.document_service_s3_policy.json
+}
+
+# ---------------------------------------------------------------------------------------------------------------------
+# OCR SERVICE IAM ROLE
+# ---------------------------------------------------------------------------------------------------------------------
+
+# IAM policy for OCR Service to access S3 buckets
+data "aws_iam_policy_document" "ocr_service_s3_policy" {
+  statement {
+    sid    = "AllowOCRServiceS3Access"
+    effect = "Allow"
+    actions = [
+      "s3:GetObject",
+      "s3:PutObject",
+      "s3:ListBucket"
     ]
-  })
-}
-
-# Attach the deployment policy to the CI/CD role
-resource "aws_iam_role_policy_attachment" "cicd_deployment_attachment" {
-  role       = aws_iam_role.cicd_deployment_role.name
-  policy_arn = aws_iam_policy.cicd_deployment_policy.arn
-}
-
-# -----------------------------------------------------------------------------
-# Global S3 Access Policies
-# These policies define access to S3 buckets shared across environments
-# -----------------------------------------------------------------------------
-
-# Policy for read-only access to document storage buckets
-resource "aws_iam_policy" "s3_document_read_policy" {
-  name        = "${var.organization_prefix}-s3-document-read-policy"
-  description = "Policy for read-only access to document storage buckets"
+    resources = [
+      for bucket_name in values(var.s3_bucket_names) : 
+        "arn:aws:s3:::${bucket_name}/*"
+    ]
+  }
   
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Action = [
-          "s3:GetObject",
-          "s3:ListBucket"
-        ]
-        Effect   = "Allow"
-        Resource = [
-          "arn:aws:s3:::${var.organization_prefix}-*-documents/*",
-          "arn:aws:s3:::${var.organization_prefix}-*-documents"
-        ]
-      }
+  statement {
+    sid    = "AllowOCRServiceS3BucketList"
+    effect = "Allow"
+    actions = [
+      "s3:ListBucket"
     ]
-  })
-}
-
-# Policy for read-write access to document storage buckets
-resource "aws_iam_policy" "s3_document_readwrite_policy" {
-  name        = "${var.organization_prefix}-s3-document-readwrite-policy"
-  description = "Policy for read-write access to document storage buckets"
-  
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Action = [
-          "s3:GetObject",
-          "s3:PutObject",
-          "s3:DeleteObject",
-          "s3:ListBucket"
-        ]
-        Effect   = "Allow"
-        Resource = [
-          "arn:aws:s3:::${var.organization_prefix}-*-documents/*",
-          "arn:aws:s3:::${var.organization_prefix}-*-documents"
-        ]
-      }
+    resources = [
+      for bucket_name in values(var.s3_bucket_names) : 
+        "arn:aws:s3:::${bucket_name}"
     ]
-  })
-}
-
-# -----------------------------------------------------------------------------
-# Service-Specific IAM Policies
-# These policies define permissions for specific services across environments
-# -----------------------------------------------------------------------------
-
-# Policy for Email Service to access SES and S3
-resource "aws_iam_policy" "email_service_policy" {
-  name        = "${var.organization_prefix}-email-service-policy"
-  description = "Policy for Email Service to access SES and S3"
-  
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Action = [
-          "ses:SendEmail",
-          "ses:SendRawEmail"
-        ]
-        Effect   = "Allow"
-        Resource = "*"
-      },
-      {
-        Action = [
-          "s3:PutObject",
-          "s3:GetObject"
-        ]
-        Effect   = "Allow"
-        Resource = [
-          "arn:aws:s3:::${var.organization_prefix}-*-documents/email-attachments/*"
-        ]
-      }
-    ]
-  })
-}
-
-# Policy for Document Service to access S3 and machine learning services
-resource "aws_iam_policy" "document_service_policy" {
-  name        = "${var.organization_prefix}-document-service-policy"
-  description = "Policy for Document Service to access S3 and ML services"
-  
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Action = [
-          "s3:GetObject",
-          "s3:PutObject",
-          "s3:ListBucket"
-        ]
-        Effect   = "Allow"
-        Resource = [
-          "arn:aws:s3:::${var.organization_prefix}-*-documents/*",
-          "arn:aws:s3:::${var.organization_prefix}-*-documents"
-        ]
-      },
-      {
-        Action = [
-          "rekognition:DetectText",
-          "rekognition:AnalyzeDocument",
-          "textract:AnalyzeDocument",
-          "textract:DetectDocumentText"
-        ]
-        Effect   = "Allow"
-        Resource = "*"
-      }
-    ]
-  })
-}
-
-# Policy for OCR Service to access S3 and machine learning services
-resource "aws_iam_policy" "ocr_service_policy" {
-  name        = "${var.organization_prefix}-ocr-service-policy"
-  description = "Policy for OCR Service to access S3 and ML services"
-  
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Action = [
-          "s3:GetObject",
-          "s3:PutObject"
-        ]
-        Effect   = "Allow"
-        Resource = [
-          "arn:aws:s3:::${var.organization_prefix}-*-documents/*"
-        ]
-      },
-      {
-        Action = [
-          "rekognition:DetectText",
-          "rekognition:AnalyzeDocument",
-          "textract:AnalyzeDocument",
-          "textract:DetectDocumentText"
-        ]
-        Effect   = "Allow"
-        Resource = "*"
-      }
-    ]
-  })
-}
-
-# Policy for Data Service to access RDS and S3
-resource "aws_iam_policy" "data_service_policy" {
-  name        = "${var.organization_prefix}-data-service-policy"
-  description = "Policy for Data Service to access RDS and S3"
-  
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Action = [
-          "rds:DescribeDBInstances",
-          "rds:DescribeDBClusters"
-        ]
-        Effect   = "Allow"
-        Resource = "*"
-      },
-      {
-        Action = [
-          "s3:GetObject"
-        ]
-        Effect   = "Allow"
-        Resource = [
-          "arn:aws:s3:::${var.organization_prefix}-*-documents/*"
-        ]
-      },
-      {
-        Action = [
-          "kms:Decrypt",
-          "kms:GenerateDataKey"
-        ]
-        Effect   = "Allow"
-        Resource = var.pii_encryption_key_arns
-      }
-    ]
-  })
-}
-
-# Policy for Notification Service to access SNS and SQS
-resource "aws_iam_policy" "notification_service_policy" {
-  name        = "${var.organization_prefix}-notification-service-policy"
-  description = "Policy for Notification Service to access SNS and SQS"
-  
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Action = [
-          "sns:Publish",
-          "sns:CreateTopic",
-          "sns:Subscribe",
-          "sns:Unsubscribe"
-        ]
-        Effect   = "Allow"
-        Resource = "arn:aws:sns:*:*:${var.organization_prefix}-*"
-      },
-      {
-        Action = [
-          "sqs:SendMessage",
-          "sqs:ReceiveMessage",
-          "sqs:DeleteMessage",
-          "sqs:GetQueueUrl",
-          "sqs:GetQueueAttributes"
-        ]
-        Effect   = "Allow"
-        Resource = "arn:aws:sqs:*:*:${var.organization_prefix}-*"
-      }
-    ]
-  })
-}
-
-# -----------------------------------------------------------------------------
-# JWT Authentication IAM Resources
-# These resources support JWT authentication with RS256 algorithm
-# -----------------------------------------------------------------------------
-
-# IAM user for JWT token signing (used by API Gateway)
-resource "aws_iam_user" "jwt_signing_user" {
-  name = "${var.organization_prefix}-jwt-signing-user"
-  path = "/system/"
-
-  tags = {
-    Name        = "${var.organization_prefix}-jwt-signing-user"
-    Environment = "global"
-    Terraform   = "true"
   }
 }
 
-# Policy for JWT signing user to access KMS for signing operations
-resource "aws_iam_policy" "jwt_signing_policy" {
-  name        = "${var.organization_prefix}-jwt-signing-policy"
-  description = "Policy for JWT signing operations using KMS"
+# IAM role for OCR Service
+resource "aws_iam_role" "ocr_service_role" {
+  for_each = var.environment_account_ids
   
-  policy = jsonencode({
+  name = "ocr-service-role-${each.key}"
+  
+  assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
       {
-        Action = [
-          "kms:Sign",
-          "kms:Verify",
-          "kms:GetPublicKey"
-        ]
-        Effect   = "Allow"
-        Resource = var.jwt_signing_key_arns
+        Effect = "Allow"
+        Principal = {
+          Federated = aws_iam_openid_connect_provider.eks_oidc_provider[each.key].arn
+        }
+        Action = "sts:AssumeRoleWithWebIdentity"
+        Condition = {
+          StringEquals = {
+            "${replace(aws_iam_openid_connect_provider.eks_oidc_provider[each.key].url, "https://", "")}:sub": "system:serviceaccount:ocr-service:ocr-service-sa"
+          }
+        }
       }
     ]
   })
+  
+  tags = {
+    Environment = each.key
+    Service     = "ocr-service"
+  }
 }
 
-# Attach the JWT signing policy to the JWT signing user
-resource "aws_iam_user_policy_attachment" "jwt_signing_attachment" {
-  user       = aws_iam_user.jwt_signing_user.name
-  policy_arn = aws_iam_policy.jwt_signing_policy.arn
+# Attach S3 policy to OCR Service role
+resource "aws_iam_role_policy" "ocr_service_s3_policy_attachment" {
+  for_each = var.environment_account_ids
+  
+  name   = "ocr-service-s3-policy-${each.key}"
+  role   = aws_iam_role.ocr_service_role[each.key].id
+  policy = data.aws_iam_policy_document.ocr_service_s3_policy.json
 }
 
-# -----------------------------------------------------------------------------
-# Variables
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------------------------------------------------
+# EMAIL SERVICE IAM ROLE
+# ---------------------------------------------------------------------------------------------------------------------
 
-variable "organization_prefix" {
-  description = "Prefix used for all resource names"
-  type        = string
-  default     = "dollarfunding-mca"
+# IAM policy for Email Service to access SES for sending emails
+data "aws_iam_policy_document" "email_service_policy" {
+  statement {
+    sid    = "AllowEmailServiceSESAccess"
+    effect = "Allow"
+    actions = [
+      "ses:SendEmail",
+      "ses:SendRawEmail"
+    ]
+    resources = ["*"]
+  }
 }
 
-variable "eks_oidc_provider_url" {
-  description = "URL of the OIDC provider for EKS clusters"
-  type        = string
+# IAM role for Email Service
+resource "aws_iam_role" "email_service_role" {
+  for_each = var.environment_account_ids
+  
+  name = "email-service-role-${each.key}"
+  
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Federated = aws_iam_openid_connect_provider.eks_oidc_provider[each.key].arn
+        }
+        Action = "sts:AssumeRoleWithWebIdentity"
+        Condition = {
+          StringEquals = {
+            "${replace(aws_iam_openid_connect_provider.eks_oidc_provider[each.key].url, "https://", "")}:sub": "system:serviceaccount:email-service:email-service-sa"
+          }
+        }
+      }
+    ]
+  })
+  
+  tags = {
+    Environment = each.key
+    Service     = "email-service"
+  }
 }
 
-variable "eks_oidc_thumbprints" {
-  description = "Thumbprints of the OIDC provider for EKS clusters"
-  type        = list(string)
+# Attach SES policy to Email Service role
+resource "aws_iam_role_policy" "email_service_policy_attachment" {
+  for_each = var.environment_account_ids
+  
+  name   = "email-service-ses-policy-${each.key}"
+  role   = aws_iam_role.email_service_role[each.key].id
+  policy = data.aws_iam_policy_document.email_service_policy.json
 }
 
-variable "cicd_account_arns" {
-  description = "ARNs of the CI/CD accounts that can assume the deployment role"
-  type        = list(string)
+# ---------------------------------------------------------------------------------------------------------------------
+# DATA SERVICE IAM ROLE
+# ---------------------------------------------------------------------------------------------------------------------
+
+# IAM policy for Data Service to access DynamoDB and other resources
+data "aws_iam_policy_document" "data_service_policy" {
+  statement {
+    sid    = "AllowDataServiceS3Access"
+    effect = "Allow"
+    actions = [
+      "s3:GetObject",
+      "s3:ListBucket"
+    ]
+    resources = [
+      for bucket_name in values(var.s3_bucket_names) : 
+        "arn:aws:s3:::${bucket_name}/*",
+      for bucket_name in values(var.s3_bucket_names) : 
+        "arn:aws:s3:::${bucket_name}"
+    ]
+  }
+  
+  # Add KMS permissions for field-level encryption
+  statement {
+    sid    = "AllowDataServiceKMSAccess"
+    effect = "Allow"
+    actions = [
+      "kms:Decrypt",
+      "kms:Encrypt",
+      "kms:GenerateDataKey"
+    ]
+    resources = ["*"] # This should be restricted to specific KMS keys in production
+  }
 }
 
-variable "pii_encryption_key_arns" {
-  description = "ARNs of the KMS keys used for PII encryption"
-  type        = list(string)
+# IAM role for Data Service
+resource "aws_iam_role" "data_service_role" {
+  for_each = var.environment_account_ids
+  
+  name = "data-service-role-${each.key}"
+  
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Federated = aws_iam_openid_connect_provider.eks_oidc_provider[each.key].arn
+        }
+        Action = "sts:AssumeRoleWithWebIdentity"
+        Condition = {
+          StringEquals = {
+            "${replace(aws_iam_openid_connect_provider.eks_oidc_provider[each.key].url, "https://", "")}:sub": "system:serviceaccount:data-service:data-service-sa"
+          }
+        }
+      }
+    ]
+  })
+  
+  tags = {
+    Environment = each.key
+    Service     = "data-service"
+  }
 }
 
-variable "jwt_signing_key_arns" {
-  description = "ARNs of the KMS keys used for JWT signing"
-  type        = list(string)
+# Attach policy to Data Service role
+resource "aws_iam_role_policy" "data_service_policy_attachment" {
+  for_each = var.environment_account_ids
+  
+  name   = "data-service-policy-${each.key}"
+  role   = aws_iam_role.data_service_role[each.key].id
+  policy = data.aws_iam_policy_document.data_service_policy.json
 }
 
-# -----------------------------------------------------------------------------
-# Outputs
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------------------------------------------------
+# NOTIFICATION SERVICE IAM ROLE
+# ---------------------------------------------------------------------------------------------------------------------
 
-output "cicd_deployment_role_arn" {
-  description = "ARN of the CI/CD deployment role"
-  value       = aws_iam_role.cicd_deployment_role.arn
+# IAM policy for Notification Service to access SNS and other resources
+data "aws_iam_policy_document" "notification_service_policy" {
+  statement {
+    sid    = "AllowNotificationServiceSNSAccess"
+    effect = "Allow"
+    actions = [
+      "sns:Publish",
+      "sns:CreateTopic",
+      "sns:Subscribe",
+      "sns:Unsubscribe"
+    ]
+    resources = ["*"] # This should be restricted to specific SNS topics in production
+  }
 }
 
-output "s3_document_read_policy_arn" {
-  description = "ARN of the S3 document read-only policy"
-  value       = aws_iam_policy.s3_document_read_policy.arn
+# IAM role for Notification Service
+resource "aws_iam_role" "notification_service_role" {
+  for_each = var.environment_account_ids
+  
+  name = "notification-service-role-${each.key}"
+  
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Federated = aws_iam_openid_connect_provider.eks_oidc_provider[each.key].arn
+        }
+        Action = "sts:AssumeRoleWithWebIdentity"
+        Condition = {
+          StringEquals = {
+            "${replace(aws_iam_openid_connect_provider.eks_oidc_provider[each.key].url, "https://", "")}:sub": "system:serviceaccount:notification-service:notification-service-sa"
+          }
+        }
+      }
+    ]
+  })
+  
+  tags = {
+    Environment = each.key
+    Service     = "notification-service"
+  }
 }
 
-output "s3_document_readwrite_policy_arn" {
-  description = "ARN of the S3 document read-write policy"
-  value       = aws_iam_policy.s3_document_readwrite_policy.arn
+# Attach policy to Notification Service role
+resource "aws_iam_role_policy" "notification_service_policy_attachment" {
+  for_each = var.environment_account_ids
+  
+  name   = "notification-service-policy-${each.key}"
+  role   = aws_iam_role.notification_service_role[each.key].id
+  policy = data.aws_iam_policy_document.notification_service_policy.json
 }
 
-output "email_service_policy_arn" {
-  description = "ARN of the Email Service policy"
-  value       = aws_iam_policy.email_service_policy.arn
+# ---------------------------------------------------------------------------------------------------------------------
+# CROSS-ACCOUNT ROLES FOR ENVIRONMENT ACCESS
+# ---------------------------------------------------------------------------------------------------------------------
+
+# IAM policy for cross-account access
+data "aws_iam_policy_document" "cross_account_assume_role_policy" {
+  for_each = var.environment_account_ids
+  
+  statement {
+    sid    = "AllowCrossAccountAccess"
+    effect = "Allow"
+    principals {
+      type        = "AWS"
+      identifiers = ["arn:aws:iam::${each.value}:root"]
+    }
+    actions = ["sts:AssumeRole"]
+  }
 }
 
-output "document_service_policy_arn" {
-  description = "ARN of the Document Service policy"
-  value       = aws_iam_policy.document_service_policy.arn
+# Cross-account role for CI/CD pipelines
+resource "aws_iam_role" "cross_account_cicd_role" {
+  for_each = var.environment_account_ids
+  
+  name               = "cross-account-cicd-role-${each.key}"
+  assume_role_policy = data.aws_iam_policy_document.cross_account_assume_role_policy[each.key].json
+  
+  tags = {
+    Environment = each.key
+    Purpose     = "CI/CD"
+  }
 }
 
-output "ocr_service_policy_arn" {
-  description = "ARN of the OCR Service policy"
-  value       = aws_iam_policy.ocr_service_policy.arn
+# Policy for CI/CD cross-account role
+data "aws_iam_policy_document" "cicd_policy" {
+  statement {
+    sid    = "AllowECRAccess"
+    effect = "Allow"
+    actions = [
+      "ecr:GetDownloadUrlForLayer",
+      "ecr:BatchGetImage",
+      "ecr:BatchCheckLayerAvailability",
+      "ecr:PutImage",
+      "ecr:InitiateLayerUpload",
+      "ecr:UploadLayerPart",
+      "ecr:CompleteLayerUpload"
+    ]
+    resources = ["*"]
+  }
+  
+  statement {
+    sid    = "AllowEKSAccess"
+    effect = "Allow"
+    actions = [
+      "eks:DescribeCluster",
+      "eks:ListClusters"
+    ]
+    resources = ["*"]
+  }
+  
+  statement {
+    sid    = "AllowS3Access"
+    effect = "Allow"
+    actions = [
+      "s3:GetObject",
+      "s3:PutObject",
+      "s3:ListBucket"
+    ]
+    resources = [
+      for bucket_name in values(var.s3_bucket_names) : 
+        "arn:aws:s3:::${bucket_name}/*",
+      for bucket_name in values(var.s3_bucket_names) : 
+        "arn:aws:s3:::${bucket_name}"
+    ]
+  }
 }
 
-output "data_service_policy_arn" {
-  description = "ARN of the Data Service policy"
-  value       = aws_iam_policy.data_service_policy.arn
+# Attach policy to cross-account CI/CD role
+resource "aws_iam_role_policy" "cross_account_cicd_policy_attachment" {
+  for_each = var.environment_account_ids
+  
+  name   = "cross-account-cicd-policy-${each.key}"
+  role   = aws_iam_role.cross_account_cicd_role[each.key].id
+  policy = data.aws_iam_policy_document.cicd_policy.json
 }
 
-output "notification_service_policy_arn" {
-  description = "ARN of the Notification Service policy"
-  value       = aws_iam_policy.notification_service_policy.arn
+# ---------------------------------------------------------------------------------------------------------------------
+# JWT AUTHENTICATION RESOURCES
+# ---------------------------------------------------------------------------------------------------------------------
+
+# KMS key for JWT token signing
+resource "aws_kms_key" "jwt_signing_key" {
+  description             = "KMS key for JWT token signing using RS256 algorithm"
+  deletion_window_in_days = 30
+  enable_key_rotation     = true
+  
+  tags = {
+    Name = "jwt-signing-key"
+    Purpose = "JWT Authentication"
+  }
 }
 
-output "jwt_signing_user_arn" {
-  description = "ARN of the JWT signing user"
-  value       = aws_iam_user.jwt_signing_user.arn
+# KMS key alias for easier reference
+resource "aws_kms_alias" "jwt_signing_key_alias" {
+  name          = "alias/jwt-signing-key"
+  target_key_id = aws_kms_key.jwt_signing_key.key_id
 }
 
-output "eks_oidc_provider_arn" {
-  description = "ARN of the EKS OIDC provider"
-  value       = aws_iam_openid_connect_provider.eks_oidc_provider.arn
+# SSM Parameter to store JWT configuration
+resource "aws_ssm_parameter" "jwt_config" {
+  name        = "/global/jwt/config"
+  description = "JWT configuration for authentication"
+  type        = "SecureString"
+  value = jsonencode({
+    algorithm    = var.jwt_algorithm
+    token_expiry = var.jwt_token_expiry
+    issuer       = "dollarfunding-mca"
+    audience     = "mca-application-system"
+    key_id       = aws_kms_key.jwt_signing_key.key_id
+  })
+  
+  tags = {
+    Name = "jwt-config"
+    Purpose = "Authentication"
+  }
+}
+
+# ---------------------------------------------------------------------------------------------------------------------
+# OUTPUTS
+# ---------------------------------------------------------------------------------------------------------------------
+
+output "document_service_role_arns" {
+  description = "ARNs of the Document Service IAM roles"
+  value       = { for env, role in aws_iam_role.document_service_role : env => role.arn }
+}
+
+output "ocr_service_role_arns" {
+  description = "ARNs of the OCR Service IAM roles"
+  value       = { for env, role in aws_iam_role.ocr_service_role : env => role.arn }
+}
+
+output "email_service_role_arns" {
+  description = "ARNs of the Email Service IAM roles"
+  value       = { for env, role in aws_iam_role.email_service_role : env => role.arn }
+}
+
+output "data_service_role_arns" {
+  description = "ARNs of the Data Service IAM roles"
+  value       = { for env, role in aws_iam_role.data_service_role : env => role.arn }
+}
+
+output "notification_service_role_arns" {
+  description = "ARNs of the Notification Service IAM roles"
+  value       = { for env, role in aws_iam_role.notification_service_role : env => role.arn }
+}
+
+output "cross_account_cicd_role_arns" {
+  description = "ARNs of the cross-account CI/CD roles"
+  value       = { for env, role in aws_iam_role.cross_account_cicd_role : env => role.arn }
+}
+
+output "jwt_signing_key_arn" {
+  description = "ARN of the KMS key used for JWT signing"
+  value       = aws_kms_key.jwt_signing_key.arn
 }
