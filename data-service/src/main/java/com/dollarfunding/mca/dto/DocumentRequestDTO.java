@@ -1,11 +1,13 @@
 package com.dollarfunding.mca.dto;
 
 import com.dollarfunding.mca.entity.DocumentType;
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.annotation.JsonProperty;
 
 import javax.validation.constraints.NotBlank;
 import javax.validation.constraints.NotNull;
+import javax.validation.constraints.Pattern;
 import javax.validation.constraints.Size;
 import java.util.HashMap;
 import java.util.Map;
@@ -13,102 +15,110 @@ import java.util.UUID;
 
 /**
  * Data Transfer Object for document upload and update operations.
- * Defines the structure for incoming document metadata with validation annotations for required fields.
- * This class includes fields for document type, application association, and classification metadata.
- * It serves as the contract for document operations in the REST API.
+ * 
+ * This class defines the structure for incoming document metadata with validation
+ * annotations for required fields. It includes fields for document type, application
+ * association, and classification metadata. It serves as the contract for document
+ * operations in the REST API.
+ * 
+ * Used for both document creation and update operations, with appropriate validation
+ * rules for each field. For updates, only the fields that are provided will be updated.
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
-@JsonIgnoreProperties(ignoreUnknown = true)
 public class DocumentRequestDTO {
 
     /**
      * The ID of the application this document belongs to.
-     * Required for all document operations.
+     * Required for document creation.
      */
     @NotNull(message = "Application ID is required")
+    @JsonProperty("application_id")
     private UUID applicationId;
 
     /**
-     * The type of document being uploaded or updated.
+     * The type of document being uploaded.
      * Required for document creation.
      */
     @NotNull(message = "Document type is required")
     private DocumentType type;
 
     /**
-     * The classification of the document, if known.
-     * Optional for document creation, as it may be determined by the Document Service.
+     * Optional document classification.
+     * If not provided, will be determined by the Document Service.
      */
     private String classification;
 
     /**
-     * Additional metadata for the document.
-     * Optional for document creation.
+     * Optional metadata for the document.
+     * Can include any additional information about the document.
      */
-    private Map<String, Object> metadata = new HashMap<>();
-
-    /**
-     * Confidence scores for document classification and field extraction.
-     * Optional for document creation, typically populated by the OCR Service.
-     */
-    private Map<String, Double> confidenceScores = new HashMap<>();
+    @JsonInclude(JsonInclude.Include.NON_EMPTY)
+    private Map<String, Object> metadata;
 
     /**
      * Original filename of the uploaded document.
-     * Optional but recommended for document creation.
+     * Used for reference and display purposes.
      */
     @Size(max = 255, message = "Filename cannot exceed 255 characters")
-    private String originalFilename;
+    private String filename;
 
     /**
-     * Content type of the uploaded document.
-     * Optional but recommended for document creation.
+     * Content type of the document (e.g., application/pdf, image/jpeg).
+     * Used for proper handling and display of the document.
      */
-    @Size(max = 100, message = "Content type cannot exceed 100 characters")
+    @Pattern(regexp = "^[a-zA-Z0-9/\\-+.]+$", message = "Invalid content type format")
+    @JsonProperty("content_type")
     private String contentType;
 
     /**
-     * Default constructor for serialization frameworks
+     * Flag indicating if the document contains personally identifiable information (PII).
+     * Used for applying appropriate security measures.
+     */
+    @JsonProperty("contains_pii")
+    private Boolean containsPii;
+
+    /**
+     * Flag indicating if the document is a financial document.
+     * Used for applying appropriate processing rules.
+     */
+    @JsonProperty("is_financial")
+    private Boolean isFinancial;
+
+    /**
+     * Base64-encoded content of the document for direct API uploads.
+     * Not used when uploading via multipart form data.
+     */
+    @JsonProperty("content")
+    private String base64Content;
+
+    /**
+     * Confidence score for document classification (0.0-1.0).
+     * Used when classification is provided by the client.
+     */
+    @JsonProperty("classification_confidence")
+    private Double classificationConfidence;
+
+    /**
+     * Default constructor
      */
     public DocumentRequestDTO() {
+        this.metadata = new HashMap<>();
     }
 
     /**
      * Constructor with required fields
-     *
-     * @param applicationId the ID of the application this document belongs to
-     * @param type the type of document
+     * 
+     * @param applicationId The ID of the application this document belongs to
+     * @param type The type of document
      */
     public DocumentRequestDTO(UUID applicationId, DocumentType type) {
         this.applicationId = applicationId;
         this.type = type;
+        this.metadata = new HashMap<>();
     }
 
     /**
-     * Constructor with all fields
-     *
-     * @param applicationId the ID of the application this document belongs to
-     * @param type the type of document
-     * @param classification the classification of the document
-     * @param metadata additional metadata for the document
-     * @param confidenceScores confidence scores for document classification and field extraction
-     * @param originalFilename original filename of the uploaded document
-     * @param contentType content type of the uploaded document
-     */
-    public DocumentRequestDTO(UUID applicationId, DocumentType type, String classification,
-                             Map<String, Object> metadata, Map<String, Double> confidenceScores,
-                             String originalFilename, String contentType) {
-        this.applicationId = applicationId;
-        this.type = type;
-        this.classification = classification;
-        this.metadata = metadata != null ? metadata : new HashMap<>();
-        this.confidenceScores = confidenceScores != null ? confidenceScores : new HashMap<>();
-        this.originalFilename = originalFilename;
-        this.contentType = contentType;
-    }
-
-    /**
-     * @return the application ID this document belongs to
+     * @return the application ID
      */
     public UUID getApplicationId() {
         return applicationId;
@@ -164,65 +174,21 @@ public class DocumentRequestDTO {
     }
 
     /**
-     * Adds a metadata entry to the document
-     *
-     * @param key the metadata key
-     * @param value the metadata value
-     * @return this DTO for method chaining
+     * @return the original filename
      */
-    public DocumentRequestDTO addMetadata(String key, Object value) {
-        if (this.metadata == null) {
-            this.metadata = new HashMap<>();
-        }
-        this.metadata.put(key, value);
-        return this;
+    public String getFilename() {
+        return filename;
     }
 
     /**
-     * @return the confidence scores for document classification and field extraction
+     * @param filename the original filename to set
      */
-    public Map<String, Double> getConfidenceScores() {
-        return confidenceScores;
+    public void setFilename(String filename) {
+        this.filename = filename;
     }
 
     /**
-     * @param confidenceScores the confidence scores to set
-     */
-    public void setConfidenceScores(Map<String, Double> confidenceScores) {
-        this.confidenceScores = confidenceScores != null ? confidenceScores : new HashMap<>();
-    }
-
-    /**
-     * Adds a confidence score for a specific field
-     *
-     * @param fieldName the field name
-     * @param confidenceScore the confidence score (0.0 to 1.0)
-     * @return this DTO for method chaining
-     */
-    public DocumentRequestDTO addConfidenceScore(String fieldName, Double confidenceScore) {
-        if (this.confidenceScores == null) {
-            this.confidenceScores = new HashMap<>();
-        }
-        this.confidenceScores.put(fieldName, confidenceScore);
-        return this;
-    }
-
-    /**
-     * @return the original filename of the uploaded document
-     */
-    public String getOriginalFilename() {
-        return originalFilename;
-    }
-
-    /**
-     * @param originalFilename the original filename to set
-     */
-    public void setOriginalFilename(String originalFilename) {
-        this.originalFilename = originalFilename;
-    }
-
-    /**
-     * @return the content type of the uploaded document
+     * @return the content type
      */
     public String getContentType() {
         return contentType;
@@ -236,90 +202,146 @@ public class DocumentRequestDTO {
     }
 
     /**
-     * Validates if this DTO has all required fields for document creation
-     *
-     * @return true if the DTO has all required fields for document creation
+     * @return whether the document contains PII
      */
+    public Boolean getContainsPii() {
+        return containsPii;
+    }
+
+    /**
+     * @param containsPii whether the document contains PII
+     */
+    public void setContainsPii(Boolean containsPii) {
+        this.containsPii = containsPii;
+    }
+
+    /**
+     * @return whether the document is financial
+     */
+    public Boolean getIsFinancial() {
+        return isFinancial;
+    }
+
+    /**
+     * @param isFinancial whether the document is financial
+     */
+    public void setIsFinancial(Boolean isFinancial) {
+        this.isFinancial = isFinancial;
+    }
+
+    /**
+     * @return the base64-encoded content
+     */
+    public String getBase64Content() {
+        return base64Content;
+    }
+
+    /**
+     * @param base64Content the base64-encoded content to set
+     */
+    public void setBase64Content(String base64Content) {
+        this.base64Content = base64Content;
+    }
+
+    /**
+     * @return the classification confidence score
+     */
+    public Double getClassificationConfidence() {
+        return classificationConfidence;
+    }
+
+    /**
+     * @param classificationConfidence the classification confidence score to set
+     */
+    public void setClassificationConfidence(Double classificationConfidence) {
+        this.classificationConfidence = classificationConfidence;
+    }
+
+    /**
+     * Adds a metadata key-value pair
+     * 
+     * @param key the metadata key
+     * @param value the metadata value
+     */
+    public void addMetadata(String key, Object value) {
+        if (this.metadata == null) {
+            this.metadata = new HashMap<>();
+        }
+        this.metadata.put(key, value);
+    }
+
+    /**
+     * Gets a specific metadata value
+     * 
+     * @param key the metadata key
+     * @param <T> the expected type of the metadata value
+     * @return the metadata value, or null if not available
+     */
+    @SuppressWarnings("unchecked")
+    public <T> T getMetadataValue(String key) {
+        if (this.metadata == null) {
+            return null;
+        }
+        return (T) this.metadata.get(key);
+    }
+
+    /**
+     * Checks if the document has metadata
+     * 
+     * @return true if the document has metadata
+     */
+    @JsonIgnore
+    public boolean hasMetadata() {
+        return this.metadata != null && !this.metadata.isEmpty();
+    }
+
+    /**
+     * Checks if the document has base64 content
+     * 
+     * @return true if the document has base64 content
+     */
+    @JsonIgnore
+    public boolean hasBase64Content() {
+        return this.base64Content != null && !this.base64Content.isEmpty();
+    }
+
+    /**
+     * Checks if this request contains the minimum required fields for document creation
+     * 
+     * @return true if the request is valid for document creation
+     */
+    @JsonIgnore
     public boolean isValidForCreation() {
-        return applicationId != null && type != null;
+        return this.applicationId != null && this.type != null;
     }
 
     /**
-     * Validates if this DTO has all required fields for document update
-     *
-     * @param documentId the ID of the document being updated
-     * @return true if the DTO has all required fields for document update
+     * Adds confidence scores to the metadata
+     * 
+     * @param confidenceScores the confidence scores to add
      */
-    public boolean isValidForUpdate(UUID documentId) {
-        return documentId != null && applicationId != null;
-    }
-
-    /**
-     * Creates a copy of this DTO with additional metadata
-     *
-     * @param additionalMetadata additional metadata to add
-     * @return a new DTO with combined metadata
-     */
-    public DocumentRequestDTO withAdditionalMetadata(Map<String, Object> additionalMetadata) {
-        if (additionalMetadata == null || additionalMetadata.isEmpty()) {
-            return this;
+    public void addConfidenceScores(Map<String, Double> confidenceScores) {
+        if (confidenceScores == null || confidenceScores.isEmpty()) {
+            return;
         }
-
-        Map<String, Object> combinedMetadata = new HashMap<>(this.metadata);
-        combinedMetadata.putAll(additionalMetadata);
-
-        return new DocumentRequestDTO(
-                this.applicationId,
-                this.type,
-                this.classification,
-                combinedMetadata,
-                this.confidenceScores,
-                this.originalFilename,
-                this.contentType
-        );
-    }
-
-    /**
-     * Creates a copy of this DTO with additional confidence scores
-     *
-     * @param additionalScores additional confidence scores to add
-     * @return a new DTO with combined confidence scores
-     */
-    public DocumentRequestDTO withAdditionalConfidenceScores(Map<String, Double> additionalScores) {
-        if (additionalScores == null || additionalScores.isEmpty()) {
-            return this;
+        if (this.metadata == null) {
+            this.metadata = new HashMap<>();
         }
-
-        Map<String, Double> combinedScores = new HashMap<>(this.confidenceScores);
-        combinedScores.putAll(additionalScores);
-
-        return new DocumentRequestDTO(
-                this.applicationId,
-                this.type,
-                this.classification,
-                this.metadata,
-                combinedScores,
-                this.originalFilename,
-                this.contentType
-        );
+        this.metadata.put("confidenceScores", confidenceScores);
     }
 
     /**
-     * Returns a string representation of this DTO for debugging and logging
-     *
-     * @return a string representation of this DTO
+     * Gets the confidence scores from the metadata
+     * 
+     * @return the confidence scores, or an empty map if not available
      */
-    @Override
-    public String toString() {
-        return "DocumentRequestDTO{" +
-                "applicationId=" + applicationId +
-                ", type=" + type +
-                ", classification='" + classification + '\'' +
-                ", hasMetadata=" + (metadata != null && !metadata.isEmpty()) +
-                ", hasConfidenceScores=" + (confidenceScores != null && !confidenceScores.isEmpty()) +
-                ", originalFilename='" + originalFilename + '\'' +
-                ", contentType='" + contentType + '\'' +
-                '}';
+    @SuppressWarnings("unchecked")
+    @JsonIgnore
+    public Map<String, Double> getConfidenceScores() {
+        if (this.metadata == null || !this.metadata.containsKey("confidenceScores")) {
+            return new HashMap<>();
+        }
+        return (Map<String, Double>) this.metadata.get("confidenceScores");
     }
 
     /**
@@ -330,9 +352,12 @@ public class DocumentRequestDTO {
         private DocumentType type;
         private String classification;
         private Map<String, Object> metadata = new HashMap<>();
-        private Map<String, Double> confidenceScores = new HashMap<>();
-        private String originalFilename;
+        private String filename;
         private String contentType;
+        private Boolean containsPii;
+        private Boolean isFinancial;
+        private String base64Content;
+        private Double classificationConfidence;
 
         public Builder(UUID applicationId, DocumentType type) {
             this.applicationId = applicationId;
@@ -349,23 +374,8 @@ public class DocumentRequestDTO {
             return this;
         }
 
-        public Builder addMetadata(String key, Object value) {
-            this.metadata.put(key, value);
-            return this;
-        }
-
-        public Builder withConfidenceScores(Map<String, Double> confidenceScores) {
-            this.confidenceScores = confidenceScores;
-            return this;
-        }
-
-        public Builder addConfidenceScore(String fieldName, Double confidenceScore) {
-            this.confidenceScores.put(fieldName, confidenceScore);
-            return this;
-        }
-
-        public Builder withOriginalFilename(String originalFilename) {
-            this.originalFilename = originalFilename;
+        public Builder withFilename(String filename) {
+            this.filename = filename;
             return this;
         }
 
@@ -374,16 +384,51 @@ public class DocumentRequestDTO {
             return this;
         }
 
+        public Builder withContainsPii(Boolean containsPii) {
+            this.containsPii = containsPii;
+            return this;
+        }
+
+        public Builder withIsFinancial(Boolean isFinancial) {
+            this.isFinancial = isFinancial;
+            return this;
+        }
+
+        public Builder withBase64Content(String base64Content) {
+            this.base64Content = base64Content;
+            return this;
+        }
+
+        public Builder withClassificationConfidence(Double classificationConfidence) {
+            this.classificationConfidence = classificationConfidence;
+            return this;
+        }
+
+        public Builder addMetadata(String key, Object value) {
+            this.metadata.put(key, value);
+            return this;
+        }
+
+        public Builder addConfidenceScores(Map<String, Double> confidenceScores) {
+            if (confidenceScores != null && !confidenceScores.isEmpty()) {
+                this.metadata.put("confidenceScores", confidenceScores);
+            }
+            return this;
+        }
+
         public DocumentRequestDTO build() {
-            return new DocumentRequestDTO(
-                    applicationId,
-                    type,
-                    classification,
-                    metadata,
-                    confidenceScores,
-                    originalFilename,
-                    contentType
-            );
+            DocumentRequestDTO dto = new DocumentRequestDTO();
+            dto.setApplicationId(applicationId);
+            dto.setType(type);
+            dto.setClassification(classification);
+            dto.setMetadata(metadata);
+            dto.setFilename(filename);
+            dto.setContentType(contentType);
+            dto.setContainsPii(containsPii);
+            dto.setIsFinancial(isFinancial);
+            dto.setBase64Content(base64Content);
+            dto.setClassificationConfidence(classificationConfidence);
+            return dto;
         }
     }
 }
