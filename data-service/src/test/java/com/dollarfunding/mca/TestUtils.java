@@ -1,484 +1,278 @@
 package com.dollarfunding.mca;
 
-import com.dollarfunding.mca.security.RoleConstants;
+import com.dollarfunding.mca.entity.*;
+import com.dollarfunding.mca.dto.*;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.SignatureAlgorithm;
 import io.jsonwebtoken.security.Keys;
-import org.springframework.core.io.ClassPathResource;
-import org.springframework.util.ResourceUtils;
 
-import java.io.File;
-import java.io.IOException;
-import java.nio.file.Files;
-import java.security.KeyFactory;
 import java.security.KeyPair;
-import java.security.PrivateKey;
-import java.security.PublicKey;
-import java.security.spec.PKCS8EncodedKeySpec;
-import java.security.spec.X509EncodedKeySpec;
-import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.*;
-import java.util.concurrent.ThreadLocalRandom;
-import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
 /**
  * Utility class providing helper methods for testing across the MCA application.
- * <p>
- * This class includes methods for:
- * - Creating test JWT tokens with different roles
- * - Generating random test data
- * - Comparing objects for equality
- * - Working with JSON for API testing
+ * Contains methods for JWT token generation, test data creation, object comparison,
+ * and JSON serialization/deserialization.
  */
-public final class TestUtils {
+public class TestUtils {
 
     private static final ObjectMapper objectMapper = new ObjectMapper()
-            .registerModule(new JavaTimeModule());
+            .registerModule(new JavaTimeModule())
+            .configure(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS, false);
 
-    private static KeyPair keyPair;
+    private static final KeyPair keyPair = Keys.keyPairFor(SignatureAlgorithm.RS256);
     
-    // Prevent instantiation
-    private TestUtils() {
-        throw new UnsupportedOperationException("Utility class cannot be instantiated");
+    // Role constants matching the roles defined in the system
+    public static final String ROLE_OPERATIONS_STAFF = "ROLE_OPERATIONS_STAFF";
+    public static final String ROLE_SYSTEM_ADMIN = "ROLE_SYSTEM_ADMIN";
+
+    /**
+     * Creates a test JWT token for the Operations Staff role.
+     * 
+     * @param userId User ID to include in the token
+     * @return JWT token string
+     */
+    public static String createOperationsStaffToken(String userId) {
+        return createToken(userId, Collections.singletonList(ROLE_OPERATIONS_STAFF));
     }
 
     /**
-     * Generates a JWT token for testing with the specified role.
-     *
-     * @param username the username to include in the token
-     * @param role     the role to include in the token (use constants from RoleConstants)
-     * @return a JWT token string
+     * Creates a test JWT token for the System Admin role.
+     * 
+     * @param userId User ID to include in the token
+     * @return JWT token string
      */
-    public static String generateJwtToken(String username, String role) {
-        return generateJwtToken(username, Collections.singletonList(role), 3600000L); // 1 hour expiry
+    public static String createSystemAdminToken(String userId) {
+        return createToken(userId, Collections.singletonList(ROLE_SYSTEM_ADMIN));
     }
 
     /**
-     * Generates a JWT token for testing with the specified roles and expiration time.
-     *
-     * @param username   the username to include in the token
-     * @param roles      the roles to include in the token (use constants from RoleConstants)
-     * @param expiryTime the token expiry time in milliseconds
-     * @return a JWT token string
+     * Creates a test JWT token with multiple roles.
+     * 
+     * @param userId User ID to include in the token
+     * @param roles List of roles to include in the token
+     * @return JWT token string
      */
-    public static String generateJwtToken(String username, List<String> roles, Long expiryTime) {
-        try {
-            Date now = new Date();
-            Date expiry = new Date(now.getTime() + expiryTime);
-            
-            Map<String, Object> claims = new HashMap<>();
-            claims.put("roles", roles);
-            claims.put("username", username);
-            
-            return Jwts.builder()
-                    .setClaims(claims)
-                    .setSubject(username)
-                    .setIssuedAt(now)
-                    .setExpiration(expiry)
-                    .setIssuer("mca-test")
-                    .setAudience("mca-test-client")
-                    .signWith(getSigningKey(), SignatureAlgorithm.RS256)
-                    .compact();
-        } catch (Exception e) {
-            throw new RuntimeException("Error generating JWT token for testing", e);
-        }
-    }
-
-    /**
-     * Generates a JWT token for an Operations Staff user.
-     *
-     * @param username the username to include in the token
-     * @return a JWT token string
-     */
-    public static String generateOperationsStaffToken(String username) {
-        return generateJwtToken(username, RoleConstants.ROLE_OPERATIONS_STAFF);
-    }
-
-    /**
-     * Generates a JWT token for a System Admin user.
-     *
-     * @param username the username to include in the token
-     * @return a JWT token string
-     */
-    public static String generateSystemAdminToken(String username) {
-        return generateJwtToken(username, RoleConstants.ROLE_SYSTEM_ADMIN);
-    }
-
-    /**
-     * Gets the private key for signing JWT tokens.
-     * In a test environment, we generate a key pair if none exists.
-     *
-     * @return the private key for signing
-     */
-    private static PrivateKey getSigningKey() {
-        if (keyPair == null) {
-            try {
-                // Try to load keys from test resources if available
-                File privateKeyFile = ResourceUtils.getFile("classpath:jwt/private_key.pem");
-                if (privateKeyFile.exists()) {
-                    byte[] privateKeyBytes = Files.readAllBytes(privateKeyFile.toPath());
-                    String privateKeyPEM = new String(privateKeyBytes)
-                            .replace("-----BEGIN PRIVATE KEY-----", "")
-                            .replace("-----END PRIVATE KEY-----", "")
-                            .replaceAll("\\s", "");
-                    
-                    byte[] decodedKey = Base64.getDecoder().decode(privateKeyPEM);
-                    KeyFactory keyFactory = KeyFactory.getInstance("RSA");
-                    PKCS8EncodedKeySpec keySpec = new PKCS8EncodedKeySpec(decodedKey);
-                    return keyFactory.generatePrivate(keySpec);
-                }
-            } catch (Exception e) {
-                // If loading fails, generate a new key pair
-                keyPair = Keys.keyPairFor(SignatureAlgorithm.RS256);
-            }
-            
-            if (keyPair == null) {
-                keyPair = Keys.keyPairFor(SignatureAlgorithm.RS256);
-            }
-        }
+    public static String createToken(String userId, List<String> roles) {
+        Map<String, Object> claims = new HashMap<>();
+        claims.put("roles", roles);
+        claims.put("userId", userId);
         
-        return keyPair.getPrivate();
-    }
-
-    /**
-     * Gets the public key for verifying JWT tokens.
-     *
-     * @return the public key for verification
-     */
-    public static PublicKey getVerificationKey() {
-        if (keyPair == null) {
-            getSigningKey(); // Initialize key pair if needed
-        }
+        Date now = new Date();
+        Date expiration = new Date(now.getTime() + 3600000); // 1 hour expiration
         
-        try {
-            // Try to load keys from test resources if available
-            File publicKeyFile = ResourceUtils.getFile("classpath:jwt/public_key.pem");
-            if (publicKeyFile.exists()) {
-                byte[] publicKeyBytes = Files.readAllBytes(publicKeyFile.toPath());
-                String publicKeyPEM = new String(publicKeyBytes)
-                        .replace("-----BEGIN PUBLIC KEY-----", "")
-                        .replace("-----END PUBLIC KEY-----", "")
-                        .replaceAll("\\s", "");
-                
-                byte[] decodedKey = Base64.getDecoder().decode(publicKeyPEM);
-                KeyFactory keyFactory = KeyFactory.getInstance("RSA");
-                X509EncodedKeySpec keySpec = new X509EncodedKeySpec(decodedKey);
-                return keyFactory.generatePublic(keySpec);
-            }
-        } catch (Exception e) {
-            // If loading fails, use the generated key pair
-        }
+        return Jwts.builder()
+                .setClaims(claims)
+                .setSubject(userId)
+                .setIssuedAt(now)
+                .setExpiration(expiration)
+                .setIssuer("dollarfunding-test")
+                .signWith(keyPair.getPrivate(), SignatureAlgorithm.RS256)
+                .compact();
+    }
+
+    /**
+     * Creates a random Application entity for testing.
+     * 
+     * @return Application entity with random data
+     */
+    public static Application createRandomApplication() {
+        Application application = new Application();
+        application.setId(UUID.randomUUID());
+        application.setStatus(getRandomEnum(ApplicationStatus.class));
+        application.setReviewStatus(getRandomEnum(ReviewStatus.class));
+        application.setMetadata(createRandomMetadata());
+        application.setCreatedAt(LocalDateTime.now().minusDays(new Random().nextInt(30)));
+        application.setUpdatedAt(LocalDateTime.now());
+        return application;
+    }
+
+    /**
+     * Creates a random Document entity for testing.
+     * 
+     * @param application The application to associate with the document
+     * @return Document entity with random data
+     */
+    public static Document createRandomDocument(Application application) {
+        Document document = new Document();
+        document.setId(UUID.randomUUID());
+        document.setApplication(application);
+        document.setType(getRandomEnum(DocumentType.class));
+        document.setStoragePath("s3://mca-documents-test/" + UUID.randomUUID() + ".pdf");
+        document.setClassification(document.getType().name());
+        document.setUploadedAt(LocalDateTime.now().minusDays(new Random().nextInt(10)));
         
-        return keyPair.getPublic();
-    }
-
-    /**
-     * Generates a random string of the specified length.
-     *
-     * @param length the length of the string to generate
-     * @return a random alphanumeric string
-     */
-    public static String randomString(int length) {
-        String chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-        StringBuilder sb = new StringBuilder(length);
-        Random random = new Random();
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("fileSize", new Random().nextInt(10000000));
+        metadata.put("mimeType", "application/pdf");
+        metadata.put("confidenceScore", new Random().nextDouble() * 100);
+        document.setMetadata(metadata);
         
-        for (int i = 0; i < length; i++) {
-            sb.append(chars.charAt(random.nextInt(chars.length())));
-        }
+        return document;
+    }
+
+    /**
+     * Creates a random MerchantDetails entity for testing.
+     * 
+     * @param application The application to associate with the merchant details
+     * @return MerchantDetails entity with random data
+     */
+    public static MerchantDetails createRandomMerchantDetails(Application application) {
+        MerchantDetails merchantDetails = new MerchantDetails();
+        merchantDetails.setId(UUID.randomUUID());
+        merchantDetails.setApplication(application);
+        merchantDetails.setLegalName("Test Business " + UUID.randomUUID().toString().substring(0, 8));
+        merchantDetails.setDbaName("DBA " + UUID.randomUUID().toString().substring(0, 8));
+        merchantDetails.setEin("12-" + (1000000 + new Random().nextInt(9000000)));
         
-        return sb.toString();
-    }
-
-    /**
-     * Generates a random email address for testing.
-     *
-     * @return a random email address
-     */
-    public static String randomEmail() {
-        return randomString(8) + "@" + randomString(5) + ".com";
-    }
-
-    /**
-     * Generates a random integer within the specified range.
-     *
-     * @param min the minimum value (inclusive)
-     * @param max the maximum value (exclusive)
-     * @return a random integer
-     */
-    public static int randomInt(int min, int max) {
-        return ThreadLocalRandom.current().nextInt(min, max);
-    }
-
-    /**
-     * Generates a random long within the specified range.
-     *
-     * @param min the minimum value (inclusive)
-     * @param max the maximum value (exclusive)
-     * @return a random long
-     */
-    public static long randomLong(long min, long max) {
-        return ThreadLocalRandom.current().nextLong(min, max);
-    }
-
-    /**
-     * Generates a random double within the specified range.
-     *
-     * @param min the minimum value (inclusive)
-     * @param max the maximum value (exclusive)
-     * @return a random double
-     */
-    public static double randomDouble(double min, double max) {
-        return ThreadLocalRandom.current().nextDouble(min, max);
-    }
-
-    /**
-     * Generates a random boolean value.
-     *
-     * @return a random boolean
-     */
-    public static boolean randomBoolean() {
-        return ThreadLocalRandom.current().nextBoolean();
-    }
-
-    /**
-     * Generates a random date within the specified range.
-     *
-     * @param startInclusive the start date (inclusive)
-     * @param endExclusive   the end date (exclusive)
-     * @return a random date
-     */
-    public static LocalDate randomDate(LocalDate startInclusive, LocalDate endExclusive) {
-        long startEpochDay = startInclusive.toEpochDay();
-        long endEpochDay = endExclusive.toEpochDay();
-        long randomDay = ThreadLocalRandom.current().nextLong(startEpochDay, endEpochDay);
-        return LocalDate.ofEpochDay(randomDay);
-    }
-
-    /**
-     * Generates a random date-time within the specified range.
-     *
-     * @param startInclusive the start date-time (inclusive)
-     * @param endExclusive   the end date-time (exclusive)
-     * @return a random date-time
-     */
-    public static LocalDateTime randomDateTime(LocalDateTime startInclusive, LocalDateTime endExclusive) {
-        long startEpochSecond = startInclusive.atZone(ZoneId.systemDefault()).toEpochSecond();
-        long endEpochSecond = endExclusive.atZone(ZoneId.systemDefault()).toEpochSecond();
-        long randomSecond = ThreadLocalRandom.current().nextLong(startEpochSecond, endEpochSecond);
-        return LocalDateTime.ofInstant(java.time.Instant.ofEpochSecond(randomSecond), ZoneId.systemDefault());
-    }
-
-    /**
-     * Generates a random UUID string.
-     *
-     * @return a random UUID string
-     */
-    public static String randomUuid() {
-        return UUID.randomUUID().toString();
-    }
-
-    /**
-     * Selects a random element from the provided list.
-     *
-     * @param <T>  the type of elements in the list
-     * @param list the list to select from
-     * @return a randomly selected element, or null if the list is empty
-     */
-    public static <T> T randomElement(List<T> list) {
-        if (list == null || list.isEmpty()) {
-            return null;
-        }
-        return list.get(ThreadLocalRandom.current().nextInt(list.size()));
-    }
-
-    /**
-     * Selects a random element from the provided array.
-     *
-     * @param <T>   the type of elements in the array
-     * @param array the array to select from
-     * @return a randomly selected element, or null if the array is empty
-     */
-    public static <T> T randomElement(T[] array) {
-        if (array == null || array.length == 0) {
-            return null;
-        }
-        return array[ThreadLocalRandom.current().nextInt(array.length)];
-    }
-
-    /**
-     * Creates a random subset of the provided list.
-     *
-     * @param <T>  the type of elements in the list
-     * @param list the list to select from
-     * @param size the size of the subset to create
-     * @return a randomly selected subset of the list
-     */
-    public static <T> List<T> randomSubset(List<T> list, int size) {
-        if (list == null || list.isEmpty() || size <= 0) {
-            return Collections.emptyList();
-        }
+        Map<String, Object> address = new HashMap<>();
+        address.put("street", "123 Test Street");
+        address.put("city", "Test City");
+        address.put("state", "TS");
+        address.put("zipCode", "12345");
+        merchantDetails.setAddress(address);
         
-        if (size >= list.size()) {
-            return new ArrayList<>(list);
-        }
+        merchantDetails.setIndustry("Retail");
+        merchantDetails.setRevenue(100000 + new Random().nextInt(900000));
         
-        List<T> copy = new ArrayList<>(list);
-        Collections.shuffle(copy);
-        return copy.subList(0, size);
+        return merchantDetails;
+    }
+
+    /**
+     * Creates a random Webhook entity for testing.
+     * 
+     * @return Webhook entity with random data
+     */
+    public static Webhook createRandomWebhook() {
+        Webhook webhook = new Webhook();
+        webhook.setId(UUID.randomUUID());
+        webhook.setEndpointUrl("https://test-endpoint.com/webhook/" + UUID.randomUUID());
+        webhook.setSecretKey(UUID.randomUUID().toString());
+        webhook.setActive(new Random().nextBoolean());
+        webhook.setEventType(getRandomEnum(EventType.class));
+        webhook.setCreatedAt(LocalDateTime.now().minusDays(new Random().nextInt(30)));
+        webhook.setUpdatedAt(LocalDateTime.now());
+        return webhook;
+    }
+
+    /**
+     * Creates a random metadata map for testing.
+     * 
+     * @return Map containing random metadata
+     */
+    public static Map<String, Object> createRandomMetadata() {
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("source", "email");
+        metadata.put("emailSubject", "Funding Application " + UUID.randomUUID());
+        metadata.put("receivedAt", LocalDateTime.now().minusDays(new Random().nextInt(10)));
+        metadata.put("automationConfidence", new Random().nextDouble() * 100);
+        return metadata;
+    }
+
+    /**
+     * Gets a random enum value from the specified enum class.
+     * 
+     * @param enumClass The enum class
+     * @param <T> The enum type
+     * @return Random enum value
+     */
+    public static <T extends Enum<T>> T getRandomEnum(Class<T> enumClass) {
+        T[] values = enumClass.getEnumConstants();
+        return values[new Random().nextInt(values.length)];
     }
 
     /**
      * Converts an object to its JSON string representation.
-     *
-     * @param object the object to convert
-     * @return the JSON string representation of the object
-     * @throws RuntimeException if the conversion fails
+     * 
+     * @param object The object to convert
+     * @return JSON string representation
+     * @throws RuntimeException if serialization fails
      */
     public static String toJson(Object object) {
         try {
             return objectMapper.writeValueAsString(object);
         } catch (JsonProcessingException e) {
-            throw new RuntimeException("Error converting object to JSON", e);
+            throw new RuntimeException("Failed to convert object to JSON", e);
         }
     }
 
     /**
-     * Converts a JSON string to an object of the specified type.
-     *
-     * @param <T>        the type of the object
-     * @param json       the JSON string to convert
-     * @param targetType the class of the target type
-     * @return the object representation of the JSON string
-     * @throws RuntimeException if the conversion fails
+     * Converts a JSON string to an object of the specified class.
+     * 
+     * @param json The JSON string
+     * @param clazz The target class
+     * @param <T> The target type
+     * @return Object of the specified class
+     * @throws RuntimeException if deserialization fails
      */
-    public static <T> T fromJson(String json, Class<T> targetType) {
+    public static <T> T fromJson(String json, Class<T> clazz) {
         try {
-            return objectMapper.readValue(json, targetType);
+            return objectMapper.readValue(json, clazz);
         } catch (JsonProcessingException e) {
-            throw new RuntimeException("Error converting JSON to object", e);
+            throw new RuntimeException("Failed to convert JSON to object", e);
         }
     }
 
     /**
-     * Converts a JSON string to a JsonNode for flexible access.
-     *
-     * @param json the JSON string to convert
-     * @return the JsonNode representation of the JSON string
-     * @throws RuntimeException if the conversion fails
+     * Compares two objects for equality by converting them to JSON and comparing the JSON structures.
+     * This is useful for comparing objects with nested structures or collections.
+     * 
+     * @param first First object
+     * @param second Second object
+     * @return true if the objects are equal, false otherwise
      */
-    public static JsonNode jsonToNode(String json) {
+    public static boolean areEqualByJson(Object first, Object second) {
         try {
-            return objectMapper.readTree(json);
-        } catch (JsonProcessingException e) {
-            throw new RuntimeException("Error converting JSON to JsonNode", e);
+            JsonNode firstNode = objectMapper.valueToTree(first);
+            JsonNode secondNode = objectMapper.valueToTree(second);
+            return firstNode.equals(secondNode);
+        } catch (Exception e) {
+            return false;
         }
     }
 
     /**
-     * Reads a JSON file from the classpath and converts it to an object of the specified type.
-     *
-     * @param <T>        the type of the object
-     * @param path       the classpath path to the JSON file
-     * @param targetType the class of the target type
-     * @return the object representation of the JSON file
-     * @throws RuntimeException if the file cannot be read or the conversion fails
+     * Compares two collections for equality by converting them to sets of JSON strings.
+     * This is useful for comparing collections of objects regardless of order.
+     * 
+     * @param first First collection
+     * @param second Second collection
+     * @return true if the collections contain the same elements, false otherwise
      */
-    public static <T> T readJsonFromClasspath(String path, Class<T> targetType) {
-        try {
-            ClassPathResource resource = new ClassPathResource(path);
-            return objectMapper.readValue(resource.getInputStream(), targetType);
-        } catch (IOException e) {
-            throw new RuntimeException("Error reading JSON from classpath: " + path, e);
-        }
-    }
-
-    /**
-     * Compares two objects for deep equality, handling collections and nested objects.
-     * This is useful for comparing complex objects in test assertions.
-     *
-     * @param expected the expected object
-     * @param actual   the actual object
-     * @return true if the objects are deeply equal, false otherwise
-     */
-    public static boolean deepEquals(Object expected, Object actual) {
-        if (expected == actual) {
+    public static boolean areCollectionsEqualByJson(Collection<?> first, Collection<?> second) {
+        if (first == null && second == null) {
             return true;
         }
-        
-        if (expected == null || actual == null) {
+        if (first == null || second == null || first.size() != second.size()) {
             return false;
         }
         
-        // Convert both objects to JSON and compare the JSON structures
-        try {
-            JsonNode expectedNode = objectMapper.valueToTree(expected);
-            JsonNode actualNode = objectMapper.valueToTree(actual);
-            return expectedNode.equals(actualNode);
-        } catch (Exception e) {
-            // Fall back to regular equals if JSON conversion fails
-            return Objects.equals(expected, actual);
-        }
-    }
-
-    /**
-     * Filters a collection based on a predicate and returns a new list.
-     *
-     * @param <T>        the type of elements in the collection
-     * @param collection the collection to filter
-     * @param predicate  the predicate to apply
-     * @return a new list containing only the elements that match the predicate
-     */
-    public static <T> List<T> filterCollection(Collection<T> collection, Predicate<T> predicate) {
-        if (collection == null) {
-            return Collections.emptyList();
-        }
+        Set<String> firstJsonSet = first.stream()
+                .map(TestUtils::toJson)
+                .collect(Collectors.toSet());
         
-        return collection.stream()
-                .filter(predicate)
-                .collect(Collectors.toList());
+        Set<String> secondJsonSet = second.stream()
+                .map(TestUtils::toJson)
+                .collect(Collectors.toSet());
+        
+        return firstJsonSet.equals(secondJsonSet);
     }
 
     /**
-     * Reads a file from the classpath as a string.
-     *
-     * @param path the classpath path to the file
-     * @return the contents of the file as a string
-     * @throws RuntimeException if the file cannot be read
-     */
-    public static String readFileFromClasspath(String path) {
-        try {
-            ClassPathResource resource = new ClassPathResource(path);
-            return new String(Files.readAllBytes(resource.getFile().toPath()));
-        } catch (IOException e) {
-            throw new RuntimeException("Error reading file from classpath: " + path, e);
-        }
-    }
-
-    /**
-     * Formats a date-time for use in test data.
+     * Converts a LocalDateTime to a Date object.
      * 
-     * @param dateTime the date-time to format
-     * @return the formatted date-time string
+     * @param localDateTime The LocalDateTime to convert
+     * @return Date object
      */
-    public static String formatDateTime(LocalDateTime dateTime) {
-        return dateTime.toString();
-    }
-
-    /**
-     * Formats a date for use in test data.
-     * 
-     * @param date the date to format
-     * @return the formatted date string
-     */
-    public static String formatDate(LocalDate date) {
-        return date.toString();
+    public static Date toDate(LocalDateTime localDateTime) {
+        return Date.from(localDateTime.atZone(ZoneId.systemDefault()).toInstant());
     }
 }
