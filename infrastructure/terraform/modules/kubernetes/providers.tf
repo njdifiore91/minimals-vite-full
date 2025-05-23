@@ -1,164 +1,246 @@
-# Terraform providers configuration for Kubernetes module
-# This file configures the Terraform providers required for Kubernetes resource management,
-# including the Kubernetes provider and cloud-specific providers (AWS, Azure, GCP).
+# Kubernetes Provider Configuration for Multi-Cloud Deployments
 
-# Define required Terraform version and providers with version constraints
+# Define required providers with version constraints
 terraform {
-  required_version = ">= 1.3.0"
-  
   required_providers {
-    # Kubernetes provider for managing Kubernetes resources
     kubernetes = {
       source  = "hashicorp/kubernetes"
       version = ">= 2.20.0, < 3.0.0"
     }
-    
-    # AWS provider for EKS authentication and resources
     aws = {
       source  = "hashicorp/aws"
-      version = ">= 4.0.0, < 6.0.0"
-      optional = true
+      version = ">= 4.0.0, < 5.0.0"
     }
-    
-    # Azure provider for AKS authentication and resources
     azurerm = {
       source  = "hashicorp/azurerm"
       version = ">= 3.0.0, < 4.0.0"
-      optional = true
     }
-    
-    # Google provider for GKE authentication and resources
     google = {
       source  = "hashicorp/google"
       version = ">= 4.0.0, < 5.0.0"
-      optional = true
     }
   }
 }
 
-# Kubernetes provider configuration with dynamic authentication based on cloud provider
-# This provider will be configured based on the cloud provider being used (AWS EKS, Azure AKS, or GCP GKE)
+# Default Kubernetes provider configuration
+# This will be used when no specific provider is referenced
 provider "kubernetes" {
-  # Configuration will be provided by one of the following methods:
-  # 1. EKS authentication (AWS)
-  # 2. AKS authentication (Azure)
-  # 3. GKE authentication (Google)
-  # 4. Direct kubeconfig file
+  # Configuration will be provided by the module consumer
+  # through environment variables or explicit configuration
+}
+
+# AWS EKS provider configuration
+provider "kubernetes" {
+  alias = "eks"
   
-  # Common configuration options
-  alias                  = var.kubernetes_provider_alias
-  host                   = var.kubernetes_host
-  cluster_ca_certificate = var.kubernetes_cluster_ca_certificate
-  token                  = var.kubernetes_token
+  host                   = var.eks_cluster_endpoint
+  cluster_ca_certificate = base64decode(var.eks_cluster_ca_certificate)
   
-  # Dynamic configuration based on authentication method
-  dynamic "exec" {
-    for_each = var.kubernetes_exec_enabled ? [1] : []
-    
-    content {
-      api_version = var.kubernetes_exec_api_version
-      command     = var.kubernetes_exec_command
-      args        = var.kubernetes_exec_args
-    }
-  }
-  
-  # Additional provider configuration
-  client_certificate     = var.kubernetes_client_certificate
-  client_key             = var.kubernetes_client_key
-  config_path            = var.kubernetes_config_path
-  config_context         = var.kubernetes_config_context
-  
-  # Timeouts for API operations
-  dynamic "timeouts" {
-    for_each = var.kubernetes_timeouts != null ? [var.kubernetes_timeouts] : []
-    
-    content {
-      create = lookup(timeouts.value, "create", null)
-      update = lookup(timeouts.value, "update", null)
-      delete = lookup(timeouts.value, "delete", null)
-    }
+  # Use AWS EKS token for authentication
+  # This is the recommended approach for EKS authentication
+  exec {
+    api_version = "client.authentication.k8s.io/v1beta1"
+    command     = "aws"
+    args = [
+      "eks",
+      "get-token",
+      "--cluster-name",
+      var.eks_cluster_name,
+      "--region",
+      var.aws_region
+    ]
   }
 }
 
-# AWS provider configuration for EKS authentication
+# Azure AKS provider configuration
+provider "kubernetes" {
+  alias = "aks"
+  
+  host                   = var.aks_cluster_endpoint
+  cluster_ca_certificate = base64decode(var.aks_cluster_ca_certificate)
+  
+  # Use Azure AKS token for authentication
+  exec {
+    api_version = "client.authentication.k8s.io/v1beta1"
+    command     = "az"
+    args = [
+      "aks",
+      "get-credentials",
+      "--resource-group",
+      var.aks_resource_group,
+      "--name",
+      var.aks_cluster_name,
+      "--file",
+      "-"
+    ]
+  }
+}
+
+# Google GKE provider configuration
+provider "kubernetes" {
+  alias = "gke"
+  
+  host                   = "https://${var.gke_cluster_endpoint}"
+  cluster_ca_certificate = base64decode(var.gke_cluster_ca_certificate)
+  
+  # Use GCP GKE token for authentication
+  exec {
+    api_version = "client.authentication.k8s.io/v1beta1"
+    command     = "gcloud"
+    args = [
+      "container",
+      "clusters",
+      "get-credentials",
+      var.gke_cluster_name,
+      "--region",
+      var.gke_region,
+      "--project",
+      var.gcp_project_id
+    ]
+  }
+}
+
+# Generic Kubernetes provider configuration for on-premises or other providers
+# This can be used for any Kubernetes cluster with kubeconfig authentication
+provider "kubernetes" {
+  alias = "generic"
+  
+  config_path    = var.kubeconfig_path
+  config_context = var.kubeconfig_context
+}
+
+# AWS provider configuration for EKS-related resources
 provider "aws" {
-  # Only configure if using AWS EKS
-  count = var.cloud_provider == "aws" ? 1 : 0
+  region = var.aws_region
   
-  region                   = var.aws_region
-  profile                  = var.aws_profile
-  shared_credentials_files = var.aws_shared_credentials_files
-  
-  # Use environment variables for authentication if not specified:
-  # - AWS_ACCESS_KEY_ID
-  # - AWS_SECRET_ACCESS_KEY
-  # - AWS_SESSION_TOKEN (optional)
-  
-  # Additional provider settings
-  dynamic "assume_role" {
-    for_each = var.aws_assume_role != null ? [var.aws_assume_role] : []
-    
-    content {
-      role_arn     = assume_role.value.role_arn
-      session_name = lookup(assume_role.value, "session_name", null)
-      external_id  = lookup(assume_role.value, "external_id", null)
-    }
+  # Default tags to be applied to all AWS resources
+  default_tags {
+    tags = var.default_aws_tags
   }
 }
 
-# Azure provider configuration for AKS authentication
+# Azure provider configuration for AKS-related resources
 provider "azurerm" {
-  # Only configure if using Azure AKS
-  count = var.cloud_provider == "azure" ? 1 : 0
+  features {}
   
   subscription_id = var.azure_subscription_id
   tenant_id       = var.azure_tenant_id
-  client_id       = var.azure_client_id
-  client_secret   = var.azure_client_secret
-  
-  # Use environment variables for authentication if not specified:
-  # - ARM_SUBSCRIPTION_ID
-  # - ARM_TENANT_ID
-  # - ARM_CLIENT_ID
-  # - ARM_CLIENT_SECRET
-  
-  # Additional provider settings
-  features {}
 }
 
-# Google provider configuration for GKE authentication
+# Google provider configuration for GKE-related resources
 provider "google" {
-  # Only configure if using GCP GKE
-  count = var.cloud_provider == "google" ? 1 : 0
-  
-  project     = var.google_project
-  region      = var.google_region
-  zone        = var.google_zone
-  credentials = var.google_credentials
-  
-  # Use environment variables for authentication if not specified:
-  # - GOOGLE_CREDENTIALS
-  # - GOOGLE_PROJECT
-  # - GOOGLE_REGION
-  # - GOOGLE_ZONE
+  project = var.gcp_project_id
+  region  = var.gke_region
 }
 
-# Provider aliases for multi-cluster management
-provider "kubernetes" {
-  alias = "admin"
-  
-  host                   = var.admin_kubernetes_host
-  cluster_ca_certificate = var.admin_kubernetes_cluster_ca_certificate
-  token                  = var.admin_kubernetes_token
-  
-  # Additional configuration for admin cluster
-  dynamic "exec" {
-    for_each = var.admin_kubernetes_exec_enabled ? [1] : []
-    
-    content {
-      api_version = var.admin_kubernetes_exec_api_version
-      command     = var.admin_kubernetes_exec_command
-      args        = var.admin_kubernetes_exec_args
-    }
-  }
+# Variable definitions for provider configurations
+variable "eks_cluster_endpoint" {
+  description = "The endpoint for the EKS Kubernetes API server"
+  type        = string
+  default     = ""
+}
+
+variable "eks_cluster_ca_certificate" {
+  description = "The base64 encoded certificate data required to communicate with the EKS cluster"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "eks_cluster_name" {
+  description = "The name of the EKS cluster"
+  type        = string
+  default     = ""
+}
+
+variable "aws_region" {
+  description = "The AWS region where the EKS cluster is deployed"
+  type        = string
+  default     = "us-west-2"
+}
+
+variable "default_aws_tags" {
+  description = "Default tags to apply to all AWS resources"
+  type        = map(string)
+  default     = {}
+}
+
+variable "aks_cluster_endpoint" {
+  description = "The endpoint for the AKS Kubernetes API server"
+  type        = string
+  default     = ""
+}
+
+variable "aks_cluster_ca_certificate" {
+  description = "The base64 encoded certificate data required to communicate with the AKS cluster"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "aks_resource_group" {
+  description = "The Azure resource group where the AKS cluster is deployed"
+  type        = string
+  default     = ""
+}
+
+variable "aks_cluster_name" {
+  description = "The name of the AKS cluster"
+  type        = string
+  default     = ""
+}
+
+variable "azure_subscription_id" {
+  description = "The Azure subscription ID"
+  type        = string
+  default     = ""
+}
+
+variable "azure_tenant_id" {
+  description = "The Azure tenant ID"
+  type        = string
+  default     = ""
+}
+
+variable "gke_cluster_endpoint" {
+  description = "The endpoint for the GKE Kubernetes API server"
+  type        = string
+  default     = ""
+}
+
+variable "gke_cluster_ca_certificate" {
+  description = "The base64 encoded certificate data required to communicate with the GKE cluster"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "gke_cluster_name" {
+  description = "The name of the GKE cluster"
+  type        = string
+  default     = ""
+}
+
+variable "gke_region" {
+  description = "The GCP region where the GKE cluster is deployed"
+  type        = string
+  default     = "us-central1"
+}
+
+variable "gcp_project_id" {
+  description = "The GCP project ID"
+  type        = string
+  default     = ""
+}
+
+variable "kubeconfig_path" {
+  description = "Path to the kubeconfig file for generic Kubernetes clusters"
+  type        = string
+  default     = "~/.kube/config"
+}
+
+variable "kubeconfig_context" {
+  description = "Context to use from the kubeconfig file for generic Kubernetes clusters"
+  type        = string
+  default     = ""
 }
