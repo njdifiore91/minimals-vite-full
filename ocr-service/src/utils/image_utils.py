@@ -5,54 +5,56 @@
 Image processing utilities for the OCR Service.
 
 This module provides functions for image preprocessing, normalization, enhancement,
-and segmentation to prepare documents for OCR processing. It's essential for
-optimizing document images before text extraction.
+and segmentation to prepare documents for OCR processing. These utilities are essential
+for optimizing document images before text extraction to achieve high accuracy OCR results.
+
+The module includes functions for:
+- Image loading and basic operations
+- Image preprocessing (normalization, orientation correction)
+- Image enhancement (contrast, noise removal, sharpening)
+- Document segmentation (text regions, tables, form fields)
+- Image format handling
+- Image quality assessment
+
+These functions are designed to work with TensorFlow OCR models and support GPU acceleration
+for optimal performance.
 """
 
+import os
 import cv2
 import numpy as np
 import math
-import logging
-from typing import Tuple, List, Dict, Optional, Union, Any
 from enum import Enum
-import os
 import tempfile
-from PIL import Image, ImageEnhance, ImageFilter
+from typing import Tuple, List, Dict, Union, Optional, Any
 
-from ..types.documents import DocumentType
-from ..types.extraction import FieldLocation
-from ..types.errors import ServiceError
+from src.types.errors import ServiceError
+from src.types.documents import DocumentType
+from src.types.extraction import FieldLocation
 
-# Configure logger
-logger = logging.getLogger(__name__)
 
-# Constants
-MIN_OCR_DPI = 300  # Minimum DPI for good OCR results
-MAX_IMAGE_SIZE = 4096  # Maximum dimension for processing
-MIN_IMAGE_SIZE = 50  # Minimum dimension for processing
-DEFAULT_BINARIZATION_THRESHOLD = 128  # Default threshold for binarization
-MIN_QUALITY_SCORE = 0.4  # Minimum quality score for OCR suitability
+# ===== Enums for image processing =====
+
+class ColorSpace(Enum):
+    """Enum for color space conversion options."""
+    RGB = 1
+    BGR = 2
+    GRAY = 3
+    HSV = 4
+    BINARY = 5
 
 
 class ImageFormat(Enum):
-    """Supported image formats for OCR processing."""
-    JPEG = "jpeg"
-    PNG = "png"
-    TIFF = "tiff"
-    BMP = "bmp"
-    PDF = "pdf"
-
-
-class ColorSpace(Enum):
-    """Color spaces for image processing."""
-    RGB = "rgb"
-    GRAY = "gray"
-    HSV = "hsv"
-    BINARY = "binary"
+    """Enum for image file formats."""
+    JPEG = 1
+    PNG = 2
+    TIFF = 3
+    BMP = 4
+    PDF = 5
 
 
 class QualityMetrics(Enum):
-    """Image quality metrics for OCR suitability assessment."""
+    """Enum for image quality assessment metrics."""
     CONTRAST = "contrast"
     BRIGHTNESS = "brightness"
     SHARPNESS = "sharpness"
@@ -61,28 +63,27 @@ class QualityMetrics(Enum):
     SKEW = "skew"
 
 
-# ===== Image Preprocessing Functions =====
+# ===== Image loading and basic operations =====
 
-def load_image(image_path: str) -> np.ndarray:
-    """Load an image from file path.
+def load_image(file_path: str) -> np.ndarray:
+    """Load an image from a file path.
     
     Args:
-        image_path: Path to the image file
+        file_path: Path to the image file
         
     Returns:
-        Loaded image as numpy array
+        Image as a numpy array
         
     Raises:
-        ServiceError: If image cannot be loaded
+        ServiceError: If the image cannot be loaded
     """
     try:
-        image = cv2.imread(image_path)
+        image = cv2.imread(file_path, cv2.IMREAD_UNCHANGED)
         if image is None:
-            raise ServiceError(f"Failed to load image from {image_path}")
+            raise ServiceError(f"Failed to load image from {file_path}")
         return image
     except Exception as e:
-        logger.error(f"Error loading image from {image_path}: {str(e)}")
-        raise ServiceError(f"Error loading image: {str(e)}")
+        raise ServiceError(f"Error loading image from {file_path}: {str(e)}")
 
 
 def load_image_from_bytes(image_bytes: bytes) -> np.ndarray:
@@ -92,69 +93,60 @@ def load_image_from_bytes(image_bytes: bytes) -> np.ndarray:
         image_bytes: Image data as bytes
         
     Returns:
-        Loaded image as numpy array
+        Image as a numpy array
         
     Raises:
-        ServiceError: If image cannot be loaded
+        ServiceError: If the image cannot be loaded
     """
     try:
         nparr = np.frombuffer(image_bytes, np.uint8)
-        image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        image = cv2.imdecode(nparr, cv2.IMREAD_UNCHANGED)
         if image is None:
             raise ServiceError("Failed to decode image from bytes")
         return image
     except Exception as e:
-        logger.error(f"Error loading image from bytes: {str(e)}")
         raise ServiceError(f"Error loading image from bytes: {str(e)}")
 
 
-def normalize_size(image: np.ndarray, target_dpi: int = MIN_OCR_DPI) -> np.ndarray:
-    """Normalize image size to ensure minimum DPI for OCR.
+# ===== Image preprocessing =====
+
+def normalize_size(image: np.ndarray, min_size: int = 50, max_size: int = 4096) -> np.ndarray:
+    """Normalize image size to ensure it's within acceptable bounds for OCR processing.
     
     Args:
         image: Input image
-        target_dpi: Target DPI for the image (default: 300)
+        min_size: Minimum dimension size
+        max_size: Maximum dimension size
         
     Returns:
         Resized image
     """
-    # Calculate current image dimensions
     height, width = image.shape[:2]
     
     # Check if image is too small
-    if width < MIN_IMAGE_SIZE or height < MIN_IMAGE_SIZE:
-        logger.warning(f"Image is too small: {width}x{height}. Upscaling to minimum size.")
-        scale_factor = max(MIN_IMAGE_SIZE / width, MIN_IMAGE_SIZE / height)
-        new_width = int(width * scale_factor)
-        new_height = int(height * scale_factor)
-        image = cv2.resize(image, (new_width, new_height), interpolation=cv2.INTER_CUBIC)
-        return image
+    if height < min_size or width < min_size:
+        scale = max(min_size / height, min_size / width)
+        new_height = int(height * scale)
+        new_width = int(width * scale)
+        resized = cv2.resize(image, (new_width, new_height), interpolation=cv2.INTER_CUBIC)
+        return resized
     
     # Check if image is too large
-    if width > MAX_IMAGE_SIZE or height > MAX_IMAGE_SIZE:
-        logger.info(f"Image is too large: {width}x{height}. Downscaling to maximum size.")
-        scale_factor = min(MAX_IMAGE_SIZE / width, MAX_IMAGE_SIZE / height)
-        new_width = int(width * scale_factor)
-        new_height = int(height * scale_factor)
-        image = cv2.resize(image, (new_width, new_height), interpolation=cv2.INTER_AREA)
-    
-    # Estimate current DPI (assuming standard 8.5x11 inch document)
-    # This is a rough estimate and would need to be adjusted based on actual document size
-    estimated_dpi = min(width / 8.5, height / 11)
-    
-    # Resize if estimated DPI is too low
-    if estimated_dpi < target_dpi:
-        logger.info(f"Estimated DPI ({estimated_dpi:.1f}) is below target ({target_dpi}). Upscaling image.")
-        scale_factor = target_dpi / estimated_dpi
-        new_width = int(width * scale_factor)
-        new_height = int(height * scale_factor)
-        image = cv2.resize(image, (new_width, new_height), interpolation=cv2.INTER_CUBIC)
+    if height > max_size or width > max_size:
+        scale = min(max_size / height, max_size / width)
+        new_height = int(height * scale)
+        new_width = int(width * scale)
+        resized = cv2.resize(image, (new_width, new_height), interpolation=cv2.INTER_AREA)
+        return resized
     
     return image
 
 
 def normalize_orientation(image: np.ndarray) -> np.ndarray:
-    """Detect and correct image orientation to ensure text is horizontal.
+    """Correct the orientation of the document image.
+    
+    Uses Hough Line Transform to detect the dominant orientation of text lines
+    and rotates the image to correct skew.
     
     Args:
         image: Input image
@@ -168,48 +160,50 @@ def normalize_orientation(image: np.ndarray) -> np.ndarray:
     else:
         gray = image.copy()
     
-    # Use Hough Line Transform to detect lines
+    # Apply edge detection
     edges = cv2.Canny(gray, 50, 150, apertureSize=3)
-    lines = cv2.HoughLinesP(edges, 1, np.pi/180, threshold=100, minLineLength=100, maxLineGap=10)
     
+    # Use Hough Line Transform to detect lines
+    lines = cv2.HoughLines(edges, 1, np.pi/180, threshold=100)
+    
+    # If no lines detected, return original image
     if lines is None or len(lines) == 0:
-        logger.info("No lines detected for orientation correction. Returning original image.")
         return image
     
-    # Calculate angles of detected lines
+    # Calculate the dominant angle
     angles = []
     for line in lines:
-        x1, y1, x2, y2 = line[0]
-        if x2 - x1 == 0:  # Avoid division by zero
-            continue
-        angle = math.degrees(math.atan2(y2 - y1, x2 - x1))
-        # Consider only angles that are likely to be text lines (-30 to 30 degrees)
-        if abs(angle) <= 30 or abs(angle - 180) <= 30 or abs(angle + 180) <= 30:
-            angles.append(angle)
+        rho, theta = line[0]
+        # Only consider mostly horizontal or vertical lines
+        if (theta < np.pi/4 or theta > 3*np.pi/4):
+            angles.append(theta)
     
     if not angles:
-        logger.info("No valid text line angles detected. Returning original image.")
         return image
     
-    # Find the most common angle using a histogram approach
-    hist, bins = np.histogram(angles, bins=60, range=(-30, 30))
-    dominant_angle_bin = np.argmax(hist)
-    dominant_angle = (bins[dominant_angle_bin] + bins[dominant_angle_bin + 1]) / 2
+    # Get median angle to avoid outliers
+    median_angle = np.median(angles)
     
-    # If the dominant angle is close to horizontal, no rotation needed
-    if abs(dominant_angle) < 1.0:
+    # Convert to degrees and adjust
+    angle_degrees = np.degrees(median_angle)
+    if angle_degrees < 45:
+        angle_degrees = angle_degrees
+    elif angle_degrees > 135:
+        angle_degrees = angle_degrees - 180
+    else:
+        return image  # No significant skew detected
+    
+    # Only correct if skew is significant (more than 0.5 degrees)
+    if abs(angle_degrees) < 0.5:
         return image
-    
-    logger.info(f"Detected skew angle: {dominant_angle:.2f} degrees. Correcting orientation.")
     
     # Rotate the image to correct orientation
-    height, width = image.shape[:2]
-    center = (width // 2, height // 2)
-    rotation_matrix = cv2.getRotationMatrix2D(center, dominant_angle, 1.0)
-    rotated_image = cv2.warpAffine(image, rotation_matrix, (width, height), 
-                                  flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
+    (h, w) = image.shape[:2]
+    center = (w // 2, h // 2)
+    M = cv2.getRotationMatrix2D(center, angle_degrees, 1.0)
+    rotated = cv2.warpAffine(image, M, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
     
-    return rotated_image
+    return rotated
 
 
 def convert_color_space(image: np.ndarray, target_space: ColorSpace) -> np.ndarray:
@@ -226,158 +220,123 @@ def convert_color_space(image: np.ndarray, target_space: ColorSpace) -> np.ndarr
     if len(image.shape) == 2:
         current_space = ColorSpace.GRAY
     else:
-        current_space = ColorSpace.RGB  # Assuming BGR in OpenCV
+        current_space = ColorSpace.BGR  # OpenCV default
     
-    # Return if already in target space
+    # If already in target space, return as is
     if current_space == target_space:
         return image
     
     # Convert to target space
     if target_space == ColorSpace.GRAY:
-        if current_space == ColorSpace.RGB:
+        if current_space != ColorSpace.GRAY:
             return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        elif current_space == ColorSpace.HSV:
-            return cv2.cvtColor(image, cv2.COLOR_HSV2BGR)
-            return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    
     elif target_space == ColorSpace.RGB:
         if current_space == ColorSpace.GRAY:
             return cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
-        elif current_space == ColorSpace.HSV:
-            return cv2.cvtColor(image, cv2.COLOR_HSV2BGR)
-        elif current_space == ColorSpace.BINARY:
-            # Convert binary to grayscale, then to RGB
-            return cv2.cvtColor(image * 255, cv2.COLOR_GRAY2BGR)
-    
+        elif current_space == ColorSpace.BGR:
+            return cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    elif target_space == ColorSpace.BGR:
+        if current_space == ColorSpace.GRAY:
+            return cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+        elif current_space == ColorSpace.RGB:
+            return cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
     elif target_space == ColorSpace.HSV:
         if current_space == ColorSpace.GRAY:
-            rgb = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
-            return cv2.cvtColor(rgb, cv2.COLOR_BGR2HSV)
-        elif current_space == ColorSpace.RGB:
+            # Convert gray to BGR first, then to HSV
+            temp = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+            return cv2.cvtColor(temp, cv2.COLOR_BGR2HSV)
+        else:
             return cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-    
     elif target_space == ColorSpace.BINARY:
-        if current_space == ColorSpace.GRAY:
-            _, binary = cv2.threshold(image, DEFAULT_BINARIZATION_THRESHOLD, 1, cv2.THRESH_BINARY)
-            return binary
-        elif current_space == ColorSpace.RGB:
+        # Convert to grayscale first if needed
+        if current_space != ColorSpace.GRAY:
             gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-            _, binary = cv2.threshold(gray, DEFAULT_BINARIZATION_THRESHOLD, 1, cv2.THRESH_BINARY)
-            return binary
-        elif current_space == ColorSpace.HSV:
-            rgb = cv2.cvtColor(image, cv2.COLOR_HSV2BGR)
-            gray = cv2.cvtColor(rgb, cv2.COLOR_BGR2GRAY)
-            _, binary = cv2.threshold(gray, DEFAULT_BINARIZATION_THRESHOLD, 1, cv2.THRESH_BINARY)
-            return binary
+        else:
+            gray = image
+        # Apply Otsu's thresholding
+        _, binary = cv2.threshold(gray, 0, 1, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        return binary
     
-    # If we get here, the conversion is not supported
-    logger.warning(f"Unsupported color space conversion from {current_space} to {target_space}")
+    # Default case - return original image
     return image
 
 
-# ===== Image Enhancement Functions =====
+# ===== Image enhancement =====
 
-def enhance_contrast(image: np.ndarray, clip_limit: float = 2.0, tile_grid_size: Tuple[int, int] = (8, 8)) -> np.ndarray:
-    """Enhance image contrast using CLAHE (Contrast Limited Adaptive Histogram Equalization).
+def enhance_contrast(image: np.ndarray) -> np.ndarray:
+    """Enhance the contrast of the image using CLAHE (Contrast Limited Adaptive Histogram Equalization).
     
     Args:
         image: Input image
-        clip_limit: Threshold for contrast limiting
-        tile_grid_size: Size of grid for histogram equalization
         
     Returns:
         Contrast-enhanced image
     """
-    # Convert to grayscale if needed
+    # Handle color images
     if len(image.shape) == 3:
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        is_color = True
+        # Convert to LAB color space
+        lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+        l, a, b = cv2.split(lab)
+        
+        # Apply CLAHE to L channel
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        cl = clahe.apply(l)
+        
+        # Merge channels and convert back to BGR
+        merged = cv2.merge((cl, a, b))
+        enhanced = cv2.cvtColor(merged, cv2.COLOR_LAB2BGR)
+        return enhanced
     else:
-        gray = image.copy()
-        is_color = False
-    
-    # Apply CLAHE
-    clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=tile_grid_size)
-    enhanced_gray = clahe.apply(gray)
-    
-    # Return enhanced image in original color space
-    if is_color:
-        # Create YUV image (Y = luminance, UV = chrominance)
-        yuv_image = cv2.cvtColor(image, cv2.COLOR_BGR2YUV)
-        # Replace Y channel with enhanced image
-        yuv_image[:,:,0] = enhanced_gray
-        # Convert back to BGR
-        enhanced_image = cv2.cvtColor(yuv_image, cv2.COLOR_YUV2BGR)
-        return enhanced_image
-    else:
-        return enhanced_gray
+        # For grayscale images
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        enhanced = clahe.apply(image)
+        return enhanced
 
 
-def remove_noise(image: np.ndarray, method: str = 'gaussian', kernel_size: int = 5) -> np.ndarray:
-    """Remove noise from image using various filtering methods.
+def remove_noise(image: np.ndarray, method: str = 'gaussian') -> np.ndarray:
+    """Remove noise from the image using various filtering methods.
     
     Args:
         image: Input image
-        method: Noise removal method ('gaussian', 'median', 'bilateral', 'nlm')
-        kernel_size: Size of kernel for filtering
+        method: Noise removal method ('gaussian', 'median', or 'bilateral')
         
     Returns:
-        Noise-reduced image
+        Denoised image
     """
     if method == 'gaussian':
-        return cv2.GaussianBlur(image, (kernel_size, kernel_size), 0)
-    
+        # Gaussian blur for general noise reduction
+        return cv2.GaussianBlur(image, (5, 5), 0)
     elif method == 'median':
-        return cv2.medianBlur(image, kernel_size)
-    
+        # Median filter for salt-and-pepper noise
+        return cv2.medianBlur(image, 5)
     elif method == 'bilateral':
         # Bilateral filter preserves edges while removing noise
         if len(image.shape) == 3:
-            return cv2.bilateralFilter(image, kernel_size, 75, 75)
+            return cv2.bilateralFilter(image, 9, 75, 75)
         else:
-            return cv2.bilateralFilter(image, kernel_size, 75, 75)
-    
-    elif method == 'nlm':
-        # Non-local means denoising (best quality but slowest)
-        if len(image.shape) == 3:
-            return cv2.fastNlMeansDenoisingColored(image, None, 10, 10, 7, 21)
-        else:
-            return cv2.fastNlMeansDenoising(image, None, 10, 7, 21)
-    
+            # For grayscale images
+            return cv2.bilateralFilter(image, 9, 75, 75)
     else:
-        logger.warning(f"Unknown noise removal method: {method}. Using gaussian blur.")
-        return cv2.GaussianBlur(image, (kernel_size, kernel_size), 0)
+        # Default to Gaussian blur
+        return cv2.GaussianBlur(image, (5, 5), 0)
 
 
-def sharpen_image(image: np.ndarray, amount: float = 1.5) -> np.ndarray:
-    """Sharpen image to improve text clarity.
+def sharpen_image(image: np.ndarray) -> np.ndarray:
+    """Sharpen the image to enhance text edges.
     
     Args:
         image: Input image
-        amount: Sharpening intensity
         
     Returns:
         Sharpened image
     """
-    # Convert to PIL Image for easier sharpening
-    if len(image.shape) == 3:
-        # OpenCV uses BGR, PIL uses RGB
-        image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        pil_image = Image.fromarray(image_rgb)
-    else:
-        pil_image = Image.fromarray(image)
+    # Create sharpening kernel
+    kernel = np.array([[-1, -1, -1],
+                       [-1,  9, -1],
+                       [-1, -1, -1]])
     
-    # Apply sharpening filter
-    enhancer = ImageEnhance.Sharpness(pil_image)
-    sharpened_pil = enhancer.enhance(amount)
-    
-    # Convert back to numpy array
-    if len(image.shape) == 3:
-        sharpened_rgb = np.array(sharpened_pil)
-        sharpened = cv2.cvtColor(sharpened_rgb, cv2.COLOR_RGB2BGR)
-    else:
-        sharpened = np.array(sharpened_pil)
-    
+    # Apply kernel to the image
+    sharpened = cv2.filter2D(image, -1, kernel)
     return sharpened
 
 
@@ -385,8 +344,8 @@ def binarize_image(image: np.ndarray, method: str = 'otsu') -> np.ndarray:
     """Convert image to binary (black and white) using various thresholding methods.
     
     Args:
-        image: Input grayscale image
-        method: Binarization method ('simple', 'otsu', 'adaptive', 'sauvola')
+        image: Input image
+        method: Binarization method ('simple', 'otsu', 'adaptive', or 'sauvola')
         
     Returns:
         Binarized image
@@ -395,49 +354,47 @@ def binarize_image(image: np.ndarray, method: str = 'otsu') -> np.ndarray:
     if len(image.shape) == 3:
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     else:
-        gray = image.copy()
+        gray = image
     
     if method == 'simple':
-        _, binary = cv2.threshold(gray, DEFAULT_BINARIZATION_THRESHOLD, 255, cv2.THRESH_BINARY)
-    
+        # Simple thresholding
+        _, binary = cv2.threshold(gray, 128, 255, cv2.THRESH_BINARY)
     elif method == 'otsu':
-        # Otsu's method automatically determines optimal threshold value
+        # Otsu's thresholding
         _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    
     elif method == 'adaptive':
-        # Adaptive thresholding handles varying illumination
+        # Adaptive thresholding
         binary = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
                                       cv2.THRESH_BINARY, 11, 2)
-    
     elif method == 'sauvola':
-        # Sauvola's method is good for document images
+        # Sauvola thresholding (local adaptive)
         # This is an approximation of Sauvola using OpenCV
         window_size = 25
         k = 0.2
         r = 128
         
-        # Calculate mean and standard deviation using local windows
+        # Calculate local mean using a moving window
         mean = cv2.boxFilter(gray, -1, (window_size, window_size), 
                             borderType=cv2.BORDER_REPLICATE)
+        
+        # Calculate local standard deviation
         mean_sq = cv2.boxFilter(gray**2, -1, (window_size, window_size), 
                                borderType=cv2.BORDER_REPLICATE)
-        variance = mean_sq - mean**2
-        std = np.sqrt(variance)
+        std = np.sqrt(mean_sq - mean**2)
         
         # Calculate Sauvola threshold
         threshold = mean * (1 + k * ((std / r) - 1))
         binary = np.zeros_like(gray)
         binary[gray > threshold] = 255
-    
     else:
-        logger.warning(f"Unknown binarization method: {method}. Using Otsu's method.")
+        # Default to Otsu's method
         _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     
     return binary
 
 
 def deskew_image(image: np.ndarray) -> np.ndarray:
-    """Detect and correct skew in document images.
+    """Deskew the image by detecting and correcting the skew angle.
     
     Args:
         image: Input image
@@ -445,51 +402,46 @@ def deskew_image(image: np.ndarray) -> np.ndarray:
     Returns:
         Deskewed image
     """
-    # This is a more specialized version of normalize_orientation focused on small skew angles
-    
-    # Convert to grayscale and binarize
+    # Convert to grayscale if needed
     if len(image.shape) == 3:
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     else:
         gray = image.copy()
     
-    # Binarize the image
+    # Threshold the image
     _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
     
     # Find all non-zero points
     coords = np.column_stack(np.where(binary > 0))
     
-    if len(coords) == 0:
-        logger.info("No text detected for deskewing. Returning original image.")
+    # If no text is detected, return original image
+    if len(coords) <= 10:
         return image
     
-    # Find rotated rectangle around text
+    # Find rotated rectangle
     rect = cv2.minAreaRect(coords)
     angle = rect[-1]
     
-    # Adjust angle for proper deskewing
+    # Adjust angle
     if angle < -45:
-        angle = 90 + angle
+        angle = -(90 + angle)
     else:
         angle = -angle
     
-    # If angle is very small, no need to deskew
+    # Only deskew if angle is significant
     if abs(angle) < 0.5:
         return image
     
-    logger.info(f"Detected skew angle: {angle:.2f} degrees. Deskewing image.")
-    
-    # Rotate the image to correct skew
-    height, width = image.shape[:2]
-    center = (width // 2, height // 2)
-    rotation_matrix = cv2.getRotationMatrix2D(center, angle, 1.0)
-    deskewed = cv2.warpAffine(image, rotation_matrix, (width, height), 
-                             flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
+    # Rotate the image to correct the skew
+    (h, w) = image.shape[:2]
+    center = (w // 2, h // 2)
+    M = cv2.getRotationMatrix2D(center, angle, 1.0)
+    deskewed = cv2.warpAffine(image, M, (w, h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
     
     return deskewed
 
 
-# ===== Document Segmentation Functions =====
+# ===== Document segmentation =====
 
 def detect_text_regions(image: np.ndarray) -> List[Tuple[int, int, int, int]]:
     """Detect regions containing text in the document.
@@ -506,28 +458,27 @@ def detect_text_regions(image: np.ndarray) -> List[Tuple[int, int, int, int]]:
     else:
         gray = image.copy()
     
-    # Binarize the image
-    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    # Apply adaptive thresholding
+    binary = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                                  cv2.THRESH_BINARY_INV, 11, 2)
     
-    # Apply morphological operations to connect text into blocks
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 3))
-    dilated = cv2.dilate(binary, kernel, iterations=3)
+    # Apply morphological operations to connect nearby text
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 1))
+    connected = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
     
-    # Find contours of text regions
-    contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # Find contours
+    contours, _ = cv2.findContours(connected, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
     # Filter contours based on size and aspect ratio
     text_regions = []
     for contour in contours:
         x, y, w, h = cv2.boundingRect(contour)
-        aspect_ratio = w / float(h)
-        area = w * h
+        aspect_ratio = w / float(h) if h > 0 else 0
         
-        # Filter out very small regions and those with extreme aspect ratios
-        if area > 100 and 0.1 < aspect_ratio < 15:
+        # Filter based on size and aspect ratio
+        if w > 20 and h > 5 and aspect_ratio > 1.0 and aspect_ratio < 10.0:
             text_regions.append((x, y, w, h))
     
-    logger.info(f"Detected {len(text_regions)} text regions in the document")
     return text_regions
 
 
@@ -540,42 +491,39 @@ def detect_paragraphs(image: np.ndarray) -> List[Tuple[int, int, int, int]]:
     Returns:
         List of bounding boxes (x, y, width, height) for paragraph regions
     """
-    # Similar to detect_text_regions but with different morphological operations
-    # to group text lines into paragraphs
+    # First detect text regions
+    text_regions = detect_text_regions(image)
     
-    # Convert to grayscale if needed
-    if len(image.shape) == 3:
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    else:
-        gray = image.copy()
+    # If no text regions found, return empty list
+    if not text_regions:
+        return []
     
-    # Binarize the image
-    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    # Group text regions into paragraphs based on vertical proximity
+    text_regions.sort(key=lambda r: r[1])  # Sort by y-coordinate
     
-    # Apply morphological operations to connect text lines into paragraphs
-    # First connect characters in a line
-    kernel_horizontal = cv2.getStructuringElement(cv2.MORPH_RECT, (10, 1))
-    connected_lines = cv2.dilate(binary, kernel_horizontal, iterations=1)
+    paragraphs = []
+    current_paragraph = list(text_regions[0])
     
-    # Then connect lines in a paragraph
-    kernel_vertical = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 20))
-    connected_paragraphs = cv2.dilate(connected_lines, kernel_vertical, iterations=1)
+    for region in text_regions[1:]:
+        x, y, w, h = region
+        # If this region is close to the bottom of current paragraph, extend it
+        if y <= (current_paragraph[1] + current_paragraph[3] + 20):  # 20px threshold
+            # Update paragraph bounds
+            min_x = min(current_paragraph[0], x)
+            min_y = min(current_paragraph[1], y)
+            max_x = max(current_paragraph[0] + current_paragraph[2], x + w)
+            max_y = max(current_paragraph[1] + current_paragraph[3], y + h)
+            
+            current_paragraph = [min_x, min_y, max_x - min_x, max_y - min_y]
+        else:
+            # Start a new paragraph
+            paragraphs.append(tuple(current_paragraph))
+            current_paragraph = list(region)
     
-    # Find contours of paragraph regions
-    contours, _ = cv2.findContours(connected_paragraphs, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # Add the last paragraph
+    paragraphs.append(tuple(current_paragraph))
     
-    # Filter contours based on size
-    paragraph_regions = []
-    for contour in contours:
-        x, y, w, h = cv2.boundingRect(contour)
-        area = w * h
-        
-        # Filter out very small regions
-        if area > 500:
-            paragraph_regions.append((x, y, w, h))
-    
-    logger.info(f"Detected {len(paragraph_regions)} paragraph regions in the document")
-    return paragraph_regions
+    return paragraphs
 
 
 def detect_tables(image: np.ndarray) -> List[Tuple[int, int, int, int]]:
@@ -593,45 +541,41 @@ def detect_tables(image: np.ndarray) -> List[Tuple[int, int, int, int]]:
     else:
         gray = image.copy()
     
-    # Binarize the image
-    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    # Apply adaptive thresholding
+    binary = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                                  cv2.THRESH_BINARY_INV, 11, 2)
     
-    # Apply morphological operations to detect table structures
     # Detect horizontal lines
     horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (40, 1))
-    horizontal_lines = cv2.morphologyEx(binary, cv2.MORPH_OPEN, horizontal_kernel, iterations=3)
+    horizontal_lines = cv2.morphologyEx(binary, cv2.MORPH_OPEN, horizontal_kernel)
     
     # Detect vertical lines
     vertical_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 40))
-    vertical_lines = cv2.morphologyEx(binary, cv2.MORPH_OPEN, vertical_kernel, iterations=3)
+    vertical_lines = cv2.morphologyEx(binary, cv2.MORPH_OPEN, vertical_kernel)
     
     # Combine horizontal and vertical lines
-    table_structure = cv2.add(horizontal_lines, vertical_lines)
+    table_mask = cv2.bitwise_or(horizontal_lines, vertical_lines)
     
     # Dilate to connect nearby lines
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
-    table_structure = cv2.dilate(table_structure, kernel, iterations=2)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    table_mask = cv2.dilate(table_mask, kernel, iterations=3)
     
-    # Find contours of table regions
-    contours, _ = cv2.findContours(table_structure, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # Find contours
+    contours, _ = cv2.findContours(table_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
-    # Filter contours based on size and shape
-    table_regions = []
+    # Filter contours based on size
+    tables = []
     for contour in contours:
         x, y, w, h = cv2.boundingRect(contour)
-        aspect_ratio = w / float(h)
-        area = w * h
-        
-        # Tables typically have reasonable aspect ratios and are larger
-        if area > 5000 and 0.2 < aspect_ratio < 5:
-            table_regions.append((x, y, w, h))
+        # Filter based on size
+        if w > 100 and h > 100:
+            tables.append((x, y, w, h))
     
-    logger.info(f"Detected {len(table_regions)} table regions in the document")
-    return table_regions
+    return tables
 
 
 def detect_form_fields(image: np.ndarray) -> List[Dict[str, Any]]:
-    """Detect form fields (checkboxes, text fields, etc.) in the document.
+    """Detect form fields (checkboxes, text fields) in the document.
     
     Args:
         image: Input image
@@ -645,303 +589,318 @@ def detect_form_fields(image: np.ndarray) -> List[Dict[str, Any]]:
     else:
         gray = image.copy()
     
-    # Binarize the image
-    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    # Apply adaptive thresholding
+    binary = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                                  cv2.THRESH_BINARY_INV, 11, 2)
     
-    # Detect form field regions
+    # Detect horizontal lines (potential underlines for text fields)
+    horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (40, 1))
+    horizontal_lines = cv2.morphologyEx(binary, cv2.MORPH_OPEN, horizontal_kernel)
+    
+    # Find contours for horizontal lines
+    h_contours, _ = cv2.findContours(horizontal_lines, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    # Detect checkboxes
+    # Look for square contours
+    checkbox_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    checkbox_mask = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, checkbox_kernel)
+    
+    # Find contours for potential checkboxes
+    c_contours, _ = cv2.findContours(checkbox_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
     form_fields = []
     
-    # Detect checkboxes (small squares)
-    checkbox_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-    checkbox_image = cv2.morphologyEx(binary, cv2.MORPH_OPEN, checkbox_kernel, iterations=1)
-    checkbox_contours, _ = cv2.findContours(checkbox_image, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    
-    for contour in checkbox_contours:
+    # Process horizontal lines (potential text fields)
+    for contour in h_contours:
         x, y, w, h = cv2.boundingRect(contour)
-        aspect_ratio = w / float(h)
-        area = w * h
+        # Filter based on size and aspect ratio
+        if w > 50 and h < 5 and w / h > 10:  # Likely an underline
+            form_fields.append({
+                'type': 'text_field',
+                'bbox': (x, y, w, h),
+                'underline': True
+            })
+    
+    # Process potential checkboxes
+    for contour in c_contours:
+        x, y, w, h = cv2.boundingRect(contour)
+        aspect_ratio = w / float(h) if h > 0 else 0
         
-        # Checkboxes are typically square and small
-        if 100 < area < 1000 and 0.8 < aspect_ratio < 1.2:
-            # Check if it's actually a checkbox by looking for a square shape
-            perimeter = cv2.arcLength(contour, True)
-            approx = cv2.approxPolyDP(contour, 0.04 * perimeter, True)
+        # Filter based on size and aspect ratio
+        if 10 < w < 50 and 10 < h < 50 and 0.8 < aspect_ratio < 1.2:  # Square-ish
+            # Check if the checkbox is checked
+            checkbox_roi = gray[y:y+h, x:x+w]
+            is_checked = is_checkbox_checked(gray, (x, y, w, h))
             
-            if len(approx) == 4:  # It's a quadrilateral
-                form_fields.append({
-                    'type': 'checkbox',
-                    'bbox': (x, y, w, h),
-                    'checked': is_checkbox_checked(gray, (x, y, w, h))
-                })
+            form_fields.append({
+                'type': 'checkbox',
+                'bbox': (x, y, w, h),
+                'checked': is_checked
+            })
     
-    # Detect text fields (horizontal lines with space above)
-    horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (40, 1))
-    horizontal_lines = cv2.morphologyEx(binary, cv2.MORPH_OPEN, horizontal_kernel, iterations=1)
-    line_contours, _ = cv2.findContours(horizontal_lines, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    
-    for contour in line_contours:
-        x, y, w, h = cv2.boundingRect(contour)
-        aspect_ratio = w / float(h)
-        
-        # Text field underlines are typically very wide and thin
-        if w > 50 and aspect_ratio > 10:
-            # Look for text above the line
-            text_region = (x, y - 30, w, 30)  # 30 pixels above the line
-            if is_region_in_bounds(text_region, gray.shape):
-                form_fields.append({
-                    'type': 'text_field',
-                    'bbox': (x, y - 30, w, 30),
-                    'underline': (x, y, w, h)
-                })
-    
-    logger.info(f"Detected {len(form_fields)} form fields in the document")
     return form_fields
 
 
-def segment_document(image: np.ndarray, document_type: Optional[DocumentType] = None) -> Dict[str, List[Dict[str, Any]]]:
-    """Segment document into different regions based on content type.
+def segment_document(image: np.ndarray, document_type: Optional[DocumentType] = None) -> Dict[str, List]:
+    """Segment the document into different regions (text, paragraphs, tables, form fields).
     
     Args:
         image: Input image
-        document_type: Type of document for specialized segmentation
+        document_type: Optional document type for specialized segmentation
         
     Returns:
         Dictionary containing lists of different region types
     """
-    # Initialize result dictionary
-    segments = {
-        'text_regions': [],
-        'paragraphs': [],
-        'tables': [],
-        'form_fields': [],
-        'images': []
-    }
+    # Preprocess the image
+    preprocessed = preprocess_for_ocr(image, document_type)
     
-    # Detect text regions
-    text_boxes = detect_text_regions(image)
-    segments['text_regions'] = [{'bbox': box, 'type': 'text'} for box in text_boxes]
+    # Detect different region types
+    text_regions = detect_text_regions(preprocessed)
+    paragraphs = detect_paragraphs(preprocessed)
+    tables = detect_tables(preprocessed)
+    form_fields = detect_form_fields(preprocessed)
     
-    # Detect paragraphs
-    paragraph_boxes = detect_paragraphs(image)
-    segments['paragraphs'] = [{'bbox': box, 'type': 'paragraph'} for box in paragraph_boxes]
-    
-    # Detect tables
-    table_boxes = detect_tables(image)
-    segments['tables'] = [{'bbox': box, 'type': 'table'} for box in table_boxes]
-    
-    # Detect form fields
-    form_fields = detect_form_fields(image)
-    segments['form_fields'] = form_fields
-    
-    # Apply document type-specific segmentation if available
-    if document_type:
-        if document_type == DocumentType.APPLICATION:
-            # Application forms typically have more structured form fields
-            # Enhance form field detection for applications
-            pass
-        
-        elif document_type == DocumentType.TAX_RETURN:
-            # Tax returns typically have tables with numerical data
-            # Enhance table detection for tax returns
-            pass
-        
-        elif document_type == DocumentType.BANK_STATEMENT:
-            # Bank statements have tables with transaction data
-            # Enhance table detection for bank statements
-            pass
-    
-    return segments
-
-
-# ===== Image Format Handling Functions =====
-
-def convert_to_format(image: np.ndarray, target_format: ImageFormat) -> bytes:
-    """Convert image to the specified format.
-    
-    Args:
-        image: Input image
-        target_format: Target image format
-        
-    Returns:
-        Image data in the specified format as bytes
-    """
-    # Encode image to the target format
-    if target_format == ImageFormat.JPEG:
-        _, encoded_image = cv2.imencode('.jpg', image, [cv2.IMWRITE_JPEG_QUALITY, 95])
-    
-    elif target_format == ImageFormat.PNG:
-        _, encoded_image = cv2.imencode('.png', image)
-    
-    elif target_format == ImageFormat.TIFF:
-        _, encoded_image = cv2.imencode('.tiff', image)
-    
-    elif target_format == ImageFormat.BMP:
-        _, encoded_image = cv2.imencode('.bmp', image)
-    
+    # Detect images/graphics (non-text regions)
+    # This is a simplified approach - just find large contours that aren't text or tables
+    if len(preprocessed.shape) == 3:
+        gray = cv2.cvtColor(preprocessed, cv2.COLOR_BGR2GRAY)
     else:
-        logger.warning(f"Unsupported target format: {target_format}. Converting to PNG.")
-        _, encoded_image = cv2.imencode('.png', image)
+        gray = preprocessed.copy()
     
-    return encoded_image.tobytes()
+    # Threshold the image
+    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    
+    # Find all contours
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    # Filter for potential image regions
+    image_regions = []
+    for contour in contours:
+        x, y, w, h = cv2.boundingRect(contour)
+        area = w * h
+        
+        # Check if this region overlaps with text or tables
+        is_overlapping = False
+        for region in text_regions + tables:
+            rx, ry, rw, rh = region
+            if (x < rx + rw and x + w > rx and y < ry + rh and y + h > ry):
+                is_overlapping = True
+                break
+        
+        # If large enough and not overlapping, consider it an image region
+        if area > 10000 and not is_overlapping:
+            image_regions.append({
+                'type': 'image',
+                'bbox': (x, y, w, h)
+            })
+    
+    # Convert text regions and other simple regions to dictionaries with type
+    text_regions_dict = [{'type': 'text', 'bbox': region} for region in text_regions]
+    paragraphs_dict = [{'type': 'paragraph', 'bbox': region} for region in paragraphs]
+    tables_dict = [{'type': 'table', 'bbox': region} for region in tables]
+    
+    # Return all segments
+    return {
+        'text_regions': text_regions_dict,
+        'paragraphs': paragraphs_dict,
+        'tables': tables_dict,
+        'form_fields': form_fields,
+        'images': image_regions
+    }
 
 
-def save_image(image: np.ndarray, output_path: str, image_format: Optional[ImageFormat] = None) -> str:
-    """Save image to file.
+# ===== Image format handling =====
+
+def convert_to_format(image: np.ndarray, format: ImageFormat) -> bytes:
+    """Convert image to the specified format and return as bytes.
     
     Args:
         image: Input image
-        output_path: Path to save the image
-        image_format: Format to save the image (if None, inferred from output_path)
+        format: Target image format
         
     Returns:
-        Path to the saved image
+        Image data as bytes
+    """
+    # Set encoding parameters based on format
+    if format == ImageFormat.JPEG:
+        params = [cv2.IMWRITE_JPEG_QUALITY, 95]
+        ext = '.jpg'
+    elif format == ImageFormat.PNG:
+        params = [cv2.IMWRITE_PNG_COMPRESSION, 9]
+        ext = '.png'
+    elif format == ImageFormat.TIFF:
+        params = [cv2.IMWRITE_TIFF_COMPRESSION, 5]
+        ext = '.tiff'
+    elif format == ImageFormat.BMP:
+        params = []
+        ext = '.bmp'
+    else:
+        # Default to PNG
+        params = [cv2.IMWRITE_PNG_COMPRESSION, 9]
+        ext = '.png'
+    
+    # Encode image to bytes
+    success, buffer = cv2.imencode(ext, image, params)
+    if not success:
+        raise ServiceError(f"Failed to convert image to {format.name} format")
+    
+    return buffer.tobytes()
+
+
+def save_image(image: np.ndarray, file_path: str, format: Optional[ImageFormat] = None) -> str:
+    """Save image to a file.
+    
+    Args:
+        image: Input image
+        file_path: Path to save the image
+        format: Optional image format (if not specified, inferred from file extension)
+        
+    Returns:
+        Path to the saved file
+        
+    Raises:
+        ServiceError: If the image cannot be saved
     """
     try:
         # If format is specified, convert to that format
-        if image_format:
-            image_data = convert_to_format(image, image_format)
-            with open(output_path, 'wb') as f:
-                f.write(image_data)
+        if format is not None:
+            image_bytes = convert_to_format(image, format)
+            with open(file_path, 'wb') as f:
+                f.write(image_bytes)
         else:
-            # Otherwise, let OpenCV determine format from file extension
-            cv2.imwrite(output_path, image)
+            # Save directly using OpenCV
+            cv2.imwrite(file_path, image)
         
-        return output_path
-    
+        return file_path
     except Exception as e:
-        logger.error(f"Error saving image to {output_path}: {str(e)}")
-        raise ServiceError(f"Error saving image: {str(e)}")
+        raise ServiceError(f"Error saving image to {file_path}: {str(e)}")
 
 
-def get_image_format(image_path: str) -> ImageFormat:
-    """Determine image format from file path.
+def get_image_format(file_path: str) -> ImageFormat:
+    """Determine image format from file path extension.
     
     Args:
-        image_path: Path to the image file
+        file_path: Path to the image file
         
     Returns:
-        Detected image format
+        Image format enum
     """
-    extension = os.path.splitext(image_path)[1].lower()
+    ext = os.path.splitext(file_path)[1].lower()
     
-    if extension == '.jpg' or extension == '.jpeg':
+    if ext in ['.jpg', '.jpeg']:
         return ImageFormat.JPEG
-    elif extension == '.png':
+    elif ext == '.png':
         return ImageFormat.PNG
-    elif extension == '.tiff' or extension == '.tif':
+    elif ext in ['.tif', '.tiff']:
         return ImageFormat.TIFF
-    elif extension == '.bmp':
+    elif ext == '.bmp':
         return ImageFormat.BMP
-    elif extension == '.pdf':
+    elif ext == '.pdf':
         return ImageFormat.PDF
     else:
-        logger.warning(f"Unknown image format: {extension}. Assuming JPEG.")
+        # Default to JPEG
         return ImageFormat.JPEG
 
 
-# ===== Image Quality Assessment Functions =====
+# ===== Image quality assessment =====
 
 def assess_image_quality(image: np.ndarray) -> Dict[str, float]:
-    """Assess image quality for OCR suitability.
+    """Assess the quality of the image for OCR processing.
     
     Args:
         image: Input image
         
     Returns:
-        Dictionary of quality metrics with scores between 0.0 and 1.0
+        Dictionary of quality metrics
     """
-    # Initialize quality metrics
-    quality_metrics = {
-        QualityMetrics.CONTRAST.value: 0.0,
-        QualityMetrics.BRIGHTNESS.value: 0.0,
-        QualityMetrics.SHARPNESS.value: 0.0,
-        QualityMetrics.NOISE.value: 0.0,
-        QualityMetrics.RESOLUTION.value: 0.0,
-        QualityMetrics.SKEW.value: 0.0
-    }
-    
     # Convert to grayscale if needed
     if len(image.shape) == 3:
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     else:
         gray = image.copy()
     
-    # Assess contrast
-    min_val, max_val, _, _ = cv2.minMaxLoc(gray)
-    contrast_range = max_val - min_val
-    quality_metrics[QualityMetrics.CONTRAST.value] = min(contrast_range / 255.0, 1.0)
+    # Calculate contrast (standard deviation of pixel values)
+    contrast = np.std(gray) / 255.0
     
-    # Assess brightness
-    mean_brightness = np.mean(gray) / 255.0
-    # Optimal brightness is around 0.5 (middle of range)
-    brightness_score = 1.0 - 2.0 * abs(mean_brightness - 0.5)
-    quality_metrics[QualityMetrics.BRIGHTNESS.value] = max(brightness_score, 0.0)
+    # Calculate brightness (mean pixel value)
+    brightness = np.mean(gray) / 255.0
     
-    # Assess sharpness using Laplacian variance
+    # Calculate sharpness (variance of Laplacian)
     laplacian = cv2.Laplacian(gray, cv2.CV_64F)
-    laplacian_var = laplacian.var()
-    # Normalize sharpness score (empirical values based on testing)
-    sharpness_score = min(laplacian_var / 500.0, 1.0)
-    quality_metrics[QualityMetrics.SHARPNESS.value] = sharpness_score
+    sharpness = np.var(laplacian) / 10000.0  # Normalize
+    if sharpness > 1.0:
+        sharpness = 1.0
     
-    # Assess noise using homogeneity of regions
-    # Calculate local standard deviation
-    mean, stddev = cv2.meanStdDev(gray)
-    noise_level = stddev[0][0] / 128.0  # Normalize to [0, 1] range
-    noise_score = 1.0 - min(noise_level, 1.0)
-    quality_metrics[QualityMetrics.NOISE.value] = noise_score
+    # Calculate noise level (approximation using local standard deviation)
+    noise = 0.0
+    block_size = 16
+    for y in range(0, gray.shape[0], block_size):
+        for x in range(0, gray.shape[1], block_size):
+            block = gray[y:min(y+block_size, gray.shape[0]), 
+                        x:min(x+block_size, gray.shape[1])]
+            if block.size > 0:
+                local_std = np.std(block)
+                noise += local_std
     
-    # Assess resolution based on image size
+    # Normalize noise
+    if gray.size > 0:
+        noise = 1.0 - (noise / (gray.size / (block_size**2) * 255.0))
+        if noise < 0.0:
+            noise = 0.0
+        if noise > 1.0:
+            noise = 1.0
+    
+    # Calculate resolution quality (based on image dimensions)
     height, width = gray.shape
-    min_dimension = min(height, width)
-    # Normalize resolution score (empirical values based on testing)
-    resolution_score = min(min_dimension / 1000.0, 1.0)
-    quality_metrics[QualityMetrics.RESOLUTION.value] = resolution_score
+    min_dim = min(height, width)
+    resolution = min(1.0, min_dim / 1000.0)  # Normalize to 0-1
     
-    # Assess skew using Hough Line Transform
-    edges = cv2.Canny(gray, 50, 150, apertureSize=3)
-    lines = cv2.HoughLinesP(edges, 1, np.pi/180, threshold=100, minLineLength=100, maxLineGap=10)
+    # Calculate skew (using the deskew function)
+    # Convert to binary
+    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
     
-    if lines is not None and len(lines) > 0:
-        angles = []
-        for line in lines:
-            x1, y1, x2, y2 = line[0]
-            if x2 - x1 == 0:  # Avoid division by zero
-                continue
-            angle = math.degrees(math.atan2(y2 - y1, x2 - x1))
-            # Consider only angles that are likely to be text lines
-            if abs(angle) <= 30 or abs(angle - 180) <= 30 or abs(angle + 180) <= 30:
-                angles.append(angle)
+    # Find all non-zero points
+    coords = np.column_stack(np.where(binary > 0))
+    
+    # Default skew value (perfect)
+    skew = 1.0
+    
+    # If enough text is detected, calculate skew
+    if len(coords) > 10:
+        # Find rotated rectangle
+        rect = cv2.minAreaRect(coords)
+        angle = rect[-1]
         
-        if angles:
-            # Find the most common angle
-            hist, bins = np.histogram(angles, bins=60, range=(-30, 30))
-            dominant_angle_bin = np.argmax(hist)
-            dominant_angle = (bins[dominant_angle_bin] + bins[dominant_angle_bin + 1]) / 2
-            
-            # Calculate skew score (0 degrees is perfect)
-            skew_score = 1.0 - min(abs(dominant_angle) / 30.0, 1.0)
-            quality_metrics[QualityMetrics.SKEW.value] = skew_score
+        # Adjust angle
+        if angle < -45:
+            angle = -(90 + angle)
         else:
-            # No valid text line angles detected
-            quality_metrics[QualityMetrics.SKEW.value] = 0.5  # Neutral score
-    else:
-        # No lines detected
-        quality_metrics[QualityMetrics.SKEW.value] = 0.5  # Neutral score
+            angle = -angle
+        
+        # Convert angle to quality metric (0-1, where 1 is perfect)
+        skew = 1.0 - min(1.0, abs(angle) / 45.0)
     
-    return quality_metrics
+    # Return all metrics
+    return {
+        QualityMetrics.CONTRAST.value: contrast,
+        QualityMetrics.BRIGHTNESS.value: brightness,
+        QualityMetrics.SHARPNESS.value: sharpness,
+        QualityMetrics.NOISE.value: noise,
+        QualityMetrics.RESOLUTION.value: resolution,
+        QualityMetrics.SKEW.value: skew
+    }
 
 
-def calculate_overall_quality(quality_metrics: Dict[str, float]) -> float:
+def calculate_overall_quality(metrics: Dict[str, float]) -> float:
     """Calculate overall image quality score from individual metrics.
     
     Args:
-        quality_metrics: Dictionary of quality metrics
+        metrics: Dictionary of quality metrics
         
     Returns:
-        Overall quality score between 0.0 and 1.0
+        Overall quality score (0-1)
     """
-    # Define weights for each metric based on importance for OCR
+    # Define weights for each metric
     weights = {
         QualityMetrics.CONTRAST.value: 0.25,
         QualityMetrics.BRIGHTNESS.value: 0.15,
@@ -952,13 +911,25 @@ def calculate_overall_quality(quality_metrics: Dict[str, float]) -> float:
     }
     
     # Calculate weighted sum
-    weighted_sum = sum(quality_metrics[metric] * weights[metric] for metric in quality_metrics)
+    weighted_sum = 0.0
+    total_weight = 0.0
     
-    return weighted_sum
+    for metric, value in metrics.items():
+        if metric in weights:
+            weighted_sum += value * weights[metric]
+            total_weight += weights[metric]
+    
+    # Normalize
+    if total_weight > 0:
+        overall_quality = weighted_sum / total_weight
+    else:
+        overall_quality = 0.0
+    
+    return overall_quality
 
 
 def is_suitable_for_ocr(image: np.ndarray) -> Tuple[bool, Dict[str, float]]:
-    """Determine if image is suitable for OCR processing.
+    """Determine if the image is suitable for OCR processing.
     
     Args:
         image: Input image
@@ -967,74 +938,67 @@ def is_suitable_for_ocr(image: np.ndarray) -> Tuple[bool, Dict[str, float]]:
         Tuple of (is_suitable, quality_metrics)
     """
     # Assess image quality
-    quality_metrics = assess_image_quality(image)
-    overall_quality = calculate_overall_quality(quality_metrics)
+    metrics = assess_image_quality(image)
     
-    # Log quality assessment results
-    logger.info(f"Image quality assessment: {quality_metrics}")
-    logger.info(f"Overall quality score: {overall_quality:.2f}")
+    # Calculate overall quality
+    overall_quality = calculate_overall_quality(metrics)
     
-    # Determine if image is suitable for OCR
-    is_suitable = overall_quality >= MIN_QUALITY_SCORE
+    # Define threshold for OCR suitability
+    threshold = 0.5  # Adjust as needed
     
-    if not is_suitable:
-        logger.warning(f"Image quality ({overall_quality:.2f}) is below minimum threshold ({MIN_QUALITY_SCORE})")
-        
-        # Identify specific issues
-        issues = []
-        if quality_metrics[QualityMetrics.CONTRAST.value] < 0.4:
-            issues.append("low contrast")
-        if quality_metrics[QualityMetrics.BRIGHTNESS.value] < 0.4:
-            issues.append("poor brightness")
-        if quality_metrics[QualityMetrics.SHARPNESS.value] < 0.4:
-            issues.append("insufficient sharpness")
-        if quality_metrics[QualityMetrics.NOISE.value] < 0.4:
-            issues.append("excessive noise")
-        if quality_metrics[QualityMetrics.RESOLUTION.value] < 0.4:
-            issues.append("low resolution")
-        if quality_metrics[QualityMetrics.SKEW.value] < 0.4:
-            issues.append("significant skew")
-        
-        if issues:
-            logger.warning(f"Image quality issues: {', '.join(issues)}")
+    # Check if image is suitable
+    is_suitable = overall_quality >= threshold
     
-    return is_suitable, quality_metrics
+    return is_suitable, metrics
 
 
-def suggest_enhancements(quality_metrics: Dict[str, float]) -> List[str]:
-    """Suggest image enhancements based on quality assessment.
+def suggest_enhancements(metrics: Dict[str, float]) -> List[str]:
+    """Suggest image enhancements based on quality metrics.
     
     Args:
-        quality_metrics: Dictionary of quality metrics
+        metrics: Dictionary of quality metrics
         
     Returns:
         List of suggested enhancement operations
     """
     suggestions = []
     
-    # Check each metric and suggest appropriate enhancements
-    if quality_metrics[QualityMetrics.CONTRAST.value] < 0.4:
-        suggestions.append("enhance_contrast")
+    # Define thresholds for each metric
+    thresholds = {
+        QualityMetrics.CONTRAST.value: 0.4,
+        QualityMetrics.BRIGHTNESS.value: 0.3,
+        QualityMetrics.SHARPNESS.value: 0.4,
+        QualityMetrics.NOISE.value: 0.6,
+        QualityMetrics.RESOLUTION.value: 0.5,
+        QualityMetrics.SKEW.value: 0.8
+    }
     
-    if quality_metrics[QualityMetrics.BRIGHTNESS.value] < 0.4:
-        suggestions.append("normalize_brightness")
+    # Check each metric and suggest enhancements
+    if metrics[QualityMetrics.CONTRAST.value] < thresholds[QualityMetrics.CONTRAST.value]:
+        suggestions.append('enhance_contrast')
     
-    if quality_metrics[QualityMetrics.SHARPNESS.value] < 0.4:
-        suggestions.append("sharpen_image")
+    # For brightness, check if too dark or too bright
+    if metrics[QualityMetrics.BRIGHTNESS.value] < thresholds[QualityMetrics.BRIGHTNESS.value]:
+        suggestions.append('increase_brightness')
+    elif metrics[QualityMetrics.BRIGHTNESS.value] > 0.8:  # Too bright
+        suggestions.append('decrease_brightness')
     
-    if quality_metrics[QualityMetrics.NOISE.value] < 0.4:
-        suggestions.append("remove_noise")
+    if metrics[QualityMetrics.SHARPNESS.value] < thresholds[QualityMetrics.SHARPNESS.value]:
+        suggestions.append('sharpen_image')
     
-    if quality_metrics[QualityMetrics.RESOLUTION.value] < 0.4:
-        suggestions.append("normalize_size")
+    if metrics[QualityMetrics.NOISE.value] < thresholds[QualityMetrics.NOISE.value]:
+        suggestions.append('remove_noise')
     
-    if quality_metrics[QualityMetrics.SKEW.value] < 0.4:
-        suggestions.append("deskew_image")
+    if metrics[QualityMetrics.RESOLUTION.value] < thresholds[QualityMetrics.RESOLUTION.value]:
+        suggestions.append('increase_resolution')
+    
+    if metrics[QualityMetrics.SKEW.value] < thresholds[QualityMetrics.SKEW.value]:
+        suggestions.append('deskew_image')
     
     return suggestions
 
 
-# ===== Helper Functions =====
+# ===== Helper functions =====
 
 def is_checkbox_checked(image: np.ndarray, bbox: Tuple[int, int, int, int]) -> bool:
     """Determine if a checkbox is checked.
@@ -1048,21 +1012,21 @@ def is_checkbox_checked(image: np.ndarray, bbox: Tuple[int, int, int, int]) -> b
     """
     x, y, w, h = bbox
     
-    # Extract checkbox region
-    checkbox_region = image[y:y+h, x:x+w]
+    # Extract the checkbox region
+    checkbox = image[y:y+h, x:x+w]
     
-    # Binarize the region
-    _, binary = cv2.threshold(checkbox_region, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    # Threshold to binary
+    _, binary = cv2.threshold(checkbox, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
     
-    # Calculate percentage of black pixels (potential check mark)
-    black_pixel_percentage = np.sum(binary == 255) / (w * h)
+    # Calculate the fill ratio (percentage of black pixels)
+    fill_ratio = np.sum(binary == 255) / (w * h)
     
-    # If more than 20% of pixels are black, consider it checked
-    return black_pixel_percentage > 0.2
+    # If more than 20% filled, consider it checked
+    return fill_ratio > 0.2
 
 
 def is_region_in_bounds(region: Tuple[int, int, int, int], image_shape: Tuple[int, int]) -> bool:
-    """Check if a region is within image bounds.
+    """Check if a region is within the bounds of the image.
     
     Args:
         region: Region as (x, y, width, height)
@@ -1074,54 +1038,52 @@ def is_region_in_bounds(region: Tuple[int, int, int, int], image_shape: Tuple[in
     x, y, w, h = region
     height, width = image_shape
     
-    return (x >= 0 and y >= 0 and x + w <= width and y + h <= height)
+    return (x >= 0 and y >= 0 and 
+            x + w <= width and y + h <= height and 
+            w > 0 and h > 0)
 
 
-def extract_region(image: np.ndarray, bbox: Tuple[int, int, int, int]) -> np.ndarray:
+def extract_region(image: np.ndarray, region: Tuple[int, int, int, int]) -> np.ndarray:
     """Extract a region from an image.
     
     Args:
         image: Input image
-        bbox: Bounding box as (x, y, width, height)
+        region: Region as (x, y, width, height)
         
     Returns:
         Extracted region
     """
-    x, y, w, h = bbox
+    x, y, w, h = region
     
-    # Ensure region is within image bounds
-    if not is_region_in_bounds(bbox, image.shape[:2]):
-        logger.warning(f"Region {bbox} is outside image bounds {image.shape[:2]}")
-        # Adjust region to fit within image bounds
-        x = max(0, x)
-        y = max(0, y)
-        w = min(w, image.shape[1] - x)
-        h = min(h, image.shape[0] - y)
+    # Ensure region is within bounds
+    height, width = image.shape[:2]
+    x = max(0, x)
+    y = max(0, y)
+    w = min(width - x, w)
+    h = min(height - y, h)
     
+    # Extract region
     return image[y:y+h, x:x+w]
 
 
 def preprocess_for_ocr(image: np.ndarray, document_type: Optional[DocumentType] = None) -> np.ndarray:
-    """Apply a standard preprocessing pipeline for OCR.
+    """Apply standard preprocessing pipeline for OCR.
     
     Args:
         image: Input image
-        document_type: Type of document for specialized preprocessing
+        document_type: Optional document type for specialized preprocessing
         
     Returns:
-        Preprocessed image ready for OCR
+        Preprocessed image
     """
-    # Normalize image size
-    image = normalize_size(image)
-    
-    # Correct orientation
-    image = normalize_orientation(image)
+    # Normalize size
+    resized = normalize_size(image)
     
     # Convert to grayscale
-    if len(image.shape) == 3:
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    if len(resized.shape) == 3:
+        gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
     else:
-        gray = image.copy()
+        gray = resized.copy()
     
     # Enhance contrast
     enhanced = enhance_contrast(gray)
@@ -1129,27 +1091,25 @@ def preprocess_for_ocr(image: np.ndarray, document_type: Optional[DocumentType] 
     # Remove noise
     denoised = remove_noise(enhanced, method='gaussian')
     
-    # Sharpen image
-    sharpened = sharpen_image(denoised)
-    
-    # Apply document type-specific preprocessing if available
-    if document_type:
-        if document_type == DocumentType.APPLICATION:
-            # Application forms typically have form fields
-            # Enhance form field visibility
-            pass
-        
-        elif document_type == DocumentType.TAX_RETURN:
-            # Tax returns typically have tables with numerical data
-            # Enhance table visibility
-            pass
-        
-        elif document_type == DocumentType.BANK_STATEMENT:
-            # Bank statements have tables with transaction data
-            # Enhance table visibility
-            pass
-    
-    return sharpened
+    # Apply document type-specific preprocessing if specified
+    if document_type == DocumentType.APPLICATION:
+        # For application forms, use adaptive thresholding
+        binary = cv2.adaptiveThreshold(denoised, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                                      cv2.THRESH_BINARY, 11, 2)
+        return binary
+    elif document_type == DocumentType.INVOICE:
+        # For invoices, use Otsu's thresholding
+        _, binary = cv2.threshold(denoised, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        return binary
+    elif document_type == DocumentType.ID_DOCUMENT:
+        # For ID documents, use sharper image without binarization
+        sharpened = sharpen_image(denoised)
+        return sharpened
+    else:
+        # Default preprocessing
+        # Deskew the image
+        deskewed = deskew_image(denoised)
+        return deskewed
 
 
 def create_field_mask(image: np.ndarray, field_locations: List[FieldLocation]) -> np.ndarray:
@@ -1169,14 +1129,17 @@ def create_field_mask(image: np.ndarray, field_locations: List[FieldLocation]) -
     else:
         highlighted = image.copy()
     
+    # Define highlight color (green)
+    color = (0, 255, 0)  # BGR
+    
     # Draw rectangles around each field
     for field in field_locations:
         x, y, w, h = field.bbox
-        cv2.rectangle(highlighted, (x, y), (x + w, y + h), (0, 255, 0), 2)
+        cv2.rectangle(highlighted, (x, y), (x + w, y + h), color, 2)
         
-        # Add field label if available
-        if hasattr(field, 'label') and field.label:
+        # Add label if available
+        if field.label:
             cv2.putText(highlighted, field.label, (x, y - 5),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
     
     return highlighted
