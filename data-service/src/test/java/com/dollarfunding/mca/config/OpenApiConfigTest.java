@@ -1,210 +1,170 @@
 package com.dollarfunding.mca.config;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertTrue;
-
-import java.util.List;
-
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.test.context.junit.jupiter.SpringExtension;
-
 import io.swagger.v3.oas.models.Components;
 import io.swagger.v3.oas.models.OpenAPI;
 import io.swagger.v3.oas.models.info.Contact;
 import io.swagger.v3.oas.models.info.Info;
 import io.swagger.v3.oas.models.info.License;
+import io.swagger.v3.oas.models.security.SecurityRequirement;
 import io.swagger.v3.oas.models.security.SecurityScheme;
 import io.swagger.v3.oas.models.servers.Server;
 import io.swagger.v3.oas.models.tags.Tag;
 
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
+
+import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.when;
+
 /**
  * Unit tests for the OpenApiConfig class that configures OpenAPI 3.0 documentation for the REST API.
- * <p>
- * These tests verify that the OpenAPI configuration is properly set up with the correct API information,
- * security schemes, documentation settings, API groups, and Swagger UI configuration.
+ * Tests verify API information configuration, security scheme setup, documentation settings,
+ * API group configuration, and Swagger UI setup.
  */
-@ExtendWith(SpringExtension.class)
-@SpringBootTest(classes = {OpenApiConfig.class})
+@ExtendWith(MockitoExtension.class)
 public class OpenApiConfigTest {
 
-    @Autowired
+    @InjectMocks
     private OpenApiConfig openApiConfig;
 
-    /**
-     * Tests that the OpenAPI bean is properly configured with API information.
-     */
+    @BeforeEach
+    public void setUp() {
+        // Set up the application properties that would normally be injected via @Value
+        ReflectionTestUtils.setField(openApiConfig, "applicationName", "MCA Data Service");
+        ReflectionTestUtils.setField(openApiConfig, "applicationDescription", "Merchant Cash Advance Application Processing System");
+        ReflectionTestUtils.setField(openApiConfig, "applicationVersion", "1.0.0");
+    }
+
     @Test
     @DisplayName("Should configure OpenAPI with correct API information")
-    public void testApiInformation() {
-        // Given
-        OpenAPI openAPI = openApiConfig.customOpenAPI();
-        
+    public void testOpenAPIConfiguration() {
         // When
+        OpenAPI openAPI = openApiConfig.openAPI();
+        
+        // Then
+        assertNotNull(openAPI, "OpenAPI configuration should not be null");
+        assertNotNull(openAPI.getInfo(), "API info should not be null");
+        assertEquals("MCA Data Service", openAPI.getInfo().getTitle(), "API title should match application name");
+        assertEquals("Merchant Cash Advance Application Processing System", openAPI.getInfo().getDescription(), "API description should match application description");
+        assertEquals("1.0.0", openAPI.getInfo().getVersion(), "API version should match application version");
+    }
+
+    @Test
+    @DisplayName("Should configure API information with correct contact details")
+    public void testApiInfoContactDetails() {
+        // When
+        OpenAPI openAPI = openApiConfig.openAPI();
         Info info = openAPI.getInfo();
         
         // Then
-        assertNotNull(info, "API information should not be null");
-        assertEquals("Merchant Cash Advance (MCA) API", info.getTitle(), "API title should match");
-        assertEquals("1.0", info.getVersion(), "API version should match");
-        assertTrue(info.getDescription().contains("REST API for the Merchant Cash Advance (MCA) Application Processing System"), 
-                "API description should contain expected text");
+        assertNotNull(info.getContact(), "Contact information should not be null");
+        assertEquals("Dollar Funding Support", info.getContact().getName(), "Contact name should be correct");
+        assertEquals("support@dollarfunding.com", info.getContact().getEmail(), "Contact email should be correct");
+        assertEquals("https://dollarfunding.com/support", info.getContact().getUrl(), "Contact URL should be correct");
         
-        // Verify contact information
-        Contact contact = info.getContact();
-        assertNotNull(contact, "Contact information should not be null");
-        assertEquals("Dollar Funding Support", contact.getName(), "Contact name should match");
-        assertEquals("support@dollarfunding.com", contact.getEmail(), "Contact email should match");
-        assertEquals("https://dollarfunding.com/support", contact.getUrl(), "Contact URL should match");
-        
-        // Verify license information
-        License license = info.getLicense();
-        assertNotNull(license, "License information should not be null");
-        assertEquals("Proprietary", license.getName(), "License name should match");
-        assertEquals("https://dollarfunding.com/terms", license.getUrl(), "License URL should match");
+        assertNotNull(info.getLicense(), "License information should not be null");
+        assertEquals("Dollar Funding License", info.getLicense().getName(), "License name should be correct");
+        assertEquals("https://dollarfunding.com/license", info.getLicense().getUrl(), "License URL should be correct");
     }
 
-    /**
-     * Tests that the OpenAPI bean is properly configured with server information.
-     */
     @Test
-    @DisplayName("Should configure OpenAPI with correct server information")
-    public void testServerInformation() {
-        // Given
-        OpenAPI openAPI = openApiConfig.customOpenAPI();
-        
+    @DisplayName("Should configure API servers for different environments")
+    public void testApiServers() {
         // When
+        OpenAPI openAPI = openApiConfig.openAPI();
         List<Server> servers = openAPI.getServers();
         
         // Then
-        assertNotNull(servers, "Server information should not be null");
-        // Note: The servers are configured via annotation in the OpenApiConfig class
-        // We're testing the customOpenAPI() method which doesn't set servers directly
+        assertNotNull(servers, "API servers should not be null");
+        assertEquals(3, servers.size(), "Should have 3 server environments configured");
+        
+        // Verify production server
+        Server productionServer = servers.get(0);
+        assertEquals("https://api.dollarfunding.com", productionServer.getUrl(), "Production server URL should be correct");
+        assertEquals("Production Server", productionServer.getDescription(), "Production server description should be correct");
+        
+        // Verify staging server
+        Server stagingServer = servers.get(1);
+        assertEquals("https://api-staging.dollarfunding.com", stagingServer.getUrl(), "Staging server URL should be correct");
+        assertEquals("Staging Server", stagingServer.getDescription(), "Staging server description should be correct");
+        
+        // Verify development server
+        Server developmentServer = servers.get(2);
+        assertEquals("https://api-dev.dollarfunding.com", developmentServer.getUrl(), "Development server URL should be correct");
+        assertEquals("Development Server", developmentServer.getDescription(), "Development server description should be correct");
     }
 
-    /**
-     * Tests that the OpenAPI bean is properly configured with security schemes.
-     */
     @Test
-    @DisplayName("Should configure OpenAPI with JWT security scheme")
-    public void testSecurityScheme() {
-        // Given
-        OpenAPI openAPI = openApiConfig.customOpenAPI();
-        
-        // When
-        Components components = openAPI.getComponents();
-        
-        // Then
-        assertNotNull(components, "Components should not be null");
-        
-        // Verify JWT security scheme
-        SecurityScheme bearerAuth = components.getSecuritySchemes().get("bearerAuth");
-        assertNotNull(bearerAuth, "Bearer auth security scheme should not be null");
-        assertEquals(SecurityScheme.Type.HTTP, bearerAuth.getType(), "Security scheme type should be HTTP");
-        assertEquals("bearer", bearerAuth.getScheme(), "Security scheme should be bearer");
-        assertEquals("JWT", bearerAuth.getBearerFormat(), "Bearer format should be JWT");
-        assertTrue(bearerAuth.getDescription().contains("JWT Authentication using RS256 algorithm"), 
-                "Security scheme description should mention RS256 algorithm");
-        
-        // Verify OAuth2 security scheme
-        SecurityScheme oauth2 = components.getSecuritySchemes().get("oauth2");
-        assertNotNull(oauth2, "OAuth2 security scheme should not be null");
-        assertEquals(SecurityScheme.Type.OAUTH2, oauth2.getType(), "Security scheme type should be OAuth2");
-        assertNotNull(oauth2.getFlows(), "OAuth2 flows should not be null");
-        assertNotNull(oauth2.getFlows().getImplicit(), "OAuth2 implicit flow should not be null");
-        assertEquals("https://dollarfunding.com/oauth2/authorize", 
-                oauth2.getFlows().getImplicit().getAuthorizationUrl(), 
-                "OAuth2 authorization URL should match");
-        assertNotNull(oauth2.getFlows().getImplicit().getScopes(), "OAuth2 scopes should not be null");
-        assertTrue(oauth2.getFlows().getImplicit().getScopes().containsKey("operations_staff"), 
-                "OAuth2 scopes should include operations_staff");
-        assertTrue(oauth2.getFlows().getImplicit().getScopes().containsKey("system_admin"), 
-                "OAuth2 scopes should include system_admin");
-    }
-
-    /**
-     * Tests that the OpenAPI bean is properly configured with API tags.
-     */
-    @Test
-    @DisplayName("Should configure OpenAPI with correct API tags")
+    @DisplayName("Should configure API tags for grouping endpoints")
     public void testApiTags() {
-        // Given
-        OpenAPI openAPI = openApiConfig.customOpenAPI();
-        
         // When
+        OpenAPI openAPI = openApiConfig.openAPI();
         List<Tag> tags = openAPI.getTags();
         
         // Then
         assertNotNull(tags, "API tags should not be null");
-        assertEquals(4, tags.size(), "Should have 4 API tags");
+        assertEquals(4, tags.size(), "Should have 4 API tags configured");
         
         // Verify Applications tag
-        assertTrue(tags.stream().anyMatch(tag -> "Applications".equals(tag.getName())), 
-                "Should have Applications tag");
+        Tag applicationsTag = tags.get(0);
+        assertEquals("Applications", applicationsTag.getName(), "Applications tag name should be correct");
+        assertEquals("Operations related to MCA applications", applicationsTag.getDescription(), "Applications tag description should be correct");
         
         // Verify Documents tag
-        assertTrue(tags.stream().anyMatch(tag -> "Documents".equals(tag.getName())), 
-                "Should have Documents tag");
+        Tag documentsTag = tags.get(1);
+        assertEquals("Documents", documentsTag.getName(), "Documents tag name should be correct");
+        assertEquals("Operations related to application documents", documentsTag.getDescription(), "Documents tag description should be correct");
         
         // Verify Webhooks tag
-        assertTrue(tags.stream().anyMatch(tag -> "Webhooks".equals(tag.getName())), 
-                "Should have Webhooks tag");
+        Tag webhooksTag = tags.get(2);
+        assertEquals("Webhooks", webhooksTag.getName(), "Webhooks tag name should be correct");
+        assertEquals("Operations related to webhook configuration and management", webhooksTag.getDescription(), "Webhooks tag description should be correct");
         
         // Verify Health tag
-        assertTrue(tags.stream().anyMatch(tag -> "Health".equals(tag.getName())), 
-                "Should have Health tag");
+        Tag healthTag = tags.get(3);
+        assertEquals("Health", healthTag.getName(), "Health tag name should be correct");
+        assertEquals("Health check endpoints for Kubernetes probes", healthTag.getDescription(), "Health tag description should be correct");
     }
 
-    /**
-     * Tests that the OpenAPI bean is properly configured with external documentation.
-     */
     @Test
-    @DisplayName("Should configure OpenAPI with external documentation")
-    public void testExternalDocumentation() {
-        // Given
-        OpenAPI openAPI = openApiConfig.customOpenAPI();
-        
+    @DisplayName("Should configure security components with JWT authentication")
+    public void testSecurityComponents() {
         // When
-        var externalDocs = openAPI.getExternalDocs();
-        
-        // Then
-        assertNotNull(externalDocs, "External documentation should not be null");
-        assertEquals("MCA Application Processing System Documentation", externalDocs.getDescription(), 
-                "External documentation description should match");
-        assertEquals("https://dollarfunding.com/docs/mca", externalDocs.getUrl(), 
-                "External documentation URL should match");
-    }
-
-    /**
-     * Tests that the OpenAPI bean is properly configured with standard API responses.
-     */
-    @Test
-    @DisplayName("Should configure OpenAPI with standard API responses")
-    public void testStandardResponses() {
-        // Given
-        OpenAPI openAPI = openApiConfig.customOpenAPI();
-        
-        // When
+        OpenAPI openAPI = openApiConfig.openAPI();
         Components components = openAPI.getComponents();
         
         // Then
         assertNotNull(components, "Components should not be null");
-        assertNotNull(components.getResponses(), "Standard responses should not be null");
+        assertNotNull(components.getSecuritySchemes(), "Security schemes should not be null");
+        assertTrue(components.getSecuritySchemes().containsKey("JWT"), "Should have JWT security scheme");
         
-        // Verify standard responses
-        assertTrue(components.getResponses().containsKey("UnauthorizedError"), 
-                "Should have UnauthorizedError response");
-        assertTrue(components.getResponses().containsKey("ForbiddenError"), 
-                "Should have ForbiddenError response");
-        assertTrue(components.getResponses().containsKey("NotFoundError"), 
-                "Should have NotFoundError response");
-        assertTrue(components.getResponses().containsKey("ValidationError"), 
-                "Should have ValidationError response");
-        assertTrue(components.getResponses().containsKey("ServerError"), 
-                "Should have ServerError response");
+        SecurityScheme jwtScheme = components.getSecuritySchemes().get("JWT");
+        assertEquals(SecurityScheme.Type.HTTP, jwtScheme.getType(), "Security scheme type should be HTTP");
+        assertEquals("bearer", jwtScheme.getScheme(), "Security scheme should be bearer");
+        assertEquals("JWT", jwtScheme.getBearerFormat(), "Bearer format should be JWT");
+        assertEquals(SecurityScheme.In.HEADER, jwtScheme.getIn(), "Security scheme should be in header");
+        assertEquals("Authorization", jwtScheme.getName(), "Security scheme name should be Authorization");
+        assertTrue(jwtScheme.getDescription().contains("JWT token authentication"), "Description should mention JWT token authentication");
+    }
+
+    @Test
+    @DisplayName("Should add global security requirement for JWT")
+    public void testGlobalSecurityRequirement() {
+        // When
+        OpenAPI openAPI = openApiConfig.openAPI();
+        List<SecurityRequirement> security = openAPI.getSecurity();
+        
+        // Then
+        assertNotNull(security, "Security requirements should not be null");
+        assertEquals(1, security.size(), "Should have 1 security requirement");
+        assertTrue(security.get(0).containsKey("JWT"), "Security requirement should be for JWT");
     }
 }
