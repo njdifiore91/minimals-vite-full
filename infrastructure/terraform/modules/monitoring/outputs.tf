@@ -1,9 +1,34 @@
-# infrastructure/terraform/modules/monitoring/outputs.tf
+# Outputs for the Prometheus and Grafana monitoring stack
 
-# Common outputs regardless of monitoring solution
-output "monitoring_type" {
-  description = "The type of monitoring solution deployed"
-  value       = var.monitoring_type
+output "prometheus_server_endpoint" {
+  description = "The endpoint URL of the Prometheus server"
+  value       = "http://prometheus-server.${var.namespace}.svc.cluster.local"
+}
+
+output "grafana_endpoint" {
+  description = "The endpoint URL of the Grafana dashboard"
+  value       = "http://prometheus-grafana.${var.namespace}.svc.cluster.local"
+}
+
+output "alertmanager_endpoint" {
+  description = "The endpoint URL of the Alertmanager"
+  value       = "http://prometheus-alertmanager.${var.namespace}.svc.cluster.local"
+}
+
+output "prometheus_namespace" {
+  description = "The namespace where Prometheus is deployed"
+  value       = local.namespace
+}
+
+output "grafana_admin_password" {
+  description = "The admin password for Grafana"
+  value       = var.grafana_admin_password
+  sensitive   = true
+}
+
+output "prometheus_service_account" {
+  description = "The service account used by Prometheus"
+  value       = "prometheus-${var.prometheus_release_name}"
 }
 
 output "monitoring_enabled" {
@@ -11,98 +36,59 @@ output "monitoring_enabled" {
   value       = true
 }
 
-# Datadog-specific outputs
-output "datadog_dashboard_url" {
-  description = "URL to the Datadog dashboard"
-  value       = local.use_datadog ? "https://app.datadoghq.com/dashboard/lists" : null
+output "exporters_deployed" {
+  description = "List of exporters that have been deployed"
+  value       = [
+    var.postgres_exporter_enabled ? "postgres-exporter" : null,
+    var.rabbitmq_exporter_enabled ? "rabbitmq-exporter" : null,
+    var.redis_exporter_enabled ? "redis-exporter" : null,
+    var.cloudwatch_exporter_enabled ? "cloudwatch-exporter" : null
+  ]
 }
 
-output "datadog_monitor_urls" {
-  description = "URLs to the Datadog monitors"
-  value = local.use_datadog ? {
-    app_processing_time = "https://app.datadoghq.com/monitors#${module.datadog[0].app_processing_time_monitor_id}"
-    ocr_accuracy        = "https://app.datadoghq.com/monitors#${module.datadog[0].ocr_accuracy_monitor_id}"
-    queue_depth         = "https://app.datadoghq.com/monitors#${module.datadog[0].queue_depth_monitor_id}"
-    api_response_time   = "https://app.datadoghq.com/monitors#${module.datadog[0].api_response_time_monitor_id}"
-  } : null
+output "service_monitors_deployed" {
+  description = "List of service monitors that have been deployed"
+  value       = [
+    var.email_service_monitor_enabled ? "email-service-monitor" : null,
+    var.document_service_monitor_enabled ? "document-service-monitor" : null,
+    var.ocr_service_monitor_enabled ? "ocr-service-monitor" : null,
+    var.data_service_monitor_enabled ? "data-service-monitor" : null,
+    var.notification_service_monitor_enabled ? "notification-service-monitor" : null,
+    var.api_gateway_service_monitor_enabled ? "api-gateway-monitor" : null
+  ]
 }
 
-# Prometheus/Grafana-specific outputs
-output "prometheus_url" {
-  description = "URL to the Prometheus UI"
-  value       = local.use_prometheus ? module.prometheus[0].prometheus_url : null
+output "grafana_ingress_hosts" {
+  description = "The hosts configured for Grafana ingress"
+  value       = var.grafana_ingress_enabled ? var.grafana_ingress_hosts : []
 }
 
-output "grafana_url" {
-  description = "URL to the Grafana dashboard"
-  value       = local.use_prometheus ? module.prometheus[0].grafana_url : null
+output "prometheus_retention_period" {
+  description = "The data retention period for Prometheus"
+  value       = var.prometheus_retention_period
 }
 
-output "alertmanager_url" {
-  description = "URL to the Alertmanager UI"
-  value       = local.use_prometheus ? module.prometheus[0].alertmanager_url : null
+output "prometheus_storage_size" {
+  description = "The storage size allocated for Prometheus"
+  value       = var.prometheus_storage_enabled ? var.prometheus_storage_size : "ephemeral"
 }
 
-# Monitoring endpoints for application integration
-output "metrics_endpoint" {
-  description = "Endpoint for sending metrics"
-  value = local.use_datadog ? {
-    url     = "https://api.datadoghq.com/api/v1/series"
-    headers = {
-      "Content-Type"       = "application/json"
-      "DD-API-KEY"         = var.datadog_api_key
-    }
-  } : {
-    url     = "${module.prometheus[0].prometheus_url}/api/v1/write"
-    headers = {
-      "Content-Type" = "application/json"
-    }
-  }
-  sensitive = true
+output "grafana_storage_size" {
+  description = "The storage size allocated for Grafana"
+  value       = var.grafana_storage_enabled ? var.grafana_storage_size : "ephemeral"
 }
 
-output "logs_endpoint" {
-  description = "Endpoint for sending logs"
-  value = local.use_datadog ? {
-    url     = "https://http-intake.logs.datadoghq.com/v1/input"
-    headers = {
-      "Content-Type"       = "application/json"
-      "DD-API-KEY"         = var.datadog_api_key
-    }
-  } : {
-    url     = "${module.prometheus[0].loki_url}/loki/api/v1/push"
-    headers = {
-      "Content-Type" = "application/json"
-    }
-  }
-  sensitive = true
+output "prometheus_version" {
+  description = "The version of Prometheus deployed"
+  value       = var.prometheus_version
 }
 
-output "traces_endpoint" {
-  description = "Endpoint for sending traces"
-  value = local.use_datadog ? {
-    url     = "https://trace.agent.datadoghq.com"
-    headers = {
-      "Content-Type"       = "application/json"
-      "DD-API-KEY"         = var.datadog_api_key
-    }
-  } : {
-    url     = "${module.prometheus[0].tempo_url}/api/traces"
-    headers = {
-      "Content-Type" = "application/json"
-    }
-  }
-  sensitive = true
+output "grafana_version" {
+  description = "The version of Grafana deployed"
+  value       = var.grafana_version
 }
 
-# Monitoring configuration for application services
-output "monitoring_config" {
-  description = "Monitoring configuration for application services"
-  value = {
-    type                      = var.monitoring_type
-    metric_collection_interval = local.metric_collection_interval
-    environment               = var.environment
-    alert_thresholds          = local.alert_thresholds
-    custom_metrics            = var.custom_metrics
-  }
+output "alertmanager_version" {
+  description = "The version of Alertmanager deployed"
+  value       = var.alertmanager_version
 }
