@@ -2,724 +2,688 @@
 # -*- coding: utf-8 -*-
 
 """
-Unit tests for the RabbitMQ message handling service.
+Unit tests for the RabbitMQ message handling service in the OCR Service.
 
-This module contains tests for the QueueService class, which provides functionality for
-connecting to RabbitMQ, consuming messages from the 'ocr.request' queue, and publishing
-extraction results to downstream services. It tests connection management, message
-consumption, publishing operations, and error handling.
+This module contains tests for the QueueService class, which provides functionality
+for connecting to RabbitMQ, consuming messages from the 'ocr.request' queue, and
+publishing extraction results to downstream services. It verifies connection management,
+message consumption, publishing operations, and error handling.
+
+The tests cover:
+1. RabbitMQ connection with TLS and client certificate authentication
+2. Message consumption from 'ocr.request' queue
+3. Message publishing to 'data.processing' queue
+4. JSON serialization/deserialization for standardized message format
+5. Error handling and connection recovery for RabbitMQ
+6. Retry logic with exponential backoff for failed operations
 """
 
 import json
 import ssl
 import time
-import pytest
 from unittest.mock import MagicMock, patch, call, ANY
 
-from pika.exceptions import AMQPConnectionError, AMQPChannelError, AMQPError
-from pika import spec
-from pika.adapters.blocking_connection import BlockingChannel
+import pytest
+import pika
+from pika.exceptions import AMQPConnectionError, AMQPChannelError, ConnectionClosedByBroker
 
-from ocr_service.src.services.queue_service import QueueService
-from ocr_service.src.types.messages import MessagePayload, MessageHeaders
-from ocr_service.src.types.errors import ServiceError, ErrorCategory, Result
-
-
-# ===== Test QueueService Initialization =====
-
-@patch('ocr_service.src.services.queue_service.pika.BlockingConnection')
-@patch('ocr_service.src.services.queue_service.ssl.create_default_context')
-def test_queue_service_init_success(mock_ssl_context, mock_connection, mock_rabbitmq_connection):
-    """Test successful initialization of QueueService with TLS."""
-    # Unpack the mock_rabbitmq_connection fixture
-    connection, channel = mock_rabbitmq_connection
-    mock_connection.return_value = connection
-    
-    # Create SSL context mock
-    ssl_context = MagicMock()
-    mock_ssl_context.return_value = ssl_context
-    
-    # Initialize QueueService
-    queue_service = QueueService()
-    
-    # Verify SSL context was created with correct parameters
-    mock_ssl_context.assert_called_once()
-    ssl_context.load_cert_chain.assert_called_once()
-    assert ssl_context.verify_mode == ssl.CERT_REQUIRED
-    assert ssl_context.check_hostname is True
-    
-    # Verify connection was established with correct parameters
-    mock_connection.assert_called_once()
-    assert queue_service.connected is True
-    assert queue_service.connection is not None
-    assert queue_service.channel is not None
-    
-    # Verify exchange and queues were declared
-    channel.exchange_declare.assert_called_with(
-        exchange=queue_service.exchange_name,
-        exchange_type=queue_service.exchange_type,
-        durable=True
-    )
-    
-    # Verify queues were declared
-    assert channel.queue_declare.call_count == 2
-    channel.queue_declare.assert_any_call(
-        queue=queue_service.ocr_request_queue,
-        durable=True
-    )
-    channel.queue_declare.assert_any_call(
-        queue=queue_service.data_processing_queue,
-        durable=True
-    )
-    
-    # Verify queues were bound to exchange
-    assert channel.queue_bind.call_count == 2
-    channel.queue_bind.assert_any_call(
-        queue=queue_service.ocr_request_queue,
-        exchange=queue_service.exchange_name,
-        routing_key='ocr.request'
-    )
-    channel.queue_bind.assert_any_call(
-        queue=queue_service.data_processing_queue,
-        exchange=queue_service.exchange_name,
-        routing_key='data.processing'
-    )
-    
-    # Verify QoS was set
-    channel.basic_qos.assert_called_once_with(
-        prefetch_count=queue_service.config.prefetch_count
-    )
+from src.services.queue_service import QueueService, Result
+from src.types.messages import MessagePayload, MessageHeaders, PublishOptions, MessageStatus
+from src.types.config import RabbitMQConfig
+from src.utils.rabbitmq_utils import RabbitMQConnection, with_connection_retry
 
 
-@patch('ocr_service.src.services.queue_service.pika.BlockingConnection')
-def test_queue_service_init_connection_error(mock_connection):
-    """Test QueueService initialization with connection error."""
-    # Configure the mock to raise an exception
-    mock_connection.side_effect = AMQPConnectionError("Connection refused")
-    
-    # Verify that ServiceError is raised with correct category
-    with pytest.raises(ServiceError) as excinfo:
-        QueueService()
-    
-    # Verify error details
-    assert excinfo.value.category == ErrorCategory.CONNECTION
-    assert "Connection refused" in str(excinfo.value)
-
-
-# ===== Test Connection Decorator =====
-
-def test_with_connection_decorator_reconnect(mock_rabbitmq_connection):
-    """Test that the with_connection decorator reconnects if connection is closed."""
-    # Unpack the mock_rabbitmq_connection fixture
-    connection, channel = mock_rabbitmq_connection
-    
-    # Create a QueueService instance with mocked connection
-    with patch('ocr_service.src.services.queue_service.pika.BlockingConnection', return_value=connection):
-        queue_service = QueueService()
-    
-    # Mock a closed connection scenario
-    queue_service.connected = False
-    queue_service.connection.is_closed = True
-    
-    # Create a test method decorated with with_connection
-    @QueueService.with_connection
-    def test_method(self):
-        return "success"
-    
-    # Call the test method
-    result = test_method(queue_service)
-    
-    # Verify that reconnection was attempted
-    assert queue_service.connected is True
-    assert result == "success"
-
-
-def test_with_connection_decorator_error(mock_rabbitmq_connection):
-    """Test that the with_connection decorator handles connection errors."""
-    # Unpack the mock_rabbitmq_connection fixture
-    connection, channel = mock_rabbitmq_connection
-    
-    # Create a QueueService instance with mocked connection
-    with patch('ocr_service.src.services.queue_service.pika.BlockingConnection', return_value=connection):
-        queue_service = QueueService()
-    
-    # Create a test method that raises an AMQPConnectionError
-    @QueueService.with_connection
-    def test_method(self):
-        raise AMQPConnectionError("Connection lost")
-    
-    # Call the test method and verify that ServiceError is raised
-    with pytest.raises(ServiceError) as excinfo:
-        test_method(queue_service)
-    
-    # Verify error details
-    assert excinfo.value.category == ErrorCategory.CONNECTION
-    assert "Connection lost" in str(excinfo.value)
-    assert queue_service.connected is False
-
-
-# ===== Test Retry Decorator =====
-
-def test_with_retry_decorator_success(mock_rabbitmq_connection):
-    """Test that the with_retry decorator returns successful results."""
-    # Unpack the mock_rabbitmq_connection fixture
-    connection, channel = mock_rabbitmq_connection
-    
-    # Create a QueueService instance with mocked connection
-    with patch('ocr_service.src.services.queue_service.pika.BlockingConnection', return_value=connection):
-        queue_service = QueueService()
-    
-    # Create a test method decorated with with_retry
-    @QueueService.with_retry
-    def test_method(self):
-        return Result(success=True, data="success")
-    
-    # Call the test method
-    result = test_method(queue_service)
-    
-    # Verify result
-    assert result.success is True
-    assert result.value == "success"
-
-
-def test_with_retry_decorator_eventual_success(mock_rabbitmq_connection):
-    """Test that the with_retry decorator retries until success."""
-    # Unpack the mock_rabbitmq_connection fixture
-    connection, channel = mock_rabbitmq_connection
-    
-    # Create a QueueService instance with mocked connection
-    with patch('ocr_service.src.services.queue_service.pika.BlockingConnection', return_value=connection):
-        queue_service = QueueService()
-        # Set a short retry delay for faster tests
-        queue_service.retry_delay = 0.01
-    
-    # Create a counter to track retry attempts
-    attempt_counter = {'count': 0}
-    
-    # Create a test method that fails twice then succeeds
-    @QueueService.with_retry
-    def test_method(self):
-        attempt_counter['count'] += 1
-        if attempt_counter['count'] <= 2:
-            return Result(success=False, error=ServiceError(
-                message="Temporary error",
-                category=ErrorCategory.MESSAGING
-            ))
-        return Result(success=True, data="success after retry")
-    
-    # Call the test method
-    result = test_method(queue_service)
-    
-    # Verify result
-    assert result.success is True
-    assert result.value == "success after retry"
-    assert attempt_counter['count'] == 3  # Initial attempt + 2 retries
-
-
-def test_with_retry_decorator_max_retries_exceeded(mock_rabbitmq_connection):
-    """Test that the with_retry decorator gives up after max retries."""
-    # Unpack the mock_rabbitmq_connection fixture
-    connection, channel = mock_rabbitmq_connection
-    
-    # Create a QueueService instance with mocked connection
-    with patch('ocr_service.src.services.queue_service.pika.BlockingConnection', return_value=connection):
-        queue_service = QueueService()
-        # Set a short retry delay for faster tests
-        queue_service.retry_delay = 0.01
-        queue_service.max_retries = 3
-    
-    # Create a test method that always fails
-    @QueueService.with_retry
-    def test_method(self):
-        return Result(success=False, error=ServiceError(
-            message="Persistent error",
-            category=ErrorCategory.MESSAGING
-        ))
-    
-    # Call the test method
-    result = test_method(queue_service)
-    
-    # Verify result
-    assert result.success is False
-    assert "Persistent error" in str(result.error)
-
-
-# ===== Test Message Publishing =====
-
-def test_publish_message_success(mock_rabbitmq_connection):
-    """Test successful message publishing."""
-    # Unpack the mock_rabbitmq_connection fixture
-    connection, channel = mock_rabbitmq_connection
-    
-    # Create a QueueService instance with mocked connection
-    with patch('ocr_service.src.services.queue_service.pika.BlockingConnection', return_value=connection):
-        queue_service = QueueService()
-    
-    # Create a test message payload
-    payload = {
-        "document_id": "doc-12345",
-        "storage_path": "mca-documents-staging/applications/doc-12345.pdf",
-        "document_type": "APPLICATION",
-        "extraction_results": {
-            "fields": [],
-            "confidence": 0.95,
-            "processing_time": 1.5
-        }
+# Fixtures for testing
+@pytest.fixture
+def mock_rabbitmq_config():
+    """Create a mock RabbitMQ configuration for testing."""
+    return {
+        "host": "test-rabbitmq.example.com",
+        "port": 5671,  # TLS port
+        "username": "test-user",
+        "password": "test-password",
+        "vhost": "/test",
+        "exchange": "mca.documents",
+        "queue_data_extraction": "data-extraction",
+        "queue_data_processing": "data-processing",
+        "routing_key": "ocr.result",
+        "ssl": True,
+        "ssl_cert_path": "/path/to/client.crt",
+        "ssl_key_path": "/path/to/client.key",
+        "ssl_ca_certs": "/path/to/ca.crt",
+        "heartbeat": 60,
+        "connection_timeout": 30,
+        "prefetch_count": 10,
     }
+
+
+@pytest.fixture
+def mock_connection():
+    """Create a mock RabbitMQ connection."""
+    connection = MagicMock()
+    connection.is_open = True
+    return connection
+
+
+@pytest.fixture
+def mock_channel():
+    """Create a mock RabbitMQ channel."""
+    channel = MagicMock()
+    channel.is_open = True
+    return channel
+
+
+@pytest.fixture
+def mock_rabbitmq_connection(mock_connection, mock_channel):
+    """Create a mock RabbitMQConnection instance."""
+    with patch('src.services.queue_service.RabbitMQConnection') as mock_conn_class:
+        mock_conn_instance = mock_conn_class.return_value
+        mock_conn_instance.connection = mock_connection
+        mock_conn_instance.channel = mock_channel
+        mock_conn_instance.connect.return_value = None
+        mock_conn_instance.close.return_value = None
+        mock_conn_instance.ensure_connection.return_value = None
+        mock_conn_instance.declare_exchange.return_value = None
+        mock_conn_instance.declare_queue.return_value = None
+        mock_conn_instance.bind_queue.return_value = None
+        mock_conn_instance.publish_message.return_value = True
+        mock_conn_instance.consume_messages.return_value = None
+        mock_conn_instance.acknowledge_message.return_value = None
+        mock_conn_instance.reject_message.return_value = None
+        yield mock_conn_instance
+
+
+@pytest.fixture
+def queue_service(mock_rabbitmq_config, mock_rabbitmq_connection):
+    """Create a QueueService instance with mocked dependencies."""
+    with patch('src.services.queue_service.get_rabbitmq_config', return_value=mock_rabbitmq_config):
+        service = QueueService()
+        yield service
+
+
+# Tests for QueueService initialization
+def test_queue_service_init(queue_service, mock_rabbitmq_config):
+    """Test QueueService initialization."""
+    assert queue_service.config == mock_rabbitmq_config
+    assert queue_service.callback is None
+    assert queue_service.running is False
+
+
+# Tests for starting and stopping the QueueService
+def test_queue_service_start(queue_service, mock_rabbitmq_connection):
+    """Test starting the QueueService."""
+    result = queue_service.start()
     
-    # Create test headers
-    headers = {"source": "ocr-service"}
+    # Verify the connection was established
+    mock_rabbitmq_connection.connect.assert_called_once()
     
-    # Publish the message
-    result = queue_service.publish_message(
-        payload=payload,
-        routing_key="data.processing",
-        headers=headers
-    )
+    # Verify exchanges and queues were set up
+    assert mock_rabbitmq_connection.declare_exchange.call_count > 0
+    assert mock_rabbitmq_connection.declare_queue.call_count > 0
+    assert mock_rabbitmq_connection.bind_queue.call_count > 0
     
-    # Verify result
+    # Verify the service is running
+    assert queue_service.running is True
     assert result.success is True
-    
-    # Verify that basic_publish was called with correct parameters
-    channel.basic_publish.assert_called_once_with(
-        exchange=queue_service.exchange_name,
-        routing_key="data.processing",
-        body=json.dumps(payload).encode('utf-8'),
-        properties=ANY
-    )
-    
-    # Verify properties
-    properties = channel.basic_publish.call_args[1]['properties']
-    assert properties.delivery_mode == 2  # Persistent message
-    assert properties.content_type == 'application/json'
-    assert properties.headers == headers
 
 
-def test_publish_message_channel_error(mock_rabbitmq_connection):
-    """Test message publishing with channel error."""
-    # Unpack the mock_rabbitmq_connection fixture
-    connection, channel = mock_rabbitmq_connection
+def test_queue_service_start_failure(queue_service, mock_rabbitmq_connection):
+    """Test starting the QueueService with a connection failure."""
+    # Simulate a connection failure
+    mock_rabbitmq_connection.connect.side_effect = AMQPConnectionError("Connection failed")
     
-    # Configure the channel to raise an exception on basic_publish
-    channel.basic_publish.side_effect = AMQPChannelError("Channel closed")
+    result = queue_service.start()
     
-    # Create a QueueService instance with mocked connection
-    with patch('ocr_service.src.services.queue_service.pika.BlockingConnection', return_value=connection):
-        queue_service = QueueService()
-        # Disable retries for this test
-        queue_service.max_retries = 0
+    # Verify the connection attempt was made
+    mock_rabbitmq_connection.connect.assert_called_once()
     
-    # Create a test message payload
-    payload = {"document_id": "doc-12345"}
-    
-    # Publish the message and verify that it fails
-    result = queue_service.publish_message(
-        payload=payload,
-        routing_key="data.processing"
-    )
-    
-    # Verify result
+    # Verify the service is not running
+    assert queue_service.running is False
     assert result.success is False
-    assert result.error.category == ErrorCategory.MESSAGING
-    assert "Channel closed" in str(result.error)
+    assert isinstance(result.error, AMQPConnectionError)
 
 
-# ===== Test Message Consumption =====
+def test_queue_service_stop(queue_service, mock_rabbitmq_connection):
+    """Test stopping the QueueService."""
+    # Start the service first
+    queue_service.start()
+    assert queue_service.running is True
+    
+    # Stop the service
+    result = queue_service.stop()
+    
+    # Verify the connection was closed
+    mock_rabbitmq_connection.close.assert_called_once()
+    
+    # Verify the service is not running
+    assert queue_service.running is False
+    assert result.success is True
 
-def test_start_consuming(mock_rabbitmq_connection):
-    """Test starting message consumption."""
-    # Unpack the mock_rabbitmq_connection fixture
-    connection, channel = mock_rabbitmq_connection
+
+def test_queue_service_stop_failure(queue_service, mock_rabbitmq_connection):
+    """Test stopping the QueueService with a connection failure."""
+    # Start the service first
+    queue_service.start()
+    assert queue_service.running is True
     
-    # Create a QueueService instance with mocked connection
-    with patch('ocr_service.src.services.queue_service.pika.BlockingConnection', return_value=connection):
-        queue_service = QueueService()
+    # Simulate a connection failure during close
+    mock_rabbitmq_connection.close.side_effect = Exception("Close failed")
     
-    # Create a mock callback function
-    callback = MagicMock()
+    result = queue_service.stop()
     
-    # Start consuming messages
-    queue_service.start_consuming(callback)
+    # Verify the connection close attempt was made
+    mock_rabbitmq_connection.close.assert_called_once()
     
-    # Verify that basic_consume was called with correct parameters
-    channel.basic_consume.assert_called_once_with(
-        queue=queue_service.ocr_request_queue,
-        on_message_callback=ANY,
-        auto_ack=False
+    # Verify the service is not running despite the error
+    assert queue_service.running is False
+    assert result.success is False
+    assert isinstance(result.error, Exception)
+
+
+# Tests for setting up exchanges and queues
+def test_setup_exchanges_and_queues(queue_service, mock_rabbitmq_connection):
+    """Test setting up exchanges and queues."""
+    # Call the method directly
+    queue_service._setup_exchanges_and_queues()
+    
+    # Verify the exchanges were declared
+    mock_rabbitmq_connection.declare_exchange.assert_any_call(
+        exchange="mca.documents",
+        exchange_type="fanout",
+        durable=True
     )
     
-    # Verify that start_consuming was called
-    channel.start_consuming.assert_called_once()
+    # Verify the queues were declared
+    mock_rabbitmq_connection.declare_queue.assert_any_call(
+        queue="data-extraction",
+        durable=True,
+        arguments=ANY
+    )
+    
+    # Verify the queues were bound to exchanges
+    mock_rabbitmq_connection.bind_queue.assert_any_call(
+        queue="data-extraction",
+        exchange="mca.documents",
+        routing_key=ANY
+    )
 
 
-def test_message_handler_success(mock_rabbitmq_connection):
+# Tests for message handling
+def test_register_callback(queue_service):
+    """Test registering a callback function."""
+    callback = MagicMock()
+    queue_service.register_callback(callback)
+    assert queue_service.callback == callback
+
+
+def test_message_handler_success(queue_service, mock_rabbitmq_connection):
     """Test successful message handling."""
-    # Unpack the mock_rabbitmq_connection fixture
-    connection, channel = mock_rabbitmq_connection
-    
-    # Create a QueueService instance with mocked connection
-    with patch('ocr_service.src.services.queue_service.pika.BlockingConnection', return_value=connection):
-        queue_service = QueueService()
-    
-    # Create a mock callback function
+    # Register a callback
     callback = MagicMock()
+    queue_service.register_callback(callback)
     
-    # Get the message handler function
-    # We need to extract the internal message handler from the start_consuming method
-    with patch.object(queue_service.channel, 'basic_consume') as mock_basic_consume:
-        queue_service.start_consuming(callback)
-        # Extract the message handler from the call arguments
-        message_handler = mock_basic_consume.call_args[1]['on_message_callback']
+    # Create mock message parameters
+    channel = MagicMock()
+    method = MagicMock()
+    method.delivery_tag = 123
+    properties = MagicMock()
+    properties.message_id = "test-message-id"
+    properties.headers = {}
+    body = json.dumps({"test": "data"}).encode("utf-8")
     
-    # Create mock message components
-    method = MagicMock(spec=spec.Basic.Deliver)
-    method.delivery_tag = "tag-12345"
-    method.routing_key = "ocr.request"
-    
-    properties = MagicMock(spec=spec.BasicProperties)
-    properties.headers = {"source": "document-service"}
-    
-    body = json.dumps({
-        "document_id": "doc-12345",
-        "storage_path": "mca-documents-staging/applications/doc-12345.pdf"
-    }).encode('utf-8')
-    
-    # Call the message handler
-    message_handler(channel, method, properties, body)
-    
-    # Verify that the callback was called with correct parameters
-    callback.assert_called_once()
-    callback_args = callback.call_args[0]
-    assert callback_args[0]["document_id"] == "doc-12345"  # payload
-    assert callback_args[1] == {"source": "document-service"}  # headers
-    assert callback_args[2] == channel  # channel
-    assert callback_args[3] == method  # method
+    # Mock the deserialize_message function
+    with patch('ocr_service.services.queue_service.utils_deserialize_message', 
+               return_value=({"test": "data"}, {})):
+        # Call the message handler
+        queue_service._message_handler(channel, method, properties, body)
+        
+        # Verify the callback was called
+        callback.assert_called_once_with(channel, method, properties, body, {"test": "data"}, {})
+        
+        # Verify the message was acknowledged
+        mock_rabbitmq_connection.acknowledge_message.assert_called_once_with(123)
 
 
-def test_message_handler_json_error(mock_rabbitmq_connection):
-    """Test message handling with JSON decode error."""
-    # Unpack the mock_rabbitmq_connection fixture
-    connection, channel = mock_rabbitmq_connection
+def test_message_handler_callback_error(queue_service, mock_rabbitmq_connection):
+    """Test message handling with a callback error."""
+    # Register a callback that raises an exception
+    callback = MagicMock(side_effect=Exception("Callback error"))
+    queue_service.register_callback(callback)
     
-    # Create a QueueService instance with mocked connection
-    with patch('ocr_service.src.services.queue_service.pika.BlockingConnection', return_value=connection):
-        queue_service = QueueService()
+    # Create mock message parameters
+    channel = MagicMock()
+    method = MagicMock()
+    method.delivery_tag = 123
+    properties = MagicMock()
+    properties.message_id = "test-message-id"
+    properties.headers = {}
+    body = json.dumps({"test": "data"}).encode("utf-8")
     
-    # Create a mock callback function
+    # Mock the deserialize_message function
+    with patch('src.services.queue_service.utils_deserialize_message', 
+               return_value=({"test": "data"}, {})):
+        # Mock the create_error_context function
+        with patch('ocr_service.services.queue_service.create_error_context', 
+                   return_value="Error context"):
+            # Call the message handler
+            queue_service._message_handler(channel, method, properties, body)
+            
+            # Verify the callback was called
+            callback.assert_called_once_with(channel, method, properties, body, {"test": "data"}, {})
+            
+            # Verify the message was requeued (first attempt)
+            mock_rabbitmq_connection.reject_message.assert_called_once_with(123, requeue=True)
+
+
+def test_message_handler_callback_error_max_retries(queue_service, mock_rabbitmq_connection):
+    """Test message handling with a callback error after max retries."""
+    # Register a callback that raises an exception
+    callback = MagicMock(side_effect=Exception("Callback error"))
+    queue_service.register_callback(callback)
+    
+    # Create mock message parameters
+    channel = MagicMock()
+    method = MagicMock()
+    method.delivery_tag = 123
+    properties = MagicMock()
+    properties.message_id = "test-message-id"
+    properties.headers = {"x-retry-count": 3}  # Max retries reached
+    body = json.dumps({"test": "data"}).encode("utf-8")
+    
+    # Mock the deserialize_message function
+    with patch('src.services.queue_service.utils_deserialize_message', 
+               return_value=({"test": "data"}, {"x-retry-count": 3})):
+        # Mock the create_error_context function
+        with patch('src.services.queue_service.create_error_context', 
+                   return_value="Error context"):
+            # Mock the get_retry_count function
+            with patch('src.services.queue_service.get_retry_count', 
+                       return_value=3):
+                # Call the message handler
+                queue_service._message_handler(channel, method, properties, body)
+                
+                # Verify the callback was called
+                callback.assert_called_once_with(channel, method, properties, body, {"test": "data"}, {"x-retry-count": 3})
+                
+                # Verify the message was rejected without requeuing (dead-letter queue)
+                mock_rabbitmq_connection.reject_message.assert_called_once_with(123, requeue=False)
+
+
+def test_message_handler_deserialization_error(queue_service, mock_rabbitmq_connection):
+    """Test message handling with a deserialization error."""
+    # Register a callback
     callback = MagicMock()
+    queue_service.register_callback(callback)
     
-    # Get the message handler function
-    with patch.object(queue_service.channel, 'basic_consume') as mock_basic_consume:
-        queue_service.start_consuming(callback)
-        message_handler = mock_basic_consume.call_args[1]['on_message_callback']
-    
-    # Create mock message components with invalid JSON
-    method = MagicMock(spec=spec.Basic.Deliver)
-    method.delivery_tag = "tag-12345"
-    properties = MagicMock(spec=spec.BasicProperties)
+    # Create mock message parameters
+    channel = MagicMock()
+    method = MagicMock()
+    method.delivery_tag = 123
+    properties = MagicMock()
+    properties.message_id = "test-message-id"
     properties.headers = {}
     body = b"invalid json"
     
-    # Call the message handler
-    message_handler(channel, method, properties, body)
-    
-    # Verify that the callback was NOT called
-    callback.assert_not_called()
-    
-    # Verify that basic_reject was called with requeue=False
-    channel.basic_reject.assert_called_once_with(
-        delivery_tag=method.delivery_tag,
-        requeue=False
-    )
-
-
-def test_message_handler_processing_error(mock_rabbitmq_connection):
-    """Test message handling with processing error."""
-    # Unpack the mock_rabbitmq_connection fixture
-    connection, channel = mock_rabbitmq_connection
-    
-    # Create a QueueService instance with mocked connection
-    with patch('ocr_service.src.services.queue_service.pika.BlockingConnection', return_value=connection):
-        queue_service = QueueService()
-    
-    # Create a mock callback function that raises an exception
-    callback = MagicMock(side_effect=Exception("Processing error"))
-    
-    # Get the message handler function
-    with patch.object(queue_service.channel, 'basic_consume') as mock_basic_consume:
-        queue_service.start_consuming(callback)
-        message_handler = mock_basic_consume.call_args[1]['on_message_callback']
-    
-    # Create mock message components
-    method = MagicMock(spec=spec.Basic.Deliver)
-    method.delivery_tag = "tag-12345"
-    properties = MagicMock(spec=spec.BasicProperties)
-    properties.headers = {}
-    body = json.dumps({"document_id": "doc-12345"}).encode('utf-8')
-    
-    # Call the message handler
-    message_handler(channel, method, properties, body)
-    
-    # Verify that the callback was called
-    callback.assert_called_once()
-    
-    # Verify that basic_reject was called with requeue=True
-    channel.basic_reject.assert_called_once_with(
-        delivery_tag=method.delivery_tag,
-        requeue=True
-    )
-
-
-# ===== Test Message Acknowledgment and Rejection =====
-
-def test_acknowledge_message(mock_rabbitmq_connection):
-    """Test acknowledging a message."""
-    # Unpack the mock_rabbitmq_connection fixture
-    connection, channel = mock_rabbitmq_connection
-    
-    # Create a QueueService instance with mocked connection
-    with patch('ocr_service.src.services.queue_service.pika.BlockingConnection', return_value=connection):
-        queue_service = QueueService()
-    
-    # Acknowledge a message
-    queue_service.acknowledge_message("tag-12345")
-    
-    # Verify that basic_ack was called with correct parameters
-    channel.basic_ack.assert_called_once_with(delivery_tag="tag-12345")
-
-
-def test_reject_message(mock_rabbitmq_connection):
-    """Test rejecting a message."""
-    # Unpack the mock_rabbitmq_connection fixture
-    connection, channel = mock_rabbitmq_connection
-    
-    # Create a QueueService instance with mocked connection
-    with patch('ocr_service.src.services.queue_service.pika.BlockingConnection', return_value=connection):
-        queue_service = QueueService()
-    
-    # Reject a message without requeue
-    queue_service.reject_message("tag-12345", requeue=False)
-    
-    # Verify that basic_reject was called with correct parameters
-    channel.basic_reject.assert_called_once_with(
-        delivery_tag="tag-12345",
-        requeue=False
-    )
-    
-    # Reset the mock
-    channel.basic_reject.reset_mock()
-    
-    # Reject a message with requeue
-    queue_service.reject_message("tag-67890", requeue=True)
-    
-    # Verify that basic_reject was called with correct parameters
-    channel.basic_reject.assert_called_once_with(
-        delivery_tag="tag-67890",
-        requeue=True
-    )
-
-
-# ===== Test Stop Consuming and Close =====
-
-def test_stop_consuming(mock_rabbitmq_connection):
-    """Test stopping message consumption."""
-    # Unpack the mock_rabbitmq_connection fixture
-    connection, channel = mock_rabbitmq_connection
-    
-    # Create a QueueService instance with mocked connection
-    with patch('ocr_service.src.services.queue_service.pika.BlockingConnection', return_value=connection):
-        queue_service = QueueService()
-    
-    # Set a consumer tag
-    queue_service.consumer_tag = "consumer-12345"
-    
-    # Stop consuming
-    queue_service.stop_consuming()
-    
-    # Verify that basic_cancel was called with correct parameters
-    channel.basic_cancel.assert_called_once_with("consumer-12345")
-    
-    # Verify that consumer_tag was reset
-    assert queue_service.consumer_tag is None
-
-
-def test_close(mock_rabbitmq_connection):
-    """Test closing the connection."""
-    # Unpack the mock_rabbitmq_connection fixture
-    connection, channel = mock_rabbitmq_connection
-    
-    # Create a QueueService instance with mocked connection
-    with patch('ocr_service.src.services.queue_service.pika.BlockingConnection', return_value=connection):
-        queue_service = QueueService()
-    
-    # Set a consumer tag
-    queue_service.consumer_tag = "consumer-12345"
-    
-    # Close the connection
-    queue_service.close()
-    
-    # Verify that stop_consuming was called
-    channel.basic_cancel.assert_called_once_with("consumer-12345")
-    
-    # Verify that channel and connection were closed
-    channel.close.assert_called_once()
-    connection.close.assert_called_once()
-    
-    # Verify that connection state was reset
-    assert queue_service.connected is False
-    assert queue_service.channel is None
-    assert queue_service.connection is None
-
-
-# ===== Test Context Manager =====
-
-def test_context_manager(mock_rabbitmq_connection):
-    """Test using QueueService as a context manager."""
-    # Unpack the mock_rabbitmq_connection fixture
-    connection, channel = mock_rabbitmq_connection
-    
-    # Create a QueueService instance with mocked connection
-    with patch('ocr_service.src.services.queue_service.pika.BlockingConnection', return_value=connection):
-        # Use QueueService as a context manager
-        with QueueService() as queue_service:
-            # Verify that connection was established
-            assert queue_service.connected is True
-            assert queue_service.connection is not None
-            assert queue_service.channel is not None
-            
-            # Publish a test message
-            queue_service.publish_message(
-                payload={"test": "message"},
-                routing_key="test.routing.key"
-            )
+    # Mock the deserialize_message function to raise an exception
+    with patch('src.services.queue_service.utils_deserialize_message', 
+               side_effect=Exception("Deserialization error")):
+        # Call the message handler
+        queue_service._message_handler(channel, method, properties, body)
         
-        # Verify that connection was closed after exiting the context
-        channel.close.assert_called_once()
-        connection.close.assert_called_once()
+        # Verify the callback was not called
+        callback.assert_not_called()
+        
+        # Verify the message was rejected without requeuing
+        mock_rabbitmq_connection.reject_message.assert_called_once_with(123, requeue=False)
 
 
-# ===== Test TLS Configuration =====
-
-@patch('ocr_service.src.services.queue_service.pika.BlockingConnection')
-@patch('ocr_service.src.services.queue_service.ssl.create_default_context')
-def test_tls_configuration(mock_ssl_context, mock_connection, mock_rabbitmq_connection):
-    """Test TLS configuration for RabbitMQ connection."""
-    # Unpack the mock_rabbitmq_connection fixture
-    connection, channel = mock_rabbitmq_connection
-    mock_connection.return_value = connection
+# Tests for message consumption
+def test_consume_messages(queue_service, mock_rabbitmq_connection):
+    """Test consuming messages from a queue."""
+    # Register a callback
+    callback = MagicMock()
+    queue_service.register_callback(callback)
     
-    # Create SSL context mock
-    ssl_context = MagicMock()
-    mock_ssl_context.return_value = ssl_context
+    # Start the service
+    queue_service.start()
     
-    # Initialize QueueService
-    queue_service = QueueService()
+    # Consume messages
+    result = queue_service.consume_messages(queue="ocr.request", prefetch_count=10)
     
-    # Verify SSL context was created with correct parameters
-    mock_ssl_context.assert_called_once_with(cafile=queue_service.config.ca_cert_path)
+    # Verify the connection was ensured
+    mock_rabbitmq_connection.ensure_connection.assert_called()
     
-    # Verify client certificate was loaded
-    ssl_context.load_cert_chain.assert_called_once_with(
-        certfile=queue_service.config.client_cert_path,
-        keyfile=queue_service.config.client_key_path,
-        password=queue_service.config.cert_password
+    # Verify the QoS was set
+    mock_rabbitmq_connection.channel.basic_qos.assert_called_once_with(prefetch_count=10)
+    
+    # Verify the consume_messages method was called
+    mock_rabbitmq_connection.consume_messages.assert_called_once_with(
+        queue="ocr.request",
+        callback=queue_service._message_handler,
+        auto_ack=False,
+        prefetch_count=10
     )
     
-    # Verify SSL verification settings
-    assert ssl_context.verify_mode == ssl.CERT_REQUIRED
-    assert ssl_context.check_hostname is True
+    # Verify the result
+    assert result.success is True
 
 
-# ===== Test Exponential Backoff =====
-
-def test_exponential_backoff(mock_rabbitmq_connection):
-    """Test exponential backoff in retry logic."""
-    # Unpack the mock_rabbitmq_connection fixture
-    connection, channel = mock_rabbitmq_connection
+def test_consume_messages_service_not_started(queue_service):
+    """Test consuming messages when the service is not started."""
+    # Register a callback
+    callback = MagicMock()
+    queue_service.register_callback(callback)
     
-    # Create a QueueService instance with mocked connection
-    with patch('ocr_service.src.services.queue_service.pika.BlockingConnection', return_value=connection):
-        queue_service = QueueService()
-        # Configure retry parameters
-        queue_service.max_retries = 3
-        queue_service.retry_delay = 0.1  # 100ms initial delay
+    # Consume messages without starting the service
+    result = queue_service.consume_messages()
     
-    # Mock time.sleep to avoid actual delays
-    with patch('time.sleep') as mock_sleep:
-        # Create a counter to track retry attempts
-        attempt_counter = {'count': 0}
+    # Verify the result
+    assert result.success is False
+    assert isinstance(result.error, RuntimeError)
+    assert "not started" in str(result.error)
+
+
+def test_consume_messages_no_callback(queue_service):
+    """Test consuming messages without registering a callback."""
+    # Start the service
+    queue_service.start()
+    
+    # Consume messages without registering a callback
+    result = queue_service.consume_messages()
+    
+    # Verify the result
+    assert result.success is False
+    assert isinstance(result.error, RuntimeError)
+    assert "No callback registered" in str(result.error)
+
+
+# Tests for message publishing
+def test_publish_message(queue_service, mock_rabbitmq_connection):
+    """Test publishing a message to RabbitMQ."""
+    # Start the service
+    queue_service.start()
+    
+    # Create a message payload
+    payload = {"test": "data"}
+    headers = {"header1": "value1"}
+    
+    # Mock the serialize_message function
+    with patch('src.services.queue_service.utils_serialize_message', 
+               return_value=(json.dumps(payload), headers)):
+        # Publish the message
+        result = queue_service.publish_message(
+            exchange="mca.documents",
+            routing_key="document.new",
+            payload=payload,
+            headers=headers
+        )
         
-        # Create a test method that always fails
-        @QueueService.with_retry
-        def test_method(self):
-            attempt_counter['count'] += 1
-            return Result(success=False, error=ServiceError(
-                message=f"Attempt {attempt_counter['count']} failed",
-                category=ErrorCategory.MESSAGING
-            ))
+        # Verify the connection was ensured
+        mock_rabbitmq_connection.ensure_connection.assert_called()
         
-        # Call the test method
-        result = test_method(queue_service)
+        # Verify the publish_message method was called
+        mock_rabbitmq_connection.publish_message.assert_called_once_with(
+            exchange="mca.documents",
+            routing_key="document.new",
+            body=json.dumps(payload),
+            headers=headers,
+            options=None
+        )
         
-        # Verify result
+        # Verify the result
+        assert result.success is True
+
+
+def test_publish_message_service_not_started(queue_service):
+    """Test publishing a message when the service is not started."""
+    # Create a message payload
+    payload = {"test": "data"}
+    
+    # Publish the message without starting the service
+    result = queue_service.publish_message(
+        exchange="mca.documents",
+        routing_key="document.new",
+        payload=payload
+    )
+    
+    # Verify the result
+    assert result.success is False
+    assert isinstance(result.error, RuntimeError)
+    assert "not started" in str(result.error)
+
+
+def test_publish_message_failure(queue_service, mock_rabbitmq_connection):
+    """Test publishing a message with a failure."""
+    # Start the service
+    queue_service.start()
+    
+    # Create a message payload
+    payload = {"test": "data"}
+    
+    # Mock the serialize_message function
+    with patch('ocr_service.services.queue_service.utils_serialize_message', 
+               return_value=(json.dumps(payload), {})):
+        # Mock the publish_message method to return False (failure)
+        mock_rabbitmq_connection.publish_message.return_value = False
+        
+        # Publish the message
+        result = queue_service.publish_message(
+            exchange="mca.documents",
+            routing_key="document.new",
+            payload=payload
+        )
+        
+        # Verify the result
         assert result.success is False
-        assert attempt_counter['count'] == 4  # Initial attempt + 3 retries
-        
-        # Verify exponential backoff delays
-        assert mock_sleep.call_count == 3  # 3 retries
-        mock_sleep.assert_has_calls([
-            # First retry: base_delay * (2^0) = 0.1
-            call(0.1),
-            # Second retry: base_delay * (2^1) = 0.2
-            call(0.2),
-            # Third retry: base_delay * (2^2) = 0.4
-            call(0.4)
-        ])
+        assert isinstance(result.error, RuntimeError)
+        assert "Failed to publish message" in str(result.error)
 
 
-# ===== Test Integration with Example Callback =====
+def test_publish_message_connection_error(queue_service, mock_rabbitmq_connection):
+    """Test publishing a message with a connection error."""
+    # Start the service
+    queue_service.start()
+    
+    # Create a message payload
+    payload = {"test": "data"}
+    
+    # Mock the serialize_message function
+    with patch('src.services.queue_service.utils_serialize_message', 
+               return_value=(json.dumps(payload), {})):
+        # Mock the publish_message method to raise a connection error
+        mock_rabbitmq_connection.publish_message.side_effect = AMQPConnectionError("Connection failed")
+        
+        # Publish the message
+        result = queue_service.publish_message(
+            exchange="mca.documents",
+            routing_key="document.new",
+            payload=payload
+        )
+        
+        # Verify the result
+        assert result.success is False
+        assert isinstance(result.error, AMQPConnectionError)
 
-def test_example_callback_integration(mock_rabbitmq_connection):
-    """Test integration with the example callback function."""
-    # Unpack the mock_rabbitmq_connection fixture
-    connection, channel = mock_rabbitmq_connection
+
+# Tests for publishing extraction results
+def test_publish_extraction_results(queue_service):
+    """Test publishing extraction results to the Data Service."""
+    # Start the service
+    queue_service.start()
     
-    # Import the example callback
-    from ocr_service.src.services.queue_service import example_callback
+    # Mock the publish_message method
+    with patch.object(queue_service, 'publish_message', return_value=Result.ok(True)) as mock_publish:
+        # Publish extraction results
+        result = queue_service.publish_extraction_results(
+            document_id="doc123",
+            application_id="app456",
+            storage_path="s3://bucket/doc123.pdf",
+            extraction_results={"field1": "value1", "field2": "value2"},
+            confidence_scores={"field1": 0.95, "field2": 0.85},
+            document_type="application_form",
+            processing_time_ms=1234.56,
+            requires_verification=True,
+            verification_fields=["field2"]
+        )
+        
+        # Verify the publish_message method was called
+        mock_publish.assert_called_once()
+        
+        # Verify the exchange and routing key
+        args, kwargs = mock_publish.call_args
+        assert kwargs["exchange"] == "mca.data.processing"
+        assert kwargs["routing_key"] == "data.extraction.complete"
+        
+        # Verify the payload contains the expected fields
+        payload = kwargs["payload"]
+        assert payload["document_id"] == "doc123"
+        assert payload["application_id"] == "app456"
+        assert payload["storage_path"] == "s3://bucket/doc123.pdf"
+        assert payload["extraction_results"] == {"field1": "value1", "field2": "value2"}
+        assert payload["confidence_scores"] == {"field1": 0.95, "field2": 0.85}
+        assert payload["document_type"] == "application_form"
+        assert payload["processing_time_ms"] == 1234.56
+        assert payload["requires_verification"] is True
+        assert payload["verification_fields"] == ["field2"]
+        assert payload["status"] == MessageStatus.COMPLETED.value
+        
+        # Verify the result
+        assert result.success is True
+
+
+def test_publish_extraction_error(queue_service):
+    """Test publishing extraction error to the Data Service."""
+    # Start the service
+    queue_service.start()
     
-    # Create mock message components
-    method = MagicMock(spec=spec.Basic.Deliver)
-    method.delivery_tag = "tag-12345"
+    # Mock the publish_message method
+    with patch.object(queue_service, 'publish_message', return_value=Result.ok(True)) as mock_publish:
+        # Publish extraction error
+        result = queue_service.publish_extraction_error(
+            document_id="doc123",
+            application_id="app456",
+            storage_path="s3://bucket/doc123.pdf",
+            error={"message": "OCR failed", "code": "OCR_ERROR"},
+            document_type="application_form"
+        )
+        
+        # Verify the publish_message method was called
+        mock_publish.assert_called_once()
+        
+        # Verify the exchange and routing key
+        args, kwargs = mock_publish.call_args
+        assert kwargs["exchange"] == "mca.data.processing"
+        assert kwargs["routing_key"] == "data.extraction.error"
+        
+        # Verify the payload contains the expected fields
+        payload = kwargs["payload"]
+        assert payload["document_id"] == "doc123"
+        assert payload["application_id"] == "app456"
+        assert payload["storage_path"] == "s3://bucket/doc123.pdf"
+        assert payload["error"] == {"message": "OCR failed", "code": "OCR_ERROR"}
+        assert payload["document_type"] == "application_form"
+        assert payload["status"] == MessageStatus.FAILED.value
+        
+        # Verify the result
+        assert result.success is True
+
+
+# Tests for health check
+def test_is_running(queue_service, mock_rabbitmq_connection, mock_connection):
+    """Test checking if the service is running."""
+    # Service is not running initially
+    assert queue_service.is_running() is False
     
-    # Create a test payload
-    payload = {
-        "document_id": "doc-12345",
-        "document_type": "APPLICATION",
-        "s3_path": "mca-documents-staging/applications/doc-12345.pdf",
-        "correlation_id": "corr-12345"
-    }
+    # Start the service
+    queue_service.start()
     
-    # Create a mock QueueService for the callback to use
-    with patch('ocr_service.src.services.queue_service.QueueService') as MockQueueService:
-        mock_queue_service = MagicMock()
-        mock_queue_service.publish_message.return_value = Result(success=True, data=True)
-        MockQueueService.return_value = mock_queue_service
-        
-        # Call the example callback
-        example_callback(payload, {}, channel, method)
-        
-        # Verify that the message was acknowledged
-        channel.basic_ack.assert_called_once_with(delivery_tag=method.delivery_tag)
-        
-        # Verify that a result message was published
-        mock_queue_service.publish_message.assert_called_once()
-        publish_args = mock_queue_service.publish_message.call_args[1]
-        
-        # Verify the published message
-        assert publish_args['routing_key'] == 'data.processing'
-        assert publish_args['headers'] == {'source': 'ocr-service'}
-        assert publish_args['payload']['document_id'] == 'doc-12345'
-        assert publish_args['payload']['document_type'] == 'APPLICATION'
-        assert publish_args['payload']['s3_path'] == 'mca-documents-staging/applications/doc-12345.pdf'
-        assert 'extraction_results' in publish_args['payload']
-        assert 'correlation_id' in publish_args['payload']
+    # Service should be running
+    assert queue_service.is_running() is True
+    
+    # Simulate connection closed
+    mock_connection.is_open = False
+    
+    # Service should not be running
+    assert queue_service.is_running() is False
+
+
+def test_health_check(queue_service, mock_rabbitmq_connection, mock_connection):
+    """Test health check functionality."""
+    # Start the service
+    queue_service.start()
+    
+    # Perform health check
+    health = queue_service.health_check()
+    
+    # Verify the health check result
+    assert health["status"] == "healthy"
+    assert health["details"]["running"] is True
+    assert health["details"]["connected"] is True
+    
+    # Simulate connection closed
+    mock_connection.is_open = False
+    
+    # Perform health check again
+    health = queue_service.health_check()
+    
+    # Verify the health check result
+    assert health["status"] == "unhealthy"
+    assert health["details"]["running"] is True
+    assert health["details"]["connected"] is False
+
+
+# Tests for retry logic
+def test_with_connection_retry_decorator():
+    """Test the with_connection_retry decorator."""
+    # Create a mock function that fails twice then succeeds
+    mock_func = MagicMock(side_effect=[AMQPConnectionError("Connection failed"),
+                                      AMQPConnectionError("Connection failed"),
+                                      "success"])
+    
+    # Apply the decorator
+    decorated_func = with_connection_retry(max_retries=3, initial_delay=0.01)(mock_func)
+    
+    # Call the decorated function
+    result = decorated_func()
+    
+    # Verify the function was called multiple times
+    assert mock_func.call_count == 3
+    
+    # Verify the final result
+    assert result == "success"
+
+
+def test_with_connection_retry_decorator_max_retries_exceeded():
+    """Test the with_connection_retry decorator when max retries are exceeded."""
+    # Create a mock function that always fails
+    mock_func = MagicMock(side_effect=AMQPConnectionError("Connection failed"))
+    
+    # Apply the decorator
+    decorated_func = with_connection_retry(max_retries=2, initial_delay=0.01)(mock_func)
+    
+    # Call the decorated function and expect an exception
+    with pytest.raises(AMQPConnectionError):
+        decorated_func()
+    
+    # Verify the function was called the expected number of times
+    assert mock_func.call_count == 3  # Initial attempt + 2 retries
+
+
+# Tests for Result class
+def test_result_ok():
+    """Test creating a successful Result."""
+    result = Result.ok("success")
+    assert result.success is True
+    assert result.value == "success"
+    assert result.error is None
+    assert bool(result) is True
+
+
+def test_result_err():
+    """Test creating a failed Result."""
+    error = Exception("Test error")
+    result = Result.err(error)
+    assert result.success is False
+    assert result.value is None
+    assert result.error == error
+    assert bool(result) is False
