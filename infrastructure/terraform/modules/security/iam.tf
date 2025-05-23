@@ -1,747 +1,767 @@
-# IAM roles and policies for the MCA Application Processing System
-# This file implements IAM roles with least-privilege permissions for each microservice
+# IAM Roles and Policies for MCA Application Processing System
+#
+# This file implements IAM roles and policies with least-privilege permissions for each microservice,
+# including specific policies for S3 access, KMS encryption/decryption, and Secrets Manager access.
+# It follows the principle of least privilege as required by the security architecture.
 
-# ---------------------------------------------------------------------------------------------------------------------
-# AWS ACCOUNT DATA
-# ---------------------------------------------------------------------------------------------------------------------
-data "aws_caller_identity" "current" {}
-
-# ---------------------------------------------------------------------------------------------------------------------
-# IAM ROLES FOR MICROSERVICES
-# ---------------------------------------------------------------------------------------------------------------------
-
-# Email Service IAM Role
-resource "aws_iam_role" "email_service" {
-  name = "${local.name_prefix}-email-service-role"
-  
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [
-      {
-        Action = "sts:AssumeRole",
-        Effect = "Allow",
-        Principal = {
-          Service = "ec2.amazonaws.com"
-        }
-      },
-      {
-        Action = "sts:AssumeRole",
-        Effect = "Allow",
-        Principal = {
-          Service = "eks.amazonaws.com"
-        }
-      },
-      {
-        Action = "sts:AssumeRoleWithWebIdentity",
-        Effect = "Allow",
-        Principal = {
-          Federated = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:oidc-provider/${var.eks_oidc_provider}"
-        },
-        Condition = {
-          StringEquals = {
-            "${var.eks_oidc_provider}:sub": "system:serviceaccount:${var.environment}:email-service-sa"
-          }
-        }
-      }
-    ]
-  })
-  
-  tags = merge(local.common_tags, {
-    Name = "${local.name_prefix}-email-service-role"
-    Service = "email-service"
-  })
+# Variables for IAM configuration
+variable "region" {
+  description = "AWS region where resources will be created"
+  type        = string
+  default     = "us-east-1"
 }
 
-# Document Service IAM Role
-resource "aws_iam_role" "document_service" {
-  name = "${local.name_prefix}-document-service-role"
-  
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [
-      {
-        Action = "sts:AssumeRole",
-        Effect = "Allow",
-        Principal = {
-          Service = "ec2.amazonaws.com"
-        }
-      },
-      {
-        Action = "sts:AssumeRole",
-        Effect = "Allow",
-        Principal = {
-          Service = "eks.amazonaws.com"
-        }
-      },
-      {
-        Action = "sts:AssumeRoleWithWebIdentity",
-        Effect = "Allow",
-        Principal = {
-          Federated = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:oidc-provider/${var.eks_oidc_provider}"
-        },
-        Condition = {
-          StringEquals = {
-            "${var.eks_oidc_provider}:sub": "system:serviceaccount:${var.environment}:document-service-sa"
-          }
-        }
-      }
-    ]
-  })
-  
-  tags = merge(local.common_tags, {
-    Name = "${local.name_prefix}-document-service-role"
-    Service = "document-service"
-  })
+variable "enable_cross_account_access" {
+  description = "Whether to enable cross-account access for IAM roles"
+  type        = bool
+  default     = false
 }
 
-# OCR Service IAM Role
-resource "aws_iam_role" "ocr_service" {
-  name = "${local.name_prefix}-ocr-service-role"
-  
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [
-      {
-        Action = "sts:AssumeRole",
-        Effect = "Allow",
-        Principal = {
-          Service = "ec2.amazonaws.com"
-        }
-      },
-      {
-        Action = "sts:AssumeRole",
-        Effect = "Allow",
-        Principal = {
-          Service = "eks.amazonaws.com"
-        }
-      },
-      {
-        Action = "sts:AssumeRoleWithWebIdentity",
-        Effect = "Allow",
-        Principal = {
-          Federated = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:oidc-provider/${var.eks_oidc_provider}"
-        },
-        Condition = {
-          StringEquals = {
-            "${var.eks_oidc_provider}:sub": "system:serviceaccount:${var.environment}:ocr-service-sa"
-          }
-        }
-      }
-    ]
-  })
-  
-  tags = merge(local.common_tags, {
-    Name = "${local.name_prefix}-ocr-service-role"
-    Service = "ocr-service"
-  })
+variable "trusted_account_ids" {
+  description = "List of AWS account IDs that are allowed to assume the IAM roles"
+  type        = list(string)
+  default     = []
 }
 
-# Data Service IAM Role
-resource "aws_iam_role" "data_service" {
-  name = "${local.name_prefix}-data-service-role"
-  
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [
-      {
-        Action = "sts:AssumeRole",
-        Effect = "Allow",
-        Principal = {
-          Service = "ec2.amazonaws.com"
-        }
-      },
-      {
-        Action = "sts:AssumeRole",
-        Effect = "Allow",
-        Principal = {
-          Service = "eks.amazonaws.com"
-        }
-      },
-      {
-        Action = "sts:AssumeRoleWithWebIdentity",
-        Effect = "Allow",
-        Principal = {
-          Federated = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:oidc-provider/${var.eks_oidc_provider}"
-        },
-        Condition = {
-          StringEquals = {
-            "${var.eks_oidc_provider}:sub": "system:serviceaccount:${var.environment}:data-service-sa"
-          }
-        }
-      }
-    ]
-  })
-  
-  tags = merge(local.common_tags, {
-    Name = "${local.name_prefix}-data-service-role"
-    Service = "data-service"
-  })
+variable "s3_document_bucket_name" {
+  description = "Name of the S3 bucket used for document storage"
+  type        = string
+  default     = ""
 }
 
-# Notification Service IAM Role
-resource "aws_iam_role" "notification_service" {
-  name = "${local.name_prefix}-notification-service-role"
-  
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [
-      {
-        Action = "sts:AssumeRole",
-        Effect = "Allow",
-        Principal = {
-          Service = "ec2.amazonaws.com"
-        }
-      },
-      {
-        Action = "sts:AssumeRole",
-        Effect = "Allow",
-        Principal = {
-          Service = "eks.amazonaws.com"
-        }
-      },
-      {
-        Action = "sts:AssumeRoleWithWebIdentity",
-        Effect = "Allow",
-        Principal = {
-          Federated = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:oidc-provider/${var.eks_oidc_provider}"
-        },
-        Condition = {
-          StringEquals = {
-            "${var.eks_oidc_provider}:sub": "system:serviceaccount:${var.environment}:notification-service-sa"
-          }
-        }
-      }
-    ]
-  })
-  
-  tags = merge(local.common_tags, {
-    Name = "${local.name_prefix}-notification-service-role"
-    Service = "notification-service"
-  })
+variable "s3_sensitive_document_bucket_name" {
+  description = "Name of the S3 bucket used for sensitive document storage"
+  type        = string
+  default     = ""
 }
 
-# API Gateway IAM Role
-resource "aws_iam_role" "api_gateway" {
-  name = "${local.name_prefix}-api-gateway-role"
+# Local variables for IAM configuration
+locals {
+  # Determine S3 bucket names based on environment if not provided
+  document_bucket_name = var.s3_document_bucket_name != "" ? var.s3_document_bucket_name : "mca-documents-${var.environment}"
+  sensitive_document_bucket_name = var.s3_sensitive_document_bucket_name != "" ? var.s3_sensitive_document_bucket_name : "mca-sensitive-documents-${var.environment}"
   
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [
-      {
-        Action = "sts:AssumeRole",
-        Effect = "Allow",
-        Principal = {
-          Service = "apigateway.amazonaws.com"
-        }
-      },
-      {
-        Action = "sts:AssumeRoleWithWebIdentity",
-        Effect = "Allow",
-        Principal = {
-          Federated = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:oidc-provider/${var.eks_oidc_provider}"
-        },
-        Condition = {
-          StringEquals = {
-            "${var.eks_oidc_provider}:sub": "system:serviceaccount:${var.environment}:api-gateway-sa"
-          }
-        }
-      }
+  # Service-specific settings
+  service_config = {
+    "email-service" = {
+      description = "IAM role for Email Service"
+      requires_s3_access = false
+      requires_ses_access = true
+      requires_kms_access = false
+      requires_secrets_access = true
+      requires_sqs_access = true
+      requires_dynamodb_access = false
+      requires_rds_access = false
+    },
+    "document-service" = {
+      description = "IAM role for Document Service"
+      requires_s3_access = true
+      requires_ses_access = false
+      requires_kms_access = true
+      requires_secrets_access = true
+      requires_sqs_access = true
+      requires_dynamodb_access = false
+      requires_rds_access = false
+    },
+    "ocr-service" = {
+      description = "IAM role for OCR Service"
+      requires_s3_access = true
+      requires_ses_access = false
+      requires_kms_access = true
+      requires_secrets_access = true
+      requires_sqs_access = true
+      requires_dynamodb_access = false
+      requires_rds_access = false
+    },
+    "data-service" = {
+      description = "IAM role for Data Service"
+      requires_s3_access = false
+      requires_ses_access = false
+      requires_kms_access = true
+      requires_secrets_access = true
+      requires_sqs_access = true
+      requires_dynamodb_access = false
+      requires_rds_access = true
+    },
+    "notification-service" = {
+      description = "IAM role for Notification Service"
+      requires_s3_access = false
+      requires_ses_access = true
+      requires_kms_access = false
+      requires_secrets_access = true
+      requires_sqs_access = true
+      requires_dynamodb_access = true
+      requires_rds_access = false
+    },
+    "api-gateway" = {
+      description = "IAM role for API Gateway"
+      requires_s3_access = false
+      requires_ses_access = false
+      requires_kms_access = false
+      requires_secrets_access = true
+      requires_sqs_access = false
+      requires_dynamodb_access = false
+      requires_rds_access = false
+    }
+  }
+  
+  # Define common actions for each service type to ensure least privilege
+  s3_actions = {
+    read = [
+      "s3:GetObject",
+      "s3:ListBucket"
+    ],
+    write = [
+      "s3:PutObject",
+      "s3:DeleteObject"
+    ],
+    tagging = [
+      "s3:GetObjectTagging",
+      "s3:PutObjectTagging"
     ]
-  })
+  }
   
-  tags = merge(local.common_tags, {
-    Name = "${local.name_prefix}-api-gateway-role"
-    Service = "api-gateway"
-  })
+  kms_actions = {
+    read = [
+      "kms:DescribeKey"
+    ],
+    encrypt = [
+      "kms:Encrypt",
+      "kms:GenerateDataKey*"
+    ],
+    decrypt = [
+      "kms:Decrypt"
+    ],
+    reencrypt = [
+      "kms:ReEncrypt*"
+    ]
+  }
+  
+  secrets_actions = [
+    "secretsmanager:GetSecretValue",
+    "secretsmanager:DescribeSecret"
+  ]
+  
+  sqs_actions = {
+    producer = [
+      "sqs:SendMessage",
+      "sqs:GetQueueUrl",
+      "sqs:GetQueueAttributes"
+    ],
+    consumer = [
+      "sqs:ReceiveMessage",
+      "sqs:DeleteMessage",
+      "sqs:GetQueueUrl",
+      "sqs:GetQueueAttributes",
+      "sqs:ChangeMessageVisibility"
+    ]
+  }
 }
 
-# ---------------------------------------------------------------------------------------------------------------------
-# IAM POLICIES FOR SPECIFIC PERMISSIONS
-# ---------------------------------------------------------------------------------------------------------------------
-
-# S3 Access Policy for Document-Related Services
+# S3 Access Policy for document-related services
 resource "aws_iam_policy" "s3_document_access" {
-  name        = "${local.name_prefix}-s3-document-access"
-  description = "Policy for accessing document S3 buckets"
+  name        = "${local.name_prefix}-s3-document-access-policy"
+  description = "Policy for accessing S3 document buckets with least privilege"
   
   policy = jsonencode({
     Version = "2012-10-17",
     Statement = [
       {
-        Effect = "Allow",
-        Action = [
-          "s3:GetObject",
-          "s3:PutObject",
-          "s3:DeleteObject",
-          "s3:ListBucket"
-        ],
+        Effect   = "Allow",
+        Action   = concat(local.s3_actions.read, local.s3_actions.write, local.s3_actions.tagging),
         Resource = [
-          for name, value in var.s3_bucket_names : 
-            "arn:aws:s3:::${value}/*"
+          "arn:aws:s3:::${local.document_bucket_name}/*",
+          "arn:aws:s3:::${local.sensitive_document_bucket_name}/*"
         ]
       },
       {
-        Effect = "Allow",
-        Action = [
-          "s3:ListBucket"
-        ],
+        Effect   = "Allow",
+        Action   = ["s3:ListBucket"],
         Resource = [
-          for name, value in var.s3_bucket_names : 
-            "arn:aws:s3:::${value}"
-        ]
-      }
-    ]
-  })
-}
-
-# S3 Read-Only Access Policy for Services that only need to read documents
-resource "aws_iam_policy" "s3_document_read_only" {
-  name        = "${local.name_prefix}-s3-document-read-only"
-  description = "Policy for read-only access to document S3 buckets"
-  
-  policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [
-      {
-        Effect = "Allow",
-        Action = [
-          "s3:GetObject",
-          "s3:ListBucket"
-        ],
-        Resource = [
-          for name, value in var.s3_bucket_names : 
-            "arn:aws:s3:::${value}/*"
+          "arn:aws:s3:::${local.document_bucket_name}",
+          "arn:aws:s3:::${local.sensitive_document_bucket_name}"
         ]
       },
       {
-        Effect = "Allow",
-        Action = [
-          "s3:ListBucket"
-        ],
-        Resource = [
-          for name, value in var.s3_bucket_names : 
-            "arn:aws:s3:::${value}"
-        ]
+        Effect   = "Allow",
+        Action   = ["s3:ListAllMyBuckets"],
+        Resource = ["*"]
       }
     ]
   })
+  
+  tags = merge(
+    local.common_tags,
+    {
+      Name = "${local.name_prefix}-s3-document-access-policy"
+      Type = "IAM-Policy"
+    },
+    var.resource_tags
+  )
 }
 
-# KMS Access Policy for PII Encryption/Decryption
-resource "aws_iam_policy" "kms_pii_access" {
-  name        = "${local.name_prefix}-kms-pii-access"
-  description = "Policy for accessing KMS keys for PII encryption/decryption"
+# KMS Access Policy for encryption/decryption operations
+resource "aws_iam_policy" "kms_data_access" {
+  name        = "${local.name_prefix}-kms-data-access-policy"
+  description = "Policy for using KMS keys for data encryption/decryption with least privilege"
   
   policy = jsonencode({
     Version = "2012-10-17",
     Statement = [
       {
-        Effect = "Allow",
-        Action = [
-          "kms:Encrypt",
-          "kms:Decrypt",
-          "kms:ReEncrypt*",
-          "kms:GenerateDataKey*",
-          "kms:DescribeKey"
-        ],
-        Resource = "*"
+        Effect   = "Allow",
+        Action   = flatten([local.kms_actions.read, local.kms_actions.encrypt, local.kms_actions.decrypt, local.kms_actions.reencrypt]),
+        Resource = [aws_kms_key.data_encryption_key.arn]
       }
     ]
   })
+  
+  tags = merge(
+    local.common_tags,
+    {
+      Name = "${local.name_prefix}-kms-data-access-policy"
+      Type = "IAM-Policy"
+    },
+    var.resource_tags
+  )
 }
 
-# Secrets Manager Access Policy for Email Service
-resource "aws_iam_policy" "secrets_email_service" {
-  name        = "${local.name_prefix}-secrets-email-service"
-  description = "Policy for accessing email service secrets"
+# Secrets Manager Access Policy for credential retrieval
+resource "aws_iam_policy" "secrets_access" {
+  name        = "${local.name_prefix}-secrets-access-policy"
+  description = "Policy for accessing secrets in AWS Secrets Manager with least privilege"
   
   policy = jsonencode({
     Version = "2012-10-17",
     Statement = [
       {
-        Effect = "Allow",
-        Action = [
-          "secretsmanager:GetSecretValue",
-          "secretsmanager:DescribeSecret"
-        ],
-        Resource = [
-          "arn:aws:secretsmanager:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:secret:mca/email-service/*",
-          "arn:aws:secretsmanager:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:secret:mca/rabbitmq/*"
-        ]
+        Effect   = "Allow",
+        Action   = local.secrets_actions,
+        Resource = ["arn:aws:secretsmanager:${var.region}:${data.aws_caller_identity.current.account_id}:secret:${local.name_prefix}*"]
       }
     ]
   })
+  
+  tags = merge(
+    local.common_tags,
+    {
+      Name = "${local.name_prefix}-secrets-access-policy"
+      Type = "IAM-Policy"
+    },
+    var.resource_tags
+  )
 }
 
-# Secrets Manager Access Policy for Document Service
-resource "aws_iam_policy" "secrets_document_service" {
-  name        = "${local.name_prefix}-secrets-document-service"
-  description = "Policy for accessing document service secrets"
+# SES Access Policy for email services
+resource "aws_iam_policy" "ses_access" {
+  name        = "${local.name_prefix}-ses-access-policy"
+  description = "Policy for sending emails via Amazon SES with least privilege"
   
   policy = jsonencode({
     Version = "2012-10-17",
     Statement = [
       {
-        Effect = "Allow",
-        Action = [
-          "secretsmanager:GetSecretValue",
-          "secretsmanager:DescribeSecret"
-        ],
-        Resource = [
-          "arn:aws:secretsmanager:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:secret:mca/rabbitmq/*"
-        ]
-      }
-    ]
-  })
-}
-
-# Secrets Manager Access Policy for OCR Service
-resource "aws_iam_policy" "secrets_ocr_service" {
-  name        = "${local.name_prefix}-secrets-ocr-service"
-  description = "Policy for accessing OCR service secrets"
-  
-  policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [
-      {
-        Effect = "Allow",
-        Action = [
-          "secretsmanager:GetSecretValue",
-          "secretsmanager:DescribeSecret"
-        ],
-        Resource = [
-          "arn:aws:secretsmanager:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:secret:mca/rabbitmq/*"
-        ]
-      }
-    ]
-  })
-}
-
-# Secrets Manager Access Policy for Data Service
-resource "aws_iam_policy" "secrets_data_service" {
-  name        = "${local.name_prefix}-secrets-data-service"
-  description = "Policy for accessing data service secrets"
-  
-  policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [
-      {
-        Effect = "Allow",
-        Action = [
-          "secretsmanager:GetSecretValue",
-          "secretsmanager:DescribeSecret"
-        ],
-        Resource = [
-          "arn:aws:secretsmanager:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:secret:mca/rabbitmq/*",
-          "arn:aws:secretsmanager:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:secret:mca/redis/*"
-        ]
-      }
-    ]
-  })
-}
-
-# Secrets Manager Access Policy for Notification Service
-resource "aws_iam_policy" "secrets_notification_service" {
-  name        = "${local.name_prefix}-secrets-notification-service"
-  description = "Policy for accessing notification service secrets"
-  
-  policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [
-      {
-        Effect = "Allow",
-        Action = [
-          "secretsmanager:GetSecretValue",
-          "secretsmanager:DescribeSecret"
-        ],
-        Resource = [
-          "arn:aws:secretsmanager:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:secret:mca/rabbitmq/*",
-          "arn:aws:secretsmanager:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:secret:mca/notification-service/*"
-        ]
-      }
-    ]
-  })
-}
-
-# Secrets Manager Access Policy for API Gateway
-resource "aws_iam_policy" "secrets_api_gateway" {
-  name        = "${local.name_prefix}-secrets-api-gateway"
-  description = "Policy for accessing API gateway secrets"
-  
-  policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [
-      {
-        Effect = "Allow",
-        Action = [
-          "secretsmanager:GetSecretValue",
-          "secretsmanager:DescribeSecret"
-        ],
-        Resource = [
-          "arn:aws:secretsmanager:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:secret:mca/jwt/*"
-        ]
-      }
-    ]
-  })
-}
-
-# SES Access Policy for Email Service
-resource "aws_iam_policy" "ses_email_service" {
-  name        = "${local.name_prefix}-ses-email-service"
-  description = "Policy for accessing SES for email service"
-  
-  policy = jsonencode({
-    Version = "2012-10-17",
-    Statement = [
-      {
-        Effect = "Allow",
-        Action = [
-          "ses:GetIdentityVerificationAttributes",
+        Effect   = "Allow",
+        Action   = [
           "ses:SendEmail",
           "ses:SendRawEmail"
         ],
-        Resource = "*"
+        Resource = ["*"],
+        Condition = {
+          StringEquals = {
+            "ses:FromAddress": ["submissions@dollarfunding.com", "notifications@dollarfunding.com"]
+          }
+        }
+      },
+      {
+        Effect   = "Allow",
+        Action   = ["ses:GetIdentityVerificationAttributes"],
+        Resource = ["*"]
       }
     ]
   })
+  
+  tags = merge(
+    local.common_tags,
+    {
+      Name = "${local.name_prefix}-ses-access-policy"
+      Type = "IAM-Policy"
+    },
+    var.resource_tags
+  )
 }
 
-# SQS Access Policy for Notification Service
-resource "aws_iam_policy" "sqs_notification_service" {
-  name        = "${local.name_prefix}-sqs-notification-service"
-  description = "Policy for accessing SQS for notification service"
+# SQS Access Policy for message queue operations
+resource "aws_iam_policy" "sqs_producer_access" {
+  name        = "${local.name_prefix}-sqs-producer-access-policy"
+  description = "Policy for producing messages to SQS queues with least privilege"
   
   policy = jsonencode({
     Version = "2012-10-17",
     Statement = [
       {
-        Effect = "Allow",
-        Action = [
-          "sqs:SendMessage",
-          "sqs:ReceiveMessage",
-          "sqs:DeleteMessage",
-          "sqs:GetQueueAttributes",
-          "sqs:GetQueueUrl"
+        Effect   = "Allow",
+        Action   = local.sqs_actions.producer,
+        Resource = ["arn:aws:sqs:${var.region}:${data.aws_caller_identity.current.account_id}:${local.name_prefix}*"]
+      }
+    ]
+  })
+  
+  tags = merge(
+    local.common_tags,
+    {
+      Name = "${local.name_prefix}-sqs-producer-access-policy"
+      Type = "IAM-Policy"
+    },
+    var.resource_tags
+  )
+}
+
+resource "aws_iam_policy" "sqs_consumer_access" {
+  name        = "${local.name_prefix}-sqs-consumer-access-policy"
+  description = "Policy for consuming messages from SQS queues with least privilege"
+  
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect   = "Allow",
+        Action   = local.sqs_actions.consumer,
+        Resource = ["arn:aws:sqs:${var.region}:${data.aws_caller_identity.current.account_id}:${local.name_prefix}*"]
+      }
+    ]
+  })
+  
+  tags = merge(
+    local.common_tags,
+    {
+      Name = "${local.name_prefix}-sqs-consumer-access-policy"
+      Type = "IAM-Policy"
+    },
+    var.resource_tags
+  )
+}
+
+# DynamoDB Access Policy for notification service
+resource "aws_iam_policy" "dynamodb_webhook_access" {
+  name        = "${local.name_prefix}-dynamodb-webhook-access-policy"
+  description = "Policy for accessing DynamoDB tables for webhook configuration with least privilege"
+  
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect   = "Allow",
+        Action   = [
+          "dynamodb:GetItem",
+          "dynamodb:PutItem",
+          "dynamodb:UpdateItem",
+          "dynamodb:DeleteItem",
+          "dynamodb:Query",
+          "dynamodb:Scan"
         ],
-        Resource = "arn:aws:sqs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:${local.name_prefix}-*"
+        Resource = [
+          "arn:aws:dynamodb:${var.region}:${data.aws_caller_identity.current.account_id}:table/${local.name_prefix}-webhooks",
+          "arn:aws:dynamodb:${var.region}:${data.aws_caller_identity.current.account_id}:table/${local.name_prefix}-webhooks/index/*"
+        ]
       }
     ]
   })
+  
+  tags = merge(
+    local.common_tags,
+    {
+      Name = "${local.name_prefix}-dynamodb-webhook-access-policy"
+      Type = "IAM-Policy"
+    },
+    var.resource_tags
+  )
 }
 
-# SNS Access Policy for Notification Service
-resource "aws_iam_policy" "sns_notification_service" {
-  name        = "${local.name_prefix}-sns-notification-service"
-  description = "Policy for accessing SNS for notification service"
+# RDS Access Policy for data service
+resource "aws_iam_policy" "rds_access" {
+  name        = "${local.name_prefix}-rds-access-policy"
+  description = "Policy for accessing RDS instances with least privilege"
   
   policy = jsonencode({
     Version = "2012-10-17",
     Statement = [
       {
-        Effect = "Allow",
-        Action = [
+        Effect   = "Allow",
+        Action   = [
+          "rds:DescribeDBInstances",
+          "rds:DescribeDBClusters",
+          "rds:DescribeDBClusterEndpoints"
+        ],
+        Resource = ["*"]
+      }
+    ]
+  })
+  
+  tags = merge(
+    local.common_tags,
+    {
+      Name = "${local.name_prefix}-rds-access-policy"
+      Type = "IAM-Policy"
+    },
+    var.resource_tags
+  )
+}
+
+# Email Service specific policy for IMAP access
+resource "aws_iam_policy" "email_service_specific" {
+  name        = "${local.name_prefix}-email-service-specific-policy"
+  description = "Specific policy for Email Service operations with least privilege"
+  
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect   = "Allow",
+        Action   = [
+          "ses:GetIdentityMailFromDomainAttributes",
+          "ses:ListIdentities"
+        ],
+        Resource = ["*"]
+      }
+    ]
+  })
+  
+  tags = merge(
+    local.common_tags,
+    {
+      Name = "${local.name_prefix}-email-service-specific-policy"
+      Type = "IAM-Policy"
+    },
+    var.resource_tags
+  )
+}
+
+# Document Service specific policy
+resource "aws_iam_policy" "document_service_specific" {
+  name        = "${local.name_prefix}-document-service-specific-policy"
+  description = "Specific policy for Document Service operations with least privilege"
+  
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect   = "Allow",
+        Action   = [
+          "s3:GetObjectVersion",
+          "s3:GetObjectVersionTagging"
+        ],
+        Resource = [
+          "arn:aws:s3:::${local.document_bucket_name}/*",
+          "arn:aws:s3:::${local.sensitive_document_bucket_name}/*"
+        ]
+      }
+    ]
+  })
+  
+  tags = merge(
+    local.common_tags,
+    {
+      Name = "${local.name_prefix}-document-service-specific-policy"
+      Type = "IAM-Policy"
+    },
+    var.resource_tags
+  )
+}
+
+# OCR Service specific policy
+resource "aws_iam_policy" "ocr_service_specific" {
+  name        = "${local.name_prefix}-ocr-service-specific-policy"
+  description = "Specific policy for OCR Service operations with least privilege"
+  
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect   = "Allow",
+        Action   = [
+          "s3:GetObjectVersion",
+          "s3:GetObjectVersionTagging"
+        ],
+        Resource = [
+          "arn:aws:s3:::${local.document_bucket_name}/*",
+          "arn:aws:s3:::${local.sensitive_document_bucket_name}/*"
+        ]
+      },
+      {
+        Effect   = "Allow",
+        Action   = [
+          "rekognition:DetectText",
+          "textract:AnalyzeDocument",
+          "textract:DetectDocumentText",
+          "textract:GetDocumentAnalysis",
+          "textract:StartDocumentAnalysis",
+          "textract:StartDocumentTextDetection"
+        ],
+        Resource = ["*"]
+      }
+    ]
+  })
+  
+  tags = merge(
+    local.common_tags,
+    {
+      Name = "${local.name_prefix}-ocr-service-specific-policy"
+      Type = "IAM-Policy"
+    },
+    var.resource_tags
+  )
+}
+
+# Notification Service specific policy
+resource "aws_iam_policy" "notification_service_specific" {
+  name        = "${local.name_prefix}-notification-service-specific-policy"
+  description = "Specific policy for Notification Service operations with least privilege"
+  
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect   = "Allow",
+        Action   = [
           "sns:Publish",
           "sns:Subscribe",
           "sns:Unsubscribe",
           "sns:ListSubscriptionsByTopic"
         ],
-        Resource = "arn:aws:sns:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:${local.name_prefix}-*"
+        Resource = ["arn:aws:sns:${var.region}:${data.aws_caller_identity.current.account_id}:${local.name_prefix}*"]
       }
     ]
   })
+  
+  tags = merge(
+    local.common_tags,
+    {
+      Name = "${local.name_prefix}-notification-service-specific-policy"
+      Type = "IAM-Policy"
+    },
+    var.resource_tags
+  )
 }
 
-# JWT Key Access Policy for API Gateway
-resource "aws_iam_policy" "jwt_key_api_gateway" {
-  name        = "${local.name_prefix}-jwt-key-api-gateway"
-  description = "Policy for accessing JWT keys for API Gateway"
+# Data Service specific policy
+resource "aws_iam_policy" "data_service_specific" {
+  name        = "${local.name_prefix}-data-service-specific-policy"
+  description = "Specific policy for Data Service operations with least privilege"
   
   policy = jsonencode({
     Version = "2012-10-17",
     Statement = [
       {
-        Effect = "Allow",
-        Action = [
-          "ssm:GetParameter"
-        ],
-        Resource = "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/mca/jwt/public-key"
+        Effect   = "Allow",
+        Action   = flatten([local.kms_actions.encrypt, local.kms_actions.decrypt]),
+        Resource = [aws_kms_key.data_encryption_key.arn]
       }
     ]
   })
+  
+  tags = merge(
+    local.common_tags,
+    {
+      Name = "${local.name_prefix}-data-service-specific-policy"
+      Type = "IAM-Policy"
+    },
+    var.resource_tags
+  )
 }
 
-# ---------------------------------------------------------------------------------------------------------------------
-# POLICY ATTACHMENTS
-# ---------------------------------------------------------------------------------------------------------------------
-
-# Email Service Policy Attachments
-resource "aws_iam_role_policy_attachment" "email_service_ses" {
-  role       = aws_iam_role.email_service.name
-  policy_arn = aws_iam_policy.ses_email_service.arn
-}
-
-resource "aws_iam_role_policy_attachment" "email_service_secrets" {
-  role       = aws_iam_role.email_service.name
-  policy_arn = aws_iam_policy.secrets_email_service.arn
-}
-
-# Document Service Policy Attachments
-resource "aws_iam_role_policy_attachment" "document_service_s3" {
-  role       = aws_iam_role.document_service.name
-  policy_arn = aws_iam_policy.s3_document_access.arn
-}
-
-resource "aws_iam_role_policy_attachment" "document_service_secrets" {
-  role       = aws_iam_role.document_service.name
-  policy_arn = aws_iam_policy.secrets_document_service.arn
-}
-
-# OCR Service Policy Attachments
-resource "aws_iam_role_policy_attachment" "ocr_service_s3" {
-  role       = aws_iam_role.ocr_service.name
-  policy_arn = aws_iam_policy.s3_document_access.arn
-}
-
-resource "aws_iam_role_policy_attachment" "ocr_service_secrets" {
-  role       = aws_iam_role.ocr_service.name
-  policy_arn = aws_iam_policy.secrets_ocr_service.arn
-}
-
-# Data Service Policy Attachments
-resource "aws_iam_role_policy_attachment" "data_service_kms" {
-  role       = aws_iam_role.data_service.name
-  policy_arn = aws_iam_policy.kms_pii_access.arn
-}
-
-resource "aws_iam_role_policy_attachment" "data_service_secrets" {
-  role       = aws_iam_role.data_service.name
-  policy_arn = aws_iam_policy.secrets_data_service.arn
-}
-
-resource "aws_iam_role_policy_attachment" "data_service_s3_read" {
-  role       = aws_iam_role.data_service.name
-  policy_arn = aws_iam_policy.s3_document_read_only.arn
-}
-
-# Notification Service Policy Attachments
-resource "aws_iam_role_policy_attachment" "notification_service_sqs" {
-  role       = aws_iam_role.notification_service.name
-  policy_arn = aws_iam_policy.sqs_notification_service.arn
-}
-
-resource "aws_iam_role_policy_attachment" "notification_service_sns" {
-  role       = aws_iam_role.notification_service.name
-  policy_arn = aws_iam_policy.sns_notification_service.arn
-}
-
-resource "aws_iam_role_policy_attachment" "notification_service_secrets" {
-  role       = aws_iam_role.notification_service.name
-  policy_arn = aws_iam_policy.secrets_notification_service.arn
-}
-
-# API Gateway Policy Attachments
-resource "aws_iam_role_policy_attachment" "api_gateway_jwt" {
-  role       = aws_iam_role.api_gateway.name
-  policy_arn = aws_iam_policy.jwt_key_api_gateway.arn
-}
-
-resource "aws_iam_role_policy_attachment" "api_gateway_secrets" {
-  role       = aws_iam_role.api_gateway.name
-  policy_arn = aws_iam_policy.secrets_api_gateway.arn
-}
-
-# Create a KMS policy for S3 encryption if using KMS
-resource "aws_iam_policy" "s3_kms_access" {
-  count       = var.s3_encryption_type == "aws:kms" ? 1 : 0
-  name        = "${local.name_prefix}-s3-kms-access"
-  description = "Policy for accessing the S3 KMS encryption key"
+# API Gateway specific policy
+resource "aws_iam_policy" "api_gateway_specific" {
+  name        = "${local.name_prefix}-api-gateway-specific-policy"
+  description = "Specific policy for API Gateway operations with least privilege"
   
   policy = jsonencode({
     Version = "2012-10-17",
     Statement = [
       {
-        Effect = "Allow",
-        Action = [
-          "kms:Encrypt",
-          "kms:Decrypt",
-          "kms:ReEncrypt*",
-          "kms:GenerateDataKey*",
-          "kms:DescribeKey"
+        Effect   = "Allow",
+        Action   = [
+          "execute-api:Invoke",
+          "execute-api:ManageConnections"
         ],
-        Resource = "*",
-        Condition = {
-          StringLike = {
-            "kms:ViaService": "s3.*.amazonaws.com"
-          }
-        }
+        Resource = ["arn:aws:execute-api:${var.region}:${data.aws_caller_identity.current.account_id}:*"]
       }
     ]
   })
+  
+  tags = merge(
+    local.common_tags,
+    {
+      Name = "${local.name_prefix}-api-gateway-specific-policy"
+      Type = "IAM-Policy"
+    },
+    var.resource_tags
+  )
 }
 
-# Attach KMS S3 access policy if using KMS encryption
-resource "aws_iam_role_policy_attachment" "document_service_kms_s3" {
-  count      = var.s3_encryption_type == "aws:kms" ? 1 : 0
-  role       = aws_iam_role.document_service.name
-  policy_arn = aws_iam_policy.s3_kms_access[0].arn
+# CloudWatch Logs access for all services
+resource "aws_iam_policy" "cloudwatch_logs_access" {
+  name        = "${local.name_prefix}-cloudwatch-logs-access-policy"
+  description = "Policy for writing to CloudWatch Logs with least privilege"
+  
+  policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect   = "Allow",
+        Action   = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents",
+          "logs:DescribeLogStreams"
+        ],
+        Resource = [
+          "arn:aws:logs:${var.region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda/${local.name_prefix}*",
+          "arn:aws:logs:${var.region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda/${local.name_prefix}*:log-stream:*",
+          "arn:aws:logs:${var.region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/eks/${local.name_prefix}*",
+          "arn:aws:logs:${var.region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/eks/${local.name_prefix}*:log-stream:*"
+        ]
+      }
+    ]
+  })
+  
+  tags = merge(
+    local.common_tags,
+    {
+      Name = "${local.name_prefix}-cloudwatch-logs-access-policy"
+      Type = "IAM-Policy"
+    },
+    var.resource_tags
+  )
 }
 
-resource "aws_iam_role_policy_attachment" "ocr_service_kms_s3" {
-  count      = var.s3_encryption_type == "aws:kms" ? 1 : 0
-  role       = aws_iam_role.ocr_service.name
-  policy_arn = aws_iam_policy.s3_kms_access[0].arn
+# Attach policies to roles based on service-specific requirements
+
+# Attach S3 document access policy to document-related services
+resource "aws_iam_role_policy_attachment" "s3_document_access_attachment" {
+  for_each = { for k, v in local.service_config : k => v if v.requires_s3_access }
+  
+  role       = aws_iam_role.service_roles[each.key].name
+  policy_arn = aws_iam_policy.s3_document_access.arn
 }
 
-# ---------------------------------------------------------------------------------------------------------------------
-# ADDITIONAL DATA SOURCES
-# ---------------------------------------------------------------------------------------------------------------------
-data "aws_region" "current" {}
-
-# ---------------------------------------------------------------------------------------------------------------------
-# OUTPUTS
-# ---------------------------------------------------------------------------------------------------------------------
-
-output "email_service_role_arn" {
-  description = "ARN of the IAM role for the Email Service"
-  value       = aws_iam_role.email_service.arn
+# Attach KMS data access policy to services that need encryption/decryption
+resource "aws_iam_role_policy_attachment" "kms_data_access_attachment" {
+  for_each = { for k, v in local.service_config : k => v if v.requires_kms_access }
+  
+  role       = aws_iam_role.service_roles[each.key].name
+  policy_arn = aws_iam_policy.kms_data_access.arn
 }
 
-output "document_service_role_arn" {
-  description = "ARN of the IAM role for the Document Service"
-  value       = aws_iam_role.document_service.arn
+# Attach Secrets Manager access policy to services that need credentials
+resource "aws_iam_role_policy_attachment" "secrets_access_attachment" {
+  for_each = { for k, v in local.service_config : k => v if v.requires_secrets_access }
+  
+  role       = aws_iam_role.service_roles[each.key].name
+  policy_arn = aws_iam_policy.secrets_access.arn
 }
 
-output "ocr_service_role_arn" {
-  description = "ARN of the IAM role for the OCR Service"
-  value       = aws_iam_role.ocr_service.arn
+# Attach SES access policy to email-related services
+resource "aws_iam_role_policy_attachment" "ses_access_attachment" {
+  for_each = { for k, v in local.service_config : k => v if v.requires_ses_access }
+  
+  role       = aws_iam_role.service_roles[each.key].name
+  policy_arn = aws_iam_policy.ses_access.arn
 }
 
-output "data_service_role_arn" {
-  description = "ARN of the IAM role for the Data Service"
-  value       = aws_iam_role.data_service.arn
+# Attach SQS producer access policy to services that send messages
+resource "aws_iam_role_policy_attachment" "sqs_producer_access_attachment" {
+  for_each = { for k, v in local.service_config : k => v if v.requires_sqs_access }
+  
+  role       = aws_iam_role.service_roles[each.key].name
+  policy_arn = aws_iam_policy.sqs_producer_access.arn
 }
 
-output "notification_service_role_arn" {
-  description = "ARN of the IAM role for the Notification Service"
-  value       = aws_iam_role.notification_service.arn
+# Attach SQS consumer access policy to services that receive messages
+resource "aws_iam_role_policy_attachment" "sqs_consumer_access_attachment" {
+  for_each = { for k, v in local.service_config : k => v if v.requires_sqs_access }
+  
+  role       = aws_iam_role.service_roles[each.key].name
+  policy_arn = aws_iam_policy.sqs_consumer_access.arn
 }
 
-output "api_gateway_role_arn" {
-  description = "ARN of the IAM role for the API Gateway"
-  value       = aws_iam_role.api_gateway.arn
+# Attach DynamoDB access policy to notification service
+resource "aws_iam_role_policy_attachment" "dynamodb_webhook_access_attachment" {
+  for_each = { for k, v in local.service_config : k => v if v.requires_dynamodb_access }
+  
+  role       = aws_iam_role.service_roles[each.key].name
+  policy_arn = aws_iam_policy.dynamodb_webhook_access.arn
 }
 
-output "s3_document_access_policy_arn" {
-  description = "ARN of the IAM policy for S3 document access"
-  value       = aws_iam_policy.s3_document_access.arn
+# Attach RDS access policy to data service
+resource "aws_iam_role_policy_attachment" "rds_access_attachment" {
+  for_each = { for k, v in local.service_config : k => v if v.requires_rds_access }
+  
+  role       = aws_iam_role.service_roles[each.key].name
+  policy_arn = aws_iam_policy.rds_access.arn
 }
 
-output "s3_document_read_only_policy_arn" {
-  description = "ARN of the IAM policy for S3 document read-only access"
-  value       = aws_iam_policy.s3_document_read_only.arn
+# Attach service-specific policies
+resource "aws_iam_role_policy_attachment" "email_service_specific_attachment" {
+  role       = aws_iam_role.service_roles["email-service"].name
+  policy_arn = aws_iam_policy.email_service_specific.arn
 }
 
-output "kms_pii_access_policy_arn" {
-  description = "ARN of the IAM policy for KMS PII access"
-  value       = aws_iam_policy.kms_pii_access.arn
+resource "aws_iam_role_policy_attachment" "document_service_specific_attachment" {
+  role       = aws_iam_role.service_roles["document-service"].name
+  policy_arn = aws_iam_policy.document_service_specific.arn
+}
+
+resource "aws_iam_role_policy_attachment" "ocr_service_specific_attachment" {
+  role       = aws_iam_role.service_roles["ocr-service"].name
+  policy_arn = aws_iam_policy.ocr_service_specific.arn
+}
+
+resource "aws_iam_role_policy_attachment" "notification_service_specific_attachment" {
+  role       = aws_iam_role.service_roles["notification-service"].name
+  policy_arn = aws_iam_policy.notification_service_specific.arn
+}
+
+resource "aws_iam_role_policy_attachment" "data_service_specific_attachment" {
+  role       = aws_iam_role.service_roles["data-service"].name
+  policy_arn = aws_iam_policy.data_service_specific.arn
+}
+
+resource "aws_iam_role_policy_attachment" "api_gateway_specific_attachment" {
+  role       = aws_iam_role.service_roles["api-gateway"].name
+  policy_arn = aws_iam_policy.api_gateway_specific.arn
+}
+
+# Attach CloudWatch Logs access to all service roles
+resource "aws_iam_role_policy_attachment" "cloudwatch_logs_access_attachment" {
+  for_each = local.service_config
+  
+  role       = aws_iam_role.service_roles[each.key].name
+  policy_arn = aws_iam_policy.cloudwatch_logs_access.arn
+}
+
+# Outputs for IAM roles and policies
+output "service_role_arns" {
+  description = "Map of service names to their IAM role ARNs"
+  value       = { for k, v in aws_iam_role.service_roles : k => v.arn }
+}
+
+output "service_role_names" {
+  description = "Map of service names to their IAM role names"
+  value       = { for k, v in aws_iam_role.service_roles : k => v.name }
+}
+
+output "policy_arns" {
+  description = "Map of policy names to their ARNs"
+  value       = {
+    s3_document_access = aws_iam_policy.s3_document_access.arn,
+    kms_data_access = aws_iam_policy.kms_data_access.arn,
+    secrets_access = aws_iam_policy.secrets_access.arn,
+    ses_access = aws_iam_policy.ses_access.arn,
+    sqs_producer_access = aws_iam_policy.sqs_producer_access.arn,
+    sqs_consumer_access = aws_iam_policy.sqs_consumer_access.arn,
+    dynamodb_webhook_access = aws_iam_policy.dynamodb_webhook_access.arn,
+    rds_access = aws_iam_policy.rds_access.arn,
+    cloudwatch_logs_access = aws_iam_policy.cloudwatch_logs_access.arn
+  }
 }
