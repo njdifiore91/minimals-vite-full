@@ -1,251 +1,357 @@
 /**
- * Number formatting utilities for the Notification Service
- * 
- * This module provides functions for formatting numbers in various locales and formats
- * for use in notification payloads. It's specifically designed for server-side use in Node.js.
+ * Number Formatting Utilities for Notification Service
+ *
+ * This file provides utility functions for formatting numbers in different locales and formats
+ * for use in notification payloads. It supports currency formatting, percentage formatting,
+ * and plain number formatting with configurable options.
+ *
+ * Key features:
+ * - Locale-aware number formatting for international notifications
+ * - Currency formatting with configurable options
+ * - Percentage formatting
+ * - Configurable decimal places and grouping
+ * - Support for accounting format for negative numbers
  */
 
 import { config } from '../config';
 
-// Default locale to use when none is specified
-const DEFAULT_LOCALE = 'en-US';
-
-// Fallback locales to use if the primary locale is not available
-const FALLBACK_LOCALES = ['en-US', 'en'];
+/**
+ * Available number format styles
+ */
+export enum NumberFormatStyle {
+  DECIMAL = 'decimal',
+  CURRENCY = 'currency',
+  PERCENT = 'percent',
+  UNIT = 'unit'
+}
 
 /**
- * Available locales in the current Node.js environment
- * Note: Node.js may have limited locale data depending on how it was built
+ * Available currency display options
  */
-const getAvailableLocales = (): string[] => {
-  try {
-    return Intl.NumberFormat.supportedLocalesOf(Intl.NumberFormat().resolvedOptions().locale);
-  } catch (error) {
-    console.warn('Error getting available locales:', error);
-    return ['en-US']; // Fallback to US English if there's an error
-  }
-};
+export enum CurrencyDisplay {
+  SYMBOL = 'symbol',       // $
+  CODE = 'code',           // USD
+  NAME = 'name',           // US Dollar
+  NARROW_SYMBOL = 'narrowSymbol' // Narrow version of the symbol
+}
 
 /**
- * Checks if a locale is supported in the current environment
- * @param locale - The locale to check
- * @returns Whether the locale is supported
+ * Available currency sign options
  */
-const isLocaleSupported = (locale: string): boolean => {
-  try {
-    return Intl.NumberFormat.supportedLocalesOf([locale]).length > 0;
-  } catch (error) {
-    return false;
-  }
-};
+export enum CurrencySign {
+  STANDARD = 'standard',   // -$10
+  ACCOUNTING = 'accounting' // ($10)
+}
 
 /**
- * Gets the best supported locale from a list of preferred locales
- * @param preferredLocales - List of preferred locales in order of preference
- * @returns The best supported locale
+ * Number formatting options
  */
-const getBestSupportedLocale = (preferredLocales: string[]): string => {
-  // Try each preferred locale
-  for (const locale of preferredLocales) {
-    if (isLocaleSupported(locale)) {
-      return locale;
-    }
-  }
-  
-  // If none of the preferred locales are supported, try the fallbacks
-  for (const locale of FALLBACK_LOCALES) {
-    if (isLocaleSupported(locale)) {
-      return locale;
-    }
-  }
-  
-  // If all else fails, return the default locale and hope for the best
-  return DEFAULT_LOCALE;
-};
+export interface FormatNumberOptions {
+  locale?: string;
+  style?: NumberFormatStyle;
+  currency?: string;
+  currencyDisplay?: CurrencyDisplay;
+  currencySign?: CurrencySign;
+  minimumFractionDigits?: number;
+  maximumFractionDigits?: number;
+  minimumIntegerDigits?: number;
+  minimumSignificantDigits?: number;
+  maximumSignificantDigits?: number;
+  useGrouping?: boolean;
+  notation?: 'standard' | 'scientific' | 'engineering' | 'compact';
+  compactDisplay?: 'short' | 'long';
+}
+
+/**
+ * Default locale for number formatting
+ * Uses the configured locale from environment variables or falls back to 'en-US'
+ */
+export const DEFAULT_LOCALE = config.app.defaultLocale || 'en-US';
+
+/**
+ * Default currency for formatting
+ * Uses the configured currency from environment variables or falls back to 'USD'
+ */
+export const DEFAULT_CURRENCY = config.app.defaultCurrency || 'USD';
+
+/**
+ * Default number of decimal places for currency formatting
+ */
+export const DEFAULT_CURRENCY_FRACTION_DIGITS = 2;
+
+/**
+ * Default number of decimal places for number formatting
+ */
+export const DEFAULT_NUMBER_FRACTION_DIGITS = 2;
 
 /**
  * Formats a number according to the specified locale and options
+ *
  * @param value - The number to format
- * @param locale - The locale to use for formatting
  * @param options - Formatting options
- * @returns The formatted number string
+ * @returns The formatted number as a string
  */
-export const formatNumber = (value: number, locale?: string, options?: Intl.NumberFormatOptions): string => {
-  if (value === null || value === undefined || isNaN(value)) {
-    return '';
-  }
-  
-  try {
-    // Use the provided locale, or get it from config, or use the default
-    const localeToUse = locale || config.defaultLocale || DEFAULT_LOCALE;
-    
-    // Get the best supported locale
-    const bestLocale = getBestSupportedLocale([localeToUse]);
-    
-    // Create the formatter and format the number
-    const formatter = new Intl.NumberFormat(bestLocale, options);
-    return formatter.format(value);
-  } catch (error) {
-    console.error('Error formatting number:', error);
-    // Fallback to basic formatting if Intl fails
-    return value.toString();
-  }
-};
+export function formatNumber(value: number, options: FormatNumberOptions = {}): string {
+  const {
+    locale = DEFAULT_LOCALE,
+    style = NumberFormatStyle.DECIMAL,
+    currency = DEFAULT_CURRENCY,
+    currencyDisplay = CurrencyDisplay.SYMBOL,
+    currencySign = CurrencySign.STANDARD,
+    minimumFractionDigits,
+    maximumFractionDigits = style === NumberFormatStyle.CURRENCY ? DEFAULT_CURRENCY_FRACTION_DIGITS : DEFAULT_NUMBER_FRACTION_DIGITS,
+    minimumIntegerDigits,
+    minimumSignificantDigits,
+    maximumSignificantDigits,
+    useGrouping = true,
+    notation = 'standard',
+    compactDisplay = 'short'
+  } = options;
+
+  // Create formatter with specified options
+  const formatter = new Intl.NumberFormat(locale, {
+    style,
+    ...(style === NumberFormatStyle.CURRENCY && { currency, currencyDisplay, currencySign }),
+    minimumFractionDigits,
+    maximumFractionDigits,
+    minimumIntegerDigits,
+    minimumSignificantDigits,
+    maximumSignificantDigits,
+    useGrouping,
+    notation,
+    compactDisplay
+  });
+
+  return formatter.format(value);
+}
 
 /**
- * Formats a number as currency according to the specified locale and currency
- * @param value - The number to format
+ * Formats a number as currency
+ *
+ * @param value - The number to format as currency
  * @param currency - The currency code (e.g., 'USD', 'EUR')
  * @param locale - The locale to use for formatting
  * @param options - Additional formatting options
- * @returns The formatted currency string
+ * @returns The formatted currency as a string
  */
-export const formatCurrency = (
+export function formatCurrency(
   value: number,
-  currency: string,
-  locale?: string,
-  options?: Omit<Intl.NumberFormatOptions, 'style' | 'currency'>
-): string => {
-  return formatNumber(value, locale, {
-    style: 'currency',
+  currency: string = DEFAULT_CURRENCY,
+  locale: string = DEFAULT_LOCALE,
+  options: Omit<FormatNumberOptions, 'style' | 'currency' | 'locale'> = {}
+): string {
+  return formatNumber(value, {
+    style: NumberFormatStyle.CURRENCY,
     currency,
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-    ...options,
+    locale,
+    ...options
   });
-};
+}
 
 /**
- * Formats a number as a percentage according to the specified locale
- * @param value - The number to format (e.g., 0.25 for 25%)
+ * Formats a number as currency for webhook payloads
+ * This is optimized for machine-readable formats in webhook payloads
+ *
+ * @param value - The number to format as currency
+ * @param currency - The currency code (e.g., 'USD', 'EUR')
  * @param locale - The locale to use for formatting
- * @param options - Additional formatting options
- * @returns The formatted percentage string
+ * @returns The formatted currency as a string
  */
-export const formatPercent = (
+export function formatCurrencyForWebhook(
   value: number,
-  locale?: string,
-  options?: Omit<Intl.NumberFormatOptions, 'style'>
-): string => {
-  return formatNumber(value, locale, {
-    style: 'percent',
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 2,
-    ...options,
+  currency: string = DEFAULT_CURRENCY,
+  locale: string = DEFAULT_LOCALE
+): string {
+  return formatNumber(value, {
+    style: NumberFormatStyle.CURRENCY,
+    currency,
+    locale,
+    currencyDisplay: CurrencyDisplay.CODE,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
   });
-};
+}
 
 /**
- * Formats a currency amount for webhook payloads
- * This ensures consistent formatting across all webhook notifications
- * 
+ * Formats a number as currency without the currency symbol
+ * Useful for tables or lists where the currency is shown in a header
+ *
  * @param value - The number to format
  * @param currency - The currency code (e.g., 'USD', 'EUR')
  * @param locale - The locale to use for formatting
- * @returns The formatted currency string
+ * @returns The formatted number as a string without currency symbol
  */
-export const formatWebhookCurrency = (
+export function formatCurrencyWithoutSymbol(
   value: number,
-  currency: string,
-  locale?: string
-): string => {
-  return formatCurrency(value, currency, locale, {
-    currencyDisplay: 'symbol',
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
-};
+  currency: string = DEFAULT_CURRENCY,
+  locale: string = DEFAULT_LOCALE
+): string {
+  // Use formatToParts to get individual parts of the formatted number
+  const parts = new Intl.NumberFormat(locale, {
+    style: NumberFormatStyle.CURRENCY,
+    currency,
+    currencyDisplay: CurrencyDisplay.CODE
+  }).formatToParts(value);
+
+  // Filter out the currency part and any whitespace literals
+  return parts
+    .filter(part => part.type !== 'currency')
+    .filter(part => part.type !== 'literal' || part.value.trim().length !== 0)
+    .map(part => part.value)
+    .join('');
+}
 
 /**
- * Formats a number for webhook payloads without currency symbol
- * Useful when the currency symbol is displayed separately
- * 
- * @param value - The number to format
+ * Formats a number as a percentage
+ *
+ * @param value - The number to format as percentage (0.1 = 10%)
  * @param locale - The locale to use for formatting
- * @returns The formatted number string
+ * @param fractionDigits - The number of decimal places to show
+ * @returns The formatted percentage as a string
  */
-export const formatWebhookAmount = (
+export function formatPercent(
   value: number,
-  locale?: string
-): string => {
-  return formatNumber(value, locale, {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
+  locale: string = DEFAULT_LOCALE,
+  fractionDigits: number = 1
+): string {
+  return formatNumber(value, {
+    style: NumberFormatStyle.PERCENT,
+    locale,
+    minimumFractionDigits: fractionDigits,
+    maximumFractionDigits: fractionDigits
   });
-};
+}
 
 /**
- * Formats a number as a compact notation (e.g., 1.2K, 5.3M)
- * Useful for displaying large numbers in notifications
- * 
+ * Formats a number with thousands separators
+ *
  * @param value - The number to format
  * @param locale - The locale to use for formatting
- * @returns The formatted compact number string
+ * @param fractionDigits - The number of decimal places to show
+ * @returns The formatted number as a string
  */
-export const formatCompactNumber = (
+export function formatWithThousandsSeparator(
   value: number,
-  locale?: string
-): string => {
-  return formatNumber(value, locale, {
+  locale: string = DEFAULT_LOCALE,
+  fractionDigits: number = DEFAULT_NUMBER_FRACTION_DIGITS
+): string {
+  return formatNumber(value, {
+    locale,
+    minimumFractionDigits: fractionDigits,
+    maximumFractionDigits: fractionDigits,
+    useGrouping: true
+  });
+}
+
+/**
+ * Formats a number for display in a compact form
+ * (e.g., 1.2K, 1.2M, etc.)
+ *
+ * @param value - The number to format
+ * @param locale - The locale to use for formatting
+ * @param fractionDigits - The number of decimal places to show
+ * @returns The formatted number as a string in compact form
+ */
+export function formatCompact(
+  value: number,
+  locale: string = DEFAULT_LOCALE,
+  fractionDigits: number = 1
+): string {
+  return formatNumber(value, {
+    locale,
     notation: 'compact',
     compactDisplay: 'short',
+    minimumFractionDigits: fractionDigits,
+    maximumFractionDigits: fractionDigits
   });
-};
+}
 
 /**
- * Formats a number with a specific number of decimal places
+ * Formats a number for accounting purposes
+ * Uses parentheses for negative numbers instead of minus sign
+ *
  * @param value - The number to format
- * @param decimalPlaces - The number of decimal places to include
+ * @param currency - The currency code (e.g., 'USD', 'EUR')
  * @param locale - The locale to use for formatting
- * @returns The formatted number string
+ * @returns The formatted number as a string with accounting format
  */
-export const formatDecimal = (
+export function formatAccountingCurrency(
   value: number,
-  decimalPlaces: number,
-  locale?: string
-): string => {
-  return formatNumber(value, locale, {
-    minimumFractionDigits: decimalPlaces,
-    maximumFractionDigits: decimalPlaces,
+  currency: string = DEFAULT_CURRENCY,
+  locale: string = DEFAULT_LOCALE
+): string {
+  return formatNumber(value, {
+    style: NumberFormatStyle.CURRENCY,
+    currency,
+    locale,
+    currencySign: CurrencySign.ACCOUNTING
   });
-};
+}
 
 /**
- * Formats a number for display in a specific locale without any additional formatting
+ * Formats a number with a specific unit
+ * (e.g., 100 kg, 200 lb, etc.)
+ *
  * @param value - The number to format
+ * @param unit - The unit to use (e.g., 'kilogram', 'pound', etc.)
  * @param locale - The locale to use for formatting
- * @returns The formatted number string
+ * @param fractionDigits - The number of decimal places to show
+ * @returns The formatted number with unit as a string
  */
-export const formatPlainNumber = (value: number, locale?: string): string => {
-  return formatNumber(value, locale);
-};
-
-/**
- * Extracts just the numeric part from a formatted currency string
- * Useful when you need to display the currency symbol separately
- * 
- * @param formattedCurrency - The formatted currency string
- * @returns The numeric part of the currency string
- */
-export const extractNumericValue = (formattedCurrency: string): string => {
-  // Remove all non-numeric characters except decimal separator and digits
-  // This is a simplified approach and may need adjustment for some locales
-  return formattedCurrency.replace(/[^\d.,]/g, '');
-};
-
-/**
- * Formats a number for international notifications based on recipient's locale
- * @param value - The number to format
- * @param recipientLocale - The recipient's locale
- * @param options - Formatting options
- * @returns The formatted number string
- */
-export const formatInternationalNumber = (
+export function formatWithUnit(
   value: number,
-  recipientLocale: string,
-  options?: Intl.NumberFormatOptions
-): string => {
-  // Try the recipient's locale first, then fall back to defaults
-  const bestLocale = getBestSupportedLocale([recipientLocale]);
-  return formatNumber(value, bestLocale, options);
-};
+  unit: string,
+  locale: string = DEFAULT_LOCALE,
+  fractionDigits: number = DEFAULT_NUMBER_FRACTION_DIGITS
+): string {
+  return formatNumber(value, {
+    style: NumberFormatStyle.UNIT,
+    unit,
+    locale,
+    minimumFractionDigits: fractionDigits,
+    maximumFractionDigits: fractionDigits
+  });
+}
+
+/**
+ * Gets the currency symbol for a specific currency and locale
+ *
+ * @param currency - The currency code (e.g., 'USD', 'EUR')
+ * @param locale - The locale to use
+ * @returns The currency symbol as a string
+ */
+export function getCurrencySymbol(currency: string = DEFAULT_CURRENCY, locale: string = DEFAULT_LOCALE): string {
+  const formatter = new Intl.NumberFormat(locale, {
+    style: NumberFormatStyle.CURRENCY,
+    currency,
+    currencyDisplay: CurrencyDisplay.SYMBOL
+  });
+  
+  const parts = formatter.formatToParts(0);
+  const currencyPart = parts.find(part => part.type === 'currency');
+  
+  return currencyPart ? currencyPart.value : currency;
+}
+
+/**
+ * Parses a localized number string back to a number
+ *
+ * @param value - The localized number string to parse
+ * @param locale - The locale of the string
+ * @returns The parsed number or NaN if parsing fails
+ */
+export function parseLocaleNumber(value: string, locale: string = DEFAULT_LOCALE): number {
+  // Get the decimal and group separators for the locale
+  const formatter = new Intl.NumberFormat(locale);
+  const parts = formatter.formatToParts(1234.5);
+  const decimalSeparator = parts.find(part => part.type === 'decimal')?.value || '.';
+  const groupSeparator = parts.find(part => part.type === 'group')?.value || ',';
+  
+  // Replace the locale-specific separators with standard ones
+  const normalized = value
+    .replace(new RegExp(`\\${groupSeparator}`, 'g'), '')
+    .replace(new RegExp(`\\${decimalSeparator}`), '.');
+  
+  // Parse the normalized string
+  return parseFloat(normalized);
+}
