@@ -2,164 +2,158 @@
 # -*- coding: utf-8 -*-
 
 """
-Tests for the main router configuration in the OCR Service API.
+Tests for the OCR Service API router configuration.
 
-This module verifies that the main router correctly includes all sub-routers
-with appropriate prefixes and that API metadata is properly set. It ensures
-the central routing hub for the OCR Service API is correctly configured.
+This module contains tests to verify that the main router correctly includes all sub-routers
+with appropriate prefixes and that API metadata is properly set. It ensures the central
+routing hub for the OCR Service API is correctly configured.
 """
 
 import pytest
-from fastapi import FastAPI
+from fastapi import APIRouter
 from fastapi.testclient import TestClient
-from unittest.mock import patch, MagicMock
 
-# Import the main router and sub-routers to test
-from src.api.router import router, __title__, __description__, __version__, __openapi_tags__
-from src.api.health import router as health_router
-from src.api.status import router as status_router
+# Import the router to test
+from src.api.router import router, tags_metadata
+
+# Import sub-routers to verify they're included
+from src.api.health import health_router
+from src.api.status import status_router
 from src.api.diagnostics import router as diagnostics_router
 from src.api.ocr import router as ocr_router
 
 
-@pytest.fixture
-def test_app():
-    """Create a test FastAPI app with the main router."""
-    app = FastAPI()
-    app.include_router(router)
-    return app
-
-
-@pytest.fixture
-def test_client(test_app):
-    """Create a TestClient for the test app."""
-    return TestClient(test_app)
-
-
-class TestRouterConfiguration:
-    """Tests for the main router configuration."""
+@pytest.mark.unit
+@pytest.mark.api
+class TestRouter:
+    """Test suite for the OCR Service API router configuration."""
 
     def test_router_prefix(self):
         """Test that the main router has the correct prefix."""
-        assert router.prefix == "/api/v1"
+        assert router.prefix == "/api/v1", "Router prefix should be '/api/v1'"
 
     def test_router_tags(self):
         """Test that the main router has the correct tags."""
-        assert router.tags == ["ocr-service"]
+        assert router.tags == ["api"], "Router tags should be ['api']"
 
-    def test_router_responses(self):
-        """Test that the main router has the correct default responses."""
-        assert 404 in router.responses
-        assert 500 in router.responses
-        assert router.responses[404]["description"] == "Not found"
-        assert router.responses[500]["description"] == "Internal server error"
-
-
-class TestSubRouterInclusion:
-    """Tests for the inclusion of sub-routers in the main router."""
-
-    def test_health_router_included(self, test_client):
+    def test_router_includes_health_router(self):
         """Test that the health router is included with the correct prefix."""
-        # Make a request to a health endpoint
-        with patch("src.api.health.check_rabbitmq_health", return_value={"status": "ok"}):
-            with patch("src.api.health.check_s3_health", return_value={"status": "ok"}):
-                with patch("src.api.health.check_gpu_health", return_value={"status": "ok"}):
-                    response = test_client.get("/api/v1/health/readiness")
-                    assert response.status_code == 200
-
-    def test_status_router_included(self, test_client):
-        """Test that the status router is included with the correct prefix."""
-        # Mock the status endpoint response
-        with patch("src.api.status.get_service_status", return_value={"status": "ok"}):
-            response = test_client.get("/api/v1/status")
-            assert response.status_code == 200
-
-    def test_diagnostics_router_included(self, test_client):
-        """Test that the diagnostics router is included with the correct prefix."""
-        # Mock the diagnostics endpoint response
-        with patch("src.api.diagnostics.get_service_config", return_value={"config": "test"}):
-            # Assuming authentication is required, mock it
-            with patch("src.api.diagnostics.verify_admin_access", return_value=True):
-                response = test_client.get("/api/v1/diagnostics/config")
-                assert response.status_code == 200
-
-    def test_ocr_router_included(self, test_client):
-        """Test that the OCR router is included with the correct prefix."""
-        # Mock the OCR endpoint response
-        with patch("src.api.ocr.get_ocr_result", return_value={"result": "test"}):
-            response = test_client.get("/api/v1/ocr/doc-123456")
-            assert response.status_code == 200
-
-
-class TestRouterMetadata:
-    """Tests for the API metadata in the main router."""
-
-    def test_api_title(self):
-        """Test that the API title is correctly set."""
-        assert __title__ == "OCR Service API"
-
-    def test_api_description(self):
-        """Test that the API description is correctly set."""
-        assert __description__ == "API for the OCR Service that extracts data from documents using TensorFlow"
-
-    def test_api_version(self):
-        """Test that the API version is correctly set."""
-        assert __version__ == "1.0.0"
-
-    def test_openapi_tags(self):
-        """Test that the OpenAPI tags are correctly set."""
-        # Check that all required tags are present
-        tag_names = [tag["name"] for tag in __openapi_tags__]
-        assert "health" in tag_names
-        assert "status" in tag_names
-        assert "diagnostics" in tag_names
-        assert "ocr" in tag_names
-
-        # Check tag descriptions
-        for tag in __openapi_tags__:
-            if tag["name"] == "health":
-                assert "Health check" in tag["description"]
-            elif tag["name"] == "status":
-                assert "Status" in tag["description"]
-            elif tag["name"] == "diagnostics":
-                assert "Diagnostic" in tag["description"]
-            elif tag["name"] == "ocr":
-                assert "OCR processing" in tag["description"]
-
-
-class TestOpenAPIConfiguration:
-    """Tests for the OpenAPI configuration in the main router."""
-
-    def test_docs_url(self):
-        """Test that the docs URL is correctly set."""
-        assert __docs_url__ == "/api/v1/docs"
-
-    def test_redoc_url(self):
-        """Test that the ReDoc URL is correctly set."""
-        assert __redoc_url__ == "/api/v1/redoc"
-
-    def test_openapi_url(self):
-        """Test that the OpenAPI URL is correctly set."""
-        assert __openapi_url__ == "/api/v1/openapi.json"
-
-
-class TestIntegrationWithFastAPI:
-    """Tests for the integration of the router with FastAPI."""
-
-    def test_router_integration(self):
-        """Test that the router can be integrated with a FastAPI app."""
-        app = FastAPI()
-        # This should not raise any exceptions
-        app.include_router(router)
-
-    def test_openapi_schema_generation(self, test_app):
-        """Test that the OpenAPI schema can be generated from the router."""
-        # Get the OpenAPI schema
-        openapi_schema = test_app.openapi()
+        # Check if the health router is included in the main router's routes
+        health_route_found = False
+        for route in router.routes:
+            if getattr(route, "prefix", "") == "/health":
+                health_route_found = True
+                break
         
-        # Check that the schema contains the expected paths
-        assert "/api/v1/health/readiness" in openapi_schema["paths"]
-        assert "/api/v1/health/liveness" in openapi_schema["paths"]
-        assert "/api/v1/status" in openapi_schema["paths"]
-        assert "/api/v1/diagnostics/config" in openapi_schema["paths"]
-        assert "/api/v1/ocr/{document_id}" in openapi_schema["paths"]
+        assert health_route_found, "Health router should be included with prefix '/health'"
+
+    def test_router_includes_status_router(self):
+        """Test that the status router is included with the correct prefix."""
+        # Check if the status router is included in the main router's routes
+        status_route_found = False
+        for route in router.routes:
+            if getattr(route, "prefix", "") == "/status":
+                status_route_found = True
+                break
+        
+        assert status_route_found, "Status router should be included with prefix '/status'"
+
+    def test_router_includes_diagnostics_router(self):
+        """Test that the diagnostics router is included with the correct prefix."""
+        # Check if the diagnostics router is included in the main router's routes
+        diagnostics_route_found = False
+        for route in router.routes:
+            if getattr(route, "prefix", "") == "/diagnostics":
+                diagnostics_route_found = True
+                break
+        
+        assert diagnostics_route_found, "Diagnostics router should be included with prefix '/diagnostics'"
+
+    def test_router_includes_ocr_router(self):
+        """Test that the OCR router is included with the correct prefix."""
+        # Check if the OCR router is included in the main router's routes
+        ocr_route_found = False
+        for route in router.routes:
+            if getattr(route, "prefix", "") == "/ocr":
+                ocr_route_found = True
+                break
+        
+        assert ocr_route_found, "OCR router should be included with prefix '/ocr'"
+
+    def test_tags_metadata(self):
+        """Test that the API metadata is properly set."""
+        # Verify that tags_metadata contains entries for all routers
+        tag_names = [tag["name"] for tag in tags_metadata]
+        
+        assert "api" in tag_names, "API metadata should include 'api' tag"
+        assert "health" in tag_names, "API metadata should include 'health' tag"
+        assert "status" in tag_names, "API metadata should include 'status' tag"
+        assert "diagnostics" in tag_names, "API metadata should include 'diagnostics' tag"
+        assert "ocr" in tag_names, "API metadata should include 'ocr' tag"
+        
+        # Verify that each tag has a description
+        for tag in tags_metadata:
+            assert "description" in tag, f"Tag '{tag['name']}' should have a description"
+            assert tag["description"], f"Tag '{tag['name']}' should have a non-empty description"
+
+    def test_router_docstring(self):
+        """Test that the router has a proper docstring."""
+        assert router.__doc__, "Router should have a docstring"
+        assert "OCR Service API" in router.__doc__, "Router docstring should mention 'OCR Service API'"
+
+
+@pytest.mark.integration
+@pytest.mark.api
+class TestRouterIntegration:
+    """Integration tests for the OCR Service API router."""
+
+    def test_health_endpoint_accessible(self, client: TestClient):
+        """Test that the health endpoint is accessible through the main router."""
+        response = client.get("/api/v1/health/liveness")
+        assert response.status_code == 200, "Health liveness endpoint should be accessible"
+        assert "status" in response.json(), "Health response should include status field"
+
+    def test_status_endpoint_accessible(self, client: TestClient):
+        """Test that the status endpoint is accessible through the main router."""
+        response = client.get("/api/v1/status")
+        assert response.status_code == 200, "Status endpoint should be accessible"
+
+    def test_diagnostics_endpoint_accessible(self, client: TestClient):
+        """Test that the diagnostics endpoint is accessible through the main router."""
+        # Note: This might require authentication in a real implementation
+        response = client.get("/api/v1/diagnostics/config")
+        # We're just testing routing, not authentication, so any response code other than 404 is acceptable
+        assert response.status_code != 404, "Diagnostics config endpoint should be routable"
+
+    def test_ocr_endpoint_accessible(self, client: TestClient):
+        """Test that the OCR endpoint is accessible through the main router."""
+        # Create a test document ID
+        test_document_id = "test-document-id"
+        
+        # Test the OCR endpoint
+        response = client.get(f"/api/v1/ocr/{test_document_id}")
+        # We're just testing routing, not the actual processing, so any response code other than 404 is acceptable
+        assert response.status_code != 404, "OCR document endpoint should be routable"
+
+
+@pytest.mark.unit
+@pytest.mark.api
+def test_router_instance():
+    """Test that the router is an instance of APIRouter."""
+    assert isinstance(router, APIRouter), "Router should be an instance of APIRouter"
+
+
+@pytest.mark.unit
+@pytest.mark.api
+def test_router_routes_count():
+    """Test that the router has the correct number of routes."""
+    # The router should include 4 sub-routers
+    assert len(router.routes) == 4, "Router should include 4 sub-routers"
+
+
+@pytest.mark.unit
+@pytest.mark.api
+def test_tags_metadata_count():
+    """Test that the tags_metadata has the correct number of entries."""
+    # There should be 5 tags: api, health, status, diagnostics, ocr
+    assert len(tags_metadata) == 5, "tags_metadata should have 5 entries"
