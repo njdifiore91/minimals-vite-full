@@ -1,270 +1,565 @@
 /**
- * Webhook Configuration
- * 
- * This file defines the configuration for webhook delivery, including:
- * - HMAC-SHA256 signature generation for webhook payloads
- * - Exponential backoff retry mechanism with configurable retry counts and intervals
- * - Dead letter queue for persistently failed notifications
- * - Timeout settings for webhook requests
- * - Payload structure validation with schema validation
+ * @file webhook.ts
+ * @description Configuration for webhook delivery settings in the Notification Service.
+ * This file defines retry logic, timeout settings, signature generation, and payload formatting.
+ * It enables the service to reliably deliver notifications to external systems with proper
+ * authentication and error handling.
  */
 
-import { IWebhookConfig, IWebhookRetryPolicy } from '../types/webhook';
+import { createHmac, timingSafeEqual } from 'crypto';
+import { config } from './app';
+import {
+  IWebhookPayload,
+  IWebhookSignature,
+  IWebhookRetryPolicy,
+  IWebhookConfig,
+} from '../types/webhook';
+import logger from './logger';
+
+/**
+ * Configuration for webhook HTTP requests
+ */
+export const httpConfig = {
+  /**
+   * Default timeout for webhook requests in milliseconds
+   * This is the maximum time to wait for a response from the webhook endpoint
+   */
+  timeoutMs: config.webhook.defaultTimeout,
+
+  /**
+   * Maximum number of redirects to follow
+   * Set to 0 to disable following redirects
+   */
+  maxRedirects: 3,
+
+  /**
+   * Maximum payload size in bytes
+   * Payloads larger than this will be rejected
+   */
+  maxPayloadSize: config.webhook.maxPayloadSize,
+
+  /**
+   * User agent string to use in webhook requests
+   */
+  userAgent: `DollarFunding-Webhook-Service/${process.env.npm_package_version || '1.0.0'}`,
+
+  /**
+   * Default content type for webhook payloads
+   */
+  contentType: 'application/json',
+
+  /**
+   * Whether to allow insecure SSL connections (not recommended for production)
+   */
+  allowInsecureSSL: process.env.NODE_ENV !== 'production',
+
+  /**
+   * Connection timeout in milliseconds (separate from request timeout)
+   */
+  connectionTimeoutMs: 5000,
+};
+
+/**
+ * Configuration for webhook signature generation and verification
+ */
+export const signatureConfig = {
+  /**
+   * Whether to enable webhook signature generation and verification
+   */
+  enabled: config.webhook.enableSignature,
+
+  /**
+   * Algorithm to use for signature generation (always HMAC-SHA256)
+   */
+  algorithm: 'sha256',
+
+  /**
+   * Header name for the webhook signature
+   */
+  headerName: config.webhook.signatureHeader,
+
+  /**
+   * Header name for the webhook timestamp
+   */
+  timestampHeaderName: 'X-Webhook-Timestamp',
+
+  /**
+   * Whether to include the timestamp in the signature
+   * When true, the signature is generated as HMAC(timestamp + '.' + payload)
+   * When false, the signature is generated as HMAC(payload)
+   */
+  includeTimestamp: true,
+
+  /**
+   * Encoding format for the signature
+   */
+  encoding: 'hex' as const,
+
+  /**
+   * Maximum age of a webhook signature in milliseconds
+   * Signatures older than this will be rejected
+   * Default: 5 minutes (300000 ms)
+   */
+  maxSignatureAgeMs: 300000,
+
+  /**
+   * Whether to enforce signature verification for incoming webhooks
+   */
+  enforceVerification: true,
+};
+
+/**
+ * Configuration for webhook acknowledgment and response handling
+ */
+export const acknowledgmentConfig = {
+  /**
+   * HTTP status codes that indicate successful webhook delivery
+   */
+  successCodes: [200, 201, 202, 204],
+
+  /**
+   * Whether to require an acknowledgment response from the webhook recipient
+   */
+  requireAcknowledgment: true,
+
+  /**
+   * Maximum time to wait for an acknowledgment response in milliseconds
+   */
+  acknowledgmentTimeoutMs: config.webhook.defaultTimeout,
+
+  /**
+   * Whether to treat a timeout as a delivery failure
+   */
+  timeoutIsFailure: true,
+};
+
+/**
+ * Configuration for webhook payload schema validation
+ */
+export const schemaValidationConfig = {
+  /**
+   * Whether to enable schema validation for webhook payloads
+   */
+  enabled: config.webhook.validatePayload,
+
+  /**
+   * Whether to reject invalid payloads or just log a warning
+   */
+  rejectInvalid: true,
+
+  /**
+   * Directory containing JSON schema files for validation
+   */
+  schemaDir: './schemas',
+
+  /**
+   * Default schema version to use
+   */
+  defaultSchemaVersion: '1.0',
+
+  /**
+   * Whether to cache schemas in memory
+   */
+  cacheSchemas: true,
+};
 
 /**
  * Default retry policy for webhook deliveries
- * Implements exponential backoff with configurable parameters
  */
 export const defaultRetryPolicy: IWebhookRetryPolicy = {
-  // Maximum number of retry attempts before sending to dead letter queue
-  maxRetries: Number(process.env.WEBHOOK_MAX_RETRIES) || 5,
-  
-  // Initial delay in milliseconds before the first retry
-  initialDelayMs: Number(process.env.WEBHOOK_INITIAL_DELAY_MS) || 1000,
-  
-  // Multiplier for exponential backoff calculation
-  backoffMultiplier: Number(process.env.WEBHOOK_BACKOFF_MULTIPLIER) || 2,
-  
-  // Maximum delay in milliseconds between retries
-  maxDelayMs: Number(process.env.WEBHOOK_MAX_DELAY_MS) || 60000, // 1 minute
-  
-  // Whether to add jitter to the delay to prevent thundering herd problem
-  useJitter: process.env.WEBHOOK_USE_JITTER === 'true',
-  
-  // Maximum jitter percentage (0-1) to apply to the delay
-  jitterFactor: Number(process.env.WEBHOOK_JITTER_FACTOR) || 0.1,
+  /**
+   * Maximum number of retry attempts
+   */
+  maxRetries: config.retry.maxAttempts,
+
+  /**
+   * Initial retry delay in milliseconds
+   */
+  initialDelayMs: config.retry.initialDelay,
+
+  /**
+   * Backoff factor for exponential backoff
+   * Each retry will wait backoffFactor times longer than the previous retry
+   */
+  backoffFactor: config.retry.backoffMultiplier,
+
+  /**
+   * Maximum delay between retries in milliseconds
+   */
+  maxDelayMs: config.retry.maxDelay,
+
+  /**
+   * Whether to add jitter to retry delays to prevent thundering herd problems
+   */
+  useJitter: config.retry.enableJitter,
+
+  /**
+   * HTTP status codes that should trigger a retry
+   */
+  retryableStatusCodes: config.retry.retryStatusCodes,
+
+  /**
+   * Whether to retry on network errors
+   */
+  retryOnNetworkError: true,
 };
 
 /**
- * Dead letter queue configuration for persistently failed webhook deliveries
+ * Configuration for webhook batching
  */
-export const deadLetterQueueConfig = {
-  // Whether to enable the dead letter queue
-  enabled: process.env.WEBHOOK_DLQ_ENABLED === 'true',
-  
-  // Exchange name for the dead letter queue
-  exchangeName: process.env.WEBHOOK_DLQ_EXCHANGE || 'webhook.dlx',
-  
-  // Queue name for the dead letter queue
-  queueName: process.env.WEBHOOK_DLQ_QUEUE || 'webhook.dlq',
-  
-  // Routing key for the dead letter queue
-  routingKey: process.env.WEBHOOK_DLQ_ROUTING_KEY || 'webhook.failed',
-  
-  // TTL for messages in the dead letter queue (in milliseconds)
-  // Default: 7 days
-  messageTtl: Number(process.env.WEBHOOK_DLQ_MESSAGE_TTL) || 7 * 24 * 60 * 60 * 1000,
-  
-  // Whether to store the original payload with the failed delivery
-  storePayload: process.env.WEBHOOK_DLQ_STORE_PAYLOAD === 'true',
-  
-  // Whether to store the error details with the failed delivery
-  storeErrorDetails: process.env.WEBHOOK_DLQ_STORE_ERROR_DETAILS !== 'false',
+export const batchingConfig = {
+  /**
+   * Whether to enable webhook batching
+   */
+  enabled: config.webhook.enableBatching,
+
+  /**
+   * Maximum number of webhooks to include in a batch
+   */
+  maxBatchSize: config.webhook.maxBatchSize,
+
+  /**
+   * Interval in milliseconds to wait before sending a batch
+   */
+  batchIntervalMs: config.webhook.batchInterval,
+
+  /**
+   * Whether to send partial batches if the batch interval expires
+   */
+  sendPartialBatches: true,
 };
 
 /**
- * HMAC-SHA256 signature configuration for webhook payloads
+ * Configuration for dead letter queue
  */
-export const signatureConfig = {
-  // Whether to sign webhook payloads
-  enabled: process.env.WEBHOOK_SIGNATURE_ENABLED !== 'false',
-  
-  // Default secret key for HMAC-SHA256 signature generation
-  // This should be overridden by customer-specific secret keys
-  defaultSecretKey: process.env.WEBHOOK_SIGNATURE_DEFAULT_SECRET || 'default-webhook-secret',
-  
-  // Header name for the signature
-  headerName: process.env.WEBHOOK_SIGNATURE_HEADER_NAME || 'X-Webhook-Signature',
-  
-  // Algorithm to use for signature generation
-  algorithm: process.env.WEBHOOK_SIGNATURE_ALGORITHM || 'sha256',
-  
-  // Whether to include a timestamp in the signature
-  includeTimestamp: process.env.WEBHOOK_SIGNATURE_INCLUDE_TIMESTAMP === 'true',
-  
-  // Header name for the timestamp (if included)
-  timestampHeaderName: process.env.WEBHOOK_SIGNATURE_TIMESTAMP_HEADER_NAME || 'X-Webhook-Timestamp',
-  
-  // Maximum age of a webhook signature in milliseconds (default: 5 minutes)
-  // Used to prevent replay attacks
-  maxAge: Number(process.env.WEBHOOK_SIGNATURE_MAX_AGE) || 5 * 60 * 1000,
+export const deadLetterConfig = {
+  /**
+   * Whether to enable the dead letter queue
+   */
+  enabled: true,
+
+  /**
+   * Exchange name for the dead letter queue
+   */
+  exchange: config.rabbitmq.deadLetterExchange,
+
+  /**
+   * Routing key for the dead letter queue
+   */
+  routingKey: config.rabbitmq.deadLetterRoutingKey,
+
+  /**
+   * Whether to include the full payload in the dead letter message
+   */
+  includePayload: true,
+
+  /**
+   * Whether to include the delivery result in the dead letter message
+   */
+  includeResult: true,
+
+  /**
+   * Time-to-live for messages in the dead letter queue in milliseconds
+   * Default: 7 days
+   */
+  messageTTL: config.rabbitmq.messageTTL || 604800000,
 };
 
 /**
- * HTTP request configuration for webhook delivery
+ * Configuration for webhook metrics
  */
-export const httpConfig = {
-  // Timeout for webhook requests in milliseconds (default: 10 seconds)
-  timeoutMs: Number(process.env.WEBHOOK_HTTP_TIMEOUT_MS) || 10000,
-  
-  // Whether to follow redirects
-  followRedirects: process.env.WEBHOOK_HTTP_FOLLOW_REDIRECTS !== 'false',
-  
-  // Maximum number of redirects to follow
-  maxRedirects: Number(process.env.WEBHOOK_HTTP_MAX_REDIRECTS) || 5,
-  
-  // Default headers to include with all webhook requests
-  defaultHeaders: {
-    'Content-Type': 'application/json',
-    'User-Agent': `DollarFunding-Webhook-Service/${process.env.npm_package_version || '1.0.0'}`,
+export const metricsConfig = {
+  /**
+   * Whether to enable webhook metrics collection
+   */
+  enabled: config.webhook.enableMetrics,
+
+  /**
+   * Prefix for metric names
+   */
+  prefix: 'webhook_',
+
+  /**
+   * Tags to include with all metrics
+   */
+  defaultTags: {
+    service: 'notification-service',
+    version: process.env.npm_package_version || '1.0.0',
   },
-  
-  // Whether to validate SSL certificates
-  validateSSL: process.env.WEBHOOK_HTTP_VALIDATE_SSL !== 'false',
+
+  /**
+   * Whether to track delivery times
+   */
+  trackDeliveryTime: true,
+
+  /**
+   * Whether to track success/failure rates
+   */
+  trackSuccessRate: true,
+
+  /**
+   * Whether to track retry attempts
+   */
+  trackRetryAttempts: true,
 };
 
 /**
- * Schema validation configuration for webhook payloads
+ * Main webhook configuration object
  */
-export const schemaValidationConfig = {
-  // Whether to validate webhook payloads against schemas
-  enabled: process.env.WEBHOOK_SCHEMA_VALIDATION_ENABLED !== 'false',
-  
-  // Whether to reject payloads that fail validation
-  rejectInvalid: process.env.WEBHOOK_SCHEMA_VALIDATION_REJECT_INVALID !== 'false',
-  
-  // Whether to log validation errors
-  logErrors: process.env.WEBHOOK_SCHEMA_VALIDATION_LOG_ERRORS !== 'false',
-  
-  // Path to schema definitions (relative to project root)
-  schemaPath: process.env.WEBHOOK_SCHEMA_VALIDATION_PATH || './schemas',
-};
-
-/**
- * Acknowledgment configuration for webhook delivery
- */
-export const acknowledgmentConfig = {
-  // Whether to require acknowledgment from webhook recipients
-  required: process.env.WEBHOOK_ACK_REQUIRED !== 'false',
-  
-  // HTTP status codes that are considered successful acknowledgments
-  successCodes: (process.env.WEBHOOK_ACK_SUCCESS_CODES || '200,201,202,204')
-    .split(',')
-    .map(code => parseInt(code.trim(), 10)),
-  
-  // Timeout for acknowledgment in milliseconds (default: 30 seconds)
-  timeoutMs: Number(process.env.WEBHOOK_ACK_TIMEOUT_MS) || 30000,
-};
-
-/**
- * Main webhook configuration that combines all settings
- */
-export const webhookConfig: IWebhookConfig = {
-  // Whether the webhook service is enabled
-  enabled: process.env.WEBHOOK_ENABLED !== 'false',
-  
-  // Retry policy configuration
-  retryPolicy: defaultRetryPolicy,
-  
-  // Dead letter queue configuration
-  deadLetterQueue: deadLetterQueueConfig,
-  
-  // Signature configuration
-  signature: signatureConfig,
-  
-  // HTTP request configuration
+export const webhookConfig = {
+  /**
+   * HTTP configuration
+   */
   http: httpConfig,
-  
-  // Schema validation configuration
-  schemaValidation: schemaValidationConfig,
-  
-  // Acknowledgment configuration
+
+  /**
+   * Signature configuration
+   */
+  signature: signatureConfig,
+
+  /**
+   * Acknowledgment configuration
+   */
   acknowledgment: acknowledgmentConfig,
-  
-  // Maximum concurrent webhook deliveries
-  maxConcurrent: Number(process.env.WEBHOOK_MAX_CONCURRENT) || 50,
-  
-  // Whether to batch webhook deliveries when possible
-  batchDeliveries: process.env.WEBHOOK_BATCH_DELIVERIES === 'true',
-  
-  // Maximum batch size for webhook deliveries
-  maxBatchSize: Number(process.env.WEBHOOK_MAX_BATCH_SIZE) || 10,
+
+  /**
+   * Schema validation configuration
+   */
+  schemaValidation: schemaValidationConfig,
+
+  /**
+   * Default retry policy
+   */
+  defaultRetryPolicy,
+
+  /**
+   * Batching configuration
+   */
+  batching: batchingConfig,
+
+  /**
+   * Dead letter configuration
+   */
+  deadLetter: deadLetterConfig,
+
+  /**
+   * Metrics configuration
+   */
+  metrics: metricsConfig,
+
+  /**
+   * Default headers to include in all webhook requests
+   */
+  defaultHeaders: config.webhook.defaultHeaders,
 };
 
 /**
- * Helper function to calculate the exponential backoff delay with jitter
- * @param attempt The current retry attempt (0-based)
- * @param policy The retry policy to use
- * @returns The delay in milliseconds before the next retry
- */
-export function calculateBackoffDelay(attempt: number, policy = defaultRetryPolicy): number {
-  // Calculate the base delay using exponential backoff
-  const baseDelay = Math.min(
-    policy.initialDelayMs * Math.pow(policy.backoffMultiplier, attempt),
-    policy.maxDelayMs
-  );
-  
-  // Add jitter if enabled to prevent thundering herd problem
-  if (policy.useJitter) {
-    const jitterAmount = baseDelay * policy.jitterFactor;
-    return baseDelay + (Math.random() * jitterAmount * 2) - jitterAmount;
-  }
-  
-  return baseDelay;
-}
-
-/**
- * Helper function to generate an HMAC-SHA256 signature for a webhook payload
+ * Generates an HMAC-SHA256 signature for a webhook payload
  * @param payload The webhook payload to sign
  * @param secretKey The secret key to use for signing
- * @param timestamp Optional timestamp to include in the signature
- * @returns The HMAC-SHA256 signature as a hexadecimal string
+ * @returns The signature object containing the signature and timestamp
  */
-export function generateWebhookSignature(
-  payload: Record<string, any>,
-  secretKey: string = signatureConfig.defaultSecretKey,
-  timestamp?: number
-): string {
-  const crypto = require('crypto');
+export const generateWebhookSignature = (
+  payload: IWebhookPayload,
+  secretKey: string
+): IWebhookSignature => {
+  const timestamp = Date.now().toString();
+  const payloadString = JSON.stringify(payload);
   
-  // Create the string to sign
-  let stringToSign: string;
+  // Create HMAC using the secret key
+  const hmac = createHmac(signatureConfig.algorithm, secretKey);
   
-  if (timestamp && signatureConfig.includeTimestamp) {
-    // Include timestamp in the signature
-    stringToSign = `${timestamp}.${JSON.stringify(payload)}`;
+  // Update HMAC with timestamp and payload
+  if (signatureConfig.includeTimestamp) {
+    hmac.update(`${timestamp}.${payloadString}`);
   } else {
-    // Sign only the payload
-    stringToSign = JSON.stringify(payload);
+    hmac.update(payloadString);
   }
   
-  // Generate the HMAC-SHA256 signature
-  const hmac = crypto.createHmac(signatureConfig.algorithm, secretKey);
-  hmac.update(stringToSign);
+  // Generate the signature
+  const signature = hmac.digest(signatureConfig.encoding);
   
-  // Return the signature as a hexadecimal string
-  return hmac.digest('hex');
-}
+  logger.debug('Generated webhook signature', { signature, timestamp });
+  
+  return {
+    signature,
+    timestamp,
+    algorithm: 'HMAC-SHA256',
+    encoding: signatureConfig.encoding,
+  };
+};
 
 /**
- * Helper function to verify a webhook signature
+ * Verifies an HMAC-SHA256 signature for a webhook payload
  * @param payload The webhook payload
  * @param signature The signature to verify
  * @param secretKey The secret key used for signing
- * @param timestamp Optional timestamp included in the signature
+ * @param timestamp The timestamp included in the signature
  * @returns Whether the signature is valid
  */
-export function verifyWebhookSignature(
-  payload: Record<string, any>,
+export const verifyWebhookSignature = (
+  payload: IWebhookPayload,
   signature: string,
-  secretKey: string = signatureConfig.defaultSecretKey,
-  timestamp?: number
-): boolean {
-  const crypto = require('crypto');
-  
-  // Generate the expected signature
-  const expectedSignature = generateWebhookSignature(payload, secretKey, timestamp);
-  
-  // Use a constant-time comparison to prevent timing attacks
+  secretKey: string,
+  timestamp?: string
+): boolean => {
   try {
-    const signatureBuffer = Buffer.from(signature, 'hex');
-    const expectedBuffer = Buffer.from(expectedSignature, 'hex');
+    // Verify timestamp if provided and includeTimestamp is enabled
+    if (timestamp && signatureConfig.includeTimestamp) {
+      const timestampAge = Date.now() - parseInt(timestamp, 10);
+      
+      // Reject if timestamp is too old
+      if (timestampAge > signatureConfig.maxSignatureAgeMs) {
+        logger.warn('Webhook signature timestamp too old', { timestamp, age: timestampAge });
+        return false;
+      }
+    }
     
-    return crypto.timingSafeEqual(signatureBuffer, expectedBuffer);
+    const payloadString = JSON.stringify(payload);
+    
+    // Create HMAC using the secret key
+    const hmac = createHmac(signatureConfig.algorithm, secretKey);
+    
+    // Update HMAC with timestamp and payload if timestamp is provided
+    if (timestamp && signatureConfig.includeTimestamp) {
+      hmac.update(`${timestamp}.${payloadString}`);
+    } else {
+      hmac.update(payloadString);
+    }
+    
+    // Generate the expected signature
+    const expectedSignature = hmac.digest(signatureConfig.encoding);
+    
+    // Use constant-time comparison to prevent timing attacks
+    const signatureBuffer = Buffer.from(signature, signatureConfig.encoding);
+    const expectedBuffer = Buffer.from(expectedSignature, signatureConfig.encoding);
+    
+    const isValid = signatureBuffer.length === expectedBuffer.length && 
+                    timingSafeEqual(signatureBuffer, expectedBuffer);
+    
+    logger.debug('Verified webhook signature', { isValid, timestamp });
+    
+    return isValid;
   } catch (error) {
-    // If there's an error (e.g., invalid hex string), the signature is invalid
+    logger.error('Error verifying webhook signature', { error });
     return false;
   }
-}
+};
+
+/**
+ * Calculates the next retry time for a failed webhook delivery
+ * @param retryAttempt The current retry attempt (0-based)
+ * @param retryPolicy The retry policy to use
+ * @returns The timestamp for the next retry attempt
+ */
+export const calculateNextRetryTime = (
+  retryAttempt: number,
+  retryPolicy: IWebhookRetryPolicy = defaultRetryPolicy
+): Date => {
+  // Calculate the base delay using exponential backoff
+  const baseDelayMs = Math.min(
+    retryPolicy.initialDelayMs * Math.pow(retryPolicy.backoffFactor, retryAttempt),
+    retryPolicy.maxDelayMs
+  );
+  
+  // Add jitter if enabled to prevent thundering herd problem
+  let delayMs = baseDelayMs;
+  if (retryPolicy.useJitter) {
+    const jitterAmount = baseDelayMs * 0.1; // 10% jitter
+    delayMs = baseDelayMs + (Math.random() * jitterAmount * 2) - jitterAmount;
+  }
+  
+  // Calculate the next retry time
+  const nextRetryTime = new Date(Date.now() + delayMs);
+  
+  logger.debug('Calculated next retry time', {
+    retryAttempt,
+    baseDelayMs,
+    actualDelayMs: delayMs,
+    nextRetryTime: nextRetryTime.toISOString(),
+  });
+  
+  return nextRetryTime;
+};
+
+/**
+ * Determines if a webhook delivery should be retried based on the result and policy
+ * @param statusCode HTTP status code from the delivery attempt
+ * @param retryCount Current retry count
+ * @param retryPolicy Retry policy to use
+ * @returns Whether the delivery should be retried
+ */
+export const shouldRetryDelivery = (
+  statusCode: number | undefined,
+  retryCount: number,
+  retryPolicy: IWebhookRetryPolicy = defaultRetryPolicy
+): boolean => {
+  // Don't retry if max retries reached
+  if (retryCount >= retryPolicy.maxRetries) {
+    logger.info('Max retry attempts reached for webhook', {
+      maxRetries: retryPolicy.maxRetries,
+      retryCount,
+    });
+    return false;
+  }
+  
+  // Check if status code is retryable
+  if (statusCode) {
+    const isRetryableStatusCode = retryPolicy.retryableStatusCodes.includes(statusCode);
+    
+    if (!isRetryableStatusCode) {
+      // Check if it's a 5xx error, which is typically retryable
+      const isServerError = statusCode >= 500 && statusCode < 600;
+      
+      if (!isServerError) {
+        logger.info('Non-retryable status code for webhook', {
+          statusCode,
+        });
+        return false;
+      }
+    }
+  }
+  
+  // If we got here, we should retry
+  logger.info('Scheduling webhook delivery for retry', {
+    retryCount,
+    nextRetryAttempt: retryCount + 1,
+  });
+  
+  return true;
+};
+
+/**
+ * Creates a webhook configuration with default values
+ * @param id Unique identifier for the webhook
+ * @param url URL of the webhook endpoint
+ * @param secretKey Secret key for signature generation
+ * @param options Additional options for the webhook
+ * @returns A complete webhook configuration
+ */
+export const createWebhookConfig = (
+  id: string,
+  url: string,
+  secretKey: string,
+  options: Partial<IWebhookConfig> = {}
+): IWebhookConfig => {
+  return {
+    id,
+    name: options.name || `Webhook ${id}`,
+    description: options.description,
+    url,
+    method: options.method || 'POST',
+    status: options.status || 'ACTIVE',
+    auth: options.auth,
+    headers: options.headers,
+    secretKey,
+    retryPolicy: options.retryPolicy || defaultRetryPolicy,
+    eventTypes: options.eventTypes || ['*'],
+    createdAt: options.createdAt || new Date().toISOString(),
+    updatedAt: options.updatedAt || new Date().toISOString(),
+    lastCalledAt: options.lastCalledAt,
+    lastCallResult: options.lastCallResult,
+  };
+};
 
 export default webhookConfig;
