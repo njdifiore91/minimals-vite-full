@@ -1,29 +1,21 @@
 /**
- * Configuration Module for Notification Service
- *
- * This file serves as the central entry point (barrel file) for the Notification Service configuration module.
- * It aggregates and re-exports all configuration components to present a single, cohesive API surface.
- * This file simplifies importing configuration throughout the service and ensures consistent configuration usage.
- *
- * @module config
+ * Notification Service Configuration
+ * 
+ * This barrel file exports all configuration modules to provide a single, cohesive API surface.
+ * It simplifies importing configuration throughout the service and ensures consistent configuration usage.
  */
 
-// Export application configuration
-// This should be first as other modules may depend on it
+// Core application configuration
 export * from './app';
 
-// Export logger configuration
+// Logging configuration
 export * from './logger';
 
-// Export Redis configuration
-export * from './redis';
-
-// Export RabbitMQ configuration
+// Message queue configuration
 export * from './rabbitmq';
 
-// Export webhook configuration
-export * from './webhook';
+// Cache configuration
+export * from './redis';
 
-// Export default configuration object
-import config from './app';
-export default config;
+// Webhook delivery configuration
+export * from './webhook';
