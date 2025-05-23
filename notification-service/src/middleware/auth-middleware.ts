@@ -5,265 +5,292 @@ import path from 'path';
 import { promisify } from 'util';
 
 // Define interfaces for the middleware
-interface JwtPayload {
+export interface JwtPayload {
   sub: string;
-  role: string;
+  roles: string[];
   exp: number;
   iat: number;
-  iss?: string;
-  aud?: string;
-  [key: string]: any;
+  iss: string;
+  aud: string;
 }
 
-interface AuthMiddlewareOptions {
-  /** Array of roles allowed to access the route */
-  roles?: string[];
-  /** Path to the directory containing public keys */
+export interface AuthOptions {
+  /**
+   * Array of roles that are allowed to access the route
+   */
+  allowedRoles?: string[];
+  
+  /**
+   * Path to the directory containing public keys for JWT verification
+   * Keys should be named in the format: public_key_1.pem, public_key_2.pem, etc.
+   */
   publicKeyDir?: string;
-  /** Whether authentication is required (defaults to true) */
-  credentialsRequired?: boolean;
-  /** Name of the property in the request object where the payload is set */
-  requestProperty?: string;
-  /** JWT issuer to validate */
-  issuer?: string;
-  /** JWT audience to validate */
-  audience?: string;
-  /** JWT algorithm to use (defaults to RS256) */
-  algorithms?: string[];
+  
+  /**
+   * Whether to skip authentication for this route
+   */
+  skipAuth?: boolean;
+  
+  /**
+   * Custom error messages
+   */
+  errorMessages?: {
+    missingToken?: string;
+    invalidToken?: string;
+    expiredToken?: string;
+    insufficientPermissions?: string;
+  };
 }
 
-// Extend Express Request interface to include auth property
-declare global {
-  namespace Express {
-    interface Request {
-      auth?: JwtPayload;
-    }
-  }
-}
+// Default configuration
+const DEFAULT_OPTIONS: AuthOptions = {
+  allowedRoles: [],
+  publicKeyDir: process.env.JWT_PUBLIC_KEY_DIR || path.join(process.cwd(), 'keys'),
+  skipAuth: false,
+  errorMessages: {
+    missingToken: 'Authentication token is missing',
+    invalidToken: 'Invalid authentication token',
+    expiredToken: 'Authentication token has expired',
+    insufficientPermissions: 'Insufficient permissions to access this resource',
+  },
+};
 
-/**
- * Error class for authentication errors
- */
-class AuthenticationError extends Error {
-  statusCode: number;
-  code: string;
-
-  constructor(message: string, statusCode: number = 401, code: string = 'authentication_error') {
-    super(message);
-    this.name = 'AuthenticationError';
-    this.statusCode = statusCode;
-    this.code = code;
-  }
-}
+// Define role constants
+export const ROLES = {
+  OPERATIONS_STAFF: 'operations_staff',
+  SYSTEM_ADMIN: 'system_admin',
+};
 
 /**
  * Loads all public keys from the specified directory
- * @param publicKeyDir Directory containing public key files
- * @returns Array of public keys
+ * @param keyDir Directory containing public keys
+ * @returns Map of key IDs to public keys
  */
-async function loadPublicKeys(publicKeyDir: string): Promise<string[]> {
+async function loadPublicKeys(keyDir: string): Promise<Map<string, string>> {
+  const readdir = promisify(fs.readdir);
+  const readFile = promisify(fs.readFile);
+  const keys = new Map<string, string>();
+  
   try {
-    const readdir = promisify(fs.readdir);
-    const readFile = promisify(fs.readFile);
+    const files = await readdir(keyDir);
+    const keyFiles = files.filter(file => file.startsWith('public_key_') && file.endsWith('.pem'));
     
-    const files = await readdir(publicKeyDir);
-    const keyFiles = files.filter(file => file.endsWith('.pub') || file.endsWith('.pem'));
-    
-    const keys = await Promise.all(
-      keyFiles.map(async (file) => {
-        const keyPath = path.join(publicKeyDir, file);
-        return readFile(keyPath, 'utf8');
-      })
-    );
-    
-    if (keys.length === 0) {
-      throw new Error('No public keys found in directory');
+    for (const file of keyFiles) {
+      const keyId = file.replace('public_key_', '').replace('.pem', '');
+      const keyPath = path.join(keyDir, file);
+      const keyContent = await readFile(keyPath, 'utf8');
+      keys.set(keyId, keyContent);
     }
     
     return keys;
   } catch (error) {
     console.error('Error loading public keys:', error);
-    throw new Error('Failed to load public keys');
+    throw new Error('Failed to load JWT public keys');
   }
 }
 
 /**
- * Verifies a JWT token with multiple public keys
- * @param token JWT token to verify
- * @param publicKeys Array of public keys to try
- * @param options Verification options
- * @returns Decoded token payload
- */
-async function verifyTokenWithKeys(
-  token: string,
-  publicKeys: string[],
-  options: jwt.VerifyOptions
-): Promise<JwtPayload> {
-  const verify = promisify<string, string, jwt.VerifyOptions, any>(jwt.verify);
-  
-  // Try each public key until one works or all fail
-  let lastError: Error | null = null;
-  
-  for (const publicKey of publicKeys) {
-    try {
-      const decoded = await verify(token, publicKey, options);
-      return decoded as JwtPayload;
-    } catch (error) {
-      lastError = error as Error;
-      // Continue to the next key if this one failed
-    }
-  }
-  
-  // If we get here, all keys failed
-  if (lastError) {
-    if (lastError.name === 'TokenExpiredError') {
-      throw new AuthenticationError('Token expired', 401, 'token_expired');
-    } else if (lastError.name === 'JsonWebTokenError') {
-      throw new AuthenticationError('Invalid token', 401, 'invalid_token');
-    } else if (lastError.name === 'NotBeforeError') {
-      throw new AuthenticationError('Token not active', 401, 'token_not_active');
-    }
-    throw new AuthenticationError(lastError.message, 401, 'token_verification_error');
-  }
-  
-  throw new AuthenticationError('Token verification failed', 401, 'token_verification_error');
-}
-
-/**
- * Extracts the token from the request
+ * Extracts the JWT token from the request
  * @param req Express request object
- * @returns JWT token string or null if not found
+ * @returns JWT token or null if not found
  */
-function getTokenFromRequest(req: Request): string | null {
-  if (req.headers.authorization && req.headers.authorization.split(' ')[0] === 'Bearer') {
-    return req.headers.authorization.split(' ')[1];
+function extractToken(req: Request): string | null {
+  if (req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
+    return req.headers.authorization.substring(7);
   }
-  
-  if (req.query && req.query.token) {
-    return req.query.token as string;
-  }
-  
   return null;
 }
 
 /**
- * Validates if the user has the required role
- * @param userRole User's role from the token
- * @param requiredRoles Array of roles allowed to access the route
- * @returns True if the user has permission, false otherwise
+ * Verifies the JWT token using the appropriate public key
+ * @param token JWT token
+ * @param publicKeys Map of key IDs to public keys
+ * @returns Decoded JWT payload
  */
-function validateRole(userRole: string, requiredRoles?: string[]): boolean {
-  if (!requiredRoles || requiredRoles.length === 0) {
-    return true; // No role requirements
+async function verifyToken(token: string, publicKeys: Map<string, string>): Promise<JwtPayload> {
+  // Extract the key ID from the token header
+  const decoded = jwt.decode(token, { complete: true });
+  if (!decoded || typeof decoded === 'string' || !decoded.header) {
+    throw new Error('Invalid token format');
   }
   
-  // System Admin has access to everything
-  if (userRole === 'System Admin') {
-    return true;
+  const keyId = decoded.header.kid || '1'; // Default to key ID 1 if not specified
+  const publicKey = publicKeys.get(keyId);
+  
+  if (!publicKey) {
+    throw new Error(`Public key with ID ${keyId} not found`);
   }
   
-  return requiredRoles.includes(userRole);
+  try {
+    // Verify the token using the appropriate public key
+    const verifyAsync = promisify<string, string, jwt.VerifyOptions, JwtPayload>(jwt.verify as any);
+    const payload = await verifyAsync(token, publicKey, {
+      algorithms: ['RS256'], // Only allow RS256 algorithm
+      issuer: process.env.JWT_ISSUER || 'dollarfunding.com',
+      audience: process.env.JWT_AUDIENCE || 'mca-application',
+    });
+    
+    return payload;
+  } catch (error) {
+    if (error instanceof jwt.TokenExpiredError) {
+      throw new Error('Token expired');
+    } else if (error instanceof jwt.JsonWebTokenError) {
+      throw new Error('Invalid token');
+    } else {
+      throw error;
+    }
+  }
 }
 
 /**
- * Creates an authentication middleware for Express
- * @param options Authentication middleware options
+ * Checks if the user has the required roles
+ * @param userRoles User's roles from the JWT payload
+ * @param allowedRoles Roles allowed to access the resource
+ * @returns True if the user has at least one of the allowed roles
+ */
+function hasRequiredRoles(userRoles: string[], allowedRoles: string[]): boolean {
+  // If no roles are required, allow access
+  if (!allowedRoles || allowedRoles.length === 0) {
+    return true;
+  }
+  
+  // System Admin role has access to everything
+  if (userRoles.includes(ROLES.SYSTEM_ADMIN)) {
+    return true;
+  }
+  
+  // Check if the user has at least one of the allowed roles
+  return userRoles.some(role => allowedRoles.includes(role));
+}
+
+/**
+ * Creates an authentication middleware with the specified options
+ * @param options Authentication options
  * @returns Express middleware function
  */
-export function createAuthMiddleware(options: AuthMiddlewareOptions = {}) {
-  const {
-    roles,
-    publicKeyDir = process.env.JWT_PUBLIC_KEY_DIR || path.resolve(__dirname, '../../config/jwt-keys'),
-    credentialsRequired = true,
-    requestProperty = 'auth',
-    issuer = process.env.JWT_ISSUER,
-    audience = process.env.JWT_AUDIENCE,
-    algorithms = ['RS256'],
-  } = options;
+export function createAuthMiddleware(options: AuthOptions = {}) {
+  // Merge options with defaults
+  const config: AuthOptions = { ...DEFAULT_OPTIONS, ...options };
   
-  // Load public keys once when middleware is created
-  let publicKeysPromise: Promise<string[]>;
+  // Initialize public keys cache
+  let publicKeysPromise: Promise<Map<string, string>> | null = null;
+  let lastKeyLoadTime = 0;
+  const KEY_CACHE_TTL = 3600000; // 1 hour in milliseconds
   
+  /**
+   * Gets the public keys, loading them if necessary
+   * @returns Map of key IDs to public keys
+   */
+  async function getPublicKeys(): Promise<Map<string, string>> {
+    const now = Date.now();
+    
+    // Load keys if they haven't been loaded yet or if the cache has expired
+    if (!publicKeysPromise || now - lastKeyLoadTime > KEY_CACHE_TTL) {
+      lastKeyLoadTime = now;
+      publicKeysPromise = loadPublicKeys(config.publicKeyDir!);
+    }
+    
+    return publicKeysPromise;
+  }
+  
+  // Return the middleware function
   return async (req: Request, res: Response, next: NextFunction) => {
     try {
-      // Initialize public keys if not already done
-      if (!publicKeysPromise) {
-        publicKeysPromise = loadPublicKeys(publicKeyDir);
+      // Skip authentication if configured to do so
+      if (config.skipAuth) {
+        return next();
       }
       
-      // Get the token from the request
-      const token = getTokenFromRequest(req);
-      
-      // If no token is provided
+      // Extract the token from the request
+      const token = extractToken(req);
       if (!token) {
-        if (credentialsRequired) {
-          throw new AuthenticationError('No authorization token was found', 401, 'credentials_required');
-        } else {
-          return next();
-        }
-      }
-      
-      // Load public keys
-      const publicKeys = await publicKeysPromise;
-      
-      // Verify the token
-      const decoded = await verifyTokenWithKeys(token, publicKeys, {
-        algorithms,
-        issuer,
-        audience,
-      });
-      
-      // Check if the token has the required role
-      if (!validateRole(decoded.role, roles)) {
-        throw new AuthenticationError('Insufficient permissions', 403, 'insufficient_permissions');
-      }
-      
-      // Set the decoded token on the request object
-      (req as any)[requestProperty] = decoded;
-      
-      next();
-    } catch (error) {
-      if (error instanceof AuthenticationError) {
-        return res.status(error.statusCode).json({
-          error: {
-            code: error.code,
-            message: error.message,
-          },
+        return res.status(401).json({
+          error: 'Unauthorized',
+          message: config.errorMessages?.missingToken || DEFAULT_OPTIONS.errorMessages!.missingToken,
+          code: 'AUTH_MISSING_TOKEN',
         });
       }
       
-      // For unexpected errors
+      // Get the public keys
+      const publicKeys = await getPublicKeys();
+      
+      // Verify the token
+      let payload: JwtPayload;
+      try {
+        payload = await verifyToken(token, publicKeys);
+      } catch (error: any) {
+        if (error.message === 'Token expired') {
+          return res.status(401).json({
+            error: 'Unauthorized',
+            message: config.errorMessages?.expiredToken || DEFAULT_OPTIONS.errorMessages!.expiredToken,
+            code: 'AUTH_EXPIRED_TOKEN',
+          });
+        } else {
+          return res.status(401).json({
+            error: 'Unauthorized',
+            message: config.errorMessages?.invalidToken || DEFAULT_OPTIONS.errorMessages!.invalidToken,
+            code: 'AUTH_INVALID_TOKEN',
+          });
+        }
+      }
+      
+      // Check if the token has expired
+      const now = Math.floor(Date.now() / 1000);
+      if (payload.exp && payload.exp < now) {
+        return res.status(401).json({
+          error: 'Unauthorized',
+          message: config.errorMessages?.expiredToken || DEFAULT_OPTIONS.errorMessages!.expiredToken,
+          code: 'AUTH_EXPIRED_TOKEN',
+        });
+      }
+      
+      // Check if the user has the required roles
+      if (!hasRequiredRoles(payload.roles, config.allowedRoles || [])) {
+        return res.status(403).json({
+          error: 'Forbidden',
+          message: config.errorMessages?.insufficientPermissions || DEFAULT_OPTIONS.errorMessages!.insufficientPermissions,
+          code: 'AUTH_INSUFFICIENT_PERMISSIONS',
+        });
+      }
+      
+      // Attach the user information to the request for use in route handlers
+      (req as any).user = {
+        id: payload.sub,
+        roles: payload.roles,
+      };
+      
+      // Continue to the next middleware or route handler
+      next();
+    } catch (error) {
+      // Handle unexpected errors
       console.error('Authentication middleware error:', error);
-      return res.status(500).json({
-        error: {
-          code: 'internal_server_error',
-          message: 'An internal server error occurred',
-        },
+      res.status(500).json({
+        error: 'Internal Server Error',
+        message: 'An unexpected error occurred during authentication',
+        code: 'AUTH_INTERNAL_ERROR',
       });
     }
   };
 }
 
 /**
- * Middleware for routes that require Operations Staff role
+ * Middleware that requires the user to have the Operations Staff role
  */
 export const requireOperationsStaff = createAuthMiddleware({
-  roles: ['Operations Staff', 'System Admin'],
+  allowedRoles: [ROLES.OPERATIONS_STAFF, ROLES.SYSTEM_ADMIN],
 });
 
 /**
- * Middleware for routes that require System Admin role
+ * Middleware that requires the user to have the System Admin role
  */
 export const requireSystemAdmin = createAuthMiddleware({
-  roles: ['System Admin'],
+  allowedRoles: [ROLES.SYSTEM_ADMIN],
 });
 
 /**
- * Middleware that requires authentication but no specific role
+ * Middleware that requires authentication but doesn't check roles
  */
 export const requireAuth = createAuthMiddleware();
 
-/**
- * Default export for the auth middleware factory function
- */
+// Export default middleware factory
 export default createAuthMiddleware;
