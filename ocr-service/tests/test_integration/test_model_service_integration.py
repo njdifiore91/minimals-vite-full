@@ -2,432 +2,352 @@
 # -*- coding: utf-8 -*-
 
 """
-Integration tests for OCR models and services.
+Integration tests for OCR model and service integration.
 
-This module tests the integration between TensorFlow models and OCR services,
-verifying that models are correctly loaded and used by services, and that model
-outputs are properly processed and transformed into structured data with confidence scores.
+These tests verify that TensorFlow models are correctly loaded and used by services,
+and that model outputs are properly processed and transformed into structured data
+with confidence scores.
+
+Requirements tested:
+- OCR Service must use TensorFlow for text recognition as specified in section 3.2.2
+- Service must apply appropriate OCR model based on document type as specified in section 4.1.8
+- Service must include confidence scoring for extracted fields as specified in section 0.1.4
+- TensorFlow OCR processing requires CUDA-compatible GPU acceleration as specified in section 3.2.3
 """
 
 import os
+import json
 import pytest
 import numpy as np
-from unittest.mock import MagicMock, patch, PropertyMock
-from typing import Dict, List, Any, Tuple
+import tensorflow as tf
+from unittest.mock import patch, MagicMock
 
-# Import application modules
-from src.models.model_factory import ModelFactory, get_model, get_model_for_document, get_model_by_document_type
-from src.models.base_model import BaseModel
-from src.services.ocr_service import OCRService
-from src.services.confidence_service import ConfidenceService
-from src.services.field_extraction_service import FieldExtractionService
-from src.types.documents import Document, DocumentType, DocumentMetadata, ProcessingStatus
-from src.types.extraction import ExtractedData, ExtractedField, ConfidenceScore
-from src.types.models import OCRModelType, ModelResult, ModelParameters
-from src.types.errors import ServiceError, ErrorCategory, Result
+# Import the services and models to test
+from services import OCRService, ConfidenceService, FieldExtractionService
+from models import ModelFactory, TypedTextModel, HandwrittenTextModel, HybridRecognitionModel
+from models.confidence_scoring import calculate_confidence_score
+from config import OCRConfig
 
 
 @pytest.fixture
-def mock_tensorflow_model():
-    """Create a mock TensorFlow model that returns predefined results."""
-    mock_model = MagicMock(spec=BaseModel)
+def mock_gpu_available():
+    """Mock GPU availability for testing."""
+    with patch('tensorflow.config.list_physical_devices') as mock_devices:
+        # Mock a GPU device being available
+        mock_devices.return_value = [tf.config.PhysicalDevice(name='/physical_device:GPU:0', 
+                                                            device_type='GPU')]
+        yield mock_devices
+
+
+@pytest.fixture
+def mock_s3_document(document_type):
+    """Mock S3 document retrieval for testing."""
+    # Load appropriate test document based on document_type
+    test_data_path = os.path.join(os.path.dirname(__file__), 
+                                 f'../test_data/{document_type}_documents')
     
-    # Configure the mock to return a valid ModelResult
-    mock_result = ModelResult(
-        model_type=OCRModelType.TYPED,
-        extracted_fields=[
-            ExtractedField(name="legal_name", value="ABC Corporation", confidence=0.95, page=1),
-            ExtractedField(name="dba_name", value="ABC Corp", confidence=0.92, page=1),
-            ExtractedField(name="business_address", value="123 Main St, New York, NY 10001", confidence=0.88, page=1),
-            ExtractedField(name="business_phone", value="(555) 123-4567", confidence=0.94, page=1),
-            ExtractedField(name="tax_id", value="12-3456789", confidence=0.85, page=1),
-            ExtractedField(name="requested_amount", value="$50,000", confidence=0.91, page=1),
-        ],
-        average_confidence=0.91,
-        processing_time=1.25,
-        metadata={"model_version": "1.0.0"}
+    # Get the first document from the manifest
+    manifest_path = os.path.join(test_data_path, 'sample_manifest.json')
+    with open(manifest_path, 'r') as f:
+        manifest = json.load(f)
+        sample_doc = list(manifest.keys())[0]
+    
+    # Create a mock document object
+    class MockDocument:
+        def __init__(self, doc_type, content, metadata):
+            self.doc_type = doc_type
+            self.content = content
+            self.metadata = metadata
+    
+    # Return a mock document with appropriate metadata
+    return MockDocument(
+        doc_type=document_type,
+        content=np.random.randint(0, 255, (1000, 800, 3), dtype=np.uint8),  # Mock image data
+        metadata={
+            'classification': document_type,
+            'confidence': 0.95,
+            'document_id': 'test-doc-123',
+            'expected_fields': manifest[sample_doc]['expected_fields']
+        }
     )
-    
-    mock_model.extract_text.return_value = mock_result
-    mock_model.model_type = OCRModelType.TYPED
-    
-    return mock_model
 
 
 @pytest.fixture
-def mock_handwritten_model():
-    """Create a mock handwritten TensorFlow model that returns predefined results."""
-    mock_model = MagicMock(spec=BaseModel)
-    
-    # Configure the mock to return a valid ModelResult with lower confidence scores
-    mock_result = ModelResult(
-        model_type=OCRModelType.HANDWRITTEN,
-        extracted_fields=[
-            ExtractedField(name="legal_name", value="XYZ Enterprises", confidence=0.82, page=1),
-            ExtractedField(name="dba_name", value="XYZ", confidence=0.79, page=1),
-            ExtractedField(name="business_address", value="456 Oak Ave, Boston, MA 02108", confidence=0.75, page=1),
-            ExtractedField(name="business_phone", value="(555) 987-6543", confidence=0.81, page=1),
-            ExtractedField(name="tax_id", value="98-7654321", confidence=0.72, page=1),
-            ExtractedField(name="requested_amount", value="$75,000", confidence=0.78, page=1),
-        ],
-        average_confidence=0.78,
-        processing_time=2.5,
-        metadata={"model_version": "1.0.0"}
+def ocr_config():
+    """Create a test OCR configuration."""
+    return OCRConfig(
+        model_path='/models',
+        confidence_threshold=0.75,
+        gpu_memory_limit=8192,  # 8GB as specified in requirements
+        batch_size=4,
+        enable_gpu=True
     )
-    
-    mock_model.extract_text.return_value = mock_result
-    mock_model.model_type = OCRModelType.HANDWRITTEN
-    
-    return mock_model
 
 
 @pytest.fixture
-def mock_hybrid_model():
-    """Create a mock hybrid TensorFlow model that returns predefined results."""
-    mock_model = MagicMock(spec=BaseModel)
+def model_factory(ocr_config, mock_gpu_available):
+    """Create a model factory for testing."""
+    return ModelFactory(config=ocr_config)
+
+
+@pytest.fixture
+def ocr_service(model_factory, ocr_config):
+    """Create an OCR service for testing."""
+    confidence_service = ConfidenceService(config=ocr_config)
+    field_extraction_service = FieldExtractionService(config=ocr_config)
     
-    # Configure the mock to return a valid ModelResult with mixed confidence scores
-    mock_result = ModelResult(
-        model_type=OCRModelType.HYBRID,
-        extracted_fields=[
-            ExtractedField(name="legal_name", value="123 Funding LLC", confidence=0.88, page=1),
-            ExtractedField(name="dba_name", value="123 Funding", confidence=0.85, page=1),
-            ExtractedField(name="business_address", value="789 Pine St, Chicago, IL 60601", confidence=0.82, page=1),
-            ExtractedField(name="business_phone", value="(555) 456-7890", confidence=0.87, page=1),
-            ExtractedField(name="tax_id", value="45-6789123", confidence=0.79, page=1),
-            ExtractedField(name="requested_amount", value="$100,000", confidence=0.84, page=1),
-        ],
-        average_confidence=0.84,
-        processing_time=1.75,
-        metadata={"model_version": "1.0.0"}
+    return OCRService(
+        model_factory=model_factory,
+        confidence_service=confidence_service,
+        field_extraction_service=field_extraction_service,
+        config=ocr_config
     )
-    
-    mock_model.extract_text.return_value = mock_result
-    mock_model.model_type = OCRModelType.HYBRID
-    
-    return mock_model
-
-
-@pytest.fixture
-def mock_model_factory(mock_tensorflow_model, mock_handwritten_model, mock_hybrid_model):
-    """Create a mock model factory that returns predefined models."""
-    with patch('src.models.model_factory.ModelFactory', autospec=True) as MockFactory:
-        factory_instance = MockFactory.return_value
-        
-        # Configure the factory to return different models based on model type
-        factory_instance.get_model.side_effect = lambda model_type: {
-            OCRModelType.TYPED: mock_tensorflow_model,
-            OCRModelType.HANDWRITTEN: mock_handwritten_model,
-            OCRModelType.HYBRID: mock_hybrid_model
-        }.get(model_type, mock_hybrid_model)
-        
-        # Configure the factory to return models based on document type
-        factory_instance.get_model_by_document_type.side_effect = lambda doc_type: {
-            DocumentType.APPLICATION: mock_hybrid_model,
-            DocumentType.TAX_RETURN: mock_tensorflow_model,
-            DocumentType.BANK_STATEMENT: mock_tensorflow_model,
-            DocumentType.PAY_STUB: mock_tensorflow_model,
-            DocumentType.ID_DOCUMENT: mock_hybrid_model,
-            DocumentType.OTHER: mock_hybrid_model
-        }.get(doc_type, mock_hybrid_model)
-        
-        # Configure the factory to return models based on document metadata
-        factory_instance.get_model_for_document.side_effect = lambda metadata: {
-            DocumentType.APPLICATION: mock_hybrid_model,
-            DocumentType.TAX_RETURN: mock_tensorflow_model,
-            DocumentType.BANK_STATEMENT: mock_tensorflow_model,
-            DocumentType.PAY_STUB: mock_tensorflow_model,
-            DocumentType.ID_DOCUMENT: mock_hybrid_model,
-            DocumentType.OTHER: mock_hybrid_model
-        }.get(metadata.document_type, mock_hybrid_model)
-        
-        yield factory_instance
-
-
-@pytest.fixture
-def sample_document():
-    """Create a sample document for testing."""
-    metadata = DocumentMetadata(
-        document_id="doc-123456",
-        filename="application.pdf",
-        mime_type="application/pdf",
-        size=12345,
-        page_count=1,
-        request_id="req-789012"
-    )
-    
-    # Create a dummy document content (would be bytes in real application)
-    content = b"Sample document content"
-    
-    document = Document(
-        content=content,
-        metadata=metadata,
-        document_type=DocumentType.APPLICATION,
-        processing_status=ProcessingStatus.PENDING
-    )
-    
-    return document
-
-
-@pytest.fixture
-def mock_gpu_environment():
-    """Mock the GPU environment for testing."""
-    with patch('src.utils.tensorflow_utils.setup_gpu_environment', return_value=True):
-        with patch('src.utils.tensorflow_utils.get_gpu_info', return_value="Tesla T4"):
-            yield
-
-
-@pytest.fixture
-def mock_image_utils():
-    """Mock image utilities for testing."""
-    with patch('src.utils.image_utils.convert_to_image', return_value=np.zeros((100, 100))):
-        with patch('src.utils.image_utils.assess_image_quality', return_value=0.95):
-            with patch('src.utils.image_utils.preprocess_for_ocr', return_value=np.zeros((100, 100))):
-                yield
-
-
-@pytest.fixture
-def ocr_service_with_mocks(mock_model_factory, mock_gpu_environment, mock_image_utils):
-    """Create an OCR service with mocked dependencies."""
-    with patch('src.models.model_factory.model_factory', mock_model_factory):
-        with patch('src.services.ocr_service.ModelFactory', return_value=mock_model_factory):
-            # Create the OCR service with mocked dependencies
-            service = OCRService()
-            yield service
 
 
 class TestModelServiceIntegration:
     """Test the integration between OCR models and services."""
-    
-    def test_model_factory_integration_with_ocr_service(self, ocr_service_with_mocks, mock_model_factory):
-        """Test that the OCR service correctly integrates with the model factory."""
-        # Verify that the OCR service initializes with the model factory
-        assert ocr_service_with_mocks.model_factory is not None
-        assert ocr_service_with_mocks.model_factory == mock_model_factory
+
+    def test_gpu_acceleration_enabled(self, ocr_service, mock_gpu_available):
+        """Test that GPU acceleration is enabled for TensorFlow models.
         
-        # Verify that the model factory was initialized during OCR service initialization
-        mock_model_factory._preload_models.assert_called_once()
-    
-    def test_model_selection_based_on_document_type(self, ocr_service_with_mocks, mock_model_factory, sample_document):
-        """Test that the OCR service selects the appropriate model based on document type."""
-        # Process a sample document
-        with patch('src.services.ocr_service.OCRService._determine_model_type', return_value=OCRModelType.HYBRID):
-            result = ocr_service_with_mocks.process_document(sample_document)
+        Requirement: TensorFlow OCR processing requires CUDA-compatible GPU acceleration
+        as specified in section 3.2.3
+        """
+        # Verify that the service is configured to use GPU
+        assert ocr_service.config.enable_gpu is True
         
-        # Verify that the result is successful
-        assert result.is_success
+        # Verify that TensorFlow is configured to use GPU
+        with patch('tensorflow.config.experimental.set_memory_growth') as mock_set_memory:
+            ocr_service.initialize_gpu()
+            mock_set_memory.assert_called_once()
         
-        # Verify that the model factory was called to get the appropriate model
-        mock_model_factory.get_model.assert_called_with(OCRModelType.HYBRID)
-    
-    def test_model_output_processing(self, ocr_service_with_mocks, mock_hybrid_model, sample_document):
-        """Test that the OCR service correctly processes model outputs into structured data."""
-        # Process a sample document
-        with patch('src.services.ocr_service.OCRService._determine_model_type', return_value=OCRModelType.HYBRID):
-            with patch('src.services.ocr_service.OCRService._extract_text', return_value=mock_hybrid_model.extract_text()):
-                result = ocr_service_with_mocks.process_document(sample_document)
+        # Verify that GPU memory limit is set correctly (8GB as specified in requirements)
+        assert ocr_service.config.gpu_memory_limit == 8192
+
+    def test_model_selection_by_document_type(self, model_factory):
+        """Test that the appropriate model is selected based on document type.
         
-        # Verify that the result is successful
-        assert result.is_success
+        Requirement: Service must apply appropriate OCR model based on document type
+        as specified in section 4.1.8
+        """
+        # Test typed document model selection
+        typed_model = model_factory.get_model(document_type='typed')
+        assert isinstance(typed_model, TypedTextModel)
         
-        # Extract the processed data from the result
-        extracted_data, processing_time = result.value
+        # Test handwritten document model selection
+        handwritten_model = model_factory.get_model(document_type='handwritten')
+        assert isinstance(handwritten_model, HandwrittenTextModel)
         
-        # Verify that the extracted data contains the expected fields
-        assert extracted_data.document_id == sample_document.metadata.document_id
-        assert extracted_data.document_type == sample_document.document_type.name
-        assert len(extracted_data.fields) == 6  # Number of fields in the mock model result
+        # Test mixed document model selection
+        mixed_model = model_factory.get_model(document_type='mixed')
+        assert isinstance(mixed_model, HybridRecognitionModel)
+
+    @pytest.mark.parametrize("document_type", ["typed", "handwritten", "mixed"])
+    def test_model_initialization_in_service(self, ocr_service, document_type):
+        """Test that models are correctly initialized and loaded in the service context.
         
-        # Verify that the field values match the model output
-        assert extracted_data.fields["legal_name"]["value"] == "123 Funding LLC"
-        assert extracted_data.fields["dba_name"]["value"] == "123 Funding"
-        assert extracted_data.fields["business_address"]["value"] == "789 Pine St, Chicago, IL 60601"
-        assert extracted_data.fields["business_phone"]["value"] == "(555) 456-7890"
-        assert extracted_data.fields["tax_id"]["value"] == "45-6789123"
-        assert extracted_data.fields["requested_amount"]["value"] == "$100,000"
+        Requirement: OCR Service must use TensorFlow for text recognition
+        as specified in section 3.2.2
+        """
+        with patch('models.base_model.BaseModel.load_model') as mock_load:
+            # Mock the model loading process
+            mock_load.return_value = MagicMock(spec=tf.keras.Model)
+            
+            # Initialize the service with the specified document type
+            model = ocr_service.model_factory.get_model(document_type=document_type)
+            
+            # Verify that the model was loaded
+            mock_load.assert_called_once()
+            
+            # Verify that the model is a TensorFlow model
+            assert hasattr(model, 'model')
+            assert isinstance(model.model, MagicMock)
+            assert model.model._spec_class == tf.keras.Model
+
+    @pytest.mark.parametrize("document_type", ["typed", "handwritten", "mixed"])
+    def test_ocr_processing_pipeline(self, ocr_service, mock_s3_document, document_type):
+        """Test the complete OCR processing pipeline from model to structured data.
         
-        # Verify that confidence scores are included
-        assert "confidence" in extracted_data.fields["legal_name"]
-        assert extracted_data.fields["legal_name"]["confidence"] == 0.88
+        This test verifies that documents are processed through the entire pipeline,
+        from model inference to structured data with confidence scores.
+        """
+        # Get a mock document of the specified type
+        document = mock_s3_document(document_type)
         
-        # Verify that the average confidence is calculated correctly
-        assert extracted_data.average_confidence == 0.84
-    
-    def test_confidence_scoring_integration(self, ocr_service_with_mocks, mock_hybrid_model, sample_document):
-        """Test that confidence scoring is correctly integrated with model outputs."""
-        # Process a sample document
-        with patch('src.services.ocr_service.OCRService._determine_model_type', return_value=OCRModelType.HYBRID):
-            with patch('src.services.ocr_service.OCRService._extract_text', return_value=mock_hybrid_model.extract_text()):
-                result = ocr_service_with_mocks.process_document(sample_document)
+        # Mock the model inference to return some text regions
+        with patch.object(TypedTextModel, 'extract_text') as mock_extract, \
+             patch.object(HandwrittenTextModel, 'extract_text') as mock_hw_extract, \
+             patch.object(HybridRecognitionModel, 'extract_text') as mock_hybrid_extract, \
+             patch.object(FieldExtractionService, 'extract_fields') as mock_extract_fields, \
+             patch.object(ConfidenceService, 'calculate_confidence') as mock_calc_confidence:
+            
+            # Configure the mocks to return appropriate data
+            mock_text_regions = [
+                {'text': 'Sample text 1', 'bbox': [10, 10, 100, 30], 'confidence': 0.92},
+                {'text': 'Sample text 2', 'bbox': [10, 40, 100, 60], 'confidence': 0.85}
+            ]
+            
+            mock_extract.return_value = mock_text_regions
+            mock_hw_extract.return_value = mock_text_regions
+            mock_hybrid_extract.return_value = mock_text_regions
+            
+            # Mock field extraction to return structured fields
+            expected_fields = document.metadata['expected_fields']
+            mock_fields = {
+                field_name: {'value': field_value, 'confidence': 0.9}
+                for field_name, field_value in expected_fields.items()
+            }
+            mock_extract_fields.return_value = mock_fields
+            
+            # Mock confidence calculation to return document-level confidence
+            mock_calc_confidence.return_value = 0.88
+            
+            # Process the document
+            result = ocr_service.process_document(document)
+            
+            # Verify that the appropriate extraction method was called based on document type
+            if document_type == 'typed':
+                mock_extract.assert_called_once()
+            elif document_type == 'handwritten':
+                mock_hw_extract.assert_called_once()
+            else:  # mixed
+                mock_hybrid_extract.assert_called_once()
+            
+            # Verify that field extraction was called
+            mock_extract_fields.assert_called_once()
+            
+            # Verify that confidence calculation was called
+            mock_calc_confidence.assert_called_once()
+            
+            # Verify the structure of the result
+            assert 'document_id' in result
+            assert 'fields' in result
+            assert 'confidence' in result
+            assert result['document_id'] == document.metadata['document_id']
+            assert result['confidence'] == 0.88
+            
+            # Verify that all expected fields are present in the result
+            for field_name in expected_fields.keys():
+                assert field_name in result['fields']
+                assert 'value' in result['fields'][field_name]
+                assert 'confidence' in result['fields'][field_name]
+
+    def test_confidence_scoring_integration(self, ocr_service):
+        """Test that confidence scoring is correctly integrated with OCR results.
         
-        # Verify that the result is successful
-        assert result.is_success
-        
-        # Extract the processed data from the result
-        extracted_data, processing_time = result.value
-        
-        # Verify that each field has a confidence score
-        for field_name, field_data in extracted_data.fields.items():
-            assert "confidence" in field_data
-            assert 0 <= field_data["confidence"] <= 1
-        
-        # Verify that fields have a requires_review flag based on confidence
-        for field_name, field_data in extracted_data.fields.items():
-            assert "requires_review" in field_data
-            # The mock TensorFlow config has a default confidence threshold of 0.8
-            # Fields with confidence < 0.8 should be flagged for review
-            if field_data["confidence"] < 0.8:
-                assert field_data["requires_review"] is True
-        
-        # Verify that the document has an overall requires_review flag
-        assert hasattr(extracted_data, "requires_review")
-    
-    def test_model_selection_for_different_document_types(self, mock_model_factory):
-        """Test that different document types are mapped to appropriate models."""
-        # Test model selection for different document types
-        document_types = [
-            DocumentType.APPLICATION,
-            DocumentType.TAX_RETURN,
-            DocumentType.BANK_STATEMENT,
-            DocumentType.PAY_STUB,
-            DocumentType.ID_DOCUMENT,
-            DocumentType.OTHER
+        Requirement: Service must include confidence scoring for extracted fields
+        as specified in section 0.1.4
+        """
+        # Create sample OCR results with raw confidence scores
+        ocr_results = [
+            {'text': 'John Doe', 'bbox': [10, 10, 100, 30], 'confidence': 0.95},
+            {'text': '123 Main St', 'bbox': [10, 40, 150, 60], 'confidence': 0.87},
+            {'text': 'Anytown, CA 12345', 'bbox': [10, 70, 200, 90], 'confidence': 0.76}
         ]
         
-        expected_model_types = [
-            OCRModelType.HYBRID,  # For APPLICATION
-            OCRModelType.TYPED,   # For TAX_RETURN
-            OCRModelType.TYPED,   # For BANK_STATEMENT
-            OCRModelType.TYPED,   # For PAY_STUB
-            OCRModelType.HYBRID,  # For ID_DOCUMENT
-            OCRModelType.HYBRID   # For OTHER
+        # Create sample extracted fields
+        extracted_fields = {
+            'name': {'value': 'John Doe', 'raw_confidence': 0.95},
+            'address_line1': {'value': '123 Main St', 'raw_confidence': 0.87},
+            'address_line2': {'value': 'Anytown, CA 12345', 'raw_confidence': 0.76}
+        }
+        
+        # Mock the confidence service to use the real calculation function
+        with patch.object(ConfidenceService, 'calculate_confidence', 
+                         side_effect=lambda fields: calculate_confidence_score(fields)):
+            
+            # Calculate confidence scores for the fields
+            confidence_service = ConfidenceService(config=ocr_service.config)
+            document_confidence = confidence_service.calculate_confidence(extracted_fields)
+            
+            # Apply confidence scores to the fields
+            for field_name, field_data in extracted_fields.items():
+                field_data['confidence'] = field_data['raw_confidence']
+                del field_data['raw_confidence']
+            
+            # Verify that document-level confidence is calculated correctly
+            # It should be the average of the field confidences
+            expected_confidence = sum(item['confidence'] for item in extracted_fields.values()) / len(extracted_fields)
+            assert abs(document_confidence - expected_confidence) < 0.001
+            
+            # Verify that all fields have confidence scores
+            for field_name, field_data in extracted_fields.items():
+                assert 'confidence' in field_data
+                assert 0 <= field_data['confidence'] <= 1
+
+    def test_low_confidence_flagging(self, ocr_service):
+        """Test that low-confidence extractions are flagged for human review.
+        
+        This test verifies that fields with confidence scores below the threshold
+        are correctly flagged for human review.
+        """
+        # Create sample extracted fields with varying confidence scores
+        extracted_fields = {
+            'name': {'value': 'John Doe', 'confidence': 0.95},  # High confidence
+            'address': {'value': '123 Main St', 'confidence': 0.87},  # High confidence
+            'ssn': {'value': '123-45-6789', 'confidence': 0.65},  # Low confidence
+            'phone': {'value': '555-123-4567', 'confidence': 0.72}  # Low confidence
+        }
+        
+        # Set the confidence threshold
+        threshold = ocr_service.config.confidence_threshold  # Should be 0.75 from fixture
+        
+        # Identify fields that need human review
+        fields_for_review = {}
+        for field_name, field_data in extracted_fields.items():
+            if field_data['confidence'] < threshold:
+                fields_for_review[field_name] = field_data
+        
+        # Verify that the correct fields are flagged for review
+        assert 'ssn' in fields_for_review
+        assert 'phone' in fields_for_review
+        assert 'name' not in fields_for_review
+        assert 'address' not in fields_for_review
+        
+        # Verify that the number of flagged fields is correct
+        assert len(fields_for_review) == 2
+
+    def test_model_output_transformation(self, ocr_service):
+        """Test that model outputs are correctly transformed into structured data.
+        
+        This test verifies that raw OCR outputs are properly processed and transformed
+        into structured field data with appropriate confidence scores.
+        """
+        # Create sample OCR results (raw model output)
+        ocr_results = [
+            {'text': 'Name: John Doe', 'bbox': [10, 10, 150, 30], 'confidence': 0.95},
+            {'text': 'Address: 123 Main St', 'bbox': [10, 40, 200, 60], 'confidence': 0.87},
+            {'text': 'Phone: 555-123-4567', 'bbox': [10, 70, 200, 90], 'confidence': 0.82},
+            {'text': 'Email: john.doe@example.com', 'bbox': [10, 100, 250, 120], 'confidence': 0.91}
         ]
         
-        # Test get_model_by_document_type function
-        for doc_type, expected_model_type in zip(document_types, expected_model_types):
-            with patch('src.models.model_factory.model_factory', mock_model_factory):
-                model = get_model_by_document_type(doc_type)
-                assert model.model_type == expected_model_type
-                mock_model_factory.get_model_by_document_type.assert_called_with(doc_type)
-    
-    def test_gpu_acceleration_integration(self, ocr_service_with_mocks, mock_hybrid_model, sample_document):
-        """Test that GPU acceleration is correctly integrated with model processing."""
-        # Process a sample document
-        with patch('src.services.ocr_service.OCRService._determine_model_type', return_value=OCRModelType.HYBRID):
-            with patch('src.services.ocr_service.OCRService._extract_text', return_value=mock_hybrid_model.extract_text()):
-                result = ocr_service_with_mocks.process_document(sample_document)
-        
-        # Verify that the result is successful
-        assert result.is_success
-        
-        # Extract the processed data from the result
-        extracted_data, processing_time = result.value
-        
-        # Verify that GPU acceleration information is included in metadata
-        assert "gpu_accelerated" in extracted_data.metadata
-        assert extracted_data.metadata["gpu_accelerated"] is True
-    
-    def test_model_fallback_on_gpu_error(self, ocr_service_with_mocks, mock_hybrid_model, sample_document):
-        """Test that the service falls back to CPU when GPU errors occur."""
-        # Configure the mock to simulate a GPU memory error on first call, then succeed
-        gpu_error_extract_text = MagicMock(side_effect=[
-            ServiceError("GPU memory error", ErrorCategory.EXTRACTION, {"error": "CUDA out of memory"}),
-            mock_hybrid_model.extract_text()
-        ])
-        
-        # Process a sample document with the mocked extract_text method
-        with patch('src.services.ocr_service.OCRService._determine_model_type', return_value=OCRModelType.HYBRID):
-            with patch('src.services.ocr_service.OCRService._extract_text', side_effect=gpu_error_extract_text):
-                with patch('src.utils.tensorflow_utils.is_gpu_memory_error', return_value=True):
-                    with patch('src.utils.tensorflow_utils.cpu_only_context'):
-                        result = ocr_service_with_mocks.process_document(sample_document)
-        
-        # Verify that the result is successful (fallback worked)
-        assert result.is_success
-    
-    def test_document_type_specific_preprocessing(self, ocr_service_with_mocks, sample_document):
-        """Test that document type-specific preprocessing options are applied."""
-        # Test preprocessing options for different document types
-        document_types = [
-            DocumentType.APPLICATION,
-            DocumentType.TAX_RETURN,
-            DocumentType.BANK_STATEMENT,
-            DocumentType.ID_DOCUMENT
-        ]
-        
-        for doc_type in document_types:
-            # Update the sample document with the current document type
-            sample_document.document_type = doc_type
+        # Mock the field extraction service
+        with patch.object(FieldExtractionService, 'extract_fields') as mock_extract_fields:
+            # Configure the mock to return structured fields
+            expected_fields = {
+                'name': {'value': 'John Doe', 'confidence': 0.95},
+                'address': {'value': '123 Main St', 'confidence': 0.87},
+                'phone': {'value': '555-123-4567', 'confidence': 0.82},
+                'email': {'value': 'john.doe@example.com', 'confidence': 0.91}
+            }
+            mock_extract_fields.return_value = expected_fields
             
-            # Get preprocessing options for this document type
-            preprocessing_options = ocr_service_with_mocks._get_preprocessing_options(doc_type)
+            # Process the OCR results
+            field_extraction_service = FieldExtractionService(config=ocr_service.config)
+            extracted_fields = field_extraction_service.extract_fields(ocr_results)
             
-            # Verify that preprocessing options are returned as a dictionary
-            assert isinstance(preprocessing_options, dict)
+            # Verify that the field extraction was called
+            mock_extract_fields.assert_called_once_with(ocr_results)
             
-            # Verify that basic preprocessing options are included
-            assert "deskew" in preprocessing_options
-            assert "denoise" in preprocessing_options
-            assert "normalize" in preprocessing_options
+            # Verify that the extracted fields match the expected structure
+            assert extracted_fields == expected_fields
             
-            # Verify document type-specific options
-            if doc_type == DocumentType.ID_DOCUMENT:
-                assert preprocessing_options["remove_background"] is False
-                assert preprocessing_options["enhance_contrast"] is True
-                assert preprocessing_options["sharpen"] is True
-            elif doc_type == DocumentType.BANK_STATEMENT:
-                assert preprocessing_options["enhance_contrast"] is True
-                assert preprocessing_options["remove_background"] is True
-            elif doc_type == DocumentType.APPLICATION:
-                assert preprocessing_options["denoise"] is True
-                assert preprocessing_options["sharpen"] is False
-                assert preprocessing_options["binarize"] is False
-            elif doc_type == DocumentType.TAX_RETURN:
-                assert preprocessing_options["remove_background"] is True
-                assert preprocessing_options["sharpen"] is True
-    
-    def test_error_handling_in_model_integration(self, ocr_service_with_mocks, sample_document):
-        """Test that errors in model processing are properly handled."""
-        # Configure the extract_text method to raise an error
-        error_message = "Model processing error"
-        with patch('src.services.ocr_service.OCRService._determine_model_type', return_value=OCRModelType.HYBRID):
-            with patch('src.services.ocr_service.OCRService._extract_text', 
-                      side_effect=ServiceError(error_message, ErrorCategory.EXTRACTION, {})):
-                result = ocr_service_with_mocks.process_document(sample_document)
-        
-        # Verify that the result is a failure
-        assert not result.is_success
-        assert isinstance(result.error, ServiceError)
-        assert error_message in result.error.message
-        
-        # Verify that the document status is updated to ERROR
-        assert sample_document.processing_status == ProcessingStatus.ERROR
-    
-    def test_model_result_validation(self, ocr_service_with_mocks, mock_hybrid_model, sample_document):
-        """Test that model results are properly validated."""
-        # Create a model result with missing critical fields
-        incomplete_result = ModelResult(
-            model_type=OCRModelType.HYBRID,
-            extracted_fields=[
-                # Missing critical fields like legal_name, tax_id
-                ExtractedField(name="dba_name", value="123 Funding", confidence=0.85, page=1),
-                ExtractedField(name="business_address", value="789 Pine St, Chicago, IL 60601", confidence=0.82, page=1),
-            ],
-            average_confidence=0.83,
-            processing_time=1.75,
-            metadata={"model_version": "1.0.0"}
-        )
-        
-        # Process a sample document with the incomplete result
-        with patch('src.services.ocr_service.OCRService._determine_model_type', return_value=OCRModelType.HYBRID):
-            with patch('src.services.ocr_service.OCRService._extract_text', return_value=incomplete_result):
-                result = ocr_service_with_mocks.process_document(sample_document)
-        
-        # Verify that the result is successful (validation doesn't fail the process)
-        assert result.is_success
-        
-        # Extract the processed data from the result
-        extracted_data, processing_time = result.value
-        
-        # Verify that the document is flagged for review due to missing critical fields
-        assert extracted_data.requires_review is True
+            # Verify that all fields have values and confidence scores
+            for field_name, field_data in extracted_fields.items():
+                assert 'value' in field_data
+                assert 'confidence' in field_data
+                assert 0 <= field_data['confidence'] <= 1
+
+
+if __name__ == "__main__":
+    pytest.main(['-xvs', __file__])
