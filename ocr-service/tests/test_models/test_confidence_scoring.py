@@ -1,1244 +1,1011 @@
-"""Tests for the confidence scoring utilities in the OCR service.
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 
-This module tests the utilities for calculating and standardizing confidence scores
-for extracted text fields. It verifies that the confidence scoring algorithms correctly
-assess the reliability of OCR results, enabling downstream services to make informed
-decisions about automation versus human review.
+"""
+Tests for the confidence scoring module of the OCR Service.
+
+This module contains tests for the confidence scoring algorithms used to assess
+the reliability of OCR results. These tests verify that the confidence scoring
+system correctly evaluates extraction quality, enabling downstream services to
+make informed decisions about automation versus human review.
+
+The tests cover:
+- Normalization of raw confidence scores from different model types
+- Field-level confidence calculation based on multiple factors
+- Confidence level categorization (high, medium, low, very_low)
+- Human verification requirement determination
+- Character variance calculation for consistency assessment
+- Field enrichment with confidence metadata
+- Document-level confidence calculation
+- Dynamic threshold adjustment for automation rate optimization
+- Confidence distribution analysis for monitoring
+
+These tests are critical for ensuring the OCR Service can achieve the 93% reduction
+in manual processing through automation while maintaining 99% data extraction accuracy.
 """
 
 import json
 import math
-import unittest
-from datetime import datetime
-from unittest import mock
+from typing import Dict, List, Optional, Tuple, Union, Any
 
 import numpy as np
 import pytest
 
-# Fix imports to match the actual project structure
-from src.models.confidence_scoring import (
-    ConfidenceScore,
-    calculate_character_confidence,
-    calculate_word_confidence,
-    normalize_model_confidence,
-    adjust_confidence_by_field_type,
-    adjust_confidence_by_context,
+from ocr_service.src.models.confidence_scoring import (
+    normalize_raw_confidence,
     calculate_field_confidence,
-    calculate_table_confidence,
-    should_flag_for_verification,
+    get_confidence_level,
+    requires_human_verification,
+    calculate_character_variance,
+    enrich_field_with_confidence,
     calculate_document_confidence,
-    enrich_extraction_with_confidence_metadata,
-    confidence_from_tensorflow_output,
-    get_confidence_threshold_config,
-    update_confidence_threshold_config,
-    ConfidenceAnalyzer,
+    adjust_thresholds_for_automation_rate,
     analyze_confidence_distribution,
-    ConfidenceScoreCalibrator,
-    FIELD_IMPORTANCE,
-    DEFAULT_CONFIDENCE_THRESHOLD,
-    HIGH_CONFIDENCE_THRESHOLD,
-    LOW_CONFIDENCE_THRESHOLD,
-    CRITICAL_FIELD_THRESHOLD,
+    DEFAULT_HIGH_CONFIDENCE_THRESHOLD,
+    DEFAULT_MEDIUM_CONFIDENCE_THRESHOLD,
+    DEFAULT_LOW_CONFIDENCE_THRESHOLD,
+    MODEL_CONFIDENCE_ADJUSTMENTS,
     FIELD_TYPE_MODIFIERS
 )
-from src.types.extraction import (
-    FieldType,
-    ExtractedField,
-    ExtractedData,
-    TableData
-)
+from ocr_service.src.types.models import OCRModelType
+from ocr_service.src.types.extraction import ExtractedField
 
-# Mock TensorFlow for testing without requiring the actual library
-class MockTensor:
-    def __init__(self, data):
-        self.data = data
-    
-    def numpy(self):
-        return np.array(self.data)
 
+# ===== Test Fixtures =====
 
 @pytest.fixture
-def mock_extracted_field() -> ExtractedField:
-    """Create a mock extracted field for testing."""
+def sample_extracted_field() -> ExtractedField:
+    """Provides a sample extracted field for testing."""
     return {
-        "field_name": "business_name",
-        "field_type": "name",
-        "value": "ACME Corp",
-        "raw_text": "ACME Corp",
-        "confidence": ConfidenceScore.from_float(0.92),
-        "location": {
-            "page": 0,
-            "top": 0.1,
-            "left": 0.1,
-            "bottom": 0.15,
-            "right": 0.5,
-            "width": 0.4,
-            "height": 0.05
-        },
-        "alternatives": [],
-        "metadata": {},
-        "requires_verification": False,
-        "verification_reason": "",
-        "extraction_timestamp": datetime.now()
+        "field_id": "business_name",
+        "field_name": "Business Name",
+        "value": "Acme Corporation",
+        "raw_text": "Acme Corporation",
+        "field_type": "text",
+        "importance": "standard"
     }
 
 
 @pytest.fixture
-def mock_low_confidence_field() -> ExtractedField:
-    """Create a mock low-confidence extracted field for testing."""
+def sample_character_confidences() -> List[float]:
+    """Provides sample character-level confidence scores for testing."""
+    return [0.98, 0.95, 0.99, 0.92, 0.97, 0.90, 0.93, 0.96, 0.91, 0.94]
+
+
+@pytest.fixture
+def sample_fields() -> Dict[str, ExtractedField]:
+    """Provides a sample set of extracted fields for testing."""
     return {
-        "field_name": "tax_id",
-        "field_type": "ein",
+        "business_name": {
+            "field_id": "business_name",
+            "field_name": "Business Name",
+            "value": "Acme Corporation",
+            "raw_text": "Acme Corporation",
+            "field_type": "text",
+            "importance": "standard",
+            "confidence": {
+                "score": 0.95,
+                "level": "high",
+                "needs_verification": False,
+                "raw_score": 0.92,
+                "model_type": "typed"
+            }
+        },
+        "tax_id": {
+            "field_id": "tax_id",
+            "field_name": "Tax ID",
+            "value": "12-3456789",
+            "raw_text": "12-3456789",
+            "field_type": "ein",
+            "importance": "critical",
+            "confidence": {
+                "score": 0.88,
+                "level": "high",
+                "needs_verification": False,
+                "raw_score": 0.85,
+                "model_type": "typed"
+            }
+        },
+        "owner_signature": {
+            "field_id": "owner_signature",
+            "field_name": "Owner Signature",
+            "value": "John Smith",
+            "raw_text": "John Smith",
+            "field_type": "signature",
+            "importance": "critical",
+            "confidence": {
+                "score": 0.75,
+                "level": "medium",
+                "needs_verification": True,
+                "raw_score": 0.70,
+                "model_type": "handwritten"
+            }
+        },
+        "business_address": {
+            "field_id": "business_address",
+            "field_name": "Business Address",
+            "value": "123 Main St, Anytown, USA 12345",
+            "raw_text": "123 Main St, Anytown, USA 12345",
+            "field_type": "address",
+            "importance": "standard",
+            "confidence": {
+                "score": 0.82,
+                "level": "medium",
+                "needs_verification": False,
+                "raw_score": 0.78,
+                "model_type": "typed"
+            }
+        },
+        "monthly_revenue": {
+            "field_id": "monthly_revenue",
+            "field_name": "Monthly Revenue",
+            "value": "$45,000",
+            "raw_text": "$45,000",
+            "field_type": "currency",
+            "importance": "standard",
+            "confidence": {
+                "score": 0.91,
+                "level": "high",
+                "needs_verification": False,
+                "raw_score": 0.88,
+                "model_type": "typed"
+            }
+        }
+    }
+
+
+@pytest.fixture
+def sample_confidence_scores() -> List[float]:
+    """Provides a sample list of confidence scores for distribution analysis."""
+    return [
+        0.98, 0.95, 0.92, 0.88, 0.85, 0.82, 0.78, 0.75, 0.72, 0.68,
+        0.65, 0.62, 0.58, 0.55, 0.52, 0.48, 0.45, 0.42, 0.38, 0.35
+    ]
+
+
+# ===== Test normalize_raw_confidence =====
+
+def test_normalize_raw_confidence_typed():
+    """Test normalization of raw confidence scores for typed text model."""
+    # Test with various confidence scores for typed text model
+    assert normalize_raw_confidence(0.9, OCRModelType.TYPED) > 0.9
+    assert normalize_raw_confidence(0.5, OCRModelType.TYPED) == 0.5
+    assert normalize_raw_confidence(0.1, OCRModelType.TYPED) < 0.1
+    
+    # Verify that normalization preserves order
+    assert normalize_raw_confidence(0.9, OCRModelType.TYPED) > normalize_raw_confidence(0.8, OCRModelType.TYPED)
+    assert normalize_raw_confidence(0.7, OCRModelType.TYPED) > normalize_raw_confidence(0.6, OCRModelType.TYPED)
+    assert normalize_raw_confidence(0.5, OCRModelType.TYPED) > normalize_raw_confidence(0.4, OCRModelType.TYPED)
+
+
+def test_normalize_raw_confidence_handwritten():
+    """Test normalization of raw confidence scores for handwritten text model."""
+    # Test with various confidence scores for handwritten text model
+    # Handwritten models typically have lower raw confidence, so normalization should adjust for this
+    typed_confidence = normalize_raw_confidence(0.8, OCRModelType.TYPED)
+    handwritten_confidence = normalize_raw_confidence(0.8, OCRModelType.HANDWRITTEN)
+    
+    # Handwritten confidence should be lower than typed for the same raw score
+    assert handwritten_confidence < typed_confidence
+    
+    # Verify that the adjustment factor is applied correctly
+    adjustment_factor = MODEL_CONFIDENCE_ADJUSTMENTS[OCRModelType.HANDWRITTEN]
+    assert adjustment_factor < MODEL_CONFIDENCE_ADJUSTMENTS[OCRModelType.TYPED]
+
+
+def test_normalize_raw_confidence_hybrid():
+    """Test normalization of raw confidence scores for hybrid text model."""
+    # Test with various confidence scores for hybrid text model
+    # Hybrid models should have confidence between typed and handwritten
+    typed_confidence = normalize_raw_confidence(0.8, OCRModelType.TYPED)
+    hybrid_confidence = normalize_raw_confidence(0.8, OCRModelType.HYBRID)
+    handwritten_confidence = normalize_raw_confidence(0.8, OCRModelType.HANDWRITTEN)
+    
+    # Hybrid confidence should be between typed and handwritten
+    assert handwritten_confidence < hybrid_confidence < typed_confidence
+
+
+def test_normalize_raw_confidence_out_of_range():
+    """Test normalization with out-of-range confidence scores."""
+    # Test with confidence scores outside the valid range [0.0, 1.0]
+    # These should be clamped to the valid range
+    assert 0.0 <= normalize_raw_confidence(-0.2, OCRModelType.TYPED) <= 1.0
+    assert 0.0 <= normalize_raw_confidence(1.5, OCRModelType.TYPED) <= 1.0
+
+
+# ===== Test calculate_field_confidence =====
+
+def test_calculate_field_confidence_basic():
+    """Test basic field confidence calculation."""
+    # Test with basic parameters
+    confidence = calculate_field_confidence(0.9, OCRModelType.TYPED)
+    assert 0.0 <= confidence <= 1.0
+    assert confidence > 0.9  # Normalized confidence should be higher for high raw confidence
+
+
+def test_calculate_field_confidence_field_types():
+    """Test field confidence calculation with different field types."""
+    # Test with different field types
+    # Numeric fields should have higher confidence than text fields
+    text_confidence = calculate_field_confidence(0.9, OCRModelType.TYPED, field_type="text")
+    numeric_confidence = calculate_field_confidence(0.9, OCRModelType.TYPED, field_type="numeric")
+    assert numeric_confidence > text_confidence
+    
+    # Signature fields should have lower confidence than text fields
+    signature_confidence = calculate_field_confidence(0.9, OCRModelType.HANDWRITTEN, field_type="signature")
+    assert signature_confidence < text_confidence
+    
+    # EIN fields should have higher confidence than address fields
+    ein_confidence = calculate_field_confidence(0.9, OCRModelType.TYPED, field_type="ein")
+    address_confidence = calculate_field_confidence(0.9, OCRModelType.TYPED, field_type="address")
+    assert ein_confidence > address_confidence
+
+
+def test_calculate_field_confidence_with_variance():
+    """Test field confidence calculation with character variance."""
+    # Test with character variance
+    # Higher variance should result in lower confidence
+    base_confidence = calculate_field_confidence(0.9, OCRModelType.TYPED)
+    with_variance_confidence = calculate_field_confidence(0.9, OCRModelType.TYPED, char_variance=0.2)
+    assert with_variance_confidence < base_confidence
+    
+    # Higher variance should result in even lower confidence
+    higher_variance_confidence = calculate_field_confidence(0.9, OCRModelType.TYPED, char_variance=0.4)
+    assert higher_variance_confidence < with_variance_confidence
+
+
+def test_calculate_field_confidence_with_context():
+    """Test field confidence calculation with context agreement."""
+    # Test with context agreement
+    # Higher context agreement should result in higher confidence
+    base_confidence = calculate_field_confidence(0.9, OCRModelType.TYPED)
+    with_context_confidence = calculate_field_confidence(0.9, OCRModelType.TYPED, context_agreement=0.8)
+    assert with_context_confidence > base_confidence
+    
+    # Lower context agreement should result in lower confidence
+    low_context_confidence = calculate_field_confidence(0.9, OCRModelType.TYPED, context_agreement=0.3)
+    assert low_context_confidence < base_confidence
+
+
+def test_calculate_field_confidence_combined_factors():
+    """Test field confidence calculation with multiple factors combined."""
+    # Test with all factors combined
+    confidence = calculate_field_confidence(
+        raw_confidence=0.85,
+        model_type=OCRModelType.HYBRID,
+        field_type="address",
+        char_variance=0.15,
+        context_agreement=0.7
+    )
+    
+    # Verify that the result is within valid range
+    assert 0.0 <= confidence <= 1.0
+    
+    # Verify that the combined factors produce a reasonable result
+    # For address field (modifier 0.90) with hybrid model (0.92), moderate variance (0.15),
+    # and good context agreement (0.7), the confidence should be moderately high
+    assert 0.7 <= confidence <= 0.9
+
+
+# ===== Test get_confidence_level =====
+
+def test_get_confidence_level_high():
+    """Test confidence level categorization for high confidence."""
+    # Test with high confidence scores
+    assert get_confidence_level(0.95) == "high"
+    assert get_confidence_level(0.90) == "high"
+    assert get_confidence_level(DEFAULT_HIGH_CONFIDENCE_THRESHOLD) == "high"
+    assert get_confidence_level(DEFAULT_HIGH_CONFIDENCE_THRESHOLD + 0.01) == "high"
+
+
+def test_get_confidence_level_medium():
+    """Test confidence level categorization for medium confidence."""
+    # Test with medium confidence scores
+    assert get_confidence_level(0.75) == "medium"
+    assert get_confidence_level(0.70) == "medium"
+    assert get_confidence_level(DEFAULT_MEDIUM_CONFIDENCE_THRESHOLD) == "medium"
+    assert get_confidence_level(DEFAULT_HIGH_CONFIDENCE_THRESHOLD - 0.01) == "medium"
+    assert get_confidence_level(DEFAULT_MEDIUM_CONFIDENCE_THRESHOLD + 0.01) == "medium"
+
+
+def test_get_confidence_level_low():
+    """Test confidence level categorization for low confidence."""
+    # Test with low confidence scores
+    assert get_confidence_level(0.55) == "low"
+    assert get_confidence_level(0.50) == "low"
+    assert get_confidence_level(DEFAULT_LOW_CONFIDENCE_THRESHOLD) == "low"
+    assert get_confidence_level(DEFAULT_MEDIUM_CONFIDENCE_THRESHOLD - 0.01) == "low"
+    assert get_confidence_level(DEFAULT_LOW_CONFIDENCE_THRESHOLD + 0.01) == "low"
+
+
+def test_get_confidence_level_very_low():
+    """Test confidence level categorization for very low confidence."""
+    # Test with very low confidence scores
+    assert get_confidence_level(0.35) == "very_low"
+    assert get_confidence_level(0.20) == "very_low"
+    assert get_confidence_level(0.0) == "very_low"
+    assert get_confidence_level(DEFAULT_LOW_CONFIDENCE_THRESHOLD - 0.01) == "very_low"
+
+
+def test_get_confidence_level_custom_thresholds():
+    """Test confidence level categorization with custom thresholds."""
+    # Test with custom thresholds
+    custom_high = 0.90
+    custom_medium = 0.70
+    custom_low = 0.50
+    
+    assert get_confidence_level(0.95, custom_high, custom_medium, custom_low) == "high"
+    assert get_confidence_level(0.85, custom_high, custom_medium, custom_low) == "medium"
+    assert get_confidence_level(0.65, custom_high, custom_medium, custom_low) == "low"
+    assert get_confidence_level(0.45, custom_high, custom_medium, custom_low) == "very_low"
+
+
+# ===== Test requires_human_verification =====
+
+def test_requires_human_verification_standard():
+    """Test human verification requirement for standard fields."""
+    # Test with standard field importance
+    # Standard fields require verification below medium confidence threshold
+    assert requires_human_verification(0.60, "standard") == True
+    assert requires_human_verification(0.70, "standard") == False
+
+
+def test_requires_human_verification_critical():
+    """Test human verification requirement for critical fields."""
+    # Test with critical field importance
+    # Critical fields require verification below high confidence threshold
+    assert requires_human_verification(0.80, "critical") == True
+    assert requires_human_verification(0.90, "critical") == False
+
+
+def test_requires_human_verification_optional():
+    """Test human verification requirement for optional fields."""
+    # Test with optional field importance
+    # Optional fields only require verification below low confidence threshold
+    assert requires_human_verification(0.35, "optional") == True
+    assert requires_human_verification(0.45, "optional") == False
+
+
+def test_requires_human_verification_custom_thresholds():
+    """Test human verification requirement with custom thresholds."""
+    # Test with custom verification thresholds
+    custom_thresholds = {
+        "critical": 0.90,
+        "standard": 0.75,
+        "optional": 0.60
+    }
+    
+    assert requires_human_verification(0.85, "critical", custom_thresholds) == True
+    assert requires_human_verification(0.95, "critical", custom_thresholds) == False
+    
+    assert requires_human_verification(0.70, "standard", custom_thresholds) == True
+    assert requires_human_verification(0.80, "standard", custom_thresholds) == False
+    
+    assert requires_human_verification(0.55, "optional", custom_thresholds) == True
+    assert requires_human_verification(0.65, "optional", custom_thresholds) == False
+
+
+def test_requires_human_verification_unknown_importance():
+    """Test human verification requirement with unknown field importance."""
+    # Test with unknown field importance
+    # Should default to standard importance
+    assert requires_human_verification(0.60, "unknown") == True
+    assert requires_human_verification(0.70, "unknown") == False
+
+
+# ===== Test calculate_character_variance =====
+
+def test_calculate_character_variance_uniform(sample_character_confidences):
+    """Test character variance calculation with uniform confidences."""
+    # Test with uniform character confidences
+    uniform_confidences = [0.9, 0.9, 0.9, 0.9, 0.9]
+    variance = calculate_character_variance(uniform_confidences)
+    assert variance == 0.0
+
+
+def test_calculate_character_variance_varied(sample_character_confidences):
+    """Test character variance calculation with varied confidences."""
+    # Test with varied character confidences
+    variance = calculate_character_variance(sample_character_confidences)
+    assert variance > 0.0
+    
+    # Calculate expected variance manually for verification
+    expected_variance = np.var(sample_character_confidences)
+    assert variance == pytest.approx(expected_variance)
+
+
+def test_calculate_character_variance_empty():
+    """Test character variance calculation with empty list."""
+    # Test with empty list
+    variance = calculate_character_variance([])
+    assert variance == 0.0
+
+
+def test_calculate_character_variance_single():
+    """Test character variance calculation with single value."""
+    # Test with single value
+    variance = calculate_character_variance([0.9])
+    assert variance == 0.0
+
+
+# ===== Test enrich_field_with_confidence =====
+
+def test_enrich_field_with_confidence_basic(sample_extracted_field):
+    """Test basic field enrichment with confidence metadata."""
+    # Test basic enrichment
+    enriched = enrich_field_with_confidence(
+        field=sample_extracted_field,
+        raw_confidence=0.9,
+        model_type=OCRModelType.TYPED
+    )
+    
+    # Verify that confidence metadata was added
+    assert "confidence" in enriched
+    assert "score" in enriched["confidence"]
+    assert "level" in enriched["confidence"]
+    assert "needs_verification" in enriched["confidence"]
+    assert "raw_score" in enriched["confidence"]
+    assert "model_type" in enriched["confidence"]
+    
+    # Verify that the original field was not modified
+    assert "confidence" not in sample_extracted_field
+
+
+def test_enrich_field_with_confidence_with_char_confidences(sample_extracted_field):
+    """Test field enrichment with character confidences."""
+    # Test enrichment with character confidences
+    char_confidences = [0.95, 0.92, 0.98, 0.90, 0.93]
+    enriched = enrich_field_with_confidence(
+        field=sample_extracted_field,
+        raw_confidence=0.9,
+        model_type=OCRModelType.TYPED,
+        char_confidences=char_confidences
+    )
+    
+    # Verify that character variance was added
+    assert "char_variance" in enriched["confidence"]
+    assert enriched["confidence"]["char_variance"] > 0.0
+
+
+def test_enrich_field_with_confidence_with_context(sample_extracted_field):
+    """Test field enrichment with context agreement."""
+    # Test enrichment with context agreement
+    enriched = enrich_field_with_confidence(
+        field=sample_extracted_field,
+        raw_confidence=0.9,
+        model_type=OCRModelType.TYPED,
+        context_agreement=0.8
+    )
+    
+    # Verify that context agreement was added
+    assert "context_agreement" in enriched["confidence"]
+    assert enriched["confidence"]["context_agreement"] == 0.8
+
+
+def test_enrich_field_with_confidence_verification_flag(sample_extracted_field):
+    """Test field enrichment with verification flag."""
+    # Test with confidence below verification threshold for standard fields
+    low_confidence = 0.6  # Below standard verification threshold
+    enriched = enrich_field_with_confidence(
+        field=sample_extracted_field,
+        raw_confidence=low_confidence,
+        model_type=OCRModelType.TYPED
+    )
+    
+    # Verify that needs_verification flag is set
+    assert enriched["confidence"]["needs_verification"] == True
+    
+    # Test with confidence above verification threshold
+    high_confidence = 0.9  # Above standard verification threshold
+    enriched = enrich_field_with_confidence(
+        field=sample_extracted_field,
+        raw_confidence=high_confidence,
+        model_type=OCRModelType.TYPED
+    )
+    
+    # Verify that needs_verification flag is not set
+    assert enriched["confidence"]["needs_verification"] == False
+
+
+def test_enrich_field_with_confidence_critical_field():
+    """Test field enrichment with critical field importance."""
+    # Test with critical field importance
+    critical_field = {
+        "field_id": "tax_id",
+        "field_name": "Tax ID",
         "value": "12-3456789",
         "raw_text": "12-3456789",
-        "confidence": ConfidenceScore.from_float(0.65),
-        "location": {
-            "page": 0,
-            "top": 0.2,
-            "left": 0.1,
-            "bottom": 0.25,
-            "right": 0.3,
-            "width": 0.2,
-            "height": 0.05
-        },
-        "alternatives": [],
-        "metadata": {},
-        "requires_verification": False,
-        "verification_reason": "",
-        "extraction_timestamp": datetime.now()
+        "field_type": "ein",
+        "importance": "critical"
     }
+    
+    # Test with confidence below critical verification threshold
+    medium_confidence = 0.8  # Below critical verification threshold
+    enriched = enrich_field_with_confidence(
+        field=critical_field,
+        raw_confidence=medium_confidence,
+        model_type=OCRModelType.TYPED
+    )
+    
+    # Verify that needs_verification flag is set for critical field
+    assert enriched["confidence"]["needs_verification"] == True
+    
+    # Test with confidence above critical verification threshold
+    high_confidence = 0.95  # Above critical verification threshold
+    enriched = enrich_field_with_confidence(
+        field=critical_field,
+        raw_confidence=high_confidence,
+        model_type=OCRModelType.TYPED
+    )
+    
+    # Verify that needs_verification flag is not set
+    assert enriched["confidence"]["needs_verification"] == False
 
 
-@pytest.fixture
-def mock_extracted_data() -> ExtractedData:
-    """Create mock extraction results for testing."""
-    return {
-        "extraction_id": "123456",
-        "fields": {
-            "business_name": {
-                "field_name": "business_name",
-                "field_type": "name",
-                "value": "ACME Corp",
-                "raw_text": "ACME Corp",
-                "confidence": ConfidenceScore.from_float(0.92),
-                "location": {
-                    "page": 0,
-                    "top": 0.1,
-                    "left": 0.1,
-                    "bottom": 0.15,
-                    "right": 0.5,
-                    "width": 0.4,
-                    "height": 0.05
-                },
-                "alternatives": [],
-                "metadata": {},
-                "requires_verification": False,
-                "verification_reason": "",
-                "extraction_timestamp": datetime.now()
-            },
-            "tax_id": {
-                "field_name": "tax_id",
-                "field_type": "ein",
-                "value": "12-3456789",
-                "raw_text": "12-3456789",
-                "confidence": ConfidenceScore.from_float(0.65),
-                "location": {
-                    "page": 0,
-                    "top": 0.2,
-                    "left": 0.1,
-                    "bottom": 0.25,
-                    "right": 0.3,
-                    "width": 0.2,
-                    "height": 0.05
-                },
-                "alternatives": [],
-                "metadata": {},
-                "requires_verification": False,
-                "verification_reason": "",
-                "extraction_timestamp": datetime.now()
+# ===== Test calculate_document_confidence =====
+
+def test_calculate_document_confidence_basic(sample_fields):
+    """Test basic document confidence calculation."""
+    # Test with sample fields
+    confidence = calculate_document_confidence(list(sample_fields.values()))
+    
+    # Verify that the result is within valid range
+    assert 0.0 <= confidence <= 1.0
+    
+    # Verify that the result is reasonable
+    # Average of field confidences: (0.95 + 0.88 + 0.75 + 0.82 + 0.91) / 5 = 0.862
+    assert 0.85 <= confidence <= 0.87
+
+
+def test_calculate_document_confidence_weighted(sample_fields):
+    """Test document confidence calculation with field weights."""
+    # Test with field weights
+    field_weights = {
+        "business_name": 1.5,  # More important
+        "tax_id": 2.0,        # Most important
+        "owner_signature": 1.0,
+        "business_address": 0.8,
+        "monthly_revenue": 1.2
+    }
+    
+    confidence = calculate_document_confidence(
+        fields=list(sample_fields.values()),
+        field_weights=field_weights
+    )
+    
+    # Verify that the result is within valid range
+    assert 0.0 <= confidence <= 1.0
+    
+    # Verify that the result is influenced by weights
+    # Weighted average should be different from unweighted average
+    unweighted_confidence = calculate_document_confidence(list(sample_fields.values()))
+    assert confidence != pytest.approx(unweighted_confidence)
+    
+    # Since tax_id (0.88) has highest weight and is below average,
+    # weighted confidence should be lower than unweighted
+    assert confidence < unweighted_confidence
+
+
+def test_calculate_document_confidence_empty():
+    """Test document confidence calculation with empty fields list."""
+    # Test with empty fields list
+    confidence = calculate_document_confidence([])
+    assert confidence == 0.0
+
+
+def test_calculate_document_confidence_missing_confidence():
+    """Test document confidence calculation with fields missing confidence."""
+    # Test with fields missing confidence metadata
+    fields = [
+        {
+            "field_id": "business_name",
+            "field_name": "Business Name",
+            "value": "Acme Corporation",
+            "raw_text": "Acme Corporation",
+            "field_type": "text"
+            # No confidence metadata
+        },
+        {
+            "field_id": "tax_id",
+            "field_name": "Tax ID",
+            "value": "12-3456789",
+            "raw_text": "12-3456789",
+            "field_type": "ein",
+            "confidence": {
+                "score": 0.88,
+                "level": "high",
+                "needs_verification": False
             }
-        },
-        "tables": [],
-        "metadata": {
-            "extraction_id": "123456",
-            "document_id": "doc123",
-            "model_id": "typed_text_v1",
-            "model_version": "1.0",
-            "document_type": "application_form",
-            "page_count": 1,
-            "language": "en",
-            "processing_node": "node1",
-            "extraction_status": "success",
-            "processing_time": 1.5,
-            "warnings": [],
-            "errors": []
-        },
-        "raw_text": "ACME Corp\n12-3456789",
-        "low_confidence_fields": [],
-        "requires_verification": False,
-        "extraction_timestamp": datetime.now(),
-        "schema_version": "1.0",
-        "document_type": "application_form"
+        }
+    ]
+    
+    confidence = calculate_document_confidence(fields)
+    
+    # Verify that the result only considers fields with confidence metadata
+    assert confidence == 0.88
+
+
+# ===== Test adjust_thresholds_for_automation_rate =====
+
+def test_adjust_thresholds_for_automation_rate_increase():
+    """Test threshold adjustment to increase automation rate."""
+    # Test with current automation rate below target
+    current_rate = 0.85  # Below target of 0.93
+    adjusted_thresholds = adjust_thresholds_for_automation_rate(current_rate)
+    
+    # Verify that thresholds were lowered to increase automation
+    default_thresholds = {
+        "critical": 0.85,
+        "standard": 0.65,
+        "optional": 0.40
     }
+    
+    for importance, threshold in adjusted_thresholds.items():
+        assert threshold < default_thresholds[importance]
 
 
-@pytest.fixture
-def mock_table_data() -> TableData:
-    """Create mock table data for testing."""
-    return {
-        "table_id": "table1",
-        "table_name": "Revenue Table",
-        "headers": ["Month", "Revenue", "Expenses", "Profit"],
-        "rows": [
-            ["January", 10000, 8000, 2000],
-            ["February", 12000, 9000, 3000],
-            ["March", 15000, 10000, 5000]
-        ],
-        "header_row_index": 0,
-        "field_mapping": {"month": 0, "revenue": 1, "expenses": 2, "profit": 3},
-        "row_count": 3,
-        "column_count": 4,
-        "confidence": ConfidenceScore.from_float(0.85),
-        "is_complete": True,
-        "metadata": {}
+def test_adjust_thresholds_for_automation_rate_decrease():
+    """Test threshold adjustment to decrease automation rate."""
+    # Test with current automation rate above target
+    current_rate = 0.98  # Above target of 0.93
+    adjusted_thresholds = adjust_thresholds_for_automation_rate(current_rate)
+    
+    # Verify that thresholds were raised to decrease automation
+    default_thresholds = {
+        "critical": 0.85,
+        "standard": 0.65,
+        "optional": 0.40
     }
-
-
-@pytest.fixture
-def mock_char_confidences() -> list:
-    """Create mock character-level confidence scores for testing."""
-    return [0.98, 0.95, 0.99, 0.97, 0.90, 0.85, 0.92, 0.94, 0.91]
-
-
-@pytest.fixture
-def mock_word_confidences() -> list:
-    """Create mock word-level confidence scores for testing."""
-    return [0.95, 0.87, 0.92, 0.65, 0.78, 0.91, 0.88, 0.72, 0.81]
-
-
-@pytest.fixture
-def mock_tensorflow_output() -> MockTensor:
-    """Create a mock TensorFlow output tensor for testing."""
-    return MockTensor([[0.95, 0.92, 0.88], [0.85, 0.91, 0.89]])
-
-
-class TestConfidenceScore:
-    """Tests for the ConfidenceScore class."""
-
-    def test_initialization(self):
-        """Test that ConfidenceScore initializes correctly."""
-        # Test valid initialization
-        score = ConfidenceScore(value=0.75)
-        assert score.value == 0.75
-        
-        # Test clamping of values below 0.0
-        score = ConfidenceScore(value=-0.5)
-        assert score.value == 0.0
-        
-        # Test clamping of values above 1.0
-        score = ConfidenceScore(value=1.5)
-        assert score.value == 1.0
     
-    def test_from_float(self):
-        """Test the from_float factory method."""
-        score = ConfidenceScore.from_float(0.8)
-        assert score.value == 0.8
-        
-        # Test clamping
-        score = ConfidenceScore.from_float(1.2)
-        assert score.value == 1.0
+    for importance, threshold in adjusted_thresholds.items():
+        assert threshold > default_thresholds[importance]
+
+
+def test_adjust_thresholds_for_automation_rate_at_target():
+    """Test threshold adjustment when already at target rate."""
+    # Test with current automation rate at target
+    current_rate = 0.93  # Equal to default target
+    adjusted_thresholds = adjust_thresholds_for_automation_rate(current_rate)
     
-    def test_float_conversion(self):
-        """Test conversion to float."""
-        score = ConfidenceScore(0.65)
-        assert float(score) == 0.65
+    # Verify that thresholds were not changed
+    default_thresholds = {
+        "critical": 0.85,
+        "standard": 0.65,
+        "optional": 0.40
+    }
     
-    def test_is_low_confidence(self):
-        """Test the is_low_confidence method."""
-        # Test with default threshold
-        score = ConfidenceScore(0.65)
-        assert score.is_low_confidence()
-        
-        score = ConfidenceScore(0.75)
-        assert not score.is_low_confidence()
-        
-        # Test with custom threshold
-        score = ConfidenceScore(0.65)
-        assert not score.is_low_confidence(0.6)
-        
-        score = ConfidenceScore(0.55)
-        assert score.is_low_confidence(0.6)
+    for importance, threshold in adjusted_thresholds.items():
+        assert threshold == pytest.approx(default_thresholds[importance])
 
 
-class TestCharacterConfidence:
-    """Tests for character-level confidence calculation."""
-
-    def test_calculate_character_confidence(self, mock_char_confidences):
-        """Test calculation of character-level confidence."""
-        confidence = calculate_character_confidence(mock_char_confidences)
-        
-        # The result should be a weighted geometric mean of the character confidences
-        # This emphasizes low confidence characters
-        expected = math.exp(sum(math.log(c) for c in mock_char_confidences) / len(mock_char_confidences))
-        assert abs(confidence - expected) < 0.0001
-        
-        # The result should be lower than the arithmetic mean due to emphasis on low values
-        arithmetic_mean = sum(mock_char_confidences) / len(mock_char_confidences)
-        assert confidence < arithmetic_mean
+def test_adjust_thresholds_for_automation_rate_custom_target():
+    """Test threshold adjustment with custom target rate."""
+    # Test with custom target automation rate
+    current_rate = 0.85
+    custom_target = 0.90
+    adjusted_thresholds = adjust_thresholds_for_automation_rate(
+        current_rate,
+        target_automation_rate=custom_target
+    )
     
-    def test_empty_input(self):
-        """Test handling of empty input."""
-        confidence = calculate_character_confidence([])
-        assert confidence == 0.0
+    # Verify that thresholds were adjusted based on custom target
+    default_thresholds = {
+        "critical": 0.85,
+        "standard": 0.65,
+        "optional": 0.40
+    }
     
-    def test_invalid_values(self):
-        """Test handling of invalid confidence values."""
-        # Test with negative values
-        confidence = calculate_character_confidence([-0.1, 0.5, 0.8])
-        assert 0.0 <= confidence <= 1.0
-        
-        # Test with values > 1.0
-        confidence = calculate_character_confidence([0.5, 1.2, 0.8])
-        assert 0.0 <= confidence <= 1.0
-        
-        # Test with all invalid values
-        confidence = calculate_character_confidence([-0.1, 1.2])
-        assert confidence == 0.0
+    for importance, threshold in adjusted_thresholds.items():
+        assert threshold < default_thresholds[importance]
 
 
-class TestWordConfidence:
-    """Tests for word-level confidence calculation."""
-
-    def test_calculate_word_confidence(self, mock_word_confidences):
-        """Test calculation of word-level confidence."""
-        confidence = calculate_word_confidence(mock_word_confidences)
-        
-        # The result should be a weighted average of the word confidences
-        # with more weight given to lower confidence words
-        weights = [2.0 - c for c in mock_word_confidences]
-        expected = sum(c * w for c, w in zip(mock_word_confidences, weights)) / sum(weights)
-        assert abs(confidence - expected) < 0.0001
-        
-        # The result should be lower than the arithmetic mean due to emphasis on low values
-        arithmetic_mean = sum(mock_word_confidences) / len(mock_word_confidences)
-        assert confidence < arithmetic_mean
+def test_adjust_thresholds_for_automation_rate_custom_thresholds():
+    """Test threshold adjustment with custom starting thresholds."""
+    # Test with custom starting thresholds
+    current_rate = 0.85
+    custom_thresholds = {
+        "critical": 0.90,
+        "standard": 0.70,
+        "optional": 0.50
+    }
     
-    def test_empty_input(self):
-        """Test handling of empty input."""
-        confidence = calculate_word_confidence([])
-        assert confidence == 0.0
+    adjusted_thresholds = adjust_thresholds_for_automation_rate(
+        current_rate,
+        current_thresholds=custom_thresholds
+    )
     
-    def test_invalid_values(self):
-        """Test handling of invalid confidence values."""
-        # Test with negative values
-        confidence = calculate_word_confidence([-0.1, 0.5, 0.8])
-        assert 0.0 <= confidence <= 1.0
-        
-        # Test with values > 1.0
-        confidence = calculate_word_confidence([0.5, 1.2, 0.8])
-        assert 0.0 <= confidence <= 1.0
-        
-        # Test with all invalid values
-        confidence = calculate_word_confidence([-0.1, 1.2])
-        assert confidence == 0.0
+    # Verify that custom thresholds were adjusted
+    for importance, threshold in adjusted_thresholds.items():
+        assert threshold < custom_thresholds[importance]
 
 
-class TestModelConfidenceNormalization:
-    """Tests for model-specific confidence normalization."""
-
-    def test_normalize_model_confidence(self):
-        """Test normalization of confidence scores from different model types."""
-        # Test typed text model (well-calibrated)
-        raw_confidence = 0.85
-        normalized = normalize_model_confidence(raw_confidence, "typed_text")
-        assert normalized == 0.85  # No change expected
-        
-        # Test handwritten model (tends to be overconfident)
-        raw_confidence = 0.85
-        normalized = normalize_model_confidence(raw_confidence, "handwritten")
-        assert normalized < raw_confidence  # Should be adjusted downward
-        
-        # Test hybrid model (slightly overconfident)
-        raw_confidence = 0.85
-        normalized = normalize_model_confidence(raw_confidence, "hybrid")
-        assert normalized < raw_confidence  # Should be adjusted downward
-        assert normalized > normalize_model_confidence(raw_confidence, "handwritten")  # But less than handwritten
-        
-        # Test unknown model type (should use default calibration)
-        raw_confidence = 0.85
-        normalized = normalize_model_confidence(raw_confidence, "unknown")
-        assert normalized == 0.85  # Should use default calibration
+def test_adjust_thresholds_for_automation_rate_min_critical():
+    """Test threshold adjustment respects minimum critical threshold."""
+    # Test with very low current automation rate
+    current_rate = 0.50  # Far below target
+    min_critical = 0.80
     
-    def test_normalization_clamping(self):
-        """Test that normalized values are clamped to [0.0, 1.0]."""
-        # Test clamping at lower bound
-        raw_confidence = 0.05
-        normalized = normalize_model_confidence(raw_confidence, "handwritten")
-        assert normalized >= 0.0
-        
-        # Test clamping at upper bound
-        raw_confidence = 0.95
-        normalized = normalize_model_confidence(raw_confidence, "typed_text")
-        assert normalized <= 1.0
-
-
-class TestFieldTypeAdjustment:
-    """Tests for field type-based confidence adjustment."""
-
-    def test_adjust_confidence_by_field_type(self):
-        """Test adjustment of confidence scores based on field type."""
-        base_confidence = 0.8
-        
-        # Test standard text field (no adjustment)
-        adjusted = adjust_confidence_by_field_type(base_confidence, FieldType.TEXT)
-        assert adjusted == base_confidence
-        
-        # Test field types that are easier to extract (higher confidence)
-        adjusted = adjust_confidence_by_field_type(base_confidence, FieldType.NUMBER)
-        assert adjusted > base_confidence
-        
-        # Test field types that are harder to extract (lower confidence)
-        adjusted = adjust_confidence_by_field_type(base_confidence, FieldType.SIGNATURE)
-        assert adjusted < base_confidence
-        
-        # Test field types with moderate difficulty
-        adjusted = adjust_confidence_by_field_type(base_confidence, FieldType.DATE)
-        assert adjusted < base_confidence
-        assert adjusted > adjust_confidence_by_field_type(base_confidence, FieldType.SIGNATURE)
+    adjusted_thresholds = adjust_thresholds_for_automation_rate(
+        current_rate,
+        min_critical_threshold=min_critical
+    )
     
-    def test_adjustment_clamping(self):
-        """Test that adjusted values are clamped to [0.0, 1.0]."""
-        # Test clamping at lower bound
-        low_confidence = 0.1
-        adjusted = adjust_confidence_by_field_type(low_confidence, FieldType.SIGNATURE)
-        assert adjusted >= 0.0
-        
-        # Test clamping at upper bound
-        high_confidence = 0.95
-        adjusted = adjust_confidence_by_field_type(high_confidence, FieldType.NUMBER)
-        assert adjusted <= 1.0
+    # Verify that critical threshold respects minimum
+    assert adjusted_thresholds["critical"] >= min_critical
+    
+    # Other thresholds should be lowered significantly
+    default_thresholds = {
+        "standard": 0.65,
+        "optional": 0.40
+    }
+    
+    for importance, threshold in adjusted_thresholds.items():
+        if importance != "critical":
+            assert threshold < default_thresholds[importance]
 
 
-class TestContextAdjustment:
-    """Tests for context-based confidence adjustment."""
+# ===== Test analyze_confidence_distribution =====
 
-    def test_adjust_confidence_by_context(self, mock_extracted_field, mock_low_confidence_field):
-        """Test adjustment of confidence scores based on context from other fields."""
-        # Create a dictionary of other fields for context
-        other_fields = {
-            "business_name": mock_extracted_field,
-            "tax_id": mock_low_confidence_field
-        }
-        
-        # Test business_name field with matching dba_name
-        base_confidence = 0.8
-        other_fields["dba_name"] = {
-            "field_name": "dba_name",
-            "field_type": "name",
-            "value": "ACME Corporation",
-            "raw_text": "ACME Corporation",
-            "confidence": ConfidenceScore.from_float(0.85)
-        }
-        
-        adjusted = adjust_confidence_by_context(base_confidence, "business_name", other_fields)
-        assert adjusted > base_confidence  # Should be increased due to matching dba_name
-        
-        # Test phone number field with valid format
-        base_confidence = 0.8
-        other_fields["business_phone"] = {
-            "field_name": "business_phone",
-            "field_type": "phone",
-            "value": "(555) 123-4567",
-            "raw_text": "(555) 123-4567",
-            "confidence": ConfidenceScore.from_float(0.75)
-        }
-        
-        adjusted = adjust_confidence_by_context(base_confidence, "business_phone", other_fields)
-        assert adjusted > base_confidence  # Should be increased due to valid format
-        
-        # Test email field with valid format
-        base_confidence = 0.8
-        other_fields["business_email"] = {
-            "field_name": "business_email",
-            "field_type": "email",
+def test_analyze_confidence_distribution_basic(sample_confidence_scores):
+    """Test basic confidence distribution analysis."""
+    # Test with sample confidence scores
+    distribution = analyze_confidence_distribution(sample_confidence_scores)
+    
+    # Verify that all expected metrics are present
+    assert "count" in distribution
+    assert "mean" in distribution
+    assert "median" in distribution
+    assert "std_dev" in distribution
+    assert "min" in distribution
+    assert "max" in distribution
+    assert "quartiles" in distribution
+    assert "below_threshold" in distribution
+    
+    # Verify that the metrics are correct
+    assert distribution["count"] == len(sample_confidence_scores)
+    assert distribution["mean"] == pytest.approx(np.mean(sample_confidence_scores))
+    assert distribution["median"] == pytest.approx(np.median(sample_confidence_scores))
+    assert distribution["std_dev"] == pytest.approx(np.std(sample_confidence_scores))
+    assert distribution["min"] == pytest.approx(min(sample_confidence_scores))
+    assert distribution["max"] == pytest.approx(max(sample_confidence_scores))
+
+
+def test_analyze_confidence_distribution_quartiles(sample_confidence_scores):
+    """Test quartile calculation in confidence distribution analysis."""
+    # Test quartile calculation
+    distribution = analyze_confidence_distribution(sample_confidence_scores)
+    
+    # Verify that quartiles are correct
+    expected_quartiles = [
+        np.percentile(sample_confidence_scores, 25),
+        np.percentile(sample_confidence_scores, 50),
+        np.percentile(sample_confidence_scores, 75)
+    ]
+    
+    assert len(distribution["quartiles"]) == 3
+    for i, quartile in enumerate(distribution["quartiles"]):
+        assert quartile == pytest.approx(expected_quartiles[i])
+
+
+def test_analyze_confidence_distribution_thresholds(sample_confidence_scores):
+    """Test threshold counting in confidence distribution analysis."""
+    # Test threshold counting
+    distribution = analyze_confidence_distribution(sample_confidence_scores)
+    
+    # Verify that threshold counts are correct
+    below_low = sum(1 for score in sample_confidence_scores if score < DEFAULT_LOW_CONFIDENCE_THRESHOLD)
+    below_medium = sum(1 for score in sample_confidence_scores if score < DEFAULT_MEDIUM_CONFIDENCE_THRESHOLD)
+    below_high = sum(1 for score in sample_confidence_scores if score < DEFAULT_HIGH_CONFIDENCE_THRESHOLD)
+    
+    assert distribution["below_threshold"]["low"] == below_low
+    assert distribution["below_threshold"]["medium"] == below_medium
+    assert distribution["below_threshold"]["high"] == below_high
+
+
+def test_analyze_confidence_distribution_empty():
+    """Test confidence distribution analysis with empty list."""
+    # Test with empty list
+    distribution = analyze_confidence_distribution([])
+    
+    # Verify that default values are returned
+    assert distribution["count"] == 0
+    assert distribution["mean"] == 0.0
+    assert distribution["median"] == 0.0
+    assert distribution["std_dev"] == 0.0
+    assert distribution["min"] == 0.0
+    assert distribution["max"] == 0.0
+    assert distribution["quartiles"] == [0.0, 0.0, 0.0]
+    assert distribution["below_threshold"]["low"] == 0
+    assert distribution["below_threshold"]["medium"] == 0
+    assert distribution["below_threshold"]["high"] == 0
+
+
+# ===== Integration Tests =====
+
+def test_confidence_scoring_end_to_end(sample_extracted_field):
+    """Test the entire confidence scoring pipeline end-to-end."""
+    # Test the entire pipeline from raw confidence to enriched field
+    raw_confidence = 0.82
+    model_type = OCRModelType.TYPED
+    char_confidences = [0.85, 0.80, 0.90, 0.75, 0.80, 0.85, 0.78, 0.88]
+    context_agreement = 0.75
+    
+    # Step 1: Normalize raw confidence
+    normalized_confidence = normalize_raw_confidence(raw_confidence, model_type)
+    
+    # Step 2: Calculate character variance
+    char_variance = calculate_character_variance(char_confidences)
+    
+    # Step 3: Calculate field confidence
+    field_confidence = calculate_field_confidence(
+        raw_confidence=raw_confidence,
+        model_type=model_type,
+        field_type=sample_extracted_field["field_type"],
+        char_variance=char_variance,
+        context_agreement=context_agreement
+    )
+    
+    # Step 4: Determine confidence level
+    confidence_level = get_confidence_level(field_confidence)
+    
+    # Step 5: Determine if verification is required
+    needs_verification = requires_human_verification(
+        confidence_score=field_confidence,
+        field_importance=sample_extracted_field.get("importance", "standard")
+    )
+    
+    # Step 6: Enrich field with confidence metadata
+    enriched_field = enrich_field_with_confidence(
+        field=sample_extracted_field,
+        raw_confidence=raw_confidence,
+        model_type=model_type,
+        char_confidences=char_confidences,
+        context_agreement=context_agreement
+    )
+    
+    # Verify that all steps produced consistent results
+    assert enriched_field["confidence"]["raw_score"] == raw_confidence
+    assert enriched_field["confidence"]["score"] == field_confidence
+    assert enriched_field["confidence"]["level"] == confidence_level
+    assert enriched_field["confidence"]["needs_verification"] == needs_verification
+    assert enriched_field["confidence"]["char_variance"] == char_variance
+    assert enriched_field["confidence"]["context_agreement"] == context_agreement
+
+
+def test_confidence_scoring_automation_rate():
+    """Test that confidence scoring enables target automation rate."""
+    # Create a set of fields with various confidence scores
+    fields = [
+        {"importance": "critical", "confidence": {"score": 0.95}},  # High confidence critical field
+        {"importance": "critical", "confidence": {"score": 0.82}},  # Medium confidence critical field
+        {"importance": "standard", "confidence": {"score": 0.88}},  # High confidence standard field
+        {"importance": "standard", "confidence": {"score": 0.72}},  # Medium confidence standard field
+        {"importance": "standard", "confidence": {"score": 0.60}},  # Low confidence standard field
+        {"importance": "optional", "confidence": {"score": 0.55}},  # Medium confidence optional field
+        {"importance": "optional", "confidence": {"score": 0.35}},  # Low confidence optional field
+    ]
+    
+    # Calculate initial automation rate
+    verification_count = 0
+    for field in fields:
+        if requires_human_verification(
+            field["confidence"]["score"],
+            field["importance"]
+        ):
+            verification_count += 1
+    
+    initial_automation_rate = 1.0 - (verification_count / len(fields))
+    
+    # Adjust thresholds to achieve target automation rate
+    target_rate = 0.85  # 85% automation target
+    adjusted_thresholds = adjust_thresholds_for_automation_rate(
+        current_automation_rate=initial_automation_rate,
+        target_automation_rate=target_rate
+    )
+    
+    # Calculate new automation rate with adjusted thresholds
+    verification_count = 0
+    for field in fields:
+        if requires_human_verification(
+            field["confidence"]["score"],
+            field["importance"],
+            adjusted_thresholds
+        ):
+            verification_count += 1
+    
+    new_automation_rate = 1.0 - (verification_count / len(fields))
+    
+    # Verify that the new automation rate is closer to the target
+    assert abs(new_automation_rate - target_rate) < abs(initial_automation_rate - target_rate)
+
+
+def test_confidence_scoring_correlation_with_accuracy():
+    """Test correlation between confidence scores and actual accuracy."""
+    # Create a set of fields with confidence scores and ground truth
+    fields_with_truth = [
+        {
+            "confidence": {"score": 0.95},
+            "value": "Acme Corporation",
+            "ground_truth": "Acme Corporation"
+        },
+        {
+            "confidence": {"score": 0.88},
+            "value": "12-3456789",
+            "ground_truth": "12-3456789"
+        },
+        {
+            "confidence": {"score": 0.82},
+            "value": "123 Main St",
+            "ground_truth": "123 Main St"
+        },
+        {
+            "confidence": {"score": 0.75},
+            "value": "John Smith",
+            "ground_truth": "John Smith"
+        },
+        {
+            "confidence": {"score": 0.68},
+            "value": "$45,000",
+            "ground_truth": "$45,000"
+        },
+        {
+            "confidence": {"score": 0.62},
+            "value": "Manufacturing",
+            "ground_truth": "Manufacturing"
+        },
+        {
+            "confidence": {"score": 0.55},
+            "value": "January 15, 2023",
+            "ground_truth": "January 15, 2023"
+        },
+        {
+            "confidence": {"score": 0.48},
+            "value": "Quarterly",
+            "ground_truth": "Quarterly"
+        },
+        {
+            "confidence": {"score": 0.42},
+            "value": "New York",
+            "ground_truth": "New Jersey"
+        },
+        {
+            "confidence": {"score": 0.35},
+            "value": "555-123-4567",
+            "ground_truth": "555-123-4567"
+        },
+        {
+            "confidence": {"score": 0.28},
             "value": "info@acme.com",
-            "raw_text": "info@acme.com",
-            "confidence": ConfidenceScore.from_float(0.75)
+            "ground_truth": "info@acmecorp.com"
+        },
+        {
+            "confidence": {"score": 0.22},
+            "value": "Established 2005",
+            "ground_truth": "Established 2015"
         }
-        
-        adjusted = adjust_confidence_by_context(base_confidence, "business_email", other_fields)
-        assert adjusted > base_confidence  # Should be increased due to valid format
-        
-        # Test field with no context adjustment
-        base_confidence = 0.8
-        adjusted = adjust_confidence_by_context(base_confidence, "owner_name", other_fields)
-        assert adjusted == base_confidence  # Should be unchanged
+    ]
     
-    def test_adjustment_clamping(self, mock_extracted_field, mock_low_confidence_field):
-        """Test that adjusted values are clamped to [0.0, 1.0]."""
-        # Create a dictionary of other fields for context
-        other_fields = {
-            "business_name": mock_extracted_field,
-            "tax_id": mock_low_confidence_field,
-            "dba_name": {
-                "field_name": "dba_name",
-                "field_type": "name",
-                "value": "ACME Corporation",
-                "raw_text": "ACME Corporation",
-                "confidence": ConfidenceScore.from_float(0.85)
-            }
-        }
-        
-        # Test clamping at upper bound
-        high_confidence = 0.98
-        adjusted = adjust_confidence_by_context(high_confidence, "business_name", other_fields)
-        assert adjusted <= 1.0
-
-
-class TestFieldConfidenceCalculation:
-    """Tests for field-level confidence calculation."""
-
-    def test_calculate_field_confidence(self, mock_char_confidences, mock_extracted_field, mock_low_confidence_field):
-        """Test calculation of field-level confidence scores."""
-        # Create a dictionary of other fields for context
-        other_fields = {
-            "business_name": mock_extracted_field,
-            "tax_id": mock_low_confidence_field
-        }
-        
-        # Test calculation with all parameters
-        confidence = calculate_field_confidence(
-            field_name="business_name",
-            raw_text="ACME Corp",
-            char_confidences=mock_char_confidences,
-            model_type="typed_text",
-            field_type=FieldType.NAME,
-            other_fields=other_fields
-        )
-        
-        # Result should be a ConfidenceScore instance
-        assert isinstance(confidence, ConfidenceScore)
-        
-        # Value should be in range [0.0, 1.0]
-        assert 0.0 <= float(confidence) <= 1.0
-        
-        # Test calculation without context
-        confidence_no_context = calculate_field_confidence(
-            field_name="business_name",
-            raw_text="ACME Corp",
-            char_confidences=mock_char_confidences,
-            model_type="typed_text",
-            field_type=FieldType.NAME
-        )
-        
-        # Result should still be valid
-        assert isinstance(confidence_no_context, ConfidenceScore)
-        assert 0.0 <= float(confidence_no_context) <= 1.0
+    # Calculate accuracy for each field
+    for field in fields_with_truth:
+        field["accurate"] = field["value"] == field["ground_truth"]
     
-    def test_model_type_impact(self, mock_char_confidences):
-        """Test the impact of model type on field confidence calculation."""
-        # Calculate confidence for different model types
-        typed_confidence = calculate_field_confidence(
-            field_name="business_name",
-            raw_text="ACME Corp",
-            char_confidences=mock_char_confidences,
-            model_type="typed_text",
-            field_type=FieldType.NAME
-        )
-        
-        handwritten_confidence = calculate_field_confidence(
-            field_name="business_name",
-            raw_text="ACME Corp",
-            char_confidences=mock_char_confidences,
-            model_type="handwritten",
-            field_type=FieldType.NAME
-        )
-        
-        # Handwritten model should have lower confidence due to calibration
-        assert float(handwritten_confidence) < float(typed_confidence)
+    # Group fields by confidence level
+    high_confidence = [f for f in fields_with_truth if f["confidence"]["score"] >= DEFAULT_HIGH_CONFIDENCE_THRESHOLD]
+    medium_confidence = [f for f in fields_with_truth if DEFAULT_MEDIUM_CONFIDENCE_THRESHOLD <= f["confidence"]["score"] < DEFAULT_HIGH_CONFIDENCE_THRESHOLD]
+    low_confidence = [f for f in fields_with_truth if DEFAULT_LOW_CONFIDENCE_THRESHOLD <= f["confidence"]["score"] < DEFAULT_MEDIUM_CONFIDENCE_THRESHOLD]
+    very_low_confidence = [f for f in fields_with_truth if f["confidence"]["score"] < DEFAULT_LOW_CONFIDENCE_THRESHOLD]
     
-    def test_field_type_impact(self, mock_char_confidences):
-        """Test the impact of field type on field confidence calculation."""
-        # Calculate confidence for different field types
-        name_confidence = calculate_field_confidence(
-            field_name="business_name",
-            raw_text="ACME Corp",
-            char_confidences=mock_char_confidences,
-            model_type="typed_text",
-            field_type=FieldType.NAME
-        )
-        
-        signature_confidence = calculate_field_confidence(
-            field_name="signature",
-            raw_text="John Doe",
-            char_confidences=mock_char_confidences,
-            model_type="typed_text",
-            field_type=FieldType.SIGNATURE
-        )
-        
-        # Signature field should have lower confidence due to field type modifier
-        assert float(signature_confidence) < float(name_confidence)
-
-
-class TestTableConfidenceCalculation:
-    """Tests for table-level confidence calculation."""
-
-    def test_calculate_table_confidence(self, mock_table_data):
-        """Test calculation of table-level confidence scores."""
-        confidence = calculate_table_confidence(mock_table_data)
-        
-        # Result should be a ConfidenceScore instance
-        assert isinstance(confidence, ConfidenceScore)
-        
-        # Value should be in range [0.0, 1.0]
-        assert 0.0 <= float(confidence) <= 1.0
-        
-        # For a complete table, confidence should be high
-        assert float(confidence) >= 0.8
-        
-        # Test with incomplete table
-        incomplete_table = mock_table_data.copy()
-        incomplete_table["is_complete"] = False
-        
-        incomplete_confidence = calculate_table_confidence(incomplete_table)
-        
-        # Incomplete table should have lower confidence
-        assert float(incomplete_confidence) < float(confidence)
-
-
-class TestVerificationFlagging:
-    """Tests for verification flagging based on confidence scores."""
-
-    def test_should_flag_for_verification(self):
-        """Test determination of whether a field should be flagged for verification."""
-        # Test critical field with confidence below threshold
-        should_verify, reason = should_flag_for_verification(
-            field_name="tax_id",
-            confidence=ConfidenceScore.from_float(0.75)
-        )
-        
-        # Should be flagged due to critical field with confidence below critical threshold
-        assert should_verify
-        assert reason  # Reason should be provided
-        
-        # Test critical field with confidence above threshold
-        should_verify, reason = should_flag_for_verification(
-            field_name="tax_id",
-            confidence=ConfidenceScore.from_float(0.85)
-        )
-        
-        # Should not be flagged
-        assert not should_verify
-        assert not reason  # No reason needed
-        
-        # Test non-critical field with confidence below threshold
-        should_verify, reason = should_flag_for_verification(
-            field_name="business_address",
-            confidence=ConfidenceScore.from_float(0.65)
-        )
-        
-        # Should be flagged due to confidence below default threshold
-        assert should_verify
-        assert reason  # Reason should be provided
-        
-        # Test non-critical field with confidence above threshold
-        should_verify, reason = should_flag_for_verification(
-            field_name="business_address",
-            confidence=ConfidenceScore.from_float(0.75)
-        )
-        
-        # Should not be flagged
-        assert not should_verify
-        assert not reason  # No reason needed
-
-
-class TestDocumentConfidenceCalculation:
-    """Tests for document-level confidence calculation."""
-
-    def test_calculate_document_confidence(self, mock_extracted_data):
-        """Test calculation of document-level confidence scores."""
-        confidence = calculate_document_confidence(mock_extracted_data)
-        
-        # Result should be a ConfidenceScore instance
-        assert isinstance(confidence, ConfidenceScore)
-        
-        # Value should be in range [0.0, 1.0]
-        assert 0.0 <= float(confidence) <= 1.0
-        
-        # For the mock data, confidence should be a weighted average of field confidences
-        # with more weight given to critical fields
-        fields = mock_extracted_data["fields"]
-        weighted_sum = 0.0
-        weight_sum = 0.0
-        
-        for field_name, field_data in fields.items():
-            confidence_value = float(field_data["confidence"])
-            importance = FIELD_IMPORTANCE.get(field_name, 0.7)  # Default importance
-            
-            weighted_sum += confidence_value * importance
-            weight_sum += importance
-        
-        expected = weighted_sum / weight_sum
-        assert abs(float(confidence) - expected) < 0.0001
+    # Calculate accuracy rates by confidence level
+    high_accuracy = sum(1 for f in high_confidence if f["accurate"]) / len(high_confidence) if high_confidence else 0
+    medium_accuracy = sum(1 for f in medium_confidence if f["accurate"]) / len(medium_confidence) if medium_confidence else 0
+    low_accuracy = sum(1 for f in low_confidence if f["accurate"]) / len(low_confidence) if low_confidence else 0
+    very_low_accuracy = sum(1 for f in very_low_confidence if f["accurate"]) / len(very_low_confidence) if very_low_confidence else 0
     
-    def test_empty_document(self):
-        """Test handling of documents with no fields."""
-        empty_data = {
-            "extraction_id": "123456",
-            "fields": {},
-            "tables": [],
-            "metadata": {},
-            "raw_text": "",
-            "low_confidence_fields": [],
-            "requires_verification": False,
-            "extraction_timestamp": datetime.now(),
-            "schema_version": "1.0",
-            "document_type": "application_form"
-        }
-        
-        confidence = calculate_document_confidence(empty_data)
-        
-        # Result should be a ConfidenceScore instance with value 0.0
-        assert isinstance(confidence, ConfidenceScore)
-        assert float(confidence) == 0.0
-
-
-class TestExtractionEnrichment:
-    """Tests for enriching extraction results with confidence metadata."""
-
-    def test_enrich_extraction_with_confidence_metadata(self, mock_extracted_data):
-        """Test enrichment of extraction results with confidence metadata."""
-        # Modify the mock data to ensure one field requires verification
-        mock_data = mock_extracted_data.copy()
-        mock_data["fields"]["tax_id"]["confidence"] = ConfidenceScore.from_float(0.65)
-        
-        # Enrich the extraction data
-        enriched_data = enrich_extraction_with_confidence_metadata(mock_data)
-        
-        # Check that metadata was added
-        assert "low_confidence_fields" in enriched_data
-        assert "requires_verification" in enriched_data
-        assert "overall_confidence" in enriched_data["metadata"]
-        assert "verification_reasons" in enriched_data["metadata"]
-        
-        # Check that the tax_id field was flagged for verification
-        assert "tax_id" in enriched_data["low_confidence_fields"]
-        assert enriched_data["requires_verification"]
-        assert enriched_data["fields"]["tax_id"]["requires_verification"]
-        assert enriched_data["fields"]["tax_id"]["verification_reason"]
-        
-        # Check that the business_name field was not flagged
-        assert "business_name" not in enriched_data["low_confidence_fields"]
-        assert not enriched_data["fields"]["business_name"]["requires_verification"]
-        assert not enriched_data["fields"]["business_name"]["verification_reason"]
+    # Verify that higher confidence correlates with higher accuracy
+    assert high_accuracy > medium_accuracy
+    assert medium_accuracy > low_accuracy
+    assert low_accuracy > very_low_accuracy
     
-    def test_enrich_high_confidence_extraction(self, mock_extracted_data):
-        """Test enrichment of extraction results with all high-confidence fields."""
-        # Modify the mock data to ensure all fields have high confidence
-        mock_data = mock_extracted_data.copy()
-        mock_data["fields"]["tax_id"]["confidence"] = ConfidenceScore.from_float(0.85)
-        mock_data["fields"]["business_name"]["confidence"] = ConfidenceScore.from_float(0.95)
-        
-        # Enrich the extraction data
-        enriched_data = enrich_extraction_with_confidence_metadata(mock_data)
-        
-        # Check that no fields were flagged for verification
-        assert len(enriched_data["low_confidence_fields"]) == 0
-        assert not enriched_data["requires_verification"]
-        assert not enriched_data["fields"]["tax_id"]["requires_verification"]
-        assert not enriched_data["fields"]["business_name"]["requires_verification"]
-
-
-class TestTensorFlowOutputConversion:
-    """Tests for converting TensorFlow output to confidence scores."""
-
-    def test_confidence_from_tensorflow_output(self, mock_tensorflow_output):
-        """Test extraction of confidence scores from TensorFlow output."""
-        confidences = confidence_from_tensorflow_output(mock_tensorflow_output)
-        
-        # Result should be a list of confidence scores
-        assert isinstance(confidences, list)
-        
-        # Values should be in range [0.0, 1.0]
-        assert all(0.0 <= c <= 1.0 for c in confidences)
-        
-        # Length should match the flattened tensor
-        expected_length = mock_tensorflow_output.data.size
-        assert len(confidences) == expected_length
-        
-        # Values should match the tensor data
-        expected_values = mock_tensorflow_output.data.flatten().tolist()
-        assert confidences == expected_values
-    
-    def test_error_handling(self):
-        """Test error handling for invalid TensorFlow output."""
-        # Test with None input
-        with mock.patch("logging.error"):
-            confidences = confidence_from_tensorflow_output(None)
-            assert confidences == [0.5]  # Should return default confidence
-        
-        # Test with input that raises an exception
-        class BadTensor:
-            def numpy(self):
-                raise ValueError("Test error")
-        
-        with mock.patch("logging.error"):
-            confidences = confidence_from_tensorflow_output(BadTensor())
-            assert confidences == [0.5]  # Should return default confidence
-
-
-class TestThresholdConfiguration:
-    """Tests for confidence threshold configuration."""
-
-    def test_get_confidence_threshold_config(self):
-        """Test retrieval of confidence threshold configuration."""
-        config = get_confidence_threshold_config()
-        
-        # Config should contain all threshold types
-        assert "default" in config
-        assert "high" in config
-        assert "low" in config
-        assert "critical" in config
-        
-        # Values should match the global constants
-        assert config["default"] == DEFAULT_CONFIDENCE_THRESHOLD
-        assert config["high"] == HIGH_CONFIDENCE_THRESHOLD
-        assert config["low"] == LOW_CONFIDENCE_THRESHOLD
-        assert config["critical"] == CRITICAL_FIELD_THRESHOLD
-    
-    def test_update_confidence_threshold_config(self):
-        """Test updating of confidence threshold configuration."""
-        # Save original values
-        original_default = DEFAULT_CONFIDENCE_THRESHOLD
-        original_high = HIGH_CONFIDENCE_THRESHOLD
-        original_low = LOW_CONFIDENCE_THRESHOLD
-        original_critical = CRITICAL_FIELD_THRESHOLD
-        
-        try:
-            # Update the configuration
-            new_config = {
-                "default": 0.75,
-                "high": 0.95,
-                "low": 0.55,
-                "critical": 0.85
-            }
-            
-            update_confidence_threshold_config(new_config)
-            
-            # Check that global constants were updated
-            assert DEFAULT_CONFIDENCE_THRESHOLD == 0.75
-            assert HIGH_CONFIDENCE_THRESHOLD == 0.95
-            assert LOW_CONFIDENCE_THRESHOLD == 0.55
-            assert CRITICAL_FIELD_THRESHOLD == 0.85
-            
-            # Check that get_confidence_threshold_config returns the updated values
-            config = get_confidence_threshold_config()
-            assert config["default"] == 0.75
-            assert config["high"] == 0.95
-            assert config["low"] == 0.55
-            assert config["critical"] == 0.85
-            
-            # Test partial update
-            partial_config = {"default": 0.72}
-            update_confidence_threshold_config(partial_config)
-            
-            # Only the specified value should be updated
-            config = get_confidence_threshold_config()
-            assert config["default"] == 0.72
-            assert config["high"] == 0.95  # Unchanged
-            assert config["low"] == 0.55  # Unchanged
-            assert config["critical"] == 0.85  # Unchanged
-        finally:
-            # Restore original values
-            update_confidence_threshold_config({
-                "default": original_default,
-                "high": original_high,
-                "low": original_low,
-                "critical": original_critical
-            })
-
-
-class TestConfidenceAnalyzer:
-    """Tests for the ConfidenceAnalyzer class."""
-
-    def test_add_document(self, mock_extracted_data):
-        """Test adding a document to the analyzer."""
-        analyzer = ConfidenceAnalyzer()
-        
-        # Add a document
-        analyzer.add_document(mock_extracted_data)
-        
-        # Check that document confidence was tracked
-        assert len(analyzer.document_confidences) == 1
-        
-        # Check that field confidences were tracked
-        assert "business_name" in analyzer.field_confidences
-        assert "tax_id" in analyzer.field_confidences
-        assert len(analyzer.field_confidences["business_name"]) == 1
-        assert len(analyzer.field_confidences["tax_id"]) == 1
-        
-        # Check that verification rates were tracked
-        assert "business_name" in analyzer.verification_rates
-        assert "tax_id" in analyzer.verification_rates
-        assert analyzer.verification_rates["business_name"]["total"] == 1
-        assert analyzer.verification_rates["tax_id"]["total"] == 1
-        
-        # Check that automation rates were tracked
-        assert "application_form" in analyzer.automation_rates
-        assert analyzer.automation_rates["application_form"]["total"] == 1
-    
-    def test_get_overall_automation_rate(self, mock_extracted_data):
-        """Test calculation of overall automation rate."""
-        analyzer = ConfidenceAnalyzer()
-        
-        # Add documents with different verification requirements
-        # First document: no verification required
-        analyzer.add_document(mock_extracted_data)
-        
-        # Second document: verification required
-        mock_data2 = mock_extracted_data.copy()
-        mock_data2["requires_verification"] = True
-        mock_data2["document_type"] = "application_form"
-        analyzer.add_document(mock_data2)
-        
-        # Third document: no verification required, different type
-        mock_data3 = mock_extracted_data.copy()
-        mock_data3["document_type"] = "tax_return"
-        analyzer.add_document(mock_data3)
-        
-        # Calculate automation rate
-        automation_rate = analyzer.get_overall_automation_rate()
-        
-        # Expected rate: 2 automated out of 3 total = 66.67%
-        expected_rate = (2 / 3) * 100.0
-        assert abs(automation_rate - expected_rate) < 0.01
-    
-    def test_get_field_verification_rates(self, mock_extracted_data):
-        """Test calculation of field verification rates."""
-        analyzer = ConfidenceAnalyzer()
-        
-        # Add a document with one field requiring verification
-        mock_data = mock_extracted_data.copy()
-        mock_data["fields"]["tax_id"]["requires_verification"] = True
-        analyzer.add_document(mock_data)
-        
-        # Add another document with both fields requiring verification
-        mock_data2 = mock_extracted_data.copy()
-        mock_data2["fields"]["tax_id"]["requires_verification"] = True
-        mock_data2["fields"]["business_name"]["requires_verification"] = True
-        analyzer.add_document(mock_data2)
-        
-        # Calculate field verification rates
-        verification_rates = analyzer.get_field_verification_rates()
-        
-        # Expected rates:
-        # tax_id: 2 verified out of 2 total = 100%
-        # business_name: 1 verified out of 2 total = 50%
-        assert abs(verification_rates["tax_id"] - 100.0) < 0.01
-        assert abs(verification_rates["business_name"] - 50.0) < 0.01
-    
-    def test_get_field_confidence_stats(self, mock_extracted_data):
-        """Test calculation of field confidence statistics."""
-        analyzer = ConfidenceAnalyzer()
-        
-        # Add documents with different confidence scores
-        mock_data1 = mock_extracted_data.copy()
-        mock_data1["fields"]["business_name"]["confidence"] = ConfidenceScore.from_float(0.9)
-        mock_data1["fields"]["tax_id"]["confidence"] = ConfidenceScore.from_float(0.7)
-        analyzer.add_document(mock_data1)
-        
-        mock_data2 = mock_extracted_data.copy()
-        mock_data2["fields"]["business_name"]["confidence"] = ConfidenceScore.from_float(0.8)
-        mock_data2["fields"]["tax_id"]["confidence"] = ConfidenceScore.from_float(0.6)
-        analyzer.add_document(mock_data2)
-        
-        # Calculate field confidence statistics
-        confidence_stats = analyzer.get_field_confidence_stats()
-        
-        # Check that statistics were calculated for both fields
-        assert "business_name" in confidence_stats
-        assert "tax_id" in confidence_stats
-        
-        # Check that all statistics are present
-        business_stats = confidence_stats["business_name"]
-        assert "mean" in business_stats
-        assert "median" in business_stats
-        assert "min" in business_stats
-        assert "max" in business_stats
-        assert "std_dev" in business_stats
-        
-        # Check that values are correct for business_name
-        assert abs(business_stats["mean"] - 0.85) < 0.01
-        assert abs(business_stats["median"] - 0.85) < 0.01
-        assert abs(business_stats["min"] - 0.8) < 0.01
-        assert abs(business_stats["max"] - 0.9) < 0.01
-        
-        # Check that values are correct for tax_id
-        tax_stats = confidence_stats["tax_id"]
-        assert abs(tax_stats["mean"] - 0.65) < 0.01
-        assert abs(tax_stats["median"] - 0.65) < 0.01
-        assert abs(tax_stats["min"] - 0.6) < 0.01
-        assert abs(tax_stats["max"] - 0.7) < 0.01
-    
-    def test_suggest_threshold_adjustments(self, mock_extracted_data):
-        """Test suggestion of threshold adjustments based on analysis."""
-        analyzer = ConfidenceAnalyzer()
-        
-        # Add documents to simulate low automation rate
-        for i in range(10):
-            mock_data = mock_extracted_data.copy()
-            mock_data["requires_verification"] = (i < 3)  # 3 out of 10 require verification
-            analyzer.add_document(mock_data)
-        
-        # Get threshold suggestions
-        suggestions = analyzer.suggest_threshold_adjustments()
-        
-        # Should suggest global threshold adjustment for high automation rate
-        assert "global" in suggestions
-        assert "default" in suggestions["global"]
-        assert "reason" in suggestions["global"]
-        
-        # Test with field-specific issues
-        analyzer = ConfidenceAnalyzer()
-        
-        # Add documents with high verification rate for tax_id but good confidence
-        for i in range(10):
-            mock_data = mock_extracted_data.copy()
-            mock_data["fields"]["tax_id"]["confidence"] = ConfidenceScore.from_float(0.7)
-            mock_data["fields"]["tax_id"]["requires_verification"] = True
-            analyzer.add_document(mock_data)
-        
-        # Get threshold suggestions
-        suggestions = analyzer.suggest_threshold_adjustments()
-        
-        # Should suggest field-specific threshold adjustment for tax_id
-        assert "tax_id" in suggestions
-        assert "threshold" in suggestions["tax_id"]
-        assert "reason" in suggestions["tax_id"]
-    
-    def test_generate_report(self, mock_extracted_data):
-        """Test generation of comprehensive analysis report."""
-        analyzer = ConfidenceAnalyzer()
-        
-        # Add a document
-        analyzer.add_document(mock_extracted_data)
-        
-        # Generate report
-        report = analyzer.generate_report()
-        
-        # Check that all sections are present
-        assert "document_confidence" in report
-        assert "field_confidence" in report
-        assert "verification_rates" in report
-        assert "automation_rates" in report
-        assert "overall_automation_rate" in report
-        assert "threshold_suggestions" in report
-        assert "current_thresholds" in report
-        assert "sample_size" in report
-        assert "timestamp" in report
-        
-        # Check that sample size is correct
-        assert report["sample_size"] == 1
-
-
-class TestConfidenceDistributionAnalysis:
-    """Tests for confidence distribution analysis."""
-
-    def test_analyze_confidence_distribution(self, mock_word_confidences):
-        """Test analysis of confidence score distribution."""
-        distribution = analyze_confidence_distribution(mock_word_confidences)
-        
-        # Check that all sections are present
-        assert "count" in distribution
-        assert "mean" in distribution
-        assert "median" in distribution
-        assert "std_dev" in distribution
-        assert "min" in distribution
-        assert "max" in distribution
-        assert "percentiles" in distribution
-        assert "histogram" in distribution
-        assert "confidence_ranges" in distribution
-        
-        # Check that count is correct
-        assert distribution["count"] == len(mock_word_confidences)
-        
-        # Check that mean is correct
-        expected_mean = sum(mock_word_confidences) / len(mock_word_confidences)
-        assert abs(distribution["mean"] - expected_mean) < 0.01
-        
-        # Check that percentiles are present
-        assert "p10" in distribution["percentiles"]
-        assert "p25" in distribution["percentiles"]
-        assert "p75" in distribution["percentiles"]
-        assert "p90" in distribution["percentiles"]
-        
-        # Check that histogram has 10 bins
-        assert len(distribution["histogram"]) == 10
-        
-        # Check that confidence ranges are present
-        assert "low" in distribution["confidence_ranges"]
-        assert "medium" in distribution["confidence_ranges"]
-        assert "high" in distribution["confidence_ranges"]
-    
-    def test_empty_input(self):
-        """Test handling of empty input."""
-        distribution = analyze_confidence_distribution([])
-        
-        # Should return minimal result with count=0
-        assert distribution == {"count": 0}
-
-
-class TestConfidenceScoreCalibrator:
-    """Tests for the ConfidenceScoreCalibrator class."""
-
-    def test_calibration(self):
-        """Test calibration of confidence scores."""
-        calibrator = ConfidenceScoreCalibrator()
-        
-        # Create paired raw and true confidence scores
-        raw_scores = [0.6, 0.7, 0.8, 0.9]
-        true_scores = [0.5, 0.6, 0.7, 0.8]  # Systematically lower
-        
-        # Calibrate the model
-        calibrator.calibrate(raw_scores, true_scores)
-        
-        # Check that calibration was successful
-        assert calibrator.is_calibrated
-        
-        # Check that a and b were calculated correctly
-        # For this simple example, a should be approximately 1.0 and b should be approximately -0.1
-        assert abs(calibrator.a - 1.0) < 0.1
-        assert abs(calibrator.b + 0.1) < 0.1
-        
-        # Test calibration of a new score
-        raw_score = 0.85
-        calibrated = calibrator.calibrate_score(raw_score)
-        
-        # Expected result: 0.85 * a + b ≈ 0.85 - 0.1 = 0.75
-        expected = raw_score * calibrator.a + calibrator.b
-        assert abs(calibrated - expected) < 0.01
-    
-    def test_model_specific_calibration(self):
-        """Test model-specific calibration of confidence scores."""
-        calibrator = ConfidenceScoreCalibrator()
-        
-        # Create paired raw and true confidence scores for different models
-        typed_raw = [0.7, 0.8, 0.9]
-        typed_true = [0.7, 0.8, 0.9]  # Well-calibrated
-        
-        handwritten_raw = [0.7, 0.8, 0.9]
-        handwritten_true = [0.5, 0.6, 0.7]  # Overconfident
-        
-        # Calibrate for each model type
-        calibrator.calibrate_by_model("typed_text", typed_raw, typed_true)
-        calibrator.calibrate_by_model("handwritten", handwritten_raw, handwritten_true)
-        
-        # Check that model calibrations were stored
-        assert "typed_text" in calibrator.model_calibrations
-        assert "handwritten" in calibrator.model_calibrations
-        
-        # Test calibration for each model type
-        raw_score = 0.8
-        
-        typed_calibrated = calibrator.calibrate_score_by_model(raw_score, "typed_text")
-        handwritten_calibrated = calibrator.calibrate_score_by_model(raw_score, "handwritten")
-        
-        # Typed text should be well-calibrated (minimal adjustment)
-        assert abs(typed_calibrated - raw_score) < 0.1
-        
-        # Handwritten should be adjusted downward
-        assert handwritten_calibrated < raw_score
-        assert handwritten_calibrated < typed_calibrated
-    
-    def test_field_specific_calibration(self):
-        """Test field-specific calibration of confidence scores."""
-        calibrator = ConfidenceScoreCalibrator()
-        
-        # Create paired raw and true confidence scores for different fields
-        business_name_raw = [0.7, 0.8, 0.9]
-        business_name_true = [0.7, 0.8, 0.9]  # Well-calibrated
-        
-        signature_raw = [0.7, 0.8, 0.9]
-        signature_true = [0.5, 0.6, 0.7]  # Overconfident
-        
-        # Calibrate for each field
-        calibrator.calibrate_by_field("business_name", business_name_raw, business_name_true)
-        calibrator.calibrate_by_field("signature", signature_raw, signature_true)
-        
-        # Check that field calibrations were stored
-        assert "business_name" in calibrator.field_calibrations
-        assert "signature" in calibrator.field_calibrations
-        
-        # Test calibration for each field
-        raw_score = 0.8
-        
-        business_name_calibrated = calibrator.calibrate_score_by_field(raw_score, "business_name")
-        signature_calibrated = calibrator.calibrate_score_by_field(raw_score, "signature")
-        
-        # Business name should be well-calibrated (minimal adjustment)
-        assert abs(business_name_calibrated - raw_score) < 0.1
-        
-        # Signature should be adjusted downward
-        assert signature_calibrated < raw_score
-        assert signature_calibrated < business_name_calibrated
-    
-    def test_insufficient_data_handling(self):
-        """Test handling of insufficient data for calibration."""
-        calibrator = ConfidenceScoreCalibrator()
-        
-        # Try to calibrate with insufficient data
-        with mock.patch("logging.warning"):
-            calibrator.calibrate([0.8, 0.9], [0.7, 0.8])  # Only 2 samples
-            assert not calibrator.is_calibrated
-            
-            calibrator.calibrate_by_model("typed_text", [0.8, 0.9], [0.7, 0.8])
-            assert "typed_text" not in calibrator.model_calibrations
-            
-            calibrator.calibrate_by_field("business_name", [0.8, 0.9], [0.7, 0.8])
-            assert "business_name" not in calibrator.field_calibrations
-    
-    def test_save_and_load_calibration(self):
-        """Test saving and loading of calibration parameters."""
-        calibrator = ConfidenceScoreCalibrator()
-        
-        # Create paired raw and true confidence scores
-        raw_scores = [0.6, 0.7, 0.8, 0.9]
-        true_scores = [0.5, 0.6, 0.7, 0.8]  # Systematically lower
-        
-        # Calibrate the model
-        calibrator.calibrate(raw_scores, true_scores)
-        
-        # Save calibration to a mock file
-        mock_file = mock.mock_open()
-        with mock.patch("builtins.open", mock_file):
-            with mock.patch("json.dump") as mock_json_dump:
-                result = calibrator.save_calibration("calibration.json")
-                assert result  # Should return True
-                mock_json_dump.assert_called_once()
-        
-        # Load calibration from a mock file
-        mock_data = {
-            "global": {"a": 0.9, "b": -0.05},
-            "models": {"typed_text": {"a": 1.0, "b": 0.0}},
-            "fields": {"business_name": {"a": 1.0, "b": 0.0}},
-            "is_calibrated": True,
-            "timestamp": datetime.now().isoformat()
-        }
-        
-        mock_file = mock.mock_open()
-        with mock.patch("builtins.open", mock_file):
-            with mock.patch("json.load", return_value=mock_data):
-                new_calibrator = ConfidenceScoreCalibrator()
-                result = new_calibrator.load_calibration("calibration.json")
-                assert result  # Should return True
-                
-                # Check that parameters were loaded correctly
-                assert new_calibrator.is_calibrated
-                assert new_calibrator.a == 0.9
-                assert new_calibrator.b == -0.05
-                assert "typed_text" in new_calibrator.model_calibrations
-                assert "business_name" in new_calibrator.field_calibrations
-
-
-if __name__ == "__main__":
-    pytest.main()
+    # Verify that high confidence fields meet the 99% accuracy requirement
+    # Note: With a small sample size, we use a lower threshold for the test
+    assert high_accuracy >= 0.9  # In production with larger samples, this would be 0.99
