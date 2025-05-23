@@ -1,213 +1,289 @@
 /**
- * Rate Limiting Middleware for Notification Service
+ * Rate Limiting Middleware
  * 
- * This middleware restricts the number of requests a client can make within a specified time window,
- * preventing abuse and ensuring fair resource allocation. It uses Redis for distributed rate limit
- * tracking and provides configurable limits based on client identity or IP address.
+ * This middleware implements request rate limiting based on client identity or IP address.
+ * It uses Redis for distributed rate limit tracking and provides configurable limits
+ * based on authentication status, user role, and endpoint sensitivity.
  * 
- * Default rate limits:
- * - 60 requests per minute for authenticated users
- * - 10 requests per minute for unauthenticated requests
+ * Features:
+ * - Configurable rate limit windows and thresholds
+ * - Redis-based storage for distributed environments
+ * - Rate limit response headers (X-RateLimit-*)
+ * - Detailed error responses for rate limit exceeded
+ * - Support for different limits based on authentication status
  */
 
 import { Request, Response, NextFunction } from 'express';
 import Redis from 'ioredis';
-import { getErrorMessage } from '../../src/auth/utils/error-message';
+import { getErrorMessage } from '../utils/error-message';
 
 /**
- * Configuration options for the rate limit middleware
+ * Rate limit options interface
  */
 export interface RateLimitOptions {
-  /** Redis client instance for distributed rate limiting */
+  // The maximum number of requests allowed within the window
+  max: number;
+  // The time window in seconds
+  windowMs: number;
+  // The Redis client instance
   redisClient: Redis;
-  /** Time window in milliseconds for rate limiting (default: 60000 = 1 minute) */
-  windowMs?: number;
-  /** Maximum number of requests allowed in the window for authenticated users (default: 60) */
-  maxRequestsAuthenticated?: number;
-  /** Maximum number of requests allowed in the window for unauthenticated users (default: 10) */
-  maxRequestsUnauthenticated?: number;
-  /** Custom key generator function (default: uses IP address or user ID) */
+  // The Redis key prefix for rate limit keys
+  keyPrefix?: string;
+  // Function to generate the rate limit key from the request
   keyGenerator?: (req: Request) => string;
-  /** Custom skip function to bypass rate limiting for certain requests (default: none) */
+  // Skip rate limiting for certain requests
   skip?: (req: Request) => boolean;
-  /** Custom error message when rate limit is exceeded (default: standard message) */
-  message?: string;
-  /** Custom status code when rate limit is exceeded (default: 429 Too Many Requests) */
+  // Custom response handler for rate limit exceeded
+  handler?: (req: Request, res: Response) => void;
+  // Whether to include rate limit headers in the response
+  headers?: boolean;
+  // The status code to use when rate limit is exceeded
   statusCode?: number;
-  /** Whether to include standard rate limit headers (default: true) */
-  standardHeaders?: boolean;
-  /** Whether to include legacy X-RateLimit headers (default: false) */
-  legacyHeaders?: boolean;
+  // The message to send when rate limit is exceeded
+  message?: string;
+  // Whether to use a sliding window for rate limiting
+  slidingWindow?: boolean;
 }
 
 /**
- * Creates a rate limiting middleware with the specified options
+ * Default rate limit options
+ */
+const defaultOptions: Partial<RateLimitOptions> = {
+  keyPrefix: 'ratelimit:',
+  keyGenerator: (req: Request): string => {
+    // Use client ID from authenticated user if available, otherwise use IP
+    const clientId = req.user?.id || req.ip || req.headers['x-forwarded-for'] || 'unknown';
+    return `${clientId}`;
+  },
+  skip: (): boolean => false,
+  headers: true,
+  statusCode: 429,
+  message: 'Too many requests, please try again later.',
+  slidingWindow: true,
+};
+
+/**
+ * Rate limit middleware factory function
  * 
- * @param options Configuration options for the rate limiter
+ * @param options Rate limit options
  * @returns Express middleware function
  */
-export const createRateLimitMiddleware = (options: RateLimitOptions) => {
-  const {
-    redisClient,
-    windowMs = 60 * 1000, // 1 minute default
-    maxRequestsAuthenticated = 60, // 60 requests per minute for authenticated users
-    maxRequestsUnauthenticated = 10, // 10 requests per minute for unauthenticated users
-    keyGenerator,
-    skip,
-    message = 'Too many requests, please try again later.',
-    statusCode = 429,
-    standardHeaders = true,
-    legacyHeaders = false
-  } = options;
-
-  // Validate Redis client
-  if (!redisClient) {
-    throw new Error('Redis client is required for rate limit middleware');
+export const rateLimitMiddleware = (options: Partial<RateLimitOptions>) => {
+  // Merge default options with provided options
+  const opts: RateLimitOptions = { ...defaultOptions, ...options } as RateLimitOptions;
+  
+  // Validate required options
+  if (!opts.max || !opts.windowMs) {
+    throw new Error('Rate limit middleware requires max and windowMs options');
   }
-
-  // Default key generator function
-  const defaultKeyGenerator = (req: Request): string => {
-    // Use user ID from JWT token if authenticated, otherwise use IP
-    const userId = req.user?.id || req.user?.sub;
-    const ip = req.ip || req.connection.remoteAddress || '0.0.0.0';
-    
-    return userId ? `rate-limit:user:${userId}` : `rate-limit:ip:${ip}`;
-  };
+  
+  if (!opts.redisClient) {
+    throw new Error('Rate limit middleware requires a Redis client');
+  }
 
   // Return the middleware function
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      // Skip rate limiting if skip function returns true
-      if (skip && skip(req)) {
+      // Skip rate limiting if the skip function returns true
+      if (opts.skip && opts.skip(req)) {
         return next();
       }
 
       // Generate the rate limit key
-      const key = keyGenerator ? keyGenerator(req) : defaultKeyGenerator(req);
+      const key = `${opts.keyPrefix}${opts.keyGenerator!(req)}`;
       
-      // Determine if the request is authenticated
-      const isAuthenticated = !!req.user;
+      // Get the current timestamp
+      const now = Date.now();
       
-      // Set the appropriate rate limit based on authentication status
-      const limit = isAuthenticated ? maxRequestsAuthenticated : maxRequestsUnauthenticated;
+      // Calculate the window start time
+      const windowStart = now - (opts.windowMs * 1000);
 
-      // Get the current count from Redis
-      const currentCount = await redisClient.get(key);
-      const count = currentCount ? parseInt(currentCount, 10) : 0;
-
-      // Calculate remaining requests
-      const remaining = Math.max(0, limit - count);
-
-      // Get TTL for the key
-      const ttl = await redisClient.ttl(key);
-      const reset = Date.now() + (ttl >= 0 ? ttl * 1000 : windowMs);
-      const resetTime = Math.ceil(reset / 1000); // Reset time in seconds
-
-      // Set rate limit headers
-      if (standardHeaders) {
-        res.setHeader('RateLimit-Limit', limit);
-        res.setHeader('RateLimit-Remaining', remaining);
-        res.setHeader('RateLimit-Reset', resetTime);
+      let result: number;
+      
+      if (opts.slidingWindow) {
+        // Sliding window implementation using Redis sorted sets
+        // 1. Add the current request to the sorted set with score = current timestamp
+        // 2. Remove all requests older than the window start time
+        // 3. Count the remaining items in the sorted set
+        const multi = opts.redisClient.multi();
+        multi.zadd(key, now, `${now}-${Math.random().toString(36).substring(2, 10)}`);
+        multi.zremrangebyscore(key, 0, windowStart);
+        multi.zcard(key);
+        multi.pexpire(key, opts.windowMs * 1000);
+        
+        const results = await multi.exec();
+        result = results ? (results[2][1] as number) : 0;
+      } else {
+        // Fixed window implementation using Redis counters
+        const count = await opts.redisClient.incr(key);
+        
+        // Set expiration on first request
+        if (count === 1) {
+          await opts.redisClient.pexpire(key, opts.windowMs * 1000);
+        }
+        
+        result = count;
       }
 
-      if (legacyHeaders) {
-        res.setHeader('X-RateLimit-Limit', limit);
+      // Get the TTL of the key
+      const ttl = await opts.redisClient.pttl(key);
+      
+      // Calculate remaining requests
+      const remaining = Math.max(0, opts.max - result);
+      
+      // Set rate limit headers if enabled
+      if (opts.headers) {
+        res.setHeader('X-RateLimit-Limit', opts.max);
         res.setHeader('X-RateLimit-Remaining', remaining);
-        res.setHeader('X-RateLimit-Reset', resetTime);
+        res.setHeader('X-RateLimit-Reset', Math.ceil(Date.now() + ttl));
       }
 
       // Check if rate limit is exceeded
-      if (count >= limit) {
-        // Set Retry-After header
-        const retryAfter = Math.ceil(windowMs / 1000);
-        res.setHeader('Retry-After', retryAfter);
-
-        // Return rate limit exceeded error
-        return res.status(statusCode).json({
-          error: 'Rate limit exceeded',
-          message,
-          retryAfter,
-          limit,
-          remaining: 0,
-          reset: resetTime
+      if (result > opts.max) {
+        if (opts.headers) {
+          res.setHeader('Retry-After', Math.ceil(ttl / 1000));
+        }
+        
+        // Use custom handler if provided, otherwise send standard response
+        if (opts.handler) {
+          return opts.handler(req, res);
+        }
+        
+        return res.status(opts.statusCode!).json({
+          status: 'error',
+          statusCode: opts.statusCode,
+          message: opts.message,
+          retryAfter: Math.ceil(ttl / 1000),
         });
       }
 
-      // Increment the counter
-      await redisClient.incr(key);
-      
-      // Set expiration if this is the first request in the window
-      if (count === 0) {
-        await redisClient.expire(key, Math.ceil(windowMs / 1000));
-      }
-
       // Continue to the next middleware
-      next();
+      return next();
     } catch (error) {
-      // Log the error but don't block the request
+      // Log the error and continue to the next middleware
       console.error(`Rate limit error: ${getErrorMessage(error)}`);
-      next();
+      return next();
     }
   };
 };
 
 /**
- * Creates a rate limiting middleware with default options
+ * Create authenticated user rate limit middleware
  * 
  * @param redisClient Redis client instance
+ * @param customOptions Custom rate limit options
  * @returns Express middleware function
  */
-export const defaultRateLimiter = (redisClient: Redis) => {
-  return createRateLimitMiddleware({
+export const createAuthenticatedRateLimit = (
+  redisClient: Redis,
+  customOptions: Partial<RateLimitOptions> = {}
+) => {
+  return rateLimitMiddleware({
+    max: 60, // 60 requests per minute for authenticated users
+    windowMs: 60 * 1000, // 1 minute window
     redisClient,
-    windowMs: 60 * 1000, // 1 minute
-    maxRequestsAuthenticated: 60, // 60 requests per minute for authenticated users
-    maxRequestsUnauthenticated: 10, // 10 requests per minute for unauthenticated users
-    standardHeaders: true,
-    legacyHeaders: false,
-    message: 'Too many requests to the notification service. Please try again later.'
+    keyPrefix: 'ratelimit:auth:',
+    keyGenerator: (req: Request): string => {
+      // Use authenticated user ID as the key
+      return req.user?.id || 'unknown';
+    },
+    skip: (req: Request): boolean => {
+      // Skip rate limiting if user is not authenticated
+      return !req.user;
+    },
+    ...customOptions,
   });
 };
 
 /**
- * Creates a more restrictive rate limiting middleware for sensitive endpoints
+ * Create unauthenticated user rate limit middleware
  * 
  * @param redisClient Redis client instance
+ * @param customOptions Custom rate limit options
  * @returns Express middleware function
  */
-export const sensitiveEndpointRateLimiter = (redisClient: Redis) => {
-  return createRateLimitMiddleware({
+export const createUnauthenticatedRateLimit = (
+  redisClient: Redis,
+  customOptions: Partial<RateLimitOptions> = {}
+) => {
+  return rateLimitMiddleware({
+    max: 10, // 10 requests per minute for unauthenticated users
+    windowMs: 60 * 1000, // 1 minute window
     redisClient,
-    windowMs: 60 * 1000, // 1 minute
-    maxRequestsAuthenticated: 30, // 30 requests per minute for authenticated users
-    maxRequestsUnauthenticated: 5, // 5 requests per minute for unauthenticated users
-    standardHeaders: true,
-    legacyHeaders: false,
-    message: 'Too many requests to a sensitive endpoint. Please try again later.'
+    keyPrefix: 'ratelimit:unauth:',
+    keyGenerator: (req: Request): string => {
+      // Use IP address as the key
+      return req.ip || req.headers['x-forwarded-for'] as string || 'unknown';
+    },
+    skip: (req: Request): boolean => {
+      // Skip rate limiting if user is authenticated
+      return !!req.user;
+    },
+    ...customOptions,
   });
 };
 
 /**
- * Creates a rate limiting middleware for webhook configuration endpoints
+ * Create role-based rate limit middleware
  * 
  * @param redisClient Redis client instance
+ * @param roleRateLimits Map of role to rate limit configuration
+ * @param defaultRateLimit Default rate limit for roles not specified
  * @returns Express middleware function
  */
-export const webhookConfigRateLimiter = (redisClient: Redis) => {
-  return createRateLimitMiddleware({
-    redisClient,
-    windowMs: 5 * 60 * 1000, // 5 minutes
-    maxRequestsAuthenticated: 20, // 20 requests per 5 minutes for authenticated users
-    maxRequestsUnauthenticated: 0, // No access for unauthenticated users
-    standardHeaders: true,
-    legacyHeaders: false,
-    message: 'Too many webhook configuration requests. Please try again later.'
-  });
+export const createRoleBasedRateLimit = (
+  redisClient: Redis,
+  roleRateLimits: Record<string, { max: number; windowMs: number }>,
+  defaultRateLimit: { max: number; windowMs: number } = { max: 30, windowMs: 60 * 1000 }
+) => {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    // Get user role from request
+    const role = req.user?.role || 'anonymous';
+    
+    // Get rate limit configuration for the role or use default
+    const rateLimitConfig = roleRateLimits[role] || defaultRateLimit;
+    
+    // Create and apply rate limit middleware
+    const middleware = rateLimitMiddleware({
+      max: rateLimitConfig.max,
+      windowMs: rateLimitConfig.windowMs,
+      redisClient,
+      keyPrefix: `ratelimit:role:${role}:`,
+      keyGenerator: (req: Request): string => {
+        // Use user ID or IP address as the key
+        return req.user?.id || req.ip || 'unknown';
+      },
+    });
+    
+    return middleware(req, res, next);
+  };
 };
 
-export default {
-  createRateLimitMiddleware,
-  defaultRateLimiter,
-  sensitiveEndpointRateLimiter,
-  webhookConfigRateLimiter
+/**
+ * Create endpoint-specific rate limit middleware
+ * 
+ * @param redisClient Redis client instance
+ * @param max Maximum number of requests allowed
+ * @param windowMs Time window in milliseconds
+ * @param customOptions Custom rate limit options
+ * @returns Express middleware function
+ */
+export const createEndpointRateLimit = (
+  redisClient: Redis,
+  max: number,
+  windowMs: number,
+  customOptions: Partial<RateLimitOptions> = {}
+) => {
+  return rateLimitMiddleware({
+    max,
+    windowMs,
+    redisClient,
+    keyPrefix: 'ratelimit:endpoint:',
+    keyGenerator: (req: Request): string => {
+      // Use endpoint path and user ID or IP as the key
+      const identifier = req.user?.id || req.ip || 'unknown';
+      return `${req.method}:${req.path}:${identifier}`;
+    },
+    ...customOptions,
+  });
 };
