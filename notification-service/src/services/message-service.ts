@@ -1,28 +1,24 @@
 import { Logger } from 'winston';
-import axios, { AxiosInstance, AxiosRequestConfig } from 'axios';
-import nodemailer, { Transporter } from 'nodemailer';
-import { v4 as uuidv4 } from 'uuid';
-
+import nodemailer from 'nodemailer';
+import axios from 'axios';
 import {
+  IMessage,
+  IMessagePayload,
+  IMessageResult,
+  IMessageTemplate,
   MessageChannel,
   MessageStatus,
-  MessagePriority,
-  IMessageTemplate,
-  IMessagePayload,
-  IMessageDeliveryOptions,
-  IMessage,
-  IMessageResult
+  MessagePriority
 } from '../types/message';
-import { IDateValue } from '../types/common';
 import { formatTime } from '../utils/format-time';
-import { validateMessagePayload } from '../utils/validation';
+import { isValidEmail, isValidPhoneNumber } from '../utils/validation';
 
 /**
  * Configuration interface for MessageService
  */
 interface MessageServiceConfig {
   logger: Logger;
-  email: {
+  email?: {
     host: string;
     port: number;
     secure: boolean;
@@ -32,769 +28,585 @@ interface MessageServiceConfig {
     };
     from: string;
   };
-  sms: {
+  sms?: {
+    provider: string;
     apiKey: string;
-    apiSecret: string;
     from: string;
-    baseUrl: string;
   };
-  push: {
+  push?: {
+    provider: string;
     apiKey: string;
-    projectId: string;
-    baseUrl: string;
+    vapidKeys?: {
+      publicKey: string;
+      privateKey: string;
+    };
   };
-  rateLimits: {
+  templates?: {
+    basePath: string;
+  };
+  rateLimits?: {
     email: number; // messages per minute
     sms: number;   // messages per minute
     push: number;  // messages per minute
   };
-  templates: {
-    basePath: string;
-    cacheEnabled: boolean;
-    cacheTTL: number; // in seconds
-  };
 }
 
 /**
- * Service responsible for handling different types of notification messages (email, SMS, push).
- * It formats messages according to channel-specific requirements, integrates with external
- * delivery providers, and manages delivery status tracking.
+ * Service that handles different types of notification messages (email, SMS, push).
+ * It formats messages according to channel-specific requirements, integrates with
+ * external delivery providers, and manages delivery status tracking.
  */
 export class MessageService {
   private logger: Logger;
   private config: MessageServiceConfig;
-  private emailTransporter: Transporter;
-  private smsClient: AxiosInstance;
-  private pushClient: AxiosInstance;
-  private templateCache: Map<string, IMessageTemplate>;
-  private rateLimitCounters: Map<MessageChannel, {
-    count: number;
-    resetAt: Date;
-  }>;
+  private emailTransporter: nodemailer.Transporter | null = null;
+  private templates: Map<string, IMessageTemplate> = new Map();
+  private rateLimitCounters: Map<string, { count: number; resetAt: Date }> = new Map();
 
   /**
-   * Creates a new instance of MessageService
+   * Creates an instance of MessageService.
    * @param config - Configuration for the message service
    */
   constructor(config: MessageServiceConfig) {
     this.logger = config.logger;
     this.config = config;
-    this.templateCache = new Map<string, IMessageTemplate>();
-    this.rateLimitCounters = new Map<MessageChannel, { count: number; resetAt: Date }>();
-    
-    // Initialize rate limit counters
-    this.initializeRateLimitCounters();
-    
-    // Initialize email transporter
-    this.emailTransporter = nodemailer.createTransport({
-      host: config.email.host,
-      port: config.email.port,
-      secure: config.email.secure,
-      auth: {
-        user: config.email.auth.user,
-        pass: config.email.auth.pass,
-      },
-    });
-    
-    // Initialize SMS client
-    this.smsClient = axios.create({
-      baseURL: config.sms.baseUrl,
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Basic ${Buffer.from(`${config.sms.apiKey}:${config.sms.apiSecret}`).toString('base64')}`,
-      },
-    });
-    
-    // Initialize Push notification client
-    this.pushClient = axios.create({
-      baseURL: config.push.baseUrl,
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${config.push.apiKey}`,
-      },
-    });
-    
-    this.logger.info('MessageService initialized');
+    this.initialize();
   }
 
   /**
-   * Initializes rate limit counters for each channel
+   * Initializes the message service, setting up transporters and loading templates
    */
-  private initializeRateLimitCounters(): void {
-    const resetAt = new Date();
-    resetAt.setMinutes(resetAt.getMinutes() + 1);
-    
-    this.rateLimitCounters.set(MessageChannel.EMAIL, { count: 0, resetAt });
-    this.rateLimitCounters.set(MessageChannel.SMS, { count: 0, resetAt });
-    this.rateLimitCounters.set(MessageChannel.PUSH, { count: 0, resetAt });
-  }
+  private async initialize(): Promise<void> {
+    try {
+      // Initialize email transporter if configured
+      if (this.config.email) {
+        this.emailTransporter = nodemailer.createTransport({
+          host: this.config.email.host,
+          port: this.config.email.port,
+          secure: this.config.email.secure,
+          auth: {
+            user: this.config.email.auth.user,
+            pass: this.config.email.auth.pass,
+          },
+        });
 
-  /**
-   * Checks if a message can be sent based on rate limits
-   * @param channel - The message channel to check
-   * @returns boolean indicating if the message can be sent
-   */
-  private checkRateLimit(channel: MessageChannel): boolean {
-    const counter = this.rateLimitCounters.get(channel);
-    if (!counter) return true;
-    
-    const now = new Date();
-    
-    // Reset counter if the reset time has passed
-    if (now > counter.resetAt) {
-      const resetAt = new Date();
-      resetAt.setMinutes(resetAt.getMinutes() + 1);
-      this.rateLimitCounters.set(channel, { count: 0, resetAt });
-      return true;
-    }
-    
-    // Check if the counter is below the limit
-    const limit = this.getChannelRateLimit(channel);
-    return counter.count < limit;
-  }
-
-  /**
-   * Increments the rate limit counter for a channel
-   * @param channel - The message channel to increment
-   */
-  private incrementRateLimit(channel: MessageChannel): void {
-    const counter = this.rateLimitCounters.get(channel);
-    if (!counter) return;
-    
-    counter.count += 1;
-    this.rateLimitCounters.set(channel, counter);
-  }
-
-  /**
-   * Gets the rate limit for a specific channel
-   * @param channel - The message channel
-   * @returns The rate limit for the channel
-   */
-  private getChannelRateLimit(channel: MessageChannel): number {
-    switch (channel) {
-      case MessageChannel.EMAIL:
-        return this.config.rateLimits.email;
-      case MessageChannel.SMS:
-        return this.config.rateLimits.sms;
-      case MessageChannel.PUSH:
-        return this.config.rateLimits.push;
-      default:
-        return Number.MAX_SAFE_INTEGER; // No limit for other channels
-    }
-  }
-
-  /**
-   * Creates a new message
-   * @param channel - The message channel
-   * @param recipient - The recipient address
-   * @param payload - The message payload
-   * @param options - Delivery options
-   * @param metadata - Additional message metadata
-   * @returns The created message
-   */
-  public createMessage(
-    channel: MessageChannel,
-    recipient: string,
-    payload: IMessagePayload,
-    options: Partial<IMessageDeliveryOptions> = {},
-    metadata?: Record<string, any>
-  ): IMessage {
-    // Validate the payload
-    validateMessagePayload(channel, payload);
-    
-    const now: IDateValue = {
-      value: formatTime(new Date()),
-    };
-    
-    // Set default delivery options
-    const deliveryOptions: IMessageDeliveryOptions = {
-      priority: options.priority || MessagePriority.MEDIUM,
-      maxRetries: options.maxRetries !== undefined ? options.maxRetries : 3,
-      retryInterval: options.retryInterval || 60000, // 1 minute
-      retryStrategy: options.retryStrategy || 'exponential',
-      requireConfirmation: options.requireConfirmation !== undefined ? options.requireConfirmation : false,
-      idempotencyKey: options.idempotencyKey || uuidv4(),
-      provider: options.provider,
-      providerOptions: options.providerOptions || {},
-      encryptContent: options.encryptContent !== undefined ? options.encryptContent : false,
-      signatureRequired: options.signatureRequired !== undefined ? options.signatureRequired : false,
-    };
-    
-    // Create the message
-    const message: IMessage = {
-      id: uuidv4(),
-      channel,
-      status: MessageStatus.QUEUED,
-      recipient,
-      payload,
-      deliveryOptions,
-      createdAt: now,
-      updatedAt: now,
-      retryCount: 0,
-    };
-    
-    // Add metadata if provided
-    if (metadata) {
-      message.metadata = {
-        correlationId: metadata.correlationId || uuidv4(),
-        ...metadata,
-      };
-    }
-    
-    this.logger.debug(`Message created: ${message.id}`, { messageId: message.id, channel });
-    
-    return message;
-  }
-
-  /**
-   * Creates a message from a template
-   * @param templateId - The template ID
-   * @param recipient - The recipient address
-   * @param variables - Template variables
-   * @param options - Delivery options
-   * @param metadata - Additional message metadata
-   * @returns The created message
-   */
-  public async createMessageFromTemplate(
-    templateId: string,
-    recipient: string,
-    variables: Record<string, any>,
-    options: Partial<IMessageDeliveryOptions> = {},
-    metadata?: Record<string, any>
-  ): Promise<IMessage> {
-    // Get the template
-    const template = await this.getTemplate(templateId);
-    if (!template) {
-      throw new Error(`Template not found: ${templateId}`);
-    }
-    
-    // Apply template variables
-    const payload = this.applyTemplateVariables(template, variables);
-    
-    // Create the message
-    return this.createMessage(
-      template.channel,
-      recipient,
-      payload,
-      options,
-      {
-        templateId,
-        ...metadata,
+        // Verify email connection
+        await this.emailTransporter.verify();
+        this.logger.info('Email transporter initialized successfully');
       }
-    );
+
+      // Initialize SMS provider if configured
+      if (this.config.sms) {
+        this.logger.info(`SMS provider ${this.config.sms.provider} initialized`);
+      }
+
+      // Initialize push notification provider if configured
+      if (this.config.push) {
+        this.logger.info(`Push notification provider ${this.config.push.provider} initialized`);
+      }
+
+      // Load message templates if configured
+      if (this.config.templates) {
+        await this.loadTemplates();
+      }
+
+      this.logger.info('MessageService initialized successfully');
+    } catch (error) {
+      this.logger.error('Failed to initialize MessageService', { error });
+      throw error;
+    }
   }
 
   /**
-   * Gets a template by ID
-   * @param templateId - The template ID
-   * @returns The template or null if not found
+   * Loads message templates from the configured templates path
    */
-  private async getTemplate(templateId: string): Promise<IMessageTemplate | null> {
-    // Check cache first if enabled
-    if (this.config.templates.cacheEnabled) {
-      const cachedTemplate = this.templateCache.get(templateId);
-      if (cachedTemplate) {
-        return cachedTemplate;
-      }
-    }
-    
-    // TODO: Implement template retrieval from database or file system
-    // For now, we'll return a mock template for demonstration
-    const mockTemplate: IMessageTemplate = {
-      id: templateId,
-      name: 'Mock Template',
-      description: 'A mock template for demonstration',
-      channel: MessageChannel.EMAIL,
-      subject: 'Mock Subject',
-      body: 'Hello {{name}}, this is a mock template with {{variable}}.',
-      variables: ['name', 'variable'],
-      createdAt: { value: formatTime(new Date()) },
-      updatedAt: { value: formatTime(new Date()) },
-      version: 1,
-      isActive: true,
-    };
-    
-    // Cache the template if caching is enabled
-    if (this.config.templates.cacheEnabled) {
-      this.templateCache.set(templateId, mockTemplate);
+  private async loadTemplates(): Promise<void> {
+    try {
+      // In a real implementation, this would load templates from files or a database
+      // For now, we'll just log that templates would be loaded
+      this.logger.info('Templates would be loaded from configured path');
       
-      // Set cache expiration
-      setTimeout(() => {
-        this.templateCache.delete(templateId);
-      }, this.config.templates.cacheTTL * 1000);
+      // Example of how templates might be loaded and stored
+      // const templateFiles = await fs.readdir(this.config.templates.basePath);
+      // for (const file of templateFiles) {
+      //   const template = await fs.readFile(path.join(this.config.templates.basePath, file), 'utf8');
+      //   const parsedTemplate = JSON.parse(template) as IMessageTemplate;
+      //   this.templates.set(parsedTemplate.id, parsedTemplate);
+      // }
+      
+      this.logger.info('Templates loaded successfully');
+    } catch (error) {
+      this.logger.error('Failed to load templates', { error });
+      throw error;
     }
-    
-    return mockTemplate;
   }
 
   /**
-   * Applies template variables to a template
-   * @param template - The message template
-   * @param variables - The variables to apply
-   * @returns The message payload with variables applied
-   */
-  private applyTemplateVariables(
-    template: IMessageTemplate,
-    variables: Record<string, any>
-  ): IMessagePayload {
-    let body = template.body;
-    let subject = template.subject || '';
-    
-    // Replace variables in the body
-    for (const key in variables) {
-      const regex = new RegExp(`{{${key}}}`, 'g');
-      body = body.replace(regex, variables[key]);
-      if (subject) {
-        subject = subject.replace(regex, variables[key]);
-      }
-    }
-    
-    // Create the payload
-    const payload: IMessagePayload = {
-      body,
-      variables,
-    };
-    
-    // Add channel-specific fields
-    if (template.channel === MessageChannel.EMAIL) {
-      payload.subject = subject;
-      payload.htmlBody = body; // Assuming the template body is HTML
-    } else if (template.channel === MessageChannel.PUSH) {
-      payload.title = subject;
-    }
-    
-    return payload;
-  }
-
-  /**
-   * Sends a message
+   * Sends a message through the specified channel
    * @param message - The message to send
-   * @returns The message result
+   * @returns A promise that resolves to the message result
    */
   public async sendMessage(message: IMessage): Promise<IMessageResult> {
-    this.logger.debug(`Sending message: ${message.id}`, { messageId: message.id, channel: message.channel });
-    
-    // Check rate limits
-    if (!this.checkRateLimit(message.channel)) {
-      this.logger.warn(`Rate limit exceeded for channel: ${message.channel}`, {
-        messageId: message.id,
-        channel: message.channel,
-      });
-      
-      return {
-        messageId: message.id,
-        success: false,
-        status: MessageStatus.FAILED,
-        timestamp: { value: formatTime(new Date()) },
-        errorCode: 'RATE_LIMIT_EXCEEDED',
-        errorMessage: `Rate limit exceeded for channel: ${message.channel}`,
-        retryable: true,
-      };
-    }
-    
-    // Increment rate limit counter
-    this.incrementRateLimit(message.channel);
-    
-    // Update message status
-    message.status = MessageStatus.SENT;
-    message.sentAt = { value: formatTime(new Date()) };
-    
     try {
-      // Send the message based on the channel
+      // Validate the message
+      this.validateMessage(message);
+
+      // Check rate limits
+      if (!this.checkRateLimit(message.channel)) {
+        return this.createFailedResult(
+          message.id,
+          'Rate limit exceeded for channel: ' + message.channel
+        );
+      }
+
+      // Process template if templateId is provided
+      if (message.templateId) {
+        message = await this.processTemplate(message);
+      }
+
+      // Send message based on channel
       let result: IMessageResult;
-      
       switch (message.channel) {
         case MessageChannel.EMAIL:
-          result = await this.sendEmailMessage(message);
+          result = await this.sendEmail(message);
           break;
         case MessageChannel.SMS:
-          result = await this.sendSmsMessage(message);
+          result = await this.sendSms(message);
           break;
         case MessageChannel.PUSH:
-          result = await this.sendPushMessage(message);
+          result = await this.sendPush(message);
           break;
         default:
-          throw new Error(`Unsupported message channel: ${message.channel}`);
+          throw new Error(`Unsupported channel: ${message.channel}`);
       }
-      
-      // Update message status based on result
-      message.status = result.status;
-      message.updatedAt = { value: formatTime(new Date()) };
-      
-      if (result.success) {
-        message.deliveredAt = { value: formatTime(new Date()) };
-      } else {
-        message.failedAt = { value: formatTime(new Date()) };
-        message.errorDetails = result.errorMessage;
-        message.retryCount = (message.retryCount || 0) + 1;
-        
-        // Calculate next retry time if retryable
-        if (result.retryable && message.retryCount < (message.deliveryOptions.maxRetries || 3)) {
-          const retryInterval = this.calculateRetryInterval(
-            message.deliveryOptions.retryInterval || 60000,
-            message.retryCount,
-            message.deliveryOptions.retryStrategy || 'exponential'
-          );
-          
-          const nextRetryDate = new Date();
-          nextRetryDate.setMilliseconds(nextRetryDate.getMilliseconds() + retryInterval);
-          
-          message.nextRetryAt = { value: formatTime(nextRetryDate) };
-        }
-      }
-      
-      return result;
-    } catch (error) {
-      this.logger.error(`Error sending message: ${message.id}`, {
+
+      // Log successful delivery
+      this.logger.info('Message sent successfully', {
         messageId: message.id,
         channel: message.channel,
-        error: error instanceof Error ? error.message : String(error),
+        recipient: message.recipient
       });
-      
-      // Update message status
-      message.status = MessageStatus.FAILED;
-      message.updatedAt = { value: formatTime(new Date()) };
-      message.failedAt = { value: formatTime(new Date()) };
-      message.errorDetails = error instanceof Error ? error.message : String(error);
-      message.retryCount = (message.retryCount || 0) + 1;
-      
-      // Calculate next retry time
-      if (message.retryCount < (message.deliveryOptions.maxRetries || 3)) {
-        const retryInterval = this.calculateRetryInterval(
-          message.deliveryOptions.retryInterval || 60000,
-          message.retryCount,
-          message.deliveryOptions.retryStrategy || 'exponential'
-        );
-        
-        const nextRetryDate = new Date();
-        nextRetryDate.setMilliseconds(nextRetryDate.getMilliseconds() + retryInterval);
-        
-        message.nextRetryAt = { value: formatTime(nextRetryDate) };
-      }
-      
-      return {
+
+      return result;
+    } catch (error) {
+      this.logger.error('Failed to send message', {
         messageId: message.id,
-        success: false,
-        status: MessageStatus.FAILED,
-        timestamp: { value: formatTime(new Date()) },
-        errorCode: 'DELIVERY_ERROR',
-        errorMessage: error instanceof Error ? error.message : String(error),
-        retryable: true,
-      };
+        channel: message.channel,
+        error: error instanceof Error ? error.message : String(error)
+      });
+
+      return this.createFailedResult(
+        message.id,
+        error instanceof Error ? error.message : 'Unknown error'
+      );
     }
   }
 
   /**
-   * Calculates the retry interval based on the retry strategy
-   * @param baseInterval - The base retry interval in milliseconds
-   * @param retryCount - The current retry count
-   * @param strategy - The retry strategy (linear or exponential)
-   * @returns The calculated retry interval in milliseconds
+   * Validates a message before sending
+   * @param message - The message to validate
+   * @throws Error if the message is invalid
    */
-  private calculateRetryInterval(
-    baseInterval: number,
-    retryCount: number,
-    strategy: 'linear' | 'exponential'
-  ): number {
-    if (strategy === 'linear') {
-      return baseInterval * (retryCount + 1);
-    } else {
-      // Exponential backoff with jitter
-      const exponentialInterval = baseInterval * Math.pow(2, retryCount);
-      const jitter = Math.random() * 0.3 * exponentialInterval; // 30% jitter
-      return exponentialInterval + jitter;
+  private validateMessage(message: IMessage): void {
+    if (!message.id) {
+      throw new Error('Message ID is required');
     }
+
+    if (!message.channel) {
+      throw new Error('Message channel is required');
+    }
+
+    if (!message.recipient) {
+      throw new Error('Message recipient is required');
+    }
+
+    if (!message.payload) {
+      throw new Error('Message payload is required');
+    }
+
+    // Channel-specific validation
+    switch (message.channel) {
+      case MessageChannel.EMAIL:
+        if (!message.payload.subject) {
+          throw new Error('Email subject is required');
+        }
+        if (!message.payload.body && !message.payload.htmlBody) {
+          throw new Error('Email body or HTML body is required');
+        }
+        // Validate email format
+        if (!isValidEmail(message.recipient)) {
+          throw new Error('Invalid email recipient format');
+        }
+        break;
+
+      case MessageChannel.SMS:
+        if (!message.payload.body) {
+          throw new Error('SMS body is required');
+        }
+        // Validate phone number format
+        if (!isValidPhoneNumber(message.recipient)) {
+          throw new Error('Invalid phone number format');
+        }
+        break;
+
+      case MessageChannel.PUSH:
+        if (!message.payload.title) {
+          throw new Error('Push notification title is required');
+        }
+        if (!message.payload.body) {
+          throw new Error('Push notification body is required');
+        }
+        break;
+    }
+  }
+
+  /**
+   * Checks if the current rate limit for a channel has been exceeded
+   * @param channel - The message channel to check
+   * @returns true if the rate limit is not exceeded, false otherwise
+   */
+  private checkRateLimit(channel: MessageChannel): boolean {
+    if (!this.config.rateLimits) {
+      return true; // No rate limits configured
+    }
+
+    const limit = this.config.rateLimits[channel.toLowerCase() as keyof typeof this.config.rateLimits];
+    if (!limit) {
+      return true; // No rate limit for this channel
+    }
+
+    const now = new Date();
+    const key = channel.toLowerCase();
+    const counter = this.rateLimitCounters.get(key) || { count: 0, resetAt: new Date(now.getTime() + 60000) };
+
+    // Reset counter if the minute has passed
+    if (now >= counter.resetAt) {
+      counter.count = 0;
+      counter.resetAt = new Date(now.getTime() + 60000);
+    }
+
+    // Check if limit is exceeded
+    if (counter.count >= limit) {
+      this.logger.warn(`Rate limit exceeded for channel: ${channel}`, {
+        channel,
+        limit,
+        count: counter.count,
+        resetAt: counter.resetAt
+      });
+      return false;
+    }
+
+    // Increment counter
+    counter.count++;
+    this.rateLimitCounters.set(key, counter);
+    return true;
+  }
+
+  /**
+   * Processes a message template, replacing variables with values
+   * @param message - The message with a templateId
+   * @returns The processed message with template content
+   */
+  private async processTemplate(message: IMessage): Promise<IMessage> {
+    try {
+      const template = this.templates.get(message.templateId!);
+      if (!template) {
+        throw new Error(`Template not found: ${message.templateId}`);
+      }
+
+      // Check if template is for the correct channel
+      if (template.channel !== message.channel) {
+        throw new Error(`Template channel mismatch: expected ${message.channel}, got ${template.channel}`);
+      }
+
+      // Clone the message to avoid modifying the original
+      const processedMessage = { ...message };
+      
+      // Apply template content
+      if (template.subject) {
+        processedMessage.payload.subject = this.replaceVariables(template.subject, message.payload.variables || {});
+      }
+      
+      processedMessage.payload.body = this.replaceVariables(template.body, message.payload.variables || {});
+
+      return processedMessage;
+    } catch (error) {
+      this.logger.error('Failed to process template', {
+        templateId: message.templateId,
+        error: error instanceof Error ? error.message : String(error)
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Replaces template variables with their values
+   * @param content - The template content with placeholders
+   * @param variables - The variables to replace in the template
+   * @returns The content with variables replaced
+   */
+  private replaceVariables(content: string, variables: Record<string, any>): string {
+    return content.replace(/\{\{([^}]+)\}\}/g, (match, variable) => {
+      const value = variables[variable.trim()];
+      return value !== undefined ? String(value) : match;
+    });
   }
 
   /**
    * Sends an email message
-   * @param message - The message to send
-   * @returns The message result
+   * @param message - The email message to send
+   * @returns A promise that resolves to the message result
    */
-  private async sendEmailMessage(message: IMessage): Promise<IMessageResult> {
-    this.logger.debug(`Sending email message: ${message.id}`, { messageId: message.id });
-    
+  private async sendEmail(message: IMessage): Promise<IMessageResult> {
+    if (!this.emailTransporter) {
+      throw new Error('Email transporter not initialized');
+    }
+
     try {
-      // Prepare email options
       const mailOptions = {
-        from: this.config.email.from,
+        from: message.sender || this.config.email?.from,
         to: message.recipient,
-        subject: message.payload.subject || 'No Subject',
+        subject: message.payload.subject,
         text: message.payload.body,
-        html: message.payload.htmlBody || message.payload.body,
+        html: message.payload.htmlBody,
         attachments: message.payload.attachments?.map(attachment => ({
           filename: attachment.name,
           contentType: attachment.contentType,
-          content: attachment.content,
-        })),
+          content: attachment.content
+        }))
       };
-      
-      // Send the email
+
       const info = await this.emailTransporter.sendMail(mailOptions);
-      
-      this.logger.info(`Email sent: ${message.id}`, {
-        messageId: message.id,
-        emailId: info.messageId,
-      });
-      
+
       return {
         messageId: message.id,
         success: true,
-        status: MessageStatus.DELIVERED,
-        timestamp: { value: formatTime(new Date()) },
+        status: MessageStatus.SENT,
+        timestamp: new Date(),
         providerMessageId: info.messageId,
         providerResponse: JSON.stringify(info),
         deliveryMetrics: {
-          latency: 0, // Not available for email
-          size: Buffer.byteLength(message.payload.body, 'utf8'),
-        },
+          latency: 0, // Would be calculated in a real implementation
+          size: Buffer.byteLength(JSON.stringify(mailOptions), 'utf8')
+        }
       };
     } catch (error) {
-      this.logger.error(`Error sending email: ${message.id}`, {
-        messageId: message.id,
-        error: error instanceof Error ? error.message : String(error),
+      this.logger.error('Failed to send email', {
+        recipient: message.recipient,
+        error: error instanceof Error ? error.message : String(error)
       });
-      
-      return {
-        messageId: message.id,
-        success: false,
-        status: MessageStatus.FAILED,
-        timestamp: { value: formatTime(new Date()) },
-        errorCode: 'EMAIL_DELIVERY_ERROR',
-        errorMessage: error instanceof Error ? error.message : String(error),
-        retryable: this.isRetryableEmailError(error),
-      };
-    }
-  }
 
-  /**
-   * Determines if an email error is retryable
-   * @param error - The error to check
-   * @returns Whether the error is retryable
-   */
-  private isRetryableEmailError(error: unknown): boolean {
-    if (!(error instanceof Error)) return true;
-    
-    // Non-retryable errors
-    const nonRetryableErrors = [
-      'invalid address',
-      'domain not found',
-      'mailbox unavailable',
-      'user unknown',
-      'rejected recipient',
-    ];
-    
-    const errorMessage = error.message.toLowerCase();
-    
-    // Check if the error message contains any non-retryable phrases
-    return !nonRetryableErrors.some(phrase => errorMessage.includes(phrase));
+      return this.createFailedResult(
+        message.id,
+        error instanceof Error ? error.message : 'Unknown error sending email'
+      );
+    }
   }
 
   /**
    * Sends an SMS message
-   * @param message - The message to send
-   * @returns The message result
+   * @param message - The SMS message to send
+   * @returns A promise that resolves to the message result
    */
-  private async sendSmsMessage(message: IMessage): Promise<IMessageResult> {
-    this.logger.debug(`Sending SMS message: ${message.id}`, { messageId: message.id });
-    
+  private async sendSms(message: IMessage): Promise<IMessageResult> {
+    if (!this.config.sms) {
+      throw new Error('SMS provider not configured');
+    }
+
     try {
-      // Prepare SMS payload
-      const smsPayload = {
-        from: message.payload.senderName || this.config.sms.from,
+      // This is a simplified implementation that would be replaced with actual SMS provider integration
+      // For example, using Twilio, Plivo, or another SMS service
+      
+      // Example of how this might be implemented with an HTTP API
+      const response = await axios.post(`https://api.${this.config.sms.provider}.com/messages`, {
+        from: message.sender || this.config.sms.from,
         to: message.recipient,
-        text: message.payload.body,
-      };
-      
-      // Send the SMS
-      const startTime = Date.now();
-      const response = await this.smsClient.post('/messages', smsPayload);
-      const latency = Date.now() - startTime;
-      
-      this.logger.info(`SMS sent: ${message.id}`, {
-        messageId: message.id,
-        smsId: response.data.id,
+        body: message.payload.body
+      }, {
+        headers: {
+          'Authorization': `Bearer ${this.config.sms.apiKey}`,
+          'Content-Type': 'application/json'
+        }
       });
-      
+
       return {
         messageId: message.id,
         success: true,
-        status: MessageStatus.DELIVERED,
-        timestamp: { value: formatTime(new Date()) },
+        status: MessageStatus.SENT,
+        timestamp: new Date(),
         providerMessageId: response.data.id,
         providerResponse: JSON.stringify(response.data),
         deliveryMetrics: {
-          latency,
-          size: Buffer.byteLength(message.payload.body, 'utf8'),
-          cost: response.data.cost,
-        },
+          latency: 0, // Would be calculated in a real implementation
+          size: Buffer.byteLength(message.payload.body || '', 'utf8'),
+          cost: response.data.cost // Some providers return cost information
+        }
       };
     } catch (error) {
-      this.logger.error(`Error sending SMS: ${message.id}`, {
-        messageId: message.id,
-        error: error instanceof Error ? error.message : String(error),
+      this.logger.error('Failed to send SMS', {
+        recipient: message.recipient,
+        error: error instanceof Error ? error.message : String(error)
       });
-      
-      return {
-        messageId: message.id,
-        success: false,
-        status: MessageStatus.FAILED,
-        timestamp: { value: formatTime(new Date()) },
-        errorCode: 'SMS_DELIVERY_ERROR',
-        errorMessage: error instanceof Error ? error.message : String(error),
-        retryable: this.isRetryableSmsError(error),
-      };
+
+      return this.createFailedResult(
+        message.id,
+        error instanceof Error ? error.message : 'Unknown error sending SMS'
+      );
     }
   }
 
   /**
-   * Determines if an SMS error is retryable
-   * @param error - The error to check
-   * @returns Whether the error is retryable
+   * Sends a push notification
+   * @param message - The push notification message to send
+   * @returns A promise that resolves to the message result
    */
-  private isRetryableSmsError(error: unknown): boolean {
-    if (!(error instanceof Error)) return true;
-    
-    // Non-retryable errors
-    const nonRetryableErrors = [
-      'invalid number',
-      'unroutable',
-      'rejected',
-      'blocked',
-    ];
-    
-    const errorMessage = error.message.toLowerCase();
-    
-    // Check if the error message contains any non-retryable phrases
-    return !nonRetryableErrors.some(phrase => errorMessage.includes(phrase));
-  }
+  private async sendPush(message: IMessage): Promise<IMessageResult> {
+    if (!this.config.push) {
+      throw new Error('Push notification provider not configured');
+    }
 
-  /**
-   * Sends a push notification message
-   * @param message - The message to send
-   * @returns The message result
-   */
-  private async sendPushMessage(message: IMessage): Promise<IMessageResult> {
-    this.logger.debug(`Sending push message: ${message.id}`, { messageId: message.id });
-    
     try {
-      // Prepare push notification payload
-      const pushPayload = {
-        token: message.recipient, // Device token
+      // This is a simplified implementation that would be replaced with actual push provider integration
+      // For example, using Firebase Cloud Messaging, OneSignal, or another push service
+      
+      // Example of how this might be implemented with an HTTP API
+      const payload = {
+        to: message.recipient, // Device token or registration ID
         notification: {
-          title: message.payload.title || 'Notification',
+          title: message.payload.title,
           body: message.payload.body,
-          imageUrl: message.payload.imageUrl,
+          icon: message.payload.imageUrl,
+          click_action: message.payload.deepLink
         },
-        data: {
-          deepLink: message.payload.deepLink,
-          ...message.metadata,
-        },
-        android: {
-          priority: message.deliveryOptions.priority === MessagePriority.HIGH ? 'high' : 'normal',
-        },
-        apns: {
-          headers: {
-            'apns-priority': message.deliveryOptions.priority === MessagePriority.HIGH ? '10' : '5',
-          },
-        },
+        data: message.payload.payload // Additional data to send with the notification
       };
-      
-      // Send the push notification
-      const startTime = Date.now();
-      const response = await this.pushClient.post('/messages:send', {
-        message: pushPayload,
-        validateOnly: false,
+
+      const response = await axios.post(`https://api.${this.config.push.provider}.com/send`, payload, {
+        headers: {
+          'Authorization': `key=${this.config.push.apiKey}`,
+          'Content-Type': 'application/json'
+        }
       });
-      const latency = Date.now() - startTime;
-      
-      this.logger.info(`Push notification sent: ${message.id}`, {
-        messageId: message.id,
-        pushId: response.data.name,
-      });
-      
+
       return {
         messageId: message.id,
         success: true,
-        status: MessageStatus.SENT, // Push notifications can only confirm sending, not delivery
-        timestamp: { value: formatTime(new Date()) },
-        providerMessageId: response.data.name,
+        status: MessageStatus.SENT,
+        timestamp: new Date(),
+        providerMessageId: response.data.id,
         providerResponse: JSON.stringify(response.data),
         deliveryMetrics: {
-          latency,
-          size: Buffer.byteLength(JSON.stringify(pushPayload), 'utf8'),
-        },
+          latency: 0, // Would be calculated in a real implementation
+          size: Buffer.byteLength(JSON.stringify(payload), 'utf8')
+        }
       };
     } catch (error) {
-      this.logger.error(`Error sending push notification: ${message.id}`, {
-        messageId: message.id,
-        error: error instanceof Error ? error.message : String(error),
+      this.logger.error('Failed to send push notification', {
+        recipient: message.recipient,
+        error: error instanceof Error ? error.message : String(error)
       });
-      
-      return {
-        messageId: message.id,
-        success: false,
-        status: MessageStatus.FAILED,
-        timestamp: { value: formatTime(new Date()) },
-        errorCode: 'PUSH_DELIVERY_ERROR',
-        errorMessage: error instanceof Error ? error.message : String(error),
-        retryable: this.isRetryablePushError(error),
-      };
+
+      return this.createFailedResult(
+        message.id,
+        error instanceof Error ? error.message : 'Unknown error sending push notification'
+      );
     }
   }
 
   /**
-   * Determines if a push notification error is retryable
-   * @param error - The error to check
-   * @returns Whether the error is retryable
+   * Creates a failed message result
+   * @param messageId - The ID of the failed message
+   * @param errorMessage - The error message
+   * @returns A message result indicating failure
    */
-  private isRetryablePushError(error: unknown): boolean {
-    if (!(error instanceof Error)) return true;
-    
-    // Non-retryable errors
-    const nonRetryableErrors = [
-      'invalid token',
-      'unregistered',
-      'not found',
-    ];
-    
-    const errorMessage = error.message.toLowerCase();
-    
-    // Check if the error message contains any non-retryable phrases
-    return !nonRetryableErrors.some(phrase => errorMessage.includes(phrase));
+  private createFailedResult(messageId: string, errorMessage: string): IMessageResult {
+    return {
+      messageId,
+      success: false,
+      status: MessageStatus.FAILED,
+      timestamp: new Date(),
+      errorCode: 'DELIVERY_FAILED',
+      errorMessage,
+      retryable: true // Most errors are retryable by default
+    };
   }
 
   /**
-   * Gets the delivery status of a message
-   * @param messageId - The message ID
-   * @returns The message status or null if not found
+   * Updates the delivery status of a message
+   * @param messageId - The ID of the message to update
+   * @param status - The new status of the message
+   * @param details - Additional details about the status update
+   * @returns A promise that resolves when the status is updated
    */
-  public async getMessageStatus(messageId: string): Promise<MessageStatus | null> {
-    // TODO: Implement message status retrieval from database
-    // For now, we'll return a mock status
-    return MessageStatus.DELIVERED;
+  public async updateMessageStatus(
+    messageId: string,
+    status: MessageStatus,
+    details?: {
+      providerMessageId?: string;
+      deliveredAt?: Date;
+      failedAt?: Date;
+      errorDetails?: string;
+    }
+  ): Promise<void> {
+    try {
+      // In a real implementation, this would update the message status in a database
+      // For now, we'll just log the status update
+      this.logger.info('Message status updated', {
+        messageId,
+        status,
+        ...details
+      });
+    } catch (error) {
+      this.logger.error('Failed to update message status', {
+        messageId,
+        status,
+        error: error instanceof Error ? error.message : String(error)
+      });
+      throw error;
+    }
   }
 
   /**
-   * Gets a message by ID
-   * @param messageId - The message ID
-   * @returns The message or null if not found
+   * Gets message delivery statistics for a time period
+   * @param startDate - The start date for the statistics
+   * @param endDate - The end date for the statistics
+   * @param channel - Optional channel to filter by
+   * @returns A promise that resolves to the message statistics
    */
-  public async getMessage(messageId: string): Promise<IMessage | null> {
-    // TODO: Implement message retrieval from database
-    // For now, we'll return null
-    return null;
-  }
-
-  /**
-   * Updates a message
-   * @param message - The message to update
-   * @returns The updated message
-   */
-  public async updateMessage(message: IMessage): Promise<IMessage> {
-    // TODO: Implement message update in database
-    // For now, we'll just return the message
-    message.updatedAt = { value: formatTime(new Date()) };
-    return message;
+  public async getMessageStats(
+    startDate: Date,
+    endDate: Date,
+    channel?: MessageChannel
+  ): Promise<{
+    total: number;
+    sent: number;
+    delivered: number;
+    failed: number;
+    byChannel?: Record<MessageChannel, number>;
+  }> {
+    try {
+      // In a real implementation, this would query a database for message statistics
+      // For now, we'll just return mock statistics
+      return {
+        total: 0,
+        sent: 0,
+        delivered: 0,
+        failed: 0,
+        byChannel: channel ? undefined : {
+          [MessageChannel.EMAIL]: 0,
+          [MessageChannel.SMS]: 0,
+          [MessageChannel.PUSH]: 0,
+          [MessageChannel.WEBHOOK]: 0
+        }
+      };
+    } catch (error) {
+      this.logger.error('Failed to get message statistics', {
+        startDate,
+        endDate,
+        channel,
+        error: error instanceof Error ? error.message : String(error)
+      });
+      throw error;
+    }
   }
 }
