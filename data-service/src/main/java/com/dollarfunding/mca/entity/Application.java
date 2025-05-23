@@ -16,12 +16,12 @@ import java.util.UUID;
  * JPA entity class representing an MCA application in the database.
  * 
  * This entity maps to the Applications schema and serves as the core data structure
- * for tracking merchant cash advance applications throughout their lifecycle.
- * It includes bidirectional relationships with Document and MerchantDetails entities.
+ * for tracking merchant cash advance applications throughout their lifecycle. It includes
+ * bidirectional relationships with Document and MerchantDetails entities.
  * 
- * The application processing system is designed to process applications in under 5 minutes
- * from receipt to completion and maintain 99% data extraction accuracy through AI and
- * machine learning.
+ * The Data Service uses this entity to manage application data, processing logic, and
+ * database interactions. Applications are processed in under 5 minutes from receipt to
+ * completion with 99% data extraction accuracy through AI and machine learning.
  */
 @Entity
 @Table(name = "applications")
@@ -44,14 +44,6 @@ public class Application {
     private ApplicationStatus status;
 
     /**
-     * Current review status of the application
-     */
-    @NotNull
-    @Enumerated(EnumType.STRING)
-    @Column(name = "review_status", nullable = false)
-    private ReviewStatus reviewStatus;
-
-    /**
      * JSON string representation of the application metadata
      * Includes processing details, confidence scores, etc.
      */
@@ -68,14 +60,24 @@ public class Application {
     /**
      * Timestamp when the application was created
      */
-    @Column(name = "created_at", nullable = false, updatable = false)
+    @NotNull
+    @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;
 
     /**
      * Timestamp when the application was last updated
      */
+    @NotNull
     @Column(name = "updated_at", nullable = false)
     private LocalDateTime updatedAt;
+
+    /**
+     * Current review status of the application
+     */
+    @NotNull
+    @Enumerated(EnumType.STRING)
+    @Column(name = "review_status", nullable = false)
+    private ReviewStatus reviewStatus;
 
     /**
      * One-to-Many relationship with Document entity
@@ -86,7 +88,7 @@ public class Application {
 
     /**
      * One-to-One relationship with MerchantDetails entity
-     * An application has exactly one merchant details record
+     * An application has one merchant details record
      */
     @OneToOne(mappedBy = "application", cascade = CascadeType.ALL, orphanRemoval = true)
     private MerchantDetails merchantDetails;
@@ -105,25 +107,31 @@ public class Application {
 
     /**
      * Constructor with required fields
+     * 
+     * @param status The initial status of the application
      */
-    public Application(ApplicationStatus status, ReviewStatus reviewStatus) {
+    public Application(ApplicationStatus status) {
         this();
-        this.status = status;
-        this.reviewStatus = reviewStatus;
+        this.status = status != null ? status : ApplicationStatus.NEW;
     }
 
     /**
      * Constructor with all fields except ID and relationships
+     * 
+     * @param status The status of the application
+     * @param metadata The application metadata
+     * @param createdAt The timestamp when the application was created
+     * @param updatedAt The timestamp when the application was last updated
+     * @param reviewStatus The review status of the application
      */
-    public Application(ApplicationStatus status, ReviewStatus reviewStatus, 
-                      Map<String, Object> metadata, LocalDateTime createdAt, 
-                      LocalDateTime updatedAt) {
-        this.status = status;
-        this.reviewStatus = reviewStatus;
-        this.metadata = metadata != null ? metadata : new HashMap<>();
-        this.createdAt = createdAt;
-        this.updatedAt = updatedAt;
+    public Application(ApplicationStatus status, Map<String, Object> metadata,
+                      LocalDateTime createdAt, LocalDateTime updatedAt, ReviewStatus reviewStatus) {
         this.documents = new ArrayList<>();
+        this.status = status != null ? status : ApplicationStatus.NEW;
+        this.metadata = metadata != null ? metadata : new HashMap<>();
+        this.createdAt = createdAt != null ? createdAt : LocalDateTime.now();
+        this.updatedAt = updatedAt != null ? updatedAt : LocalDateTime.now();
+        this.reviewStatus = reviewStatus != null ? reviewStatus : ReviewStatus.NOT_REVIEWED;
         
         // Convert metadata map to JSON string
         if (metadata != null) {
@@ -152,63 +160,32 @@ public class Application {
     }
 
     /**
-     * @return the application status
+     * @return the current status of the application
      */
     public ApplicationStatus getStatus() {
         return status;
     }
 
     /**
-     * @param status the application status to set
+     * @param status the status to set
      */
     public void setStatus(ApplicationStatus status) {
+        if (status == null) {
+            throw new IllegalArgumentException("Status cannot be null");
+        }
+        
+        // Check if the status transition is valid
+        if (this.status != null && !this.status.canTransitionTo(status)) {
+            throw new IllegalStateException(
+                "Invalid status transition from " + this.status + " to " + status);
+        }
+        
         this.status = status;
         this.updatedAt = LocalDateTime.now();
-    }
-
-    /**
-     * Updates the application status if the transition is valid
-     * 
-     * @param newStatus the new status to transition to
-     * @return true if the status was updated, false if the transition is invalid
-     */
-    public boolean updateStatus(ApplicationStatus newStatus) {
-        if (this.status.canTransitionTo(newStatus)) {
-            this.status = newStatus;
-            this.updatedAt = LocalDateTime.now();
-            return true;
-        }
-        return false;
-    }
-
-    /**
-     * @return the review status
-     */
-    public ReviewStatus getReviewStatus() {
-        return reviewStatus;
-    }
-
-    /**
-     * @param reviewStatus the review status to set
-     */
-    public void setReviewStatus(ReviewStatus reviewStatus) {
-        this.reviewStatus = reviewStatus;
-        this.updatedAt = LocalDateTime.now();
-    }
-
-    /**
-     * Updates the review status if the transition is valid
-     * 
-     * @param newReviewStatus the new review status to transition to
-     * @return true if the review status was updated, false if the transition is invalid
-     */
-    public boolean updateReviewStatus(ReviewStatus newReviewStatus) {
-        if (ReviewStatus.isValidTransition(this.reviewStatus, newReviewStatus)) {
-            this.reviewStatus = newReviewStatus;
-            this.updatedAt = LocalDateTime.now();
-            return true;
-        }
-        return false;
+        
+        // Add status change to metadata
+        addMetadata("statusHistory", getStatusHistory());
+        addMetadata("lastStatusChange", LocalDateTime.now().toString());
     }
 
     /**
@@ -239,7 +216,6 @@ public class Application {
         } else {
             this.metadataJson = "{}";
         }
-        this.updatedAt = LocalDateTime.now();
     }
 
     /**
@@ -266,6 +242,128 @@ public class Application {
             }
         } else {
             this.metadata = new HashMap<>();
+        }
+    }
+
+    /**
+     * @return the timestamp when the application was created
+     */
+    public LocalDateTime getCreatedAt() {
+        return createdAt;
+    }
+
+    /**
+     * @param createdAt the creation timestamp to set
+     */
+    public void setCreatedAt(LocalDateTime createdAt) {
+        this.createdAt = createdAt;
+    }
+
+    /**
+     * @return the timestamp when the application was last updated
+     */
+    public LocalDateTime getUpdatedAt() {
+        return updatedAt;
+    }
+
+    /**
+     * @param updatedAt the update timestamp to set
+     */
+    public void setUpdatedAt(LocalDateTime updatedAt) {
+        this.updatedAt = updatedAt;
+    }
+
+    /**
+     * @return the current review status of the application
+     */
+    public ReviewStatus getReviewStatus() {
+        return reviewStatus;
+    }
+
+    /**
+     * @param reviewStatus the review status to set
+     */
+    public void setReviewStatus(ReviewStatus reviewStatus) {
+        if (reviewStatus == null) {
+            throw new IllegalArgumentException("Review status cannot be null");
+        }
+        
+        // Check if the review status transition is valid
+        if (this.reviewStatus != null && !this.reviewStatus.canTransitionTo(reviewStatus)) {
+            throw new IllegalStateException(
+                "Invalid review status transition from " + this.reviewStatus + " to " + reviewStatus);
+        }
+        
+        this.reviewStatus = reviewStatus;
+        this.updatedAt = LocalDateTime.now();
+        
+        // Add review status change to metadata
+        addMetadata("reviewStatusHistory", getReviewStatusHistory());
+        addMetadata("lastReviewStatusChange", LocalDateTime.now().toString());
+    }
+
+    /**
+     * @return the list of documents associated with this application
+     */
+    public List<Document> getDocuments() {
+        return documents;
+    }
+
+    /**
+     * @param documents the list of documents to set
+     */
+    public void setDocuments(List<Document> documents) {
+        this.documents = documents;
+    }
+
+    /**
+     * Adds a document to this application
+     * 
+     * @param document the document to add
+     */
+    public void addDocument(Document document) {
+        if (document == null) {
+            return;
+        }
+        
+        if (this.documents == null) {
+            this.documents = new ArrayList<>();
+        }
+        
+        this.documents.add(document);
+        document.setApplication(this);
+        this.updatedAt = LocalDateTime.now();
+    }
+
+    /**
+     * Removes a document from this application
+     * 
+     * @param document the document to remove
+     */
+    public void removeDocument(Document document) {
+        if (document == null || this.documents == null) {
+            return;
+        }
+        
+        this.documents.remove(document);
+        document.setApplication(null);
+        this.updatedAt = LocalDateTime.now();
+    }
+
+    /**
+     * @return the merchant details associated with this application
+     */
+    public MerchantDetails getMerchantDetails() {
+        return merchantDetails;
+    }
+
+    /**
+     * @param merchantDetails the merchant details to set
+     */
+    public void setMerchantDetails(MerchantDetails merchantDetails) {
+        this.merchantDetails = merchantDetails;
+        if (merchantDetails != null) {
+            merchantDetails.setApplication(this);
         }
         this.updatedAt = LocalDateTime.now();
     }
@@ -306,180 +404,113 @@ public class Application {
     }
 
     /**
-     * @return the creation timestamp
-     */
-    public LocalDateTime getCreatedAt() {
-        return createdAt;
-    }
-
-    /**
-     * @param createdAt the creation timestamp to set
-     */
-    public void setCreatedAt(LocalDateTime createdAt) {
-        this.createdAt = createdAt;
-    }
-
-    /**
-     * @return the update timestamp
-     */
-    public LocalDateTime getUpdatedAt() {
-        return updatedAt;
-    }
-
-    /**
-     * @param updatedAt the update timestamp to set
-     */
-    public void setUpdatedAt(LocalDateTime updatedAt) {
-        this.updatedAt = updatedAt;
-    }
-
-    /**
-     * @return the list of documents associated with this application
-     */
-    public List<Document> getDocuments() {
-        return documents;
-    }
-
-    /**
-     * @param documents the list of documents to set
-     */
-    public void setDocuments(List<Document> documents) {
-        this.documents = documents;
-        if (documents != null) {
-            for (Document document : documents) {
-                document.setApplication(this);
-            }
-        }
-    }
-
-    /**
-     * Adds a document to this application
+     * Gets the status history of this application from metadata
      * 
-     * @param document the document to add
+     * @return the status history as a list, or an empty list if not available
      */
-    public void addDocument(Document document) {
-        if (documents == null) {
-            documents = new ArrayList<>();
-        }
-        documents.add(document);
-        document.setApplication(this);
-        this.updatedAt = LocalDateTime.now();
-    }
-
-    /**
-     * Removes a document from this application
-     * 
-     * @param document the document to remove
-     */
-    public void removeDocument(Document document) {
-        if (documents != null) {
-            documents.remove(document);
-            document.setApplication(null);
-            this.updatedAt = LocalDateTime.now();
-        }
-    }
-
-    /**
-     * @return the merchant details associated with this application
-     */
-    public MerchantDetails getMerchantDetails() {
-        return merchantDetails;
-    }
-
-    /**
-     * @param merchantDetails the merchant details to set
-     */
-    public void setMerchantDetails(MerchantDetails merchantDetails) {
-        this.merchantDetails = merchantDetails;
-        if (merchantDetails != null) {
-            merchantDetails.setApplication(this);
-        }
-        this.updatedAt = LocalDateTime.now();
-    }
-
-    /**
-     * Checks if this application has been completed
-     * 
-     * @return true if the application status is COMPLETED
-     */
-    public boolean isCompleted() {
-        return status == ApplicationStatus.COMPLETED;
-    }
-
-    /**
-     * Checks if this application is in an active state
-     * 
-     * @return true if the application is in an active state
-     */
-    public boolean isActive() {
-        return status.isActiveStatus();
-    }
-
-    /**
-     * Checks if this application has been decided upon
-     * 
-     * @return true if the application has been decided upon
-     */
-    public boolean isDecided() {
-        return status.isDecidedStatus();
-    }
-
-    /**
-     * Checks if this application requires review
-     * 
-     * @return true if the application requires review
-     */
-    public boolean requiresReview() {
-        return reviewStatus.requiresAction();
-    }
-
-    /**
-     * Checks if this application has all required documents
-     * 
-     * @return true if the application has all required documents
-     */
-    public boolean hasAllRequiredDocuments() {
-        // Check if we have at least one document of each required type
-        boolean hasIdentification = false;
-        boolean hasFinancial = false;
-        boolean hasBusinessVerification = false;
-        
-        if (documents != null) {
-            for (Document document : documents) {
-                DocumentType type = document.getType();
-                if (type == DocumentType.ID_VERIFICATION) {
-                    hasIdentification = true;
-                } else if (type == DocumentType.BANK_STATEMENT || type == DocumentType.TAX_RETURN) {
-                    hasFinancial = true;
-                } else if (type == DocumentType.BUSINESS_LICENSE || type == DocumentType.INVOICE) {
-                    hasBusinessVerification = true;
-                }
-            }
+    @SuppressWarnings("unchecked")
+    public List<Map<String, Object>> getStatusHistory() {
+        List<Map<String, Object>> history = getMetadataValue("statusHistory");
+        if (history == null) {
+            history = new ArrayList<>();
         }
         
-        return hasIdentification && hasFinancial && hasBusinessVerification;
-    }
-
-    /**
-     * Calculates the processing time of this application in minutes
-     * 
-     * @return the processing time in minutes, or -1 if the application is not completed
-     */
-    public long getProcessingTimeMinutes() {
-        if (!isCompleted() || createdAt == null || updatedAt == null) {
-            return -1;
+        // Add current status to history if it's not already there or has changed
+        if (history.isEmpty() || !history.get(history.size() - 1).get("status").equals(status.name())) {
+            Map<String, Object> entry = new HashMap<>();
+            entry.put("status", status.name());
+            entry.put("timestamp", LocalDateTime.now().toString());
+            history.add(entry);
         }
-        return java.time.Duration.between(createdAt, updatedAt).toMinutes();
+        
+        return history;
     }
 
     /**
-     * Checks if this application was processed within the target time (5 minutes)
+     * Gets the review status history of this application from metadata
      * 
-     * @return true if the application was processed within the target time
+     * @return the review status history as a list, or an empty list if not available
      */
-    public boolean isProcessedWithinTargetTime() {
-        long processingTime = getProcessingTimeMinutes();
-        return processingTime >= 0 && processingTime <= 5;
+    @SuppressWarnings("unchecked")
+    public List<Map<String, Object>> getReviewStatusHistory() {
+        List<Map<String, Object>> history = getMetadataValue("reviewStatusHistory");
+        if (history == null) {
+            history = new ArrayList<>();
+        }
+        
+        // Add current review status to history if it's not already there or has changed
+        if (history.isEmpty() || !history.get(history.size() - 1).get("status").equals(reviewStatus.name())) {
+            Map<String, Object> entry = new HashMap<>();
+            entry.put("status", reviewStatus.name());
+            entry.put("timestamp", LocalDateTime.now().toString());
+            history.add(entry);
+        }
+        
+        return history;
+    }
+
+    /**
+     * Gets the processing time of this application in milliseconds
+     * 
+     * @return the processing time, or 0 if the application is not completed
+     */
+    public long getProcessingTimeMillis() {
+        if (status != ApplicationStatus.COMPLETED) {
+            return 0;
+        }
+        
+        LocalDateTime completedAt = updatedAt;
+        return java.time.Duration.between(createdAt, completedAt).toMillis();
+    }
+
+    /**
+     * Checks if this application meets the 5-minute processing time requirement
+     * 
+     * @return true if the application was processed in under 5 minutes, false otherwise
+     */
+    public boolean meetsProcessingTimeRequirement() {
+        if (status != ApplicationStatus.COMPLETED) {
+            return false;
+        }
+        
+        // 5 minutes = 300,000 milliseconds
+        return getProcessingTimeMillis() < 300000;
+    }
+
+    /**
+     * Gets the number of documents associated with this application
+     * 
+     * @return the number of documents
+     */
+    public int getDocumentCount() {
+        return documents != null ? documents.size() : 0;
+    }
+
+    /**
+     * Checks if this application has merchant details
+     * 
+     * @return true if the application has merchant details, false otherwise
+     */
+    public boolean hasMerchantDetails() {
+        return merchantDetails != null;
+    }
+
+    /**
+     * Checks if this application is in a terminal state
+     * 
+     * @return true if the application is in a terminal state, false otherwise
+     */
+    public boolean isTerminal() {
+        return status != null && status.isTerminal();
+    }
+
+    /**
+     * Checks if this application requires human intervention
+     * 
+     * @return true if the application requires human intervention, false otherwise
+     */
+    public boolean requiresHumanIntervention() {
+        return status != null && status.requiresHumanIntervention();
     }
 
     /**
@@ -495,8 +526,8 @@ public class Application {
                 ", reviewStatus=" + reviewStatus +
                 ", createdAt=" + createdAt +
                 ", updatedAt=" + updatedAt +
-                ", documentsCount=" + (documents != null ? documents.size() : 0) +
-                ", hasMerchantDetails=" + (merchantDetails != null) +
+                ", documentCount=" + getDocumentCount() +
+                ", hasMerchantDetails=" + hasMerchantDetails() +
                 "}";
     }
 
@@ -531,18 +562,16 @@ public class Application {
      */
     public static class Builder {
         private ApplicationStatus status = ApplicationStatus.NEW;
-        private ReviewStatus reviewStatus = ReviewStatus.NOT_REVIEWED;
         private Map<String, Object> metadata = new HashMap<>();
         private LocalDateTime createdAt = LocalDateTime.now();
         private LocalDateTime updatedAt = LocalDateTime.now();
+        private ReviewStatus reviewStatus = ReviewStatus.NOT_REVIEWED;
+
+        public Builder() {
+        }
 
         public Builder withStatus(ApplicationStatus status) {
             this.status = status;
-            return this;
-        }
-
-        public Builder withReviewStatus(ReviewStatus reviewStatus) {
-            this.reviewStatus = reviewStatus;
             return this;
         }
 
@@ -566,8 +595,13 @@ public class Application {
             return this;
         }
 
+        public Builder withReviewStatus(ReviewStatus reviewStatus) {
+            this.reviewStatus = reviewStatus;
+            return this;
+        }
+
         public Application build() {
-            return new Application(status, reviewStatus, metadata, createdAt, updatedAt);
+            return new Application(status, metadata, createdAt, updatedAt, reviewStatus);
         }
     }
 }
