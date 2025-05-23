@@ -1,79 +1,133 @@
-# Network Module Outputs for MCA Application Processing System
-# This file defines output values from the network module that are consumed by other modules,
-# including VPC IDs, subnet IDs, security group IDs, and load balancer ARNs.
+# Network Module Outputs
+# This file defines output values from the network module that are consumed by other modules
+# for the Merchant Cash Advance (MCA) Application Processing System
 
-# ---------------------------------------------------------------------------------------------------------------------
-# VPC OUTPUTS
-# ---------------------------------------------------------------------------------------------------------------------
+# VPC Outputs
 output "vpc_id" {
-  description = "ID of the VPC"
+  description = "The ID of the VPC"
   value       = aws_vpc.main.id
 }
 
-output "vpc_cidr" {
-  description = "CIDR block of the VPC"
+output "vpc_cidr_block" {
+  description = "The CIDR block of the VPC"
   value       = aws_vpc.main.cidr_block
 }
 
-output "vpc_arn" {
-  description = "ARN of the VPC"
-  value       = aws_vpc.main.arn
+output "vpc_name" {
+  description = "The name of the VPC"
+  value       = aws_vpc.main.tags["Name"]
 }
 
-# ---------------------------------------------------------------------------------------------------------------------
-# SUBNET OUTPUTS
-# ---------------------------------------------------------------------------------------------------------------------
+# Subnet Outputs
 output "public_subnet_ids" {
-  description = "List of public subnet IDs"
+  description = "List of IDs of public subnets"
   value       = aws_subnet.public[*].id
 }
 
 output "private_subnet_ids" {
-  description = "List of private subnet IDs"
+  description = "List of IDs of private subnets"
   value       = aws_subnet.private[*].id
 }
 
 output "database_subnet_ids" {
-  description = "List of database subnet IDs"
+  description = "List of IDs of database subnets"
   value       = aws_subnet.database[*].id
 }
 
-output "public_subnet_cidrs" {
-  description = "List of public subnet CIDR blocks"
+output "public_subnet_cidr_blocks" {
+  description = "List of CIDR blocks of public subnets"
   value       = aws_subnet.public[*].cidr_block
 }
 
-output "private_subnet_cidrs" {
-  description = "List of private subnet CIDR blocks"
+output "private_subnet_cidr_blocks" {
+  description = "List of CIDR blocks of private subnets"
   value       = aws_subnet.private[*].cidr_block
 }
 
-output "database_subnet_cidrs" {
-  description = "List of database subnet CIDR blocks"
+output "database_subnet_cidr_blocks" {
+  description = "List of CIDR blocks of database subnets"
   value       = aws_subnet.database[*].cidr_block
 }
 
-output "database_subnet_group_name" {
-  description = "Name of the database subnet group"
-  value       = aws_db_subnet_group.database.name
+# Availability Zone Outputs
+output "availability_zones" {
+  description = "List of availability zones used"
+  value       = var.availability_zones
 }
 
-output "database_subnet_group_id" {
-  description = "ID of the database subnet group"
-  value       = aws_db_subnet_group.database.id
+# Security Group Outputs
+output "default_security_group_id" {
+  description = "The ID of the default security group"
+  value       = aws_security_group.default.id
 }
 
-# ---------------------------------------------------------------------------------------------------------------------
-# INTERNET GATEWAY OUTPUTS
-# ---------------------------------------------------------------------------------------------------------------------
-output "internet_gateway_id" {
-  description = "ID of the internet gateway"
-  value       = aws_internet_gateway.main.id
+output "api_security_group_id" {
+  description = "The ID of the API Gateway security group"
+  value       = aws_security_group.api_gateway.id
 }
 
-# ---------------------------------------------------------------------------------------------------------------------
-# NAT GATEWAY OUTPUTS
-# ---------------------------------------------------------------------------------------------------------------------
+output "app_security_group_id" {
+  description = "The ID of the application security group"
+  value       = aws_security_group.application.id
+}
+
+output "db_security_group_id" {
+  description = "The ID of the database security group"
+  value       = aws_security_group.database.id
+}
+
+output "cache_security_group_id" {
+  description = "The ID of the Redis cache security group"
+  value       = aws_security_group.redis.id
+}
+
+output "mq_security_group_id" {
+  description = "The ID of the RabbitMQ security group"
+  value       = aws_security_group.rabbitmq.id
+}
+
+output "ocr_service_security_group_id" {
+  description = "The ID of the OCR service security group with GPU access"
+  value       = aws_security_group.ocr_service.id
+}
+
+# Load Balancer Outputs
+output "public_alb_id" {
+  description = "The ID of the public Application Load Balancer"
+  value       = aws_lb.public.id
+}
+
+output "public_alb_arn" {
+  description = "The ARN of the public Application Load Balancer"
+  value       = aws_lb.public.arn
+}
+
+output "public_alb_dns_name" {
+  description = "The DNS name of the public Application Load Balancer"
+  value       = aws_lb.public.dns_name
+}
+
+output "public_alb_zone_id" {
+  description = "The canonical hosted zone ID of the public Application Load Balancer"
+  value       = aws_lb.public.zone_id
+}
+
+output "internal_alb_id" {
+  description = "The ID of the internal Application Load Balancer"
+  value       = aws_lb.internal.id
+}
+
+output "internal_alb_arn" {
+  description = "The ARN of the internal Application Load Balancer"
+  value       = aws_lb.internal.arn
+}
+
+output "internal_alb_dns_name" {
+  description = "The DNS name of the internal Application Load Balancer"
+  value       = aws_lb.internal.dns_name
+}
+
+# NAT Gateway Outputs
 output "nat_gateway_ids" {
   description = "List of NAT Gateway IDs"
   value       = aws_nat_gateway.nat[*].id
@@ -84,209 +138,79 @@ output "nat_gateway_public_ips" {
   value       = aws_nat_gateway.nat[*].public_ip
 }
 
-# ---------------------------------------------------------------------------------------------------------------------
-# ROUTE TABLE OUTPUTS
-# ---------------------------------------------------------------------------------------------------------------------
+# Route Table Outputs
 output "public_route_table_id" {
   description = "ID of the public route table"
   value       = aws_route_table.public.id
 }
 
 output "private_route_table_ids" {
-  description = "List of private route table IDs"
+  description = "List of IDs of private route tables"
   value       = aws_route_table.private[*].id
 }
 
-output "database_route_table_ids" {
-  description = "List of database route table IDs"
-  value       = aws_route_table.database[*].id
+output "database_route_table_id" {
+  description = "ID of the database route table"
+  value       = aws_route_table.database.id
 }
 
-# ---------------------------------------------------------------------------------------------------------------------
-# VPC ENDPOINT OUTPUTS
-# ---------------------------------------------------------------------------------------------------------------------
-output "s3_vpc_endpoint_id" {
-  description = "ID of the S3 VPC endpoint"
-  value       = aws_vpc_endpoint.s3.id
+# Network ACL Outputs
+output "public_network_acl_id" {
+  description = "ID of the public network ACL"
+  value       = aws_network_acl.public.id
 }
 
-output "ecr_api_vpc_endpoint_id" {
-  description = "ID of the ECR API VPC endpoint"
-  value       = aws_vpc_endpoint.ecr_api.id
+output "private_network_acl_id" {
+  description = "ID of the private network ACL"
+  value       = aws_network_acl.private.id
 }
 
-output "ecr_dkr_vpc_endpoint_id" {
-  description = "ID of the ECR Docker VPC endpoint"
-  value       = aws_vpc_endpoint.ecr_dkr.id
+output "database_network_acl_id" {
+  description = "ID of the database network ACL"
+  value       = aws_network_acl.database.id
 }
 
-output "logs_vpc_endpoint_id" {
-  description = "ID of the CloudWatch Logs VPC endpoint"
-  value       = aws_vpc_endpoint.logs.id
+# Internet Gateway Output
+output "internet_gateway_id" {
+  description = "ID of the Internet Gateway"
+  value       = aws_internet_gateway.igw.id
 }
 
-# ---------------------------------------------------------------------------------------------------------------------
-# SECURITY GROUP OUTPUTS
-# ---------------------------------------------------------------------------------------------------------------------
-# Frontend Security Group
-output "frontend_security_group_id" {
-  description = "ID of the frontend security group"
-  value       = aws_security_group.frontend.id
-}
-
-# API Gateway Security Group
-output "api_gateway_security_group_id" {
-  description = "ID of the API Gateway security group"
-  value       = aws_security_group.api_gateway.id
-}
-
-# Microservices Security Group
-output "microservices_security_group_id" {
-  description = "ID of the base microservices security group"
-  value       = aws_security_group.microservices.id
-}
-
-# Email Service Security Group
-output "email_service_security_group_id" {
-  description = "ID of the Email Service security group"
-  value       = aws_security_group.email_service.id
-}
-
-# Document Service Security Group
-output "document_service_security_group_id" {
-  description = "ID of the Document Service security group"
-  value       = aws_security_group.document_service.id
-}
-
-# OCR Service Security Group
-output "ocr_service_security_group_id" {
-  description = "ID of the OCR Service security group"
-  value       = aws_security_group.ocr_service.id
-}
-
-# Data Service Security Group
-output "data_service_security_group_id" {
-  description = "ID of the Data Service security group"
-  value       = aws_security_group.data_service.id
-}
-
-# Notification Service Security Group
-output "notification_service_security_group_id" {
-  description = "ID of the Notification Service security group"
-  value       = aws_security_group.notification_service.id
-}
-
-# PostgreSQL Security Group
-output "postgres_security_group_id" {
-  description = "ID of the PostgreSQL security group"
-  value       = aws_security_group.postgres.id
-}
-
-# RabbitMQ Security Group
-output "rabbitmq_security_group_id" {
-  description = "ID of the RabbitMQ security group"
-  value       = aws_security_group.rabbitmq.id
-}
-
-# Redis Security Group
-output "redis_security_group_id" {
-  description = "ID of the Redis security group"
-  value       = aws_security_group.redis.id
-}
-
-# Load Balancer Security Groups
-output "frontend_alb_security_group_id" {
-  description = "ID of the frontend ALB security group"
-  value       = aws_security_group.frontend_alb_sg.id
-}
-
-output "api_alb_security_group_id" {
-  description = "ID of the API ALB security group"
-  value       = aws_security_group.api_alb_sg.id
-}
-
-# ---------------------------------------------------------------------------------------------------------------------
-# LOAD BALANCER OUTPUTS
-# ---------------------------------------------------------------------------------------------------------------------
-# Frontend ALB
-output "frontend_alb_id" {
-  description = "ID of the frontend Application Load Balancer"
-  value       = aws_lb.frontend_alb.id
-}
-
-output "frontend_alb_arn" {
-  description = "ARN of the frontend Application Load Balancer"
-  value       = aws_lb.frontend_alb.arn
-}
-
-output "frontend_alb_dns_name" {
-  description = "DNS name of the frontend Application Load Balancer"
-  value       = aws_lb.frontend_alb.dns_name
-}
-
-output "frontend_alb_zone_id" {
-  description = "Zone ID of the frontend Application Load Balancer"
-  value       = aws_lb.frontend_alb.zone_id
+# Target Group Outputs
+output "api_gateway_target_group_arn" {
+  description = "ARN of the API Gateway target group"
+  value       = aws_lb_target_group.api_gateway.arn
 }
 
 output "frontend_target_group_arn" {
   description = "ARN of the frontend target group"
-  value       = aws_lb_target_group.frontend_tg.arn
+  value       = aws_lb_target_group.frontend.arn
 }
 
-# API ALB
-output "api_alb_id" {
-  description = "ID of the API Application Load Balancer"
-  value       = aws_lb.api_alb.id
+# Listener Outputs
+output "http_listener_arn" {
+  description = "ARN of the HTTP listener"
+  value       = aws_lb_listener.http.arn
 }
 
-output "api_alb_arn" {
-  description = "ARN of the API Application Load Balancer"
-  value       = aws_lb.api_alb.arn
+output "https_listener_arn" {
+  description = "ARN of the HTTPS listener"
+  value       = aws_lb_listener.https.arn
 }
 
-output "api_alb_dns_name" {
-  description = "DNS name of the API Application Load Balancer"
-  value       = aws_lb.api_alb.dns_name
+# Network Interface Outputs
+output "nat_network_interface_ids" {
+  description = "List of network interface IDs for the NAT Gateways"
+  value       = aws_nat_gateway.nat[*].network_interface_id
 }
 
-output "api_alb_zone_id" {
-  description = "Zone ID of the API Application Load Balancer"
-  value       = aws_lb.api_alb.zone_id
+# VPC Endpoint Outputs
+output "s3_vpc_endpoint_id" {
+  description = "ID of the S3 VPC Endpoint"
+  value       = aws_vpc_endpoint.s3.id
 }
 
-output "api_target_group_arn" {
-  description = "ARN of the API target group"
-  value       = aws_lb_target_group.api_tg.arn
-}
-
-# ---------------------------------------------------------------------------------------------------------------------
-# KUBERNETES SPECIFIC OUTPUTS
-# ---------------------------------------------------------------------------------------------------------------------
-output "kubernetes_subnet_ids" {
-  description = "List of subnet IDs suitable for Kubernetes deployment (private subnets)"
-  value       = aws_subnet.private[*].id
-}
-
-output "kubernetes_subnet_cidrs" {
-  description = "List of subnet CIDR blocks suitable for Kubernetes deployment"
-  value       = aws_subnet.private[*].cidr_block
-}
-
-output "kubernetes_cluster_name" {
-  description = "Name to use for Kubernetes cluster tagging"
-  value       = var.environment
-}
-
-# ---------------------------------------------------------------------------------------------------------------------
-# NETWORK FLOW LOGS OUTPUTS
-# ---------------------------------------------------------------------------------------------------------------------
-output "vpc_flow_log_id" {
-  description = "ID of the VPC Flow Log"
-  value       = aws_flow_log.vpc_flow_logs.id
-}
-
-output "vpc_flow_log_destination" {
-  description = "Destination ARN of the VPC Flow Log"
-  value       = var.flow_log_destination_arn
+output "dynamodb_vpc_endpoint_id" {
+  description = "ID of the DynamoDB VPC Endpoint"
+  value       = aws_vpc_endpoint.dynamodb.id
 }
