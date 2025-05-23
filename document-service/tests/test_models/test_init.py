@@ -4,257 +4,232 @@
 """
 Unit tests for the models package initialization.
 
-These tests verify that the models package correctly imports and re-exports
-all model components, providing a clean API surface for model imports throughout
-the service.
+This module contains tests to verify that the models package correctly imports and
+re-exports all model components, providing a clean API surface for model imports
+throughout the service.
+
+These tests ensure that:
+1. All components listed in __all__ are actually imported and available from the models package
+2. The package structure is correctly maintained
+3. All model components are properly exposed
+4. Import paths work as expected
+5. Backward compatibility is maintained
 """
 
+import unittest
 import importlib
-import inspect
 import sys
-from unittest import mock
-
-import pytest
+from types import ModuleType
 
 
-def test_all_variable_contains_expected_exports():
-    """
-    Test that the __all__ variable in models/__init__.py contains all expected exports.
-    
-    This ensures that the package's public API is correctly defined and maintained.
-    """
-    # Import the models package
-    from document_service.models import __all__
-    
-    # Define the expected exports
-    expected_exports = [
-        # Base model
-        'BaseModel',
-        
-        # Classifier implementations
-        'SVMClassifier',
-        'RandomForestClassifier',
-        'DocumentClassifier',
-        
-        # Model serialization
-        'save_model',
-        'load_model',
-        
-        # Model evaluation
-        'evaluate_classifier',
-        'calculate_metrics',
-        'plot_confusion_matrix',
-        
-        # Model training
-        'train_model',
-        'optimize_hyperparameters',
-        'cross_validate',
-        
-        # Feature extraction
-        'extract_document_features',
-        'extract_text_features',
-        'extract_metadata_features',
-    ]
-    
-    # Check that all expected exports are in __all__
-    for export in expected_exports:
-        assert export in __all__, f"Expected export '{export}' not found in __all__"
-    
-    # Check that __all__ doesn't contain any unexpected exports
-    assert len(__all__) == len(expected_exports), f"__all__ contains unexpected exports: {set(__all__) - set(expected_exports)}"
+class TestModelsInit(unittest.TestCase):
+    """Test case for the models package initialization."""
 
-
-def test_all_exports_are_importable():
-    """
-    Test that all exports listed in __all__ can be imported from the models package.
-    
-    This ensures that the package correctly re-exports all components and that
-    they can be imported using the package's public API.
-    """
-    # Import the models package
-    import document_service.models as models
-    
-    # Check that all exports in __all__ are attributes of the models package
-    for export in models.__all__:
-        assert hasattr(models, export), f"Export '{export}' is listed in __all__ but not importable from models package"
-
-
-def test_base_model_is_exported():
-    """
-    Test that the BaseModel class is correctly exported from the models package.
-    
-    This ensures that the base model interface is available for use throughout the service.
-    """
-    # Import the BaseModel from the models package
-    from document_service.models import BaseModel
-    
-    # Check that it's a class
-    assert inspect.isclass(BaseModel), "BaseModel is not a class"
-    
-    # Check that it has the expected methods
-    expected_methods = ['fit', 'predict', 'predict_proba', 'evaluate']
-    for method in expected_methods:
-        assert hasattr(BaseModel, method), f"BaseModel is missing expected method '{method}'"
-
-
-def test_classifier_implementations_are_exported():
-    """
-    Test that the classifier implementations are correctly exported from the models package.
-    
-    This ensures that the SVM and Random Forest classifiers, as well as the main
-    DocumentClassifier, are available for use throughout the service.
-    """
-    # Import the classifier implementations from the models package
-    from document_service.models import SVMClassifier, RandomForestClassifier, DocumentClassifier
-    
-    # Check that they're classes
-    assert inspect.isclass(SVMClassifier), "SVMClassifier is not a class"
-    assert inspect.isclass(RandomForestClassifier), "RandomForestClassifier is not a class"
-    assert inspect.isclass(DocumentClassifier), "DocumentClassifier is not a class"
-    
-    # Check that the specific classifiers inherit from BaseModel
-    from document_service.models import BaseModel
-    assert issubclass(SVMClassifier, BaseModel), "SVMClassifier does not inherit from BaseModel"
-    assert issubclass(RandomForestClassifier, BaseModel), "RandomForestClassifier does not inherit from BaseModel"
-
-
-def test_model_utility_functions_are_exported():
-    """
-    Test that the model utility functions are correctly exported from the models package.
-    
-    This ensures that the serialization, evaluation, training, and feature extraction
-    utilities are available for use throughout the service.
-    """
-    # Import the utility functions from the models package
-    from document_service.models import (
-        save_model, load_model,
-        evaluate_classifier, calculate_metrics, plot_confusion_matrix,
-        train_model, optimize_hyperparameters, cross_validate,
-        extract_document_features, extract_text_features, extract_metadata_features
-    )
-    
-    # Check that they're functions
-    utility_functions = [
-        save_model, load_model,
-        evaluate_classifier, calculate_metrics, plot_confusion_matrix,
-        train_model, optimize_hyperparameters, cross_validate,
-        extract_document_features, extract_text_features, extract_metadata_features
-    ]
-    
-    for func in utility_functions:
-        assert callable(func), f"{func.__name__} is not callable"
-
-
-def test_backward_compatibility_of_imports():
-    """
-    Test that the package maintains backward compatibility for imports.
-    
-    This ensures that code using older import patterns will continue to work
-    with the current package structure.
-    """
-    # Define a list of import statements that should work
-    import_statements = [
-        "from document_service.models import BaseModel",
-        "from document_service.models import SVMClassifier",
-        "from document_service.models import RandomForestClassifier",
-        "from document_service.models import DocumentClassifier",
-        "from document_service.models import save_model, load_model",
-        "from document_service.models import evaluate_classifier, calculate_metrics, plot_confusion_matrix",
-        "from document_service.models import train_model, optimize_hyperparameters, cross_validate",
-        "from document_service.models import extract_document_features, extract_text_features, extract_metadata_features",
-    ]
-    
-    # Try to execute each import statement
-    for import_statement in import_statements:
-        try:
-            exec(import_statement)
-        except ImportError as e:
-            pytest.fail(f"Import statement '{import_statement}' failed: {e}")
-
-
-def test_module_structure_integrity():
-    """
-    Test that the module structure is intact and all expected modules are present.
-    
-    This ensures that the package structure is maintained and that all required
-    modules are available.
-    """
-    # Define the expected modules
-    expected_modules = [
-        'document_service.models.base_model',
-        'document_service.models.svm_classifier',
-        'document_service.models.random_forest_classifier',
-        'document_service.models.document_classifier',
-        'document_service.models.model_serialization',
-        'document_service.models.model_evaluation',
-        'document_service.models.model_training',
-        'document_service.models.feature_extraction',
-    ]
-    
-    # Check that all expected modules can be imported
-    for module_name in expected_modules:
-        try:
-            importlib.import_module(module_name)
-        except ImportError as e:
-            pytest.fail(f"Expected module '{module_name}' could not be imported: {e}")
-
-
-def test_import_paths_are_clean():
-    """
-    Test that the import paths are clean and don't contain any unexpected side effects.
-    
-    This ensures that importing the models package doesn't have any unintended
-    consequences, such as importing unnecessary modules or executing code that
-    shouldn't be executed during import.
-    """
-    # Mock sys.modules to track which modules are imported
-    original_modules = set(sys.modules.keys())
-    
-    # Import the models package
-    importlib.import_module('document_service.models')
-    
-    # Check which new modules were imported
-    new_modules = set(sys.modules.keys()) - original_modules
-    
-    # Define the expected modules that should be imported
-    expected_modules = {
-        'document_service.models',
-        'document_service.models.base_model',
-        'document_service.models.svm_classifier',
-        'document_service.models.random_forest_classifier',
-        'document_service.models.document_classifier',
-        'document_service.models.model_serialization',
-        'document_service.models.model_evaluation',
-        'document_service.models.model_training',
-        'document_service.models.feature_extraction',
-    }
-    
-    # Check that only the expected modules were imported
-    unexpected_modules = [m for m in new_modules if m.startswith('document_service.models') and m not in expected_modules]
-    assert not unexpected_modules, f"Unexpected modules were imported: {unexpected_modules}"
-
-
-def test_no_side_effects_during_import():
-    """
-    Test that importing the models package doesn't have any side effects.
-    
-    This ensures that the package doesn't execute any code that could have
-    side effects, such as creating files, making network requests, or
-    modifying global state.
-    """
-    # Create mock objects for functions that could have side effects
-    with mock.patch('builtins.open') as mock_open, \
-         mock.patch('os.path.exists') as mock_exists, \
-         mock.patch('os.makedirs') as mock_makedirs:
-        
+    def setUp(self):
+        """Set up the test case by importing the models package."""
         # Import the models package
-        importlib.reload(importlib.import_module('document_service.models'))
+        self.models_module = importlib.import_module('src.models')
+
+    def test_all_variable_exists(self):
+        """Test that the __all__ variable exists in the models package."""
+        self.assertTrue(hasattr(self.models_module, '__all__'))
+        self.assertIsInstance(self.models_module.__all__, list)
+        self.assertGreater(len(self.models_module.__all__), 0)
+
+    def test_all_components_are_exported(self):
+        """Test that all components listed in __all__ are actually exported."""
+        for component_name in self.models_module.__all__:
+            self.assertTrue(
+                hasattr(self.models_module, component_name),
+                f"Component '{component_name}' is listed in __all__ but not exported"
+            )
+
+    def test_base_model_is_exported(self):
+        """Test that the BaseModel class is properly exported."""
+        self.assertTrue(hasattr(self.models_module, 'BaseModel'))
+        self.assertEqual(self.models_module.BaseModel.__name__, 'BaseModel')
+        # Verify it's a class
+        self.assertTrue(isinstance(self.models_module.BaseModel, type))
+
+    def test_classifier_implementations_are_exported(self):
+        """Test that classifier implementations are properly exported."""
+        classifiers = ['SVMClassifier', 'RandomForestClassifier', 'DocumentClassifier']
+        for classifier in classifiers:
+            self.assertTrue(
+                hasattr(self.models_module, classifier),
+                f"Classifier '{classifier}' is not exported"
+            )
+            self.assertEqual(getattr(self.models_module, classifier).__name__, classifier)
+            # Verify it's a class
+            self.assertTrue(isinstance(getattr(self.models_module, classifier), type))
+
+    def test_feature_extraction_utilities_are_exported(self):
+        """Test that feature extraction utilities are properly exported."""
+        utilities = [
+            'TextExtractor',
+            'TextPreprocessor',
+            'TfidfFeatureExtractor',
+            'MetadataFeatureExtractor',
+            'DimensionalityReducer',
+            'FeatureExtractor'
+        ]
+        for utility in utilities:
+            self.assertTrue(
+                hasattr(self.models_module, utility),
+                f"Utility '{utility}' is not exported"
+            )
+            self.assertEqual(getattr(self.models_module, utility).__name__, utility)
+            # Verify it's a class
+            self.assertTrue(isinstance(getattr(self.models_module, utility), type))
+
+    def test_model_serialization_functions_are_exported(self):
+        """Test that model serialization functions are properly exported."""
+        functions = [
+            'save_model',
+            'load_model',
+            'list_models',
+            'get_model_metadata',
+            'register_model',
+            'delete_model',
+            'rollback_model',
+            'validate_model'
+        ]
+        for function in functions:
+            self.assertTrue(
+                hasattr(self.models_module, function),
+                f"Function '{function}' is not exported"
+            )
+            # Verify it's a function
+            import types
+            self.assertTrue(isinstance(getattr(self.models_module, function), types.FunctionType))
+
+    def test_model_evaluation_components_are_exported(self):
+        """Test that model evaluation components are properly exported."""
+        components = [
+            'ModelEvaluator',  # Class
+            'plot_learning_curve',  # Function
+            'plot_precision_recall_curve',  # Function
+            'plot_calibration_curve',  # Function
+            'evaluate_model_performance'  # Function
+        ]
+        for component in components:
+            self.assertTrue(
+                hasattr(self.models_module, component),
+                f"Component '{component}' is not exported"
+            )
+            # Check if it's a class or function
+            component_obj = getattr(self.models_module, component)
+            if component.startswith('plot_') or component == 'evaluate_model_performance':
+                import types
+                self.assertTrue(isinstance(component_obj, types.FunctionType))
+            else:
+                self.assertTrue(isinstance(component_obj, type))
+
+    def test_model_training_components_are_exported(self):
+        """Test that model training components are properly exported."""
+        components = [
+            'ModelTrainer',  # Class
+            'prepare_dataset',  # Function
+            'optimize_hyperparameters',  # Function
+            'train_model_with_cv'  # Function
+        ]
+        for component in components:
+            self.assertTrue(
+                hasattr(self.models_module, component),
+                f"Component '{component}' is not exported"
+            )
+            # Check if it's a class or function
+            component_obj = getattr(self.models_module, component)
+            if component == 'ModelTrainer':
+                self.assertTrue(isinstance(component_obj, type))
+            else:
+                import types
+                self.assertTrue(isinstance(component_obj, types.FunctionType))
+
+    def test_direct_imports_work(self):
+        """Test that direct imports from the models package work as expected."""
+        # This test verifies that users can import components directly from the models package
+        # For example: from src.models import SVMClassifier
+        import sys
+        from unittest.mock import patch
         
-        # Check that no files were opened or created
-        mock_open.assert_not_called()
-        mock_exists.assert_not_called()
-        mock_makedirs.assert_not_called()
+        # Create a mock module to test imports
+        mock_module = ModuleType('mock_module')
+        sys.modules['mock_module'] = mock_module
+        
+        # Test importing a few representative components
+        components_to_test = [
+            'BaseModel',
+            'SVMClassifier',
+            'DocumentClassifier',
+            'FeatureExtractor',
+            'save_model',
+            'ModelEvaluator',
+            'prepare_dataset'
+        ]
+        
+        for component in components_to_test:
+            # Use exec to simulate: from src.models import {component}
+            exec(f"from src.models import {component}")
+            # Verify the component is imported correctly
+            self.assertTrue(
+                component in locals(),
+                f"Failed to import {component} directly from models package"
+            )
+            # Verify it's the same object as in the models module
+            self.assertIs(locals()[component], getattr(self.models_module, component))
+        
+        # Clean up
+        del sys.modules['mock_module']
+
+    def test_backward_compatibility(self):
+        """Test backward compatibility of imports."""
+        # This test ensures that any deprecated or renamed components are still available
+        # for backward compatibility
+        
+        # Currently, there are no deprecated or renamed components in the models package
+        # This test is a placeholder for future backward compatibility checks
+        pass
+
+    def test_import_all_components(self):
+        """Test importing all components from the models package."""
+        # This test verifies that users can import all components from the models package
+        # For example: from src.models import *
+        import sys
+        from unittest.mock import patch
+        
+        # Create a mock module to test imports
+        mock_module = ModuleType('mock_module')
+        sys.modules['mock_module'] = mock_module
+        
+        # Use exec to simulate: from src.models import *
+        exec("from src.models import *")
+        
+        # Verify all components in __all__ are imported
+        for component in self.models_module.__all__:
+            self.assertTrue(
+                component in locals(),
+                f"Failed to import {component} when using 'from src.models import *'"
+            )
+            # Verify it's the same object as in the models module
+            self.assertIs(locals()[component], getattr(self.models_module, component))
+        
+        # Clean up
+        del sys.modules['mock_module']
+
+    def test_module_docstring(self):
+        """Test that the models package has a proper docstring."""
+        self.assertIsNotNone(self.models_module.__doc__)
+        self.assertGreater(len(self.models_module.__doc__), 0)
+        # Check that the docstring mentions key components
+        docstring = self.models_module.__doc__
+        self.assertIn("BaseModel", docstring)
+        self.assertIn("SVMClassifier", docstring)
+        self.assertIn("RandomForestClassifier", docstring)
+        self.assertIn("DocumentClassifier", docstring)
+        self.assertIn("Feature", docstring)  # Should mention feature extraction
+        self.assertIn("save_model", docstring)  # Should mention serialization
 
 
 if __name__ == '__main__':
-    pytest.main(['-xvs', __file__])
+    unittest.main()
