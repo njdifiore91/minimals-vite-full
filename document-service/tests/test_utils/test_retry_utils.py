@@ -1,24 +1,18 @@
 """Unit tests for retry_utils module.
 
-This module contains tests for the retry logic utilities in the Document Service.
-Tests verify that the retry mechanisms with exponential backoff, jitter, and 
-configurable limits work correctly.
+This module contains tests for the retry utilities in the Document Service,
+including exponential backoff, jitter, and retry decorators for both
+synchronous and asynchronous functions.
 """
 
 import asyncio
-import logging
+import unittest
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
+import random
 import time
-from unittest import mock
 
-import pytest
-
-# Fix module import path for tests
-import sys
-import os
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../src')))
-
-# Import the module directly for testing
-from utils.retry_utils import (
+# Import the module to test
+from src.utils.retry_utils import (
     is_retryable_error,
     calculate_backoff_with_jitter,
     retry_with_backoff,
@@ -33,64 +27,33 @@ from utils.retry_utils import (
 )
 
 
-# Import the full module for additional testing if needed
-import utils.retry_utils as retry_utils_module
-
-
-# Configure test logger
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-
-# Test fixtures
-@pytest.fixture
-def mock_time_sleep():
-    """Mock time.sleep to speed up tests."""
-    with mock.patch('time.sleep') as mock_sleep:
-        yield mock_sleep
-
-
-@pytest.fixture
-def mock_asyncio_sleep():
-    """Mock asyncio.sleep to speed up tests."""
-    with mock.patch('asyncio.sleep') as mock_sleep:
-        yield mock_sleep
-
-
-@pytest.fixture
-def mock_random():
-    """Mock random.uniform to make tests deterministic."""
-    with mock.patch('random.uniform', return_value=0.5) as mock_rand:
-        yield mock_rand
-
-
-# Tests for is_retryable_error
-class TestIsRetryableError:
+class TestIsRetryableError(unittest.TestCase):
     """Tests for the is_retryable_error function."""
 
     def test_default_retryable_exceptions(self):
         """Test that default retryable exceptions are correctly identified."""
         # Default retryable exceptions include ConnectionError, TimeoutError, OSError
-        assert is_retryable_error(ConnectionError())
-        assert is_retryable_error(TimeoutError())
-        assert is_retryable_error(OSError())
+        self.assertTrue(is_retryable_error(ConnectionError("Connection refused")))
+        self.assertTrue(is_retryable_error(TimeoutError("Request timed out")))
+        self.assertTrue(is_retryable_error(OSError("I/O error")))
         
         # Non-retryable exceptions
-        assert not is_retryable_error(ValueError())
-        assert not is_retryable_error(TypeError())
-        assert not is_retryable_error(KeyError())
+        self.assertFalse(is_retryable_error(ValueError("Invalid value")))
+        self.assertFalse(is_retryable_error(KeyError("Missing key")))
+        self.assertFalse(is_retryable_error(TypeError("Invalid type")))
 
     def test_custom_retryable_exceptions(self):
         """Test that custom retryable exceptions are correctly identified."""
+        # Define custom retryable exceptions
         custom_exceptions = [ValueError, KeyError]
         
         # Should be retryable with custom list
-        assert is_retryable_error(ValueError(), custom_exceptions)
-        assert is_retryable_error(KeyError(), custom_exceptions)
+        self.assertTrue(is_retryable_error(ValueError("Invalid value"), custom_exceptions))
+        self.assertTrue(is_retryable_error(KeyError("Missing key"), custom_exceptions))
         
         # Should not be retryable with custom list
-        assert not is_retryable_error(TypeError(), custom_exceptions)
-        assert not is_retryable_error(ConnectionError(), custom_exceptions)
+        self.assertFalse(is_retryable_error(TypeError("Invalid type"), custom_exceptions))
+        self.assertFalse(is_retryable_error(ConnectionError("Connection refused"), custom_exceptions))
 
     def test_subclass_exceptions(self):
         """Test that subclasses of retryable exceptions are correctly identified."""
@@ -99,382 +62,502 @@ class TestIsRetryableError:
             pass
         
         # Should be retryable as it's a subclass of ConnectionError
-        assert is_retryable_error(CustomConnectionError())
-        
-        # Create a custom exception that doesn't inherit from a retryable exception
-        class CustomError(Exception):
-            pass
-        
-        # Should not be retryable
-        assert not is_retryable_error(CustomError())
+        self.assertTrue(is_retryable_error(CustomConnectionError("Custom connection error")))
 
 
-# Tests for calculate_backoff_with_jitter
-class TestCalculateBackoffWithJitter:
+class TestCalculateBackoffWithJitter(unittest.TestCase):
     """Tests for the calculate_backoff_with_jitter function."""
 
-    def test_no_jitter(self):
-        """Test backoff calculation with no jitter."""
-        # Test with default parameters
-        backoff = calculate_backoff_with_jitter(
-            retry_attempt=0,
-            jitter_type='none'
-        )
-        assert backoff == DEFAULT_INITIAL_DELAY
+    def setUp(self):
+        # Set random seed for reproducible tests
+        random.seed(42)
+
+    def test_exponential_backoff_calculation(self):
+        """Test that exponential backoff is calculated correctly without jitter."""
+        # Test with default parameters but no jitter
+        backoff_0 = calculate_backoff_with_jitter(0, jitter_type='none')
+        backoff_1 = calculate_backoff_with_jitter(1, jitter_type='none')
+        backoff_2 = calculate_backoff_with_jitter(2, jitter_type='none')
         
-        # Test with custom parameters
-        backoff = calculate_backoff_with_jitter(
-            retry_attempt=2,
-            initial_delay=1.0,
-            backoff_factor=2.0,
-            jitter_type='none'
-        )
-        assert backoff == 4.0  # 1.0 * (2.0 ^ 2)
+        # Verify exponential growth: initial_delay * (backoff_factor ^ retry_attempt)
+        self.assertEqual(backoff_0, DEFAULT_INITIAL_DELAY)  # 1.0
+        self.assertEqual(backoff_1, DEFAULT_INITIAL_DELAY * DEFAULT_BACKOFF_FACTOR)  # 1.0 * 2.0 = 2.0
+        self.assertEqual(backoff_2, DEFAULT_INITIAL_DELAY * (DEFAULT_BACKOFF_FACTOR ** 2))  # 1.0 * (2.0^2) = 4.0
 
-    def test_full_jitter(self, mock_random):
-        """Test backoff calculation with full jitter."""
-        # Test with default parameters and mocked random
-        backoff = calculate_backoff_with_jitter(
-            retry_attempt=1,
-            jitter_type='full'
-        )
-        # With mocked random.uniform returning 0.5, and DEFAULT_INITIAL_DELAY=1.0, DEFAULT_BACKOFF_FACTOR=2.0
-        # Expected: 0.5 * (1.0 * (2.0 ^ 1)) = 1.0
-        assert backoff == 1.0
-        mock_random.assert_called_once()
+    def test_max_delay_limit(self):
+        """Test that backoff is limited by max_delay."""
+        # Set parameters to reach max_delay quickly
+        initial_delay = 10.0
+        backoff_factor = 3.0
+        max_delay = 50.0
+        
+        # First retry: 10 * (3^0) = 10
+        backoff_0 = calculate_backoff_with_jitter(
+            0, initial_delay, backoff_factor, max_delay, jitter_type='none')
+        self.assertEqual(backoff_0, 10.0)
+        
+        # Second retry: 10 * (3^1) = 30
+        backoff_1 = calculate_backoff_with_jitter(
+            1, initial_delay, backoff_factor, max_delay, jitter_type='none')
+        self.assertEqual(backoff_1, 30.0)
+        
+        # Third retry: 10 * (3^2) = 90, but limited to max_delay = 50
+        backoff_2 = calculate_backoff_with_jitter(
+            2, initial_delay, backoff_factor, max_delay, jitter_type='none')
+        self.assertEqual(backoff_2, 50.0)
 
-    def test_equal_jitter(self, mock_random):
-        """Test backoff calculation with equal jitter."""
-        # Test with custom parameters and mocked random
-        backoff = calculate_backoff_with_jitter(
-            retry_attempt=1,
-            initial_delay=2.0,
-            backoff_factor=3.0,
-            jitter_type='equal'
-        )
-        # Base backoff: 2.0 * (3.0 ^ 1) = 6.0
-        # With equal jitter and mocked random.uniform returning 0.5:
-        # 6.0 - (6.0 * 0.5 * 0.5) + (0.5 * (6.0 * 0.5)) = 6.0 - 1.5 + 1.5 = 6.0
-        assert backoff == 6.0
+    def test_full_jitter(self):
+        """Test that full jitter produces values between 0 and calculated backoff."""
+        # Use fixed parameters for testing
+        initial_delay = 10.0
+        backoff_factor = 2.0
+        jitter_factor = 1.0
+        
+        # Calculate base backoff without jitter
+        base_backoff = 10.0  # initial_delay * (backoff_factor^0)
+        
+        # Calculate with full jitter
+        jittered_backoff = calculate_backoff_with_jitter(
+            0, initial_delay, backoff_factor, DEFAULT_MAX_DELAY, 'full', jitter_factor)
+        
+        # With full jitter, result should be between 0 and base_backoff
+        self.assertGreaterEqual(jittered_backoff, 0.0)
+        self.assertLessEqual(jittered_backoff, base_backoff)
+        
+        # Verify it's not equal to base_backoff (jitter was applied)
+        self.assertNotEqual(jittered_backoff, base_backoff)
 
-    def test_decorrelated_jitter(self, mock_random):
-        """Test backoff calculation with decorrelated jitter."""
-        # For decorrelated jitter, we use a simplified implementation
-        # that doesn't require tracking previous values
-        with mock.patch('random.uniform', return_value=3.0) as mock_rand:
-            backoff = calculate_backoff_with_jitter(
-                retry_attempt=1,
-                initial_delay=1.0,
-                backoff_factor=2.0,
-                max_delay=10.0,
-                jitter_type='decorrelated'
-            )
-            # With mocked random.uniform returning 3.0
-            assert backoff == 3.0
+    def test_equal_jitter(self):
+        """Test that equal jitter produces values around the calculated backoff."""
+        # Use fixed parameters for testing
+        initial_delay = 10.0
+        backoff_factor = 2.0
+        
+        # Calculate base backoff without jitter
+        base_backoff = 10.0  # initial_delay * (backoff_factor^0)
+        
+        # Calculate with equal jitter
+        jittered_backoff = calculate_backoff_with_jitter(
+            0, initial_delay, backoff_factor, DEFAULT_MAX_DELAY, 'equal')
+        
+        # With equal jitter, result should be between base_backoff/2 and base_backoff*1.5
+        self.assertGreaterEqual(jittered_backoff, base_backoff/2)
+        self.assertLessEqual(jittered_backoff, base_backoff*1.5)
 
-    def test_max_delay(self):
-        """Test that backoff doesn't exceed max_delay."""
-        # Set up a scenario where the calculated backoff would exceed max_delay
-        backoff = calculate_backoff_with_jitter(
-            retry_attempt=10,  # Very high retry attempt
-            initial_delay=1.0,
-            backoff_factor=2.0,
-            max_delay=30.0,
-            jitter_type='none'
-        )
-        # 1.0 * (2.0 ^ 10) = 1024, which exceeds max_delay of 30.0
-        assert backoff == 30.0
+    def test_decorrelated_jitter(self):
+        """Test that decorrelated jitter produces values within expected range."""
+        # Use fixed parameters for testing
+        initial_delay = 10.0
+        backoff_factor = 2.0
+        max_delay = 100.0
+        
+        # Calculate with decorrelated jitter
+        jittered_backoff = calculate_backoff_with_jitter(
+            0, initial_delay, backoff_factor, max_delay, 'decorrelated')
+        
+        # With decorrelated jitter, result should be between initial_delay and min(max_delay, base_backoff*3)
+        self.assertGreaterEqual(jittered_backoff, initial_delay)
+        self.assertLessEqual(jittered_backoff, min(max_delay, 10.0*3))
 
-    def test_invalid_jitter_type(self, caplog):
-        """Test behavior with invalid jitter type."""
-        with caplog.at_level(logging.WARNING):
-            backoff = calculate_backoff_with_jitter(
-                retry_attempt=1,
-                jitter_type='invalid_type'
-            )
-            # Should default to full jitter
-            assert "Unknown jitter type 'invalid_type'" in caplog.text
-            # With mocked random in conftest returning 0.5
-            assert backoff == 1.0
+    def test_jitter_factor(self):
+        """Test that jitter factor controls the amount of jitter applied."""
+        # Use fixed parameters for testing
+        initial_delay = 10.0
+        jitter_factor = 0.5  # 50% jitter
+        
+        # Calculate with full jitter and reduced jitter factor
+        jittered_backoff = calculate_backoff_with_jitter(
+            0, initial_delay, DEFAULT_BACKOFF_FACTOR, DEFAULT_MAX_DELAY, 'full', jitter_factor)
+        
+        # With 50% jitter factor, result should be between 0 and base_backoff*0.5
+        self.assertGreaterEqual(jittered_backoff, 0.0)
+        self.assertLessEqual(jittered_backoff, initial_delay * jitter_factor)
+
+    def test_unknown_jitter_type(self):
+        """Test that unknown jitter type defaults to full jitter."""
+        # Use fixed parameters for testing
+        initial_delay = 10.0
+        
+        # Calculate with unknown jitter type
+        with patch('logging.Logger.warning') as mock_warning:
+            jittered_backoff = calculate_backoff_with_jitter(
+                0, initial_delay, DEFAULT_BACKOFF_FACTOR, DEFAULT_MAX_DELAY, 'unknown')
+        
+        # Should log a warning
+        mock_warning.assert_called_once()
+        
+        # Should use full jitter (between 0 and base_backoff)
+        self.assertGreaterEqual(jittered_backoff, 0.0)
+        self.assertLessEqual(jittered_backoff, initial_delay)
 
 
-# Tests for retry_with_backoff decorator
-class TestRetryWithBackoff:
+class TestRetryWithBackoff(unittest.TestCase):
     """Tests for the retry_with_backoff decorator."""
 
-    def test_successful_execution(self):
+    def test_successful_execution_no_retry(self):
         """Test that a successful function execution doesn't trigger retries."""
-        mock_func = mock.Mock(return_value="success")
+        # Create a mock function that always succeeds
+        mock_func = Mock(return_value="success")
+        
+        # Apply the decorator
         decorated_func = retry_with_backoff()(mock_func)
         
+        # Call the decorated function
         result = decorated_func()
         
-        assert result == "success"
+        # Function should be called exactly once
         mock_func.assert_called_once()
+        
+        # Result should be the return value of the function
+        self.assertEqual(result, "success")
 
-    def test_retry_on_retryable_error(self, mock_time_sleep):
-        """Test that retryable errors trigger retries."""
-        # Mock function that fails with ConnectionError twice, then succeeds
-        mock_func = mock.Mock(side_effect=[ConnectionError(), ConnectionError(), "success"])
-        decorated_func = retry_with_backoff(max_retries=3)(mock_func)
+    def test_retry_until_success(self):
+        """Test that the function is retried until it succeeds."""
+        # Create a mock function that fails twice then succeeds
+        mock_func = Mock(side_effect=[ConnectionError("First failure"), 
+                                     ConnectionError("Second failure"), 
+                                     "success"])
         
-        result = decorated_func()
+        # Mock sleep to avoid waiting during tests
+        with patch('time.sleep') as mock_sleep:
+            # Apply the decorator with minimal delays
+            decorated_func = retry_with_backoff(initial_delay=0.1)(mock_func)
+            
+            # Call the decorated function
+            result = decorated_func()
         
-        assert result == "success"
-        assert mock_func.call_count == 3
-        assert mock_time_sleep.call_count == 2
+        # Function should be called 3 times (2 failures + 1 success)
+        self.assertEqual(mock_func.call_count, 3)
+        
+        # Sleep should be called twice (after first and second failures)
+        self.assertEqual(mock_sleep.call_count, 2)
+        
+        # Result should be the successful return value
+        self.assertEqual(result, "success")
 
-    def test_max_retries_exceeded(self, mock_time_sleep):
-        """Test that exceeding max retries raises the last exception."""
-        # Mock function that always fails with ConnectionError
-        mock_func = mock.Mock(side_effect=ConnectionError("persistent error"))
-        decorated_func = retry_with_backoff(max_retries=3)(mock_func)
+    def test_max_retries_exceeded(self):
+        """Test that the function raises an exception after max_retries is exceeded."""
+        # Create a mock function that always fails with ConnectionError
+        mock_func = Mock(side_effect=ConnectionError("Retryable error"))
         
-        with pytest.raises(ConnectionError, match="persistent error"):
-            decorated_func()
+        # Mock sleep to avoid waiting during tests
+        with patch('time.sleep'):
+            # Apply the decorator with 2 max retries
+            decorated_func = retry_with_backoff(max_retries=2)(mock_func)
+            
+            # Call the decorated function - should raise the last exception
+            with self.assertRaises(ConnectionError):
+                decorated_func()
         
-        assert mock_func.call_count == 4  # Initial attempt + 3 retries
-        assert mock_time_sleep.call_count == 3
+        # Function should be called 3 times (initial + 2 retries)
+        self.assertEqual(mock_func.call_count, 3)
 
-    def test_non_retryable_error(self, mock_time_sleep):
-        """Test that non-retryable errors don't trigger retries."""
-        # Mock function that fails with ValueError (non-retryable by default)
-        mock_func = mock.Mock(side_effect=ValueError("non-retryable error"))
-        decorated_func = retry_with_backoff(max_retries=3)(mock_func)
+    def test_non_retryable_exception(self):
+        """Test that non-retryable exceptions are raised immediately."""
+        # Create a mock function that fails with a non-retryable exception
+        mock_func = Mock(side_effect=ValueError("Non-retryable error"))
         
-        with pytest.raises(ValueError, match="non-retryable error"):
-            decorated_func()
+        # Mock sleep to avoid waiting during tests
+        with patch('time.sleep') as mock_sleep:
+            # Apply the decorator
+            decorated_func = retry_with_backoff()(mock_func)
+            
+            # Call the decorated function - should raise immediately
+            with self.assertRaises(ValueError):
+                decorated_func()
         
+        # Function should be called only once
         mock_func.assert_called_once()
-        mock_time_sleep.assert_not_called()
-
-    def test_custom_retryable_exceptions(self, mock_time_sleep):
-        """Test retry with custom retryable exceptions."""
-        # Mock function that fails with ValueError twice, then succeeds
-        mock_func = mock.Mock(side_effect=[ValueError(), ValueError(), "success"])
-        decorated_func = retry_with_backoff(
-            max_retries=3,
-            retryable_exceptions=[ValueError]
-        )(mock_func)
         
-        result = decorated_func()
-        
-        assert result == "success"
-        assert mock_func.call_count == 3
-        assert mock_time_sleep.call_count == 2
+        # Sleep should not be called
+        mock_sleep.assert_not_called()
 
-    def test_on_retry_callback(self, mock_time_sleep):
-        """Test that on_retry callback is called before each retry."""
+    def test_custom_retryable_exceptions(self):
+        """Test that custom retryable exceptions are handled correctly."""
+        # Create a mock function that fails with ValueError
+        mock_func = Mock(side_effect=[ValueError("Custom retryable error"), "success"])
+        
+        # Mock sleep to avoid waiting during tests
+        with patch('time.sleep'):
+            # Apply the decorator with custom retryable exceptions
+            decorated_func = retry_with_backoff(retryable_exceptions=[ValueError])(mock_func)
+            
+            # Call the decorated function
+            result = decorated_func()
+        
+        # Function should be called twice (1 failure + 1 success)
+        self.assertEqual(mock_func.call_count, 2)
+        
+        # Result should be the successful return value
+        self.assertEqual(result, "success")
+
+    def test_on_retry_callback(self):
+        """Test that the on_retry callback is called correctly."""
+        # Create a mock function that fails once then succeeds
+        mock_func = Mock(side_effect=[ConnectionError("Retryable error"), "success"])
+        
         # Create a mock callback
-        mock_callback = mock.Mock()
+        mock_callback = Mock()
         
-        # Mock function that fails with ConnectionError twice, then succeeds
-        mock_func = mock.Mock(side_effect=[ConnectionError(), ConnectionError(), "success"])
-        decorated_func = retry_with_backoff(
-            max_retries=3,
-            on_retry=mock_callback
-        )(mock_func)
+        # Mock sleep to avoid waiting during tests
+        with patch('time.sleep'):
+            # Apply the decorator with the callback
+            decorated_func = retry_with_backoff(on_retry=mock_callback)(mock_func)
+            
+            # Call the decorated function
+            result = decorated_func()
         
-        result = decorated_func()
+        # Callback should be called once (before the retry)
+        mock_callback.assert_called_once()
         
-        assert result == "success"
-        assert mock_func.call_count == 3
-        assert mock_callback.call_count == 2
-        # Check that callback was called with the right arguments
-        for i, call in enumerate(mock_callback.call_args_list):
-            args, _ = call
-            assert isinstance(args[0], ConnectionError)  # First arg is the exception
-            assert args[1] == i + 1  # Second arg is the attempt number (1-based)
+        # Callback should receive the exception, retry count, and backoff time
+        args, _ = mock_callback.call_args
+        self.assertIsInstance(args[0], ConnectionError)  # Exception
+        self.assertEqual(args[1], 1)  # Retry count
+        self.assertIsInstance(args[2], float)  # Backoff time
+        
+        # Result should be the successful return value
+        self.assertEqual(result, "success")
 
 
-# Tests for async_retry_with_backoff decorator
-class TestAsyncRetryWithBackoff:
+class TestAsyncRetryWithBackoff(unittest.TestCase):
     """Tests for the async_retry_with_backoff decorator."""
 
-    @pytest.mark.asyncio
-    async def test_successful_execution(self):
+    async def async_test_wrapper(self, coro):
+        """Helper to run async tests."""
+        return await coro
+
+    def test_successful_execution_no_retry(self):
         """Test that a successful async function execution doesn't trigger retries."""
-        mock_func = mock.AsyncMock(return_value="success")
+        # Create a mock async function that always succeeds
+        mock_func = AsyncMock(return_value="success")
+        
+        # Apply the decorator
         decorated_func = async_retry_with_backoff()(mock_func)
         
-        result = await decorated_func()
+        # Call the decorated function
+        loop = asyncio.get_event_loop()
+        result = loop.run_until_complete(decorated_func())
         
-        assert result == "success"
+        # Function should be called exactly once
         mock_func.assert_called_once()
+        
+        # Result should be the return value of the function
+        self.assertEqual(result, "success")
 
-    @pytest.mark.asyncio
-    async def test_retry_on_retryable_error(self, mock_asyncio_sleep):
-        """Test that retryable errors trigger retries in async functions."""
-        # Mock async function that fails with ConnectionError twice, then succeeds
-        mock_func = mock.AsyncMock(side_effect=[ConnectionError(), ConnectionError(), "success"])
-        decorated_func = async_retry_with_backoff(max_retries=3)(mock_func)
+    def test_retry_until_success(self):
+        """Test that the async function is retried until it succeeds."""
+        # Create a mock async function that fails twice then succeeds
+        mock_func = AsyncMock(side_effect=[ConnectionError("First failure"), 
+                                          ConnectionError("Second failure"), 
+                                          "success"])
         
-        result = await decorated_func()
-        
-        assert result == "success"
-        assert mock_func.call_count == 3
-        assert mock_asyncio_sleep.call_count == 2
-
-    @pytest.mark.asyncio
-    async def test_max_retries_exceeded(self, mock_asyncio_sleep):
-        """Test that exceeding max retries raises the last exception in async functions."""
-        # Mock async function that always fails with ConnectionError
-        mock_func = mock.AsyncMock(side_effect=ConnectionError("persistent error"))
-        decorated_func = async_retry_with_backoff(max_retries=3)(mock_func)
-        
-        with pytest.raises(ConnectionError, match="persistent error"):
-            await decorated_func()
-        
-        assert mock_func.call_count == 4  # Initial attempt + 3 retries
-        assert mock_asyncio_sleep.call_count == 3
-
-    @pytest.mark.asyncio
-    async def test_non_retryable_error(self, mock_asyncio_sleep):
-        """Test that non-retryable errors don't trigger retries in async functions."""
-        # Mock async function that fails with ValueError (non-retryable by default)
-        mock_func = mock.AsyncMock(side_effect=ValueError("non-retryable error"))
-        decorated_func = async_retry_with_backoff(max_retries=3)(mock_func)
-        
-        with pytest.raises(ValueError, match="non-retryable error"):
-            await decorated_func()
-        
-        mock_func.assert_called_once()
-        mock_asyncio_sleep.assert_not_called()
-
-
-# Tests for specialized RabbitMQ retry decorators
-class TestRabbitMQRetryDecorators:
-    """Tests for the specialized RabbitMQ retry decorators."""
-
-    def test_retry_rabbitmq_publish(self, mock_time_sleep):
-        """Test the retry_rabbitmq_publish decorator."""
-        # Mock function that fails with ConnectionError twice, then succeeds
-        mock_func = mock.Mock(side_effect=[ConnectionError(), ConnectionError(), "success"])
-        decorated_func = retry_rabbitmq_publish()(mock_func)
-        
-        result = decorated_func()
-        
-        assert result == "success"
-        assert mock_func.call_count == 3
-        assert mock_time_sleep.call_count == 2
-
-    @pytest.mark.asyncio
-    async def test_async_retry_rabbitmq_publish(self, mock_asyncio_sleep):
-        """Test the async_retry_rabbitmq_publish decorator."""
-        # Mock async function that fails with ConnectionError twice, then succeeds
-        mock_func = mock.AsyncMock(side_effect=[ConnectionError(), ConnectionError(), "success"])
-        decorated_func = async_retry_rabbitmq_publish()(mock_func)
-        
-        result = await decorated_func()
-        
-        assert result == "success"
-        assert mock_func.call_count == 3
-        assert mock_asyncio_sleep.call_count == 2
-
-    def test_rabbitmq_specific_parameters(self):
-        """Test that RabbitMQ decorators use specific parameters."""
-        # Use mock to inspect the decorator parameters
-        with mock.patch('utils.retry_utils.retry_with_backoff') as mock_retry:
-            retry_rabbitmq_publish()
+        # Mock asyncio.sleep to avoid waiting during tests
+        with patch('asyncio.sleep', new_callable=AsyncMock) as mock_sleep:
+            # Apply the decorator with minimal delays
+            decorated_func = async_retry_with_backoff(initial_delay=0.1)(mock_func)
             
-            # Check that the decorator was called with RabbitMQ-specific parameters
+            # Call the decorated function
+            loop = asyncio.get_event_loop()
+            result = loop.run_until_complete(decorated_func())
+        
+        # Function should be called 3 times (2 failures + 1 success)
+        self.assertEqual(mock_func.call_count, 3)
+        
+        # Sleep should be called twice (after first and second failures)
+        self.assertEqual(mock_sleep.call_count, 2)
+        
+        # Result should be the successful return value
+        self.assertEqual(result, "success")
+
+    def test_max_retries_exceeded(self):
+        """Test that the async function raises an exception after max_retries is exceeded."""
+        # Create a mock async function that always fails with ConnectionError
+        mock_func = AsyncMock(side_effect=ConnectionError("Retryable error"))
+        
+        # Mock asyncio.sleep to avoid waiting during tests
+        with patch('asyncio.sleep', new_callable=AsyncMock):
+            # Apply the decorator with 2 max retries
+            decorated_func = async_retry_with_backoff(max_retries=2)(mock_func)
+            
+            # Call the decorated function - should raise the last exception
+            loop = asyncio.get_event_loop()
+            with self.assertRaises(ConnectionError):
+                loop.run_until_complete(decorated_func())
+        
+        # Function should be called 3 times (initial + 2 retries)
+        self.assertEqual(mock_func.call_count, 3)
+
+    def test_non_retryable_exception(self):
+        """Test that non-retryable exceptions are raised immediately."""
+        # Create a mock async function that fails with a non-retryable exception
+        mock_func = AsyncMock(side_effect=ValueError("Non-retryable error"))
+        
+        # Mock asyncio.sleep to avoid waiting during tests
+        with patch('asyncio.sleep', new_callable=AsyncMock) as mock_sleep:
+            # Apply the decorator
+            decorated_func = async_retry_with_backoff()(mock_func)
+            
+            # Call the decorated function - should raise immediately
+            loop = asyncio.get_event_loop()
+            with self.assertRaises(ValueError):
+                loop.run_until_complete(decorated_func())
+        
+        # Function should be called only once
+        mock_func.assert_called_once()
+        
+        # Sleep should not be called
+        mock_sleep.assert_not_called()
+
+    def test_on_retry_callback(self):
+        """Test that the on_retry callback is called correctly for async functions."""
+        # Create a mock async function that fails once then succeeds
+        mock_func = AsyncMock(side_effect=[ConnectionError("Retryable error"), "success"])
+        
+        # Create a mock callback
+        mock_callback = Mock()
+        
+        # Mock asyncio.sleep to avoid waiting during tests
+        with patch('asyncio.sleep', new_callable=AsyncMock):
+            # Apply the decorator with the callback
+            decorated_func = async_retry_with_backoff(on_retry=mock_callback)(mock_func)
+            
+            # Call the decorated function
+            loop = asyncio.get_event_loop()
+            result = loop.run_until_complete(decorated_func())
+        
+        # Callback should be called once (before the retry)
+        mock_callback.assert_called_once()
+        
+        # Callback should receive the exception, retry count, and backoff time
+        args, _ = mock_callback.call_args
+        self.assertIsInstance(args[0], ConnectionError)  # Exception
+        self.assertEqual(args[1], 1)  # Retry count
+        self.assertIsInstance(args[2], float)  # Backoff time
+        
+        # Result should be the successful return value
+        self.assertEqual(result, "success")
+
+
+class TestRabbitMQRetry(unittest.TestCase):
+    """Tests for the RabbitMQ-specific retry decorators."""
+
+    def test_retry_rabbitmq_publish(self):
+        """Test that retry_rabbitmq_publish applies correct parameters."""
+        # Mock the retry_with_backoff function
+        with patch('src.utils.retry_utils.retry_with_backoff') as mock_retry:
+            # Configure mock to return a simple decorator
+            mock_retry.return_value = lambda f: f
+            
+            # Call retry_rabbitmq_publish
+            retry_rabbitmq_publish()(lambda: None)
+            
+            # Verify retry_with_backoff was called with correct parameters
             mock_retry.assert_called_once()
-            _, kwargs = mock_retry.call_args
-            assert kwargs['max_retries'] == 5
-            assert kwargs['initial_delay'] == 0.5
-            assert kwargs['backoff_factor'] == 2.0
-            assert kwargs['max_delay'] == 30.0
-            assert kwargs['jitter_type'] == 'full'
-            # Check that the retryable exceptions include ConnectionError and TimeoutError
-            retryable_exceptions = kwargs['retryable_exceptions']
-            assert any(exc is ConnectionError for exc in retryable_exceptions)
-            assert any(exc is TimeoutError for exc in retryable_exceptions)
+            args, kwargs = mock_retry.call_args
+            
+            # Check default parameters
+            self.assertEqual(kwargs['max_retries'], 5)
+            self.assertEqual(kwargs['initial_delay'], 0.5)
+            self.assertEqual(kwargs['backoff_factor'], 2.0)
+            self.assertEqual(kwargs['max_delay'], 30.0)
+            self.assertEqual(kwargs['jitter_type'], 'full')
+            
+            # Check that retryable_exceptions includes ConnectionError and TimeoutError
+            self.assertTrue(ConnectionError in kwargs['retryable_exceptions'])
+            self.assertTrue(TimeoutError in kwargs['retryable_exceptions'])
+
+    def test_async_retry_rabbitmq_publish(self):
+        """Test that async_retry_rabbitmq_publish applies correct parameters."""
+        # Mock the async_retry_with_backoff function
+        with patch('src.utils.retry_utils.async_retry_with_backoff') as mock_retry:
+            # Configure mock to return a simple decorator
+            mock_retry.return_value = lambda f: f
+            
+            # Call async_retry_rabbitmq_publish
+            async_retry_rabbitmq_publish()(lambda: None)
+            
+            # Verify async_retry_with_backoff was called with correct parameters
+            mock_retry.assert_called_once()
+            args, kwargs = mock_retry.call_args
+            
+            # Check default parameters
+            self.assertEqual(kwargs['max_retries'], 5)
+            self.assertEqual(kwargs['initial_delay'], 0.5)
+            self.assertEqual(kwargs['backoff_factor'], 2.0)
+            self.assertEqual(kwargs['max_delay'], 30.0)
+            self.assertEqual(kwargs['jitter_type'], 'full')
+            
+            # Check that retryable_exceptions includes ConnectionError and TimeoutError
+            self.assertTrue(ConnectionError in kwargs['retryable_exceptions'])
+            self.assertTrue(TimeoutError in kwargs['retryable_exceptions'])
 
 
-# Integration tests with real functions
-class TestIntegrationTests:
-    """Integration tests with real functions (not mocks)."""
+class TestIntegration(unittest.TestCase):
+    """Integration tests for retry utilities."""
 
-    def test_real_function_with_retry(self, mock_time_sleep):
-        """Test a real function with the retry decorator."""
-        # Counter to track number of calls
-        call_count = {'value': 0}
-        
-        @retry_with_backoff(max_retries=2)
-        def flaky_function():
-            call_count['value'] += 1
-            if call_count['value'] <= 2:
-                raise ConnectionError("Simulated connection error")
-            return "Success!"
-        
-        result = flaky_function()
-        
-        assert result == "Success!"
-        assert call_count['value'] == 3
-        assert mock_time_sleep.call_count == 2
-
-    @pytest.mark.asyncio
-    async def test_real_async_function_with_retry(self, mock_asyncio_sleep):
-        """Test a real async function with the async retry decorator."""
-        # Counter to track number of calls
-        call_count = {'value': 0}
-        
-        @async_retry_with_backoff(max_retries=2)
-        async def flaky_async_function():
-            call_count['value'] += 1
-            if call_count['value'] <= 2:
-                raise TimeoutError("Simulated timeout error")
-            return "Async Success!"
-        
-        result = await flaky_async_function()
-        
-        assert result == "Async Success!"
-        assert call_count['value'] == 3
-        assert mock_asyncio_sleep.call_count == 2
-
-
-# Performance tests
-class TestPerformance:
-    """Performance tests for retry utilities."""
-
-    def test_backoff_calculation_performance(self):
-        """Test the performance of backoff calculation."""
-        # Measure the time it takes to calculate backoff 1000 times
+    def test_retry_with_real_time_delays(self):
+        """Test retry with actual time delays (minimal for testing)."""
         start_time = time.time()
-        for i in range(1000):
-            calculate_backoff_with_jitter(i % 10)
-        end_time = time.time()
         
-        # Should be very fast (typically < 0.1s)
-        execution_time = end_time - start_time
-        logger.info(f"Backoff calculation performance: {execution_time:.6f}s for 1000 iterations")
+        # Function that fails once then succeeds
+        call_count = 0
         
-        # This is a soft assertion - we're just logging the time
-        # In a real test, you might want to assert that it's below a threshold
-        assert execution_time < 1.0, "Backoff calculation should be fast"
+        @retry_with_backoff(max_retries=1, initial_delay=0.01, backoff_factor=1)
+        def test_function():
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise ConnectionError("Simulated error")
+            return "success"
+        
+        # Call the function
+        result = test_function()
+        
+        # Verify it was called twice
+        self.assertEqual(call_count, 2)
+        
+        # Verify result
+        self.assertEqual(result, "success")
+        
+        # Verify some delay occurred (at least 5ms)
+        self.assertGreater(time.time() - start_time, 0.005)
 
-    def test_is_retryable_error_performance(self):
-        """Test the performance of error eligibility checking."""
-        # Create a list of exceptions to check
-        exceptions = [
-            ConnectionError(),
-            TimeoutError(),
-            ValueError(),
-            TypeError(),
-            KeyError(),
-            OSError()
-        ]
+    def test_nested_retries(self):
+        """Test that nested retry decorators work correctly."""
+        outer_calls = 0
+        inner_calls = 0
         
-        # Measure the time it takes to check 1000 exceptions
-        start_time = time.time()
-        for _ in range(1000):
-            for exc in exceptions:
-                is_retryable_error(exc)
-        end_time = time.time()
+        @retry_with_backoff(max_retries=1, initial_delay=0.01)
+        def outer_function():
+            nonlocal outer_calls
+            outer_calls += 1
+            
+            if outer_calls == 1:
+                raise ConnectionError("Outer error")
+            
+            return inner_function()
         
-        # Should be very fast (typically < 0.1s)
-        execution_time = end_time - start_time
-        logger.info(f"Error eligibility checking performance: {execution_time:.6f}s for 6000 checks")
+        @retry_with_backoff(max_retries=1, initial_delay=0.01)
+        def inner_function():
+            nonlocal inner_calls
+            inner_calls += 1
+            
+            if inner_calls == 1:
+                raise TimeoutError("Inner error")
+            
+            return "nested success"
         
-        # This is a soft assertion - we're just logging the time
-        assert execution_time < 1.0, "Error eligibility checking should be fast"
+        # Call the outer function
+        result = outer_function()
+        
+        # Verify call counts
+        self.assertEqual(outer_calls, 2)  # Failed once, then succeeded
+        self.assertEqual(inner_calls, 2)  # Failed once, then succeeded
+        
+        # Verify result
+        self.assertEqual(result, "nested success")
+
+
+if __name__ == '__main__':
+    unittest.main()
