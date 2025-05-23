@@ -2,34 +2,33 @@
 # -*- coding: utf-8 -*-
 
 """
-Base Model for OCR Processing
+Abstract base class for all OCR models in the system.
 
-This module defines the abstract base class for all OCR models in the system.
-It establishes the common interface and shared functionality that all OCR models
-must implement, including methods for model loading, image preprocessing,
-text extraction, and result formatting.
+This module defines the BaseOCRModel abstract class that establishes the common interface
+and shared functionality that all OCR models must implement. It includes methods for model
+loading, image preprocessing, text extraction, and result formatting with confidence scoring.
+
+All OCR model implementations (typed text, handwritten text, hybrid) must inherit from this
+base class and implement its abstract methods to ensure consistent behavior across the OCR service.
+
+Requirements:
+- TensorFlow 2.15.0 with GPU acceleration (CUDA-compatible GPU with at least 8GB VRAM)
+- Processing time under 5 minutes per document
+- 99% data extraction accuracy
 """
 
 import abc
-import logging
 import os
-from datetime import datetime
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+import time
+import logging
+from typing import Dict, List, Tuple, Any, Optional, Union
 
 import numpy as np
 import tensorflow as tf
 
-from ..types.config import TensorFlowConfig
-from ..types.documents import DocumentContent, DocumentMetadata
-from ..types.extraction import ConfidenceScore, ExtractedData, ExtractedField
-from ..types.models import ModelParameters, ModelResult
-from ..utils.image_utils import normalize_image, preprocess_image
-from ..utils.logging_utils import get_logger
-from ..utils.tensorflow_utils import configure_gpu_memory
-
-
-logger = get_logger(__name__)
+from ..types.models import ModelParameters, ModelResult, OCRModelType
+from ..types.extraction import ExtractedData, ExtractedField, ConfidenceScore
+from ..types.errors import ServiceError
 
 
 class BaseOCRModel(abc.ABC):
@@ -37,340 +36,314 @@ class BaseOCRModel(abc.ABC):
     Abstract base class for all OCR models in the system.
     
     This class defines the common interface and shared functionality that all OCR models
-    must implement. It provides methods for model loading, image preprocessing, text extraction,
+    must implement, including methods for model loading, image preprocessing, text extraction,
     and result formatting with confidence scoring.
     
     Attributes:
-        model_path (Path): Path to the TensorFlow model files
-        model_name (str): Name of the model for logging and identification
-        model_version (str): Version of the model
-        config (TensorFlowConfig): Configuration for TensorFlow and GPU settings
-        model (tf.keras.Model): The loaded TensorFlow model
-        parameters (ModelParameters): Model-specific parameters and hyperparameters
+        model_type (OCRModelType): The type of OCR model (TYPED, HANDWRITTEN, HYBRID).
+        model_path (str): Path to the TensorFlow model file.
+        model_parameters (ModelParameters): Configuration parameters for the model.
+        model (tf.keras.Model): The loaded TensorFlow model.
+        logger (logging.Logger): Logger for the model.
+        gpu_available (bool): Whether GPU acceleration is available.
     """
     
-    def __init__(self, 
-                 model_path: Union[str, Path], 
-                 model_name: str,
-                 config: TensorFlowConfig,
-                 parameters: Optional[ModelParameters] = None) -> None:
+    def __init__(self, model_path: str, model_parameters: ModelParameters):
         """
-        Initialize the OCR model with the specified model path and configuration.
+        Initialize the OCR model.
         
         Args:
-            model_path: Path to the TensorFlow model files
-            model_name: Name of the model for logging and identification
-            config: Configuration for TensorFlow and GPU settings
-            parameters: Model-specific parameters and hyperparameters (optional)
-        
+            model_path (str): Path to the TensorFlow model file.
+            model_parameters (ModelParameters): Configuration parameters for the model.
+            
         Raises:
-            ValueError: If the model path does not exist or is invalid
-            RuntimeError: If GPU initialization fails
+            ServiceError: If the model file does not exist or cannot be loaded.
         """
-        self.model_path = Path(model_path) if isinstance(model_path, str) else model_path
-        self.model_name = model_name
-        self.config = config
-        self.parameters = parameters or {}
+        self.model_path = model_path
+        self.model_parameters = model_parameters
         self.model = None
-        self.model_version = "unknown"
+        self.logger = logging.getLogger(__name__)
+        
+        # Check if GPU is available for TensorFlow
+        self.gpu_available = tf.config.list_physical_devices('GPU')
+        
+        if not self.gpu_available:
+            self.logger.warning("No GPU detected. OCR processing may be slow. "
+                               "TensorFlow OCR processing requires CUDA-compatible GPU "
+                               "acceleration with at least 8GB VRAM.")
+        else:
+            self.logger.info(f"GPU detected: {self.gpu_available}")
+            
+            # Configure GPU memory growth to avoid allocating all memory at once
+            for gpu in self.gpu_available:
+                try:
+                    tf.config.experimental.set_memory_growth(gpu, True)
+                    self.logger.info(f"Memory growth enabled for GPU: {gpu}")
+                except RuntimeError as e:
+                    self.logger.error(f"Error configuring GPU memory growth: {str(e)}")
         
         # Validate model path
-        if not self.model_path.exists():
-            raise ValueError(f"Model path does not exist: {self.model_path}")
-        
-        # Configure GPU memory if available
-        if config.use_gpu:
-            try:
-                configure_gpu_memory(config.gpu_memory_limit, config.gpu_growth)
-                logger.info(f"GPU configured for {self.model_name} with memory limit: {config.gpu_memory_limit}MB")
-            except Exception as e:
-                logger.error(f"Failed to configure GPU: {str(e)}")
-                raise RuntimeError(f"GPU initialization failed: {str(e)}")
-        
-        # Load the model
-        self._load_model()
-        
-        logger.info(f"Initialized {self.model_name} (version: {self.model_version})")
+        if not os.path.exists(model_path):
+            error_msg = f"Model file not found at path: {model_path}"
+            self.logger.error(error_msg)
+            raise ServiceError(error_msg, "MODEL_NOT_FOUND")
     
-    def _load_model(self) -> None:
+    @abc.abstractmethod
+    def load_model(self) -> None:
         """
         Load the TensorFlow model from the specified path.
         
-        This method loads the model and sets the model_version attribute.
+        This method must be implemented by all derived classes to load the specific
+        model architecture required for their OCR task.
         
         Raises:
-            RuntimeError: If model loading fails
+            ServiceError: If the model cannot be loaded.
         """
-        try:
-            # Load the model using TensorFlow's SavedModel format
-            self.model = tf.saved_model.load(str(self.model_path))
-            
-            # Try to get model version from saved_model.pb metadata or version file
-            version_file = self.model_path / "version.txt"
-            if version_file.exists():
-                with open(version_file, "r") as f:
-                    self.model_version = f.read().strip()
-            else:
-                # Use directory name as fallback for version
-                self.model_version = self.model_path.name
-                
-            logger.info(f"Successfully loaded {self.model_name} model (version: {self.model_version})")
-        except Exception as e:
-            error_msg = f"Failed to load model {self.model_name} from {self.model_path}: {str(e)}"
-            logger.error(error_msg)
-            raise RuntimeError(error_msg)
-    
-    def preprocess_document(self, document_content: DocumentContent, 
-                           document_metadata: DocumentMetadata) -> np.ndarray:
-        """
-        Preprocess the document image for OCR processing.
-        
-        This method applies common preprocessing steps such as normalization,
-        resizing, and enhancement to optimize the image for OCR processing.
-        
-        Args:
-            document_content: Binary content of the document
-            document_metadata: Metadata of the document including MIME type
-            
-        Returns:
-            Preprocessed image as a numpy array ready for OCR processing
-            
-        Raises:
-            ValueError: If document content is invalid or unsupported
-        """
-        try:
-            # Convert document content to image
-            image = preprocess_image(document_content, document_metadata)
-            
-            # Apply normalization and enhancement
-            normalized_image = normalize_image(image)
-            
-            return normalized_image
-        except Exception as e:
-            error_msg = f"Failed to preprocess document: {str(e)}"
-            logger.error(error_msg)
-            raise ValueError(error_msg)
+        pass
     
     @abc.abstractmethod
-    def extract_text(self, image: np.ndarray) -> List[Tuple[str, ConfidenceScore]]:
+    def preprocess_image(self, image: np.ndarray) -> np.ndarray:
         """
-        Extract text from the preprocessed document image.
+        Preprocess the input image for OCR processing.
         
-        This abstract method must be implemented by all derived classes to
-        perform the actual text extraction using the specific OCR model.
+        This method must be implemented by all derived classes to perform the specific
+        preprocessing steps required for their OCR model.
         
         Args:
-            image: Preprocessed document image as a numpy array
+            image (np.ndarray): The input image as a numpy array.
             
         Returns:
-            List of tuples containing extracted text and confidence scores
-            
-        Raises:
-            NotImplementedError: If the derived class does not implement this method
+            np.ndarray: The preprocessed image ready for OCR processing.
         """
-        raise NotImplementedError("Derived classes must implement extract_text()")
+        pass
     
     @abc.abstractmethod
-    def extract_fields(self, image: np.ndarray, 
-                      document_metadata: DocumentMetadata) -> List[ExtractedField]:
+    def extract_text(self, preprocessed_image: np.ndarray) -> ModelResult:
         """
-        Extract structured fields from the document image.
+        Extract text from the preprocessed image.
         
-        This abstract method must be implemented by all derived classes to
-        extract structured fields based on the document type and content.
+        This method must be implemented by all derived classes to perform the specific
+        text extraction logic required for their OCR model.
         
         Args:
-            image: Preprocessed document image as a numpy array
-            document_metadata: Metadata of the document including type and classification
+            preprocessed_image (np.ndarray): The preprocessed image ready for OCR processing.
             
         Returns:
-            List of extracted fields with values and confidence scores
-            
-        Raises:
-            NotImplementedError: If the derived class does not implement this method
+            ModelResult: The extracted text with confidence scores.
         """
-        raise NotImplementedError("Derived classes must implement extract_fields()")
+        pass
     
-    def process_document(self, document_content: DocumentContent, 
-                        document_metadata: DocumentMetadata) -> ModelResult:
+    @abc.abstractmethod
+    def format_result(self, model_result: ModelResult) -> ExtractedData:
         """
-        Process a document to extract text and structured fields.
+        Format the model result into structured extracted data.
         
-        This method orchestrates the complete document processing workflow:
-        1. Preprocess the document image
-        2. Extract text from the image
-        3. Extract structured fields based on document type
-        4. Format the results with confidence scores
+        This method must be implemented by all derived classes to format the raw model
+        output into structured data with field names, values, and confidence scores.
         
         Args:
-            document_content: Binary content of the document
-            document_metadata: Metadata of the document
+            model_result (ModelResult): The raw model output.
             
         Returns:
-            ModelResult containing extracted data and processing metadata
+            ExtractedData: The structured extracted data with field names, values, and confidence scores.
+        """
+        pass
+    
+    def process(self, image: np.ndarray) -> ExtractedData:
+        """
+        Process an image and extract text with confidence scores.
+        
+        This method orchestrates the OCR processing pipeline:
+        1. Load the model if not already loaded
+        2. Preprocess the input image
+        3. Extract text from the preprocessed image
+        4. Format the result into structured data
+        
+        Args:
+            image (np.ndarray): The input image as a numpy array.
+            
+        Returns:
+            ExtractedData: The structured extracted data with field names, values, and confidence scores.
             
         Raises:
-            ValueError: If document processing fails
+            ServiceError: If any step in the OCR processing pipeline fails.
         """
-        start_time = datetime.now()
+        start_time = time.time()
+        self.logger.info("Starting OCR processing")
         
         try:
-            # Preprocess the document
-            preprocessed_image = self.preprocess_document(document_content, document_metadata)
+            # Load model if not already loaded
+            if self.model is None:
+                self.logger.info("Loading OCR model")
+                self.load_model()
+                self.logger.info("OCR model loaded successfully")
             
-            # Extract text and fields
-            extracted_text = self.extract_text(preprocessed_image)
-            extracted_fields = self.extract_fields(preprocessed_image, document_metadata)
+            # Preprocess image
+            self.logger.info("Preprocessing image")
+            preprocessed_image = self.preprocess_image(image)
+            self.logger.info("Image preprocessing completed")
             
-            # Calculate overall confidence score
-            confidence_scores = [field.confidence for field in extracted_fields]
-            overall_confidence = sum(confidence_scores) / len(confidence_scores) if confidence_scores else 0.0
+            # Extract text
+            self.logger.info("Extracting text from image")
+            model_result = self.extract_text(preprocessed_image)
+            self.logger.info("Text extraction completed")
             
-            # Format results
-            extracted_data = ExtractedData(
-                fields=extracted_fields,
-                text=[text for text, _ in extracted_text],
-                confidence=overall_confidence,
-                metadata={
-                    "model_name": self.model_name,
-                    "model_version": self.model_version,
-                    "document_id": document_metadata.get("id", ""),
-                    "document_type": document_metadata.get("type", ""),
-                    "processing_time_ms": (datetime.now() - start_time).total_seconds() * 1000
-                }
-            )
+            # Format result
+            self.logger.info("Formatting extraction result")
+            extracted_data = self.format_result(model_result)
+            self.logger.info("Result formatting completed")
             
-            # Create model result
-            result = ModelResult(
-                success=True,
-                data=extracted_data,
-                error=None,
-                processing_time_ms=(datetime.now() - start_time).total_seconds() * 1000
-            )
+            # Log processing time
+            processing_time = time.time() - start_time
+            self.logger.info(f"OCR processing completed in {processing_time:.2f} seconds")
             
-            logger.info(
-                f"Successfully processed document {document_metadata.get('id', '')} "
-                f"with {self.model_name} (confidence: {overall_confidence:.2f})"
-            )
+            return extracted_data
             
-            return result
         except Exception as e:
-            error_msg = f"Failed to process document: {str(e)}"
-            logger.error(error_msg)
-            
-            # Create error result
-            result = ModelResult(
-                success=False,
-                data=None,
-                error={
-                    "message": error_msg,
-                    "type": type(e).__name__
-                },
-                processing_time_ms=(datetime.now() - start_time).total_seconds() * 1000
-            )
-            
-            return result
+            error_msg = f"Error during OCR processing: {str(e)}"
+            self.logger.error(error_msg)
+            raise ServiceError(error_msg, "OCR_PROCESSING_ERROR")
     
-    def calculate_confidence(self, predictions: np.ndarray) -> ConfidenceScore:
+    def calculate_confidence(self, probabilities: np.ndarray) -> ConfidenceScore:
         """
-        Calculate confidence score from model predictions.
+        Calculate confidence score from model probabilities.
         
-        This method converts raw model prediction probabilities into a
-        standardized confidence score between 0.0 and 1.0.
+        This is a shared utility method that all OCR models can use to calculate
+        confidence scores from model probabilities.
         
         Args:
-            predictions: Raw prediction probabilities from the model
+            probabilities (np.ndarray): The model probabilities for a prediction.
             
         Returns:
-            Standardized confidence score between 0.0 and 1.0
+            ConfidenceScore: A confidence score between 0.0 and 1.0.
         """
-        # Basic implementation - derived classes may override with model-specific logic
-        if predictions is None or len(predictions) == 0:
-            return 0.0
+        # Ensure probabilities are valid
+        if probabilities is None or len(probabilities) == 0:
+            return ConfidenceScore(0.0)
         
-        # For classification models, use the highest probability
-        if predictions.ndim > 1 and predictions.shape[1] > 1:
-            return float(np.max(predictions, axis=1).mean())
+        # Calculate confidence score (mean of top probabilities)
+        confidence = float(np.mean(probabilities))
         
-        # For regression or single-output models, normalize to 0-1 range
-        return float(np.clip(predictions.mean(), 0.0, 1.0))
+        # Ensure confidence is between 0.0 and 1.0
+        confidence = max(0.0, min(1.0, confidence))
+        
+        return ConfidenceScore(confidence)
     
-    def format_result(self, extracted_fields: List[ExtractedField], 
-                     document_metadata: DocumentMetadata) -> Dict[str, Any]:
+    def normalize_image(self, image: np.ndarray) -> np.ndarray:
         """
-        Format extracted fields into a standardized JSON structure.
+        Normalize image pixel values to the range [0, 1].
         
-        This method converts the extracted fields into a structured JSON format
-        suitable for downstream processing by the Data Service.
+        This is a shared utility method that all OCR models can use to normalize
+        image pixel values.
         
         Args:
-            extracted_fields: List of extracted fields with values and confidence scores
-            document_metadata: Metadata of the document
+            image (np.ndarray): The input image as a numpy array.
             
         Returns:
-            Structured JSON representation of the extracted data
+            np.ndarray: The normalized image with pixel values in the range [0, 1].
         """
-        # Group fields by category
-        categorized_fields = {}
-        for field in extracted_fields:
-            category = field.category or "general"
-            if category not in categorized_fields:
-                categorized_fields[category] = []
+        # Ensure image is valid
+        if image is None or image.size == 0:
+            raise ServiceError("Invalid image for normalization", "INVALID_IMAGE")
+        
+        # Convert image to float32 if not already
+        if image.dtype != np.float32:
+            image = image.astype(np.float32)
+        
+        # Normalize pixel values to [0, 1]
+        if np.max(image) > 1.0:
+            image = image / 255.0
+        
+        return image
+    
+    def resize_image(self, image: np.ndarray, target_height: int, preserve_aspect_ratio: bool = True) -> np.ndarray:
+        """
+        Resize image to target height while optionally preserving aspect ratio.
+        
+        This is a shared utility method that all OCR models can use to resize images
+        to a target height while optionally preserving the aspect ratio.
+        
+        Args:
+            image (np.ndarray): The input image as a numpy array.
+            target_height (int): The target height for the resized image.
+            preserve_aspect_ratio (bool, optional): Whether to preserve the aspect ratio. Defaults to True.
             
-            categorized_fields[category].append({
-                "name": field.name,
-                "value": field.value,
-                "confidence": field.confidence,
-                "location": field.location,
-                "requires_verification": field.confidence < self.config.verification_threshold
-            })
+        Returns:
+            np.ndarray: The resized image.
+        """
+        # Ensure image is valid
+        if image is None or image.size == 0:
+            raise ServiceError("Invalid image for resizing", "INVALID_IMAGE")
         
-        # Calculate overall confidence per category
-        category_confidence = {}
-        for category, fields in categorized_fields.items():
-            confidence_scores = [field["confidence"] for field in fields]
-            category_confidence[category] = sum(confidence_scores) / len(confidence_scores) if confidence_scores else 0.0
+        # Get original dimensions
+        height, width = image.shape[:2]
         
-        # Create result structure
-        result = {
-            "document_id": document_metadata.get("id", ""),
-            "document_type": document_metadata.get("type", ""),
-            "extraction_time": datetime.now().isoformat(),
-            "model": {
-                "name": self.model_name,
-                "version": self.model_version
-            },
-            "categories": {
-                category: {
-                    "fields": fields,
-                    "confidence": category_confidence[category]
-                } for category, fields in categorized_fields.items()
-            },
-            "overall_confidence": sum(category_confidence.values()) / len(category_confidence) 
-                                if category_confidence else 0.0,
-            "requires_verification": any(field["requires_verification"] 
-                                      for fields in categorized_fields.values() 
-                                      for field in fields)
-        }
+        if preserve_aspect_ratio:
+            # Calculate new width to preserve aspect ratio
+            aspect_ratio = width / height
+            target_width = int(target_height * aspect_ratio)
+        else:
+            # Use model's default width parameter
+            target_width = self.model_parameters.get('width', width)
         
-        return result
+        # Resize image using TensorFlow
+        resized_image = tf.image.resize(
+            image, 
+            [target_height, target_width],
+            method=tf.image.ResizeMethod.BILINEAR
+        ).numpy()
+        
+        return resized_image
+    
+    def enhance_image(self, image: np.ndarray) -> np.ndarray:
+        """
+        Enhance image quality for better OCR results.
+        
+        This is a shared utility method that all OCR models can use to enhance image
+        quality for better OCR results. It applies common image enhancement techniques
+        such as contrast adjustment and noise reduction.
+        
+        Args:
+            image (np.ndarray): The input image as a numpy array.
+            
+        Returns:
+            np.ndarray: The enhanced image.
+        """
+        # Ensure image is valid
+        if image is None or image.size == 0:
+            raise ServiceError("Invalid image for enhancement", "INVALID_IMAGE")
+        
+        # Convert to float32 if not already
+        if image.dtype != np.float32:
+            image = image.astype(np.float32)
+        
+        # Normalize to [0, 1]
+        if np.max(image) > 1.0:
+            image = image / 255.0
+        
+        # Apply contrast enhancement
+        # Stretch histogram to use full range [0, 1]
+        min_val = np.min(image)
+        max_val = np.max(image)
+        if max_val > min_val:  # Avoid division by zero
+            image = (image - min_val) / (max_val - min_val)
+        
+        return image
     
     def __str__(self) -> str:
         """
-        Return a string representation of the model.
+        Return a string representation of the OCR model.
         
         Returns:
-            String representation including model name and version
+            str: A string representation of the OCR model.
         """
-        return f"{self.model_name} (version: {self.model_version})"
+        return f"{self.__class__.__name__}(model_path={self.model_path})"
     
     def __repr__(self) -> str:
         """
-        Return a detailed string representation of the model.
+        Return a string representation of the OCR model for debugging.
         
         Returns:
-            Detailed string representation including model path and parameters
+            str: A string representation of the OCR model for debugging.
         """
-        return (f"{self.__class__.__name__}(model_name='{self.model_name}', "
-                f"model_version='{self.model_version}', "
-                f"model_path='{self.model_path}')")
+        return f"{self.__class__.__name__}(model_path={self.model_path}, parameters={self.model_parameters})"
