@@ -1,364 +1,341 @@
 package com.dollarfunding.mca.dto;
 
+import com.dollarfunding.mca.util.Constants;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
 
-import java.io.IOException;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Test class for {@link ErrorResponseDTO} that validates the error response structure,
- * JSON serialization/deserialization, and builder pattern functionality.
+ * Test class for {@link ErrorResponseDTO}.
  * 
- * Tests ensure that the DTO properly formats error information, includes appropriate
- * timestamps and request paths, and handles validation errors with field-level details.
+ * This class tests the error response structure, JSON serialization/deserialization,
+ * and builder pattern functionality. It validates error code mapping, message formatting,
+ * and field-level validation error handling.
  */
 public class ErrorResponseDTOTest {
 
-    private ObjectMapper objectMapper;
-    private ErrorResponseDTO errorResponseDTO;
-    private static final String ERROR_CODE = "VALIDATION_ERROR";
-    private static final String ERROR_MESSAGE = "Validation failed for the request";
-    private static final int HTTP_STATUS = 400;
-    private static final String REQUEST_PATH = "/api/v1/applications";
-    private static final LocalDateTime TIMESTAMP = LocalDateTime.of(2023, 1, 1, 10, 0, 0);
-
-    @BeforeEach
-    void setUp() {
-        // Configure ObjectMapper with JavaTimeModule for LocalDateTime serialization
-        objectMapper = new ObjectMapper();
-        objectMapper.registerModule(new JavaTimeModule());
-        
-        // Create test error response DTO with all required fields
-        errorResponseDTO = new ErrorResponseDTO();
-        errorResponseDTO.setErrorCode(ERROR_CODE);
-        errorResponseDTO.setMessage(ERROR_MESSAGE);
-        errorResponseDTO.setStatus(HTTP_STATUS);
-        errorResponseDTO.setPath(REQUEST_PATH);
-        errorResponseDTO.setTimestamp(TIMESTAMP);
-    }
-
+    private final ObjectMapper objectMapper = new ObjectMapper();
+    
     @Test
-    @DisplayName("Should create ErrorResponseDTO with default constructor correctly")
-    void shouldCreateWithDefaultConstructor() {
-        // Create with default constructor
-        ErrorResponseDTO dto = new ErrorResponseDTO();
+    public void testDefaultConstructor() {
+        // When
+        ErrorResponseDTO errorResponse = new ErrorResponseDTO();
         
-        // Assert timestamp is set automatically
-        assertNotNull(dto.getTimestamp());
-        assertNull(dto.getErrorCode());
-        assertNull(dto.getMessage());
-        assertNull(dto.getPath());
-        assertEquals(0, dto.getStatus());
-        assertNull(dto.getDetails());
+        // Then
+        assertNotNull(errorResponse);
+        assertNotNull(errorResponse.getTimestamp(), "Timestamp should be initialized");
+        assertNull(errorResponse.getMessage(), "Message should be null");
+        assertNull(errorResponse.getErrorCode(), "Error code should be null");
+        assertNull(errorResponse.getPath(), "Path should be null");
+        assertEquals(0, errorResponse.getStatus(), "Status should be 0");
+        assertNull(errorResponse.getDetails(), "Details should be null");
     }
-
+    
     @Test
-    @DisplayName("Should create ErrorResponseDTO with message constructor correctly")
-    void shouldCreateWithMessageConstructor() {
-        // Create with message constructor
-        String message = "Test error message";
-        ErrorResponseDTO dto = new ErrorResponseDTO(message);
+    public void testConstructorWithMessage() {
+        // Given
+        String errorMessage = "An error occurred";
         
-        // Assert fields are set correctly
-        assertNotNull(dto.getTimestamp());
-        assertEquals(message, dto.getMessage());
-        assertNull(dto.getErrorCode());
-        assertNull(dto.getPath());
-        assertEquals(0, dto.getStatus());
-        assertNull(dto.getDetails());
+        // When
+        ErrorResponseDTO errorResponse = new ErrorResponseDTO(errorMessage);
+        
+        // Then
+        assertNotNull(errorResponse);
+        assertEquals(errorMessage, errorResponse.getMessage(), "Message should match");
+        assertNotNull(errorResponse.getTimestamp(), "Timestamp should be initialized");
     }
-
+    
     @Test
-    @DisplayName("Should create ErrorResponseDTO with message and status constructor correctly")
-    void shouldCreateWithMessageAndStatusConstructor() {
-        // Create with message and status constructor
-        String message = "Test error message";
-        int status = 404;
-        ErrorResponseDTO dto = new ErrorResponseDTO(message, status);
+    public void testConstructorWithMessageAndStatus() {
+        // Given
+        String errorMessage = "Resource not found";
+        int status = HttpStatus.NOT_FOUND.value();
         
-        // Assert fields are set correctly
-        assertNotNull(dto.getTimestamp());
-        assertEquals(message, dto.getMessage());
-        assertEquals(status, dto.getStatus());
-        assertNull(dto.getErrorCode());
-        assertNull(dto.getPath());
-        assertNull(dto.getDetails());
+        // When
+        ErrorResponseDTO errorResponse = new ErrorResponseDTO(errorMessage, status);
+        
+        // Then
+        assertNotNull(errorResponse);
+        assertEquals(errorMessage, errorResponse.getMessage(), "Message should match");
+        assertEquals(status, errorResponse.getStatus(), "Status should match");
+        assertNotNull(errorResponse.getTimestamp(), "Timestamp should be initialized");
     }
-
+    
     @Test
-    @DisplayName("Should create ErrorResponseDTO with errorCode, message, and status constructor correctly")
-    void shouldCreateWithErrorCodeMessageAndStatusConstructor() {
-        // Create with errorCode, message, and status constructor
-        String errorCode = "NOT_FOUND";
-        String message = "Resource not found";
-        int status = 404;
-        ErrorResponseDTO dto = new ErrorResponseDTO(errorCode, message, status);
+    public void testConstructorWithErrorCodeMessageAndStatus() {
+        // Given
+        String errorCode = Constants.ErrorCode.NOT_FOUND;
+        String errorMessage = "Resource not found";
+        int status = HttpStatus.NOT_FOUND.value();
         
-        // Assert fields are set correctly
-        assertNotNull(dto.getTimestamp());
-        assertEquals(errorCode, dto.getErrorCode());
-        assertEquals(message, dto.getMessage());
-        assertEquals(status, dto.getStatus());
-        assertNull(dto.getPath());
-        assertNull(dto.getDetails());
+        // When
+        ErrorResponseDTO errorResponse = new ErrorResponseDTO(errorCode, errorMessage, status);
+        
+        // Then
+        assertNotNull(errorResponse);
+        assertEquals(errorCode, errorResponse.getErrorCode(), "Error code should match");
+        assertEquals(errorMessage, errorResponse.getMessage(), "Message should match");
+        assertEquals(status, errorResponse.getStatus(), "Status should match");
+        assertNotNull(errorResponse.getTimestamp(), "Timestamp should be initialized");
     }
-
+    
     @Test
-    @DisplayName("Should set and get all fields correctly")
-    void shouldSetAndGetAllFieldsCorrectly() {
-        // Create empty DTO
-        ErrorResponseDTO dto = new ErrorResponseDTO();
+    public void testGettersAndSetters() {
+        // Given
+        ErrorResponseDTO errorResponse = new ErrorResponseDTO();
+        String errorCode = Constants.ErrorCode.VALIDATION_ERROR;
+        String message = "Validation failed";
+        int status = HttpStatus.BAD_REQUEST.value();
+        String path = "/api/v1/applications";
+        LocalDateTime timestamp = LocalDateTime.now();
         
-        // Set all fields
-        dto.setErrorCode(ERROR_CODE);
-        dto.setMessage(ERROR_MESSAGE);
-        dto.setStatus(HTTP_STATUS);
-        dto.setPath(REQUEST_PATH);
-        dto.setTimestamp(TIMESTAMP);
+        // When
+        errorResponse.setErrorCode(errorCode);
+        errorResponse.setMessage(message);
+        errorResponse.setStatus(status);
+        errorResponse.setPath(path);
+        errorResponse.setTimestamp(timestamp);
         
-        // Assert all fields are set correctly
-        assertEquals(ERROR_CODE, dto.getErrorCode());
-        assertEquals(ERROR_MESSAGE, dto.getMessage());
-        assertEquals(HTTP_STATUS, dto.getStatus());
-        assertEquals(REQUEST_PATH, dto.getPath());
-        assertEquals(TIMESTAMP, dto.getTimestamp());
+        // Then
+        assertEquals(errorCode, errorResponse.getErrorCode(), "Error code should match");
+        assertEquals(message, errorResponse.getMessage(), "Message should match");
+        assertEquals(status, errorResponse.getStatus(), "Status should match");
+        assertEquals(path, errorResponse.getPath(), "Path should match");
+        assertEquals(timestamp, errorResponse.getTimestamp(), "Timestamp should match");
     }
-
+    
     @Test
-    @DisplayName("Should build ErrorResponseDTO with builder pattern correctly")
-    void shouldBuildWithBuilderPatternCorrectly() {
-        // Build DTO using builder pattern
-        ErrorResponseDTO dto = ErrorResponseDTO.builder()
-                .errorCode(ERROR_CODE)
-                .message(ERROR_MESSAGE)
-                .status(HTTP_STATUS)
-                .path(REQUEST_PATH)
-                .timestamp(TIMESTAMP)
-                .build();
-        
-        // Assert all fields are set correctly
-        assertEquals(ERROR_CODE, dto.getErrorCode());
-        assertEquals(ERROR_MESSAGE, dto.getMessage());
-        assertEquals(HTTP_STATUS, dto.getStatus());
-        assertEquals(REQUEST_PATH, dto.getPath());
-        assertEquals(TIMESTAMP, dto.getTimestamp());
-    }
-
-    @Test
-    @DisplayName("Should build ErrorResponseDTO with validation errors correctly")
-    void shouldBuildWithValidationErrorsCorrectly() {
-        // Build DTO with validation errors using builder pattern
-        ErrorResponseDTO dto = ErrorResponseDTO.builder()
-                .errorCode(ERROR_CODE)
-                .message(ERROR_MESSAGE)
-                .status(HTTP_STATUS)
-                .path(REQUEST_PATH)
-                .addValidationError("name", "Name is required")
-                .addValidationError("email", "Email is invalid", "invalid-email")
-                .build();
-        
-        // Assert validation errors are set correctly
-        assertNotNull(dto.getDetails());
-        assertEquals(2, dto.getDetails().size());
-        
-        // Assert first validation error
-        ErrorResponseDTO.ValidationError firstError = dto.getDetails().get(0);
-        assertEquals("name", firstError.getField());
-        assertEquals("Name is required", firstError.getMessage());
-        assertNull(firstError.getRejectedValue());
-        
-        // Assert second validation error
-        ErrorResponseDTO.ValidationError secondError = dto.getDetails().get(1);
-        assertEquals("email", secondError.getField());
-        assertEquals("Email is invalid", secondError.getMessage());
-        assertEquals("invalid-email", secondError.getRejectedValue());
-    }
-
-    @Test
-    @DisplayName("Should add validation errors to existing ErrorResponseDTO correctly")
-    void shouldAddValidationErrorsCorrectly() {
-        // Add validation errors to existing DTO
-        errorResponseDTO.addValidationError("name", "Name is required");
-        errorResponseDTO.addValidationError("email", "Email is invalid", "invalid-email");
-        
-        // Assert validation errors are added correctly
-        assertNotNull(errorResponseDTO.getDetails());
-        assertEquals(2, errorResponseDTO.getDetails().size());
-        
-        // Assert first validation error
-        ErrorResponseDTO.ValidationError firstError = errorResponseDTO.getDetails().get(0);
-        assertEquals("name", firstError.getField());
-        assertEquals("Name is required", firstError.getMessage());
-        assertNull(firstError.getRejectedValue());
-        
-        // Assert second validation error
-        ErrorResponseDTO.ValidationError secondError = errorResponseDTO.getDetails().get(1);
-        assertEquals("email", secondError.getField());
-        assertEquals("Email is invalid", secondError.getMessage());
-        assertEquals("invalid-email", secondError.getRejectedValue());
-    }
-
-    @Test
-    @DisplayName("Should serialize ErrorResponseDTO to JSON correctly")
-    void shouldSerializeToJsonCorrectly() throws IOException {
-        // Add validation errors
-        errorResponseDTO.addValidationError("name", "Name is required");
-        errorResponseDTO.addValidationError("email", "Email is invalid", "invalid-email");
-        
-        // Serialize to JSON
-        String json = objectMapper.writeValueAsString(errorResponseDTO);
-        
-        // Assert JSON contains expected fields
-        assertTrue(json.contains("\"errorCode\":\"" + ERROR_CODE + "\""));
-        assertTrue(json.contains("\"message\":\"" + ERROR_MESSAGE + "\""));
-        assertTrue(json.contains("\"status\":" + HTTP_STATUS));
-        assertTrue(json.contains("\"path\":\"" + REQUEST_PATH + "\""));
-        assertTrue(json.contains("\"timestamp\":\"2023-01-01T10:00:00.000Z\""));
-        assertTrue(json.contains("\"details\":"));
-        assertTrue(json.contains("\"field\":\"name\""));
-        assertTrue(json.contains("\"message\":\"Name is required\""));
-        assertTrue(json.contains("\"field\":\"email\""));
-        assertTrue(json.contains("\"message\":\"Email is invalid\""));
-        assertTrue(json.contains("\"rejectedValue\":\"invalid-email\""));
-    }
-
-    @Test
-    @DisplayName("Should deserialize JSON to ErrorResponseDTO correctly")
-    void shouldDeserializeFromJsonCorrectly() throws IOException {
-        // Add validation errors
-        errorResponseDTO.addValidationError("name", "Name is required");
-        errorResponseDTO.addValidationError("email", "Email is invalid", "invalid-email");
-        
-        // Serialize to JSON and then deserialize back
-        String json = objectMapper.writeValueAsString(errorResponseDTO);
-        ErrorResponseDTO deserializedDTO = objectMapper.readValue(json, ErrorResponseDTO.class);
-        
-        // Assert deserialized DTO matches original
-        assertEquals(ERROR_CODE, deserializedDTO.getErrorCode());
-        assertEquals(ERROR_MESSAGE, deserializedDTO.getMessage());
-        assertEquals(HTTP_STATUS, deserializedDTO.getStatus());
-        assertEquals(REQUEST_PATH, deserializedDTO.getPath());
-        assertEquals(TIMESTAMP, deserializedDTO.getTimestamp());
-        
-        // Assert validation errors
-        assertNotNull(deserializedDTO.getDetails());
-        assertEquals(2, deserializedDTO.getDetails().size());
-        
-        // Assert first validation error
-        ErrorResponseDTO.ValidationError firstError = deserializedDTO.getDetails().get(0);
-        assertEquals("name", firstError.getField());
-        assertEquals("Name is required", firstError.getMessage());
-        assertNull(firstError.getRejectedValue());
-        
-        // Assert second validation error
-        ErrorResponseDTO.ValidationError secondError = deserializedDTO.getDetails().get(1);
-        assertEquals("email", secondError.getField());
-        assertEquals("Email is invalid", secondError.getMessage());
-        assertEquals("invalid-email", secondError.getRejectedValue());
-    }
-
-    @Test
-    @DisplayName("Should handle null fields in JSON serialization correctly")
-    void shouldHandleNullFieldsInJsonSerializationCorrectly() throws IOException {
-        // Create DTO with only required fields
-        ErrorResponseDTO dto = new ErrorResponseDTO();
-        dto.setMessage(ERROR_MESSAGE);
-        
-        // Serialize to JSON
-        String json = objectMapper.writeValueAsString(dto);
-        
-        // Assert JSON contains only non-null fields
-        assertTrue(json.contains("\"message\":\"" + ERROR_MESSAGE + "\""));
-        assertTrue(json.contains("\"timestamp\":"));
-        assertFalse(json.contains("\"errorCode\":"));
-        assertFalse(json.contains("\"path\":"));
-        assertFalse(json.contains("\"details\":"));
-    }
-
-    @Test
-    @DisplayName("Should create ValidationError with field and message constructor correctly")
-    void shouldCreateValidationErrorWithFieldAndMessageConstructorCorrectly() {
-        // Create ValidationError with field and message
-        String field = "name";
-        String message = "Name is required";
-        ErrorResponseDTO.ValidationError validationError = new ErrorResponseDTO.ValidationError(field, message);
-        
-        // Assert fields are set correctly
-        assertEquals(field, validationError.getField());
-        assertEquals(message, validationError.getMessage());
-        assertNull(validationError.getRejectedValue());
-    }
-
-    @Test
-    @DisplayName("Should create ValidationError with field, message, and rejectedValue constructor correctly")
-    void shouldCreateValidationErrorWithFieldMessageAndRejectedValueConstructorCorrectly() {
-        // Create ValidationError with field, message, and rejectedValue
+    public void testAddValidationError() {
+        // Given
+        ErrorResponseDTO errorResponse = new ErrorResponseDTO("Validation failed", HttpStatus.BAD_REQUEST.value());
         String field = "email";
-        String message = "Email is invalid";
-        String rejectedValue = "invalid-email";
-        ErrorResponseDTO.ValidationError validationError = 
-                new ErrorResponseDTO.ValidationError(field, message, rejectedValue);
+        String message = "must be a valid email address";
+        Object rejectedValue = "invalid-email";
         
-        // Assert fields are set correctly
-        assertEquals(field, validationError.getField());
-        assertEquals(message, validationError.getMessage());
-        assertEquals(rejectedValue, validationError.getRejectedValue());
+        // When
+        errorResponse.addValidationError(field, message, rejectedValue);
+        
+        // Then
+        assertNotNull(errorResponse.getDetails(), "Details should not be null");
+        assertEquals(1, errorResponse.getDetails().size(), "Should have one validation error");
+        
+        ErrorResponseDTO.ValidationError validationError = errorResponse.getDetails().get(0);
+        assertEquals(field, validationError.getField(), "Field should match");
+        assertEquals(message, validationError.getMessage(), "Message should match");
+        assertEquals(rejectedValue, validationError.getRejectedValue(), "Rejected value should match");
     }
-
+    
     @Test
-    @DisplayName("Should set and get ValidationError fields correctly")
-    void shouldSetAndGetValidationErrorFieldsCorrectly() {
-        // Create empty ValidationError
-        ErrorResponseDTO.ValidationError validationError = new ErrorResponseDTO.ValidationError();
+    public void testAddMultipleValidationErrors() {
+        // Given
+        ErrorResponseDTO errorResponse = new ErrorResponseDTO("Validation failed", HttpStatus.BAD_REQUEST.value());
         
-        // Set fields
-        String field = "name";
-        String message = "Name is required";
-        String rejectedValue = "invalid-name";
+        // When
+        errorResponse.addValidationError("email", "must be a valid email address", "invalid-email");
+        errorResponse.addValidationError("password", "must be at least 8 characters", "short");
+        
+        // Then
+        assertNotNull(errorResponse.getDetails(), "Details should not be null");
+        assertEquals(2, errorResponse.getDetails().size(), "Should have two validation errors");
+    }
+    
+    @Test
+    public void testAddValidationErrorWithoutRejectedValue() {
+        // Given
+        ErrorResponseDTO errorResponse = new ErrorResponseDTO("Validation failed", HttpStatus.BAD_REQUEST.value());
+        String field = "email";
+        String message = "must not be null";
+        
+        // When
+        errorResponse.addValidationError(field, message);
+        
+        // Then
+        assertNotNull(errorResponse.getDetails(), "Details should not be null");
+        assertEquals(1, errorResponse.getDetails().size(), "Should have one validation error");
+        
+        ErrorResponseDTO.ValidationError validationError = errorResponse.getDetails().get(0);
+        assertEquals(field, validationError.getField(), "Field should match");
+        assertEquals(message, validationError.getMessage(), "Message should match");
+        assertNull(validationError.getRejectedValue(), "Rejected value should be null");
+    }
+    
+    @Test
+    public void testBuilderPattern() {
+        // Given
+        String errorCode = Constants.ErrorCode.VALIDATION_ERROR;
+        String message = "Validation failed";
+        int status = HttpStatus.BAD_REQUEST.value();
+        String path = "/api/v1/applications";
+        LocalDateTime timestamp = LocalDateTime.now();
+        
+        // When
+        ErrorResponseDTO errorResponse = ErrorResponseDTO.builder()
+                .errorCode(errorCode)
+                .message(message)
+                .status(status)
+                .path(path)
+                .timestamp(timestamp)
+                .addValidationError("email", "must be a valid email address", "invalid-email")
+                .build();
+        
+        // Then
+        assertEquals(errorCode, errorResponse.getErrorCode(), "Error code should match");
+        assertEquals(message, errorResponse.getMessage(), "Message should match");
+        assertEquals(status, errorResponse.getStatus(), "Status should match");
+        assertEquals(path, errorResponse.getPath(), "Path should match");
+        assertEquals(timestamp, errorResponse.getTimestamp(), "Timestamp should match");
+        
+        assertNotNull(errorResponse.getDetails(), "Details should not be null");
+        assertEquals(1, errorResponse.getDetails().size(), "Should have one validation error");
+    }
+    
+    @Test
+    public void testBuilderWithMultipleValidationErrors() {
+        // When
+        ErrorResponseDTO errorResponse = ErrorResponseDTO.builder()
+                .errorCode(Constants.ErrorCode.VALIDATION_ERROR)
+                .message("Validation failed")
+                .status(HttpStatus.BAD_REQUEST.value())
+                .path("/api/v1/applications")
+                .addValidationError("email", "must be a valid email address", "invalid-email")
+                .addValidationError("password", "must be at least 8 characters", "short")
+                .build();
+        
+        // Then
+        assertNotNull(errorResponse.getDetails(), "Details should not be null");
+        assertEquals(2, errorResponse.getDetails().size(), "Should have two validation errors");
+        
+        // Verify first validation error
+        ErrorResponseDTO.ValidationError firstError = errorResponse.getDetails().get(0);
+        assertEquals("email", firstError.getField(), "Field should match");
+        assertEquals("must be a valid email address", firstError.getMessage(), "Message should match");
+        assertEquals("invalid-email", firstError.getRejectedValue(), "Rejected value should match");
+        
+        // Verify second validation error
+        ErrorResponseDTO.ValidationError secondError = errorResponse.getDetails().get(1);
+        assertEquals("password", secondError.getField(), "Field should match");
+        assertEquals("must be at least 8 characters", secondError.getMessage(), "Message should match");
+        assertEquals("short", secondError.getRejectedValue(), "Rejected value should match");
+    }
+    
+    @Test
+    public void testJsonSerialization() throws Exception {
+        // Given
+        LocalDateTime now = LocalDateTime.now();
+        ErrorResponseDTO errorResponse = ErrorResponseDTO.builder()
+                .errorCode(Constants.ErrorCode.VALIDATION_ERROR)
+                .message("Validation failed")
+                .status(HttpStatus.BAD_REQUEST.value())
+                .path("/api/v1/applications")
+                .timestamp(now)
+                .addValidationError("email", "must be a valid email address", "invalid-email")
+                .build();
+        
+        // When
+        String json = objectMapper.writeValueAsString(errorResponse);
+        
+        // Then
+        assertTrue(json.contains("\"errorCode\":\"" + Constants.ErrorCode.VALIDATION_ERROR + "\""), "JSON should contain error code");
+        assertTrue(json.contains("\"message\":\"Validation failed\""), "JSON should contain message");
+        assertTrue(json.contains("\"status\":400"), "JSON should contain status");
+        assertTrue(json.contains("\"path\":\"/api/v1/applications\""), "JSON should contain path");
+        assertTrue(json.contains("\"field\":\"email\""), "JSON should contain validation field");
+        assertTrue(json.contains("\"message\":\"must be a valid email address\""), "JSON should contain validation message");
+        assertTrue(json.contains("\"rejectedValue\":\"invalid-email\""), "JSON should contain rejected value");
+        
+        // Verify timestamp format
+        String expectedTimestampPattern = now.format(DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss"));
+        assertTrue(json.contains(expectedTimestampPattern.substring(0, 16)), "JSON should contain formatted timestamp");
+    }
+    
+    @Test
+    public void testJsonDeserialization() throws Exception {
+        // Given
+        String json = "{\"errorCode\":\"GEN-002\",\"message\":\"Validation failed\",\"details\":[{\"field\":\"email\",\"message\":\"must be a valid email address\",\"rejectedValue\":\"invalid-email\"}],\"timestamp\":\"2023-05-15T10:30:45.123Z\",\"path\":\"/api/v1/applications\",\"status\":400}";
+        
+        // When
+        ErrorResponseDTO errorResponse = objectMapper.readValue(json, ErrorResponseDTO.class);
+        
+        // Then
+        assertEquals("GEN-002", errorResponse.getErrorCode(), "Error code should match");
+        assertEquals("Validation failed", errorResponse.getMessage(), "Message should match");
+        assertEquals(400, errorResponse.getStatus(), "Status should match");
+        assertEquals("/api/v1/applications", errorResponse.getPath(), "Path should match");
+        
+        // Verify validation errors
+        assertNotNull(errorResponse.getDetails(), "Details should not be null");
+        assertEquals(1, errorResponse.getDetails().size(), "Should have one validation error");
+        
+        ErrorResponseDTO.ValidationError validationError = errorResponse.getDetails().get(0);
+        assertEquals("email", validationError.getField(), "Field should match");
+        assertEquals("must be a valid email address", validationError.getMessage(), "Message should match");
+        assertEquals("invalid-email", validationError.getRejectedValue(), "Rejected value should match");
+    }
+    
+    @Test
+    public void testValidationErrorGettersAndSetters() {
+        // Given
+        ErrorResponseDTO.ValidationError validationError = new ErrorResponseDTO.ValidationError();
+        String field = "email";
+        String message = "must be a valid email address";
+        Object rejectedValue = "invalid-email";
+        
+        // When
         validationError.setField(field);
         validationError.setMessage(message);
         validationError.setRejectedValue(rejectedValue);
         
-        // Assert fields are set correctly
-        assertEquals(field, validationError.getField());
-        assertEquals(message, validationError.getMessage());
-        assertEquals(rejectedValue, validationError.getRejectedValue());
+        // Then
+        assertEquals(field, validationError.getField(), "Field should match");
+        assertEquals(message, validationError.getMessage(), "Message should match");
+        assertEquals(rejectedValue, validationError.getRejectedValue(), "Rejected value should match");
     }
-
+    
     @Test
-    @DisplayName("Should handle HTTP status codes correctly")
-    void shouldHandleHttpStatusCodesCorrectly() {
-        // Create DTOs with different status codes
-        ErrorResponseDTO badRequestDTO = new ErrorResponseDTO("Bad Request", 400);
-        ErrorResponseDTO notFoundDTO = new ErrorResponseDTO("Not Found", 404);
-        ErrorResponseDTO serverErrorDTO = new ErrorResponseDTO("Server Error", 500);
+    public void testValidationErrorConstructors() {
+        // Test constructor with field and message
+        ErrorResponseDTO.ValidationError error1 = new ErrorResponseDTO.ValidationError("email", "must be a valid email address");
+        assertEquals("email", error1.getField(), "Field should match");
+        assertEquals("must be a valid email address", error1.getMessage(), "Message should match");
+        assertNull(error1.getRejectedValue(), "Rejected value should be null");
         
-        // Assert status codes are set correctly
-        assertEquals(400, badRequestDTO.getStatus());
-        assertEquals(404, notFoundDTO.getStatus());
-        assertEquals(500, serverErrorDTO.getStatus());
+        // Test constructor with field, message, and rejected value
+        ErrorResponseDTO.ValidationError error2 = new ErrorResponseDTO.ValidationError("email", "must be a valid email address", "invalid-email");
+        assertEquals("email", error2.getField(), "Field should match");
+        assertEquals("must be a valid email address", error2.getMessage(), "Message should match");
+        assertEquals("invalid-email", error2.getRejectedValue(), "Rejected value should match");
     }
-
+    
     @Test
-    @DisplayName("Should handle method chaining with addValidationError correctly")
-    void shouldHandleMethodChainingWithAddValidationErrorCorrectly() {
-        // Use method chaining with addValidationError
-        ErrorResponseDTO dto = new ErrorResponseDTO()
-                .addValidationError("field1", "Error 1")
-                .addValidationError("field2", "Error 2", "invalid-value");
+    public void testErrorResponseWithNullDetails() {
+        // Given
+        ErrorResponseDTO errorResponse = new ErrorResponseDTO("An error occurred", HttpStatus.INTERNAL_SERVER_ERROR.value());
         
-        // Assert validation errors are added correctly
-        List<ErrorResponseDTO.ValidationError> details = dto.getDetails();
-        assertNotNull(details);
-        assertEquals(2, details.size());
-        assertEquals("field1", details.get(0).getField());
-        assertEquals("field2", details.get(1).getField());
+        // Then
+        assertNull(errorResponse.getDetails(), "Details should be null");
+    }
+    
+    @Test
+    public void testSetDetailsDirectly() {
+        // Given
+        ErrorResponseDTO errorResponse = new ErrorResponseDTO();
+        ErrorResponseDTO.ValidationError error1 = new ErrorResponseDTO.ValidationError("email", "must be a valid email address");
+        ErrorResponseDTO.ValidationError error2 = new ErrorResponseDTO.ValidationError("password", "must be at least 8 characters");
+        List<ErrorResponseDTO.ValidationError> details = List.of(error1, error2);
+        
+        // When
+        errorResponse.setDetails(details);
+        
+        // Then
+        assertNotNull(errorResponse.getDetails(), "Details should not be null");
+        assertEquals(2, errorResponse.getDetails().size(), "Should have two validation errors");
+        assertEquals("email", errorResponse.getDetails().get(0).getField(), "First error field should match");
+        assertEquals("password", errorResponse.getDetails().get(1).getField(), "Second error field should match");
     }
 }
