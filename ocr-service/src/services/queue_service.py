@@ -2,517 +2,512 @@
 # -*- coding: utf-8 -*-
 
 """
-Queue Service for OCR Service microservice.
+RabbitMQ message handling service for the OCR Service microservice.
 
-This module provides functionality for connecting to RabbitMQ, consuming messages from the
-'ocr.request' queue, and publishing extraction results to downstream services. It implements
-TLS with client certificate authentication, error handling, connection recovery, and retry
-logic with exponential backoff.
+This module provides functionality for connecting to RabbitMQ, consuming messages
+from the 'ocr.request' queue, and publishing extraction results to downstream services.
+It implements TLS with client certificate authentication, error handling with connection
+recovery, and retry logic with exponential backoff for failed operations.
+
+Key features:
+1. Secure RabbitMQ connection with TLS and client certificate authentication
+2. Message consumption from 'ocr.request' queue
+3. Message publishing to 'data.processing' queue for Data Service
+4. JSON serialization/deserialization for standardized message format
+5. Error handling and connection recovery for RabbitMQ
+6. Retry logic with exponential backoff for failed operations
 """
 
 import json
 import logging
-import ssl
 import time
+import uuid
 from functools import wraps
-from typing import Any, Callable, Dict, List, Optional, TypeVar, Union, cast
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union, TypeVar, Generic
 
 import pika
-from pika import credentials, connection, channel, spec
+from pika import spec
 from pika.adapters.blocking_connection import BlockingChannel, BlockingConnection
-from pika.exceptions import AMQPConnectionError, AMQPChannelError, AMQPError
+from pika.exceptions import AMQPConnectionError, AMQPChannelError, ConnectionClosedByBroker
 
-from ..types.messages import MessagePayload, MessageHeaders, ExchangeConfig, QueueConfig, PublishOptions, ConsumeOptions
-from ..types.errors import ServiceError, ErrorCategory, Result
-from ..config import rabbitmq_config, app_config, logging_config
-
-# Type variable for generic function return types
-T = TypeVar('T')
+from ..config.rabbitmq_config import (
+    get_rabbitmq_config, get_connection_parameters, get_consumer_options,
+    get_publisher_options, serialize_message, deserialize_message
+)
+from ..types.config import RabbitMQConfig
+from ..types.messages import (
+    MessagePayload, MessageHeaders, PublishOptions, ConsumeOptions,
+    ExchangeConfig, QueueConfig, create_message_payload, MessageStatus
+)
+from ..utils.error_utils import create_error_context
+from ..utils.logging_utils import get_logger
+from ..utils.rabbitmq_utils import (
+    RabbitMQConnection, with_connection_retry, serialize_message as utils_serialize_message,
+    deserialize_message as utils_deserialize_message, create_retry_policy,
+    get_retry_delay, get_retry_count, increment_retry_count
+)
 
 # Configure logger
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
+
+# Type variable for generic result handling
+T = TypeVar('T')
+
+
+class Result(Generic[T]):
+    """Generic result class for operations that may fail.
+    
+    This class represents the result of an operation that may succeed or fail,
+    providing access to the result value or error information.
+    
+    Attributes:
+        value: The result value if successful
+        error: Error information if failed
+        success: Whether the operation was successful
+    """
+    
+    def __init__(self, value: Optional[T] = None, error: Optional[Exception] = None):
+        self.value = value
+        self.error = error
+        self.success = error is None
+    
+    @classmethod
+    def ok(cls, value: T) -> 'Result[T]':
+        """Create a successful result with the given value.
+        
+        Args:
+            value: The result value
+            
+        Returns:
+            Result: A successful result with the given value
+        """
+        return cls(value=value)
+    
+    @classmethod
+    def err(cls, error: Exception) -> 'Result[T]':
+        """Create a failed result with the given error.
+        
+        Args:
+            error: The error that occurred
+            
+        Returns:
+            Result: A failed result with the given error
+        """
+        return cls(error=error)
+    
+    def __bool__(self) -> bool:
+        """Convert to boolean, returning True if successful.
+        
+        Returns:
+            bool: True if successful, False if failed
+        """
+        return self.success
 
 
 class QueueService:
-    """
-    Service for handling RabbitMQ message queue operations.
+    """RabbitMQ message handling service for the OCR Service.
     
-    This service provides functionality for connecting to RabbitMQ, consuming messages
+    This class provides functionality for connecting to RabbitMQ, consuming messages
     from the 'ocr.request' queue, and publishing extraction results to the Data Service.
-    It implements TLS with client certificate authentication, error handling, connection
-    recovery, and retry logic with exponential backoff.
+    It implements TLS with client certificate authentication, error handling with connection
+    recovery, and retry logic with exponential backoff for failed operations.
+    
+    Attributes:
+        config: RabbitMQ configuration
+        connection: RabbitMQ connection manager
+        callback: Callback function for processing messages
+        running: Whether the service is running
     """
     
-    def __init__(self):
-        """
-        Initialize the QueueService with RabbitMQ configuration.
-        """
-        self.config = rabbitmq_config
-        self.connection: Optional[BlockingConnection] = None
-        self.channel: Optional[BlockingChannel] = None
-        self.connected = False
-        self.consumer_tag: Optional[str] = None
-        self.max_retries = self.config.max_retries
-        self.retry_delay = self.config.retry_delay
-        self.exchange_name = self.config.exchange_name
-        self.exchange_type = self.config.exchange_type
-        self.ocr_request_queue = self.config.ocr_request_queue
-        self.data_processing_queue = self.config.data_processing_queue
-        
-        # Initialize connection
-        self._initialize_connection()
-    
-    def _initialize_connection(self) -> None:
-        """
-        Initialize the RabbitMQ connection with TLS and client certificate authentication.
-        """
-        try:
-            # Set up SSL context for TLS
-            ssl_context = ssl.create_default_context(cafile=self.config.ca_cert_path)
-            ssl_context.load_cert_chain(
-                certfile=self.config.client_cert_path,
-                keyfile=self.config.client_key_path,
-                password=self.config.cert_password
-            )
-            ssl_context.verify_mode = ssl.CERT_REQUIRED
-            ssl_context.check_hostname = True
-            
-            # Set up credentials
-            credentials_obj = credentials.ExternalCredentials() if self.config.use_cert_auth else \
-                credentials.PlainCredentials(self.config.username, self.config.password)
-            
-            # Set up connection parameters with TLS
-            conn_params = pika.ConnectionParameters(
-                host=self.config.host,
-                port=self.config.port,
-                virtual_host=self.config.virtual_host,
-                credentials=credentials_obj,
-                ssl_options=pika.SSLOptions(context=ssl_context),
-                heartbeat=self.config.heartbeat,
-                blocked_connection_timeout=self.config.connection_timeout,
-                retry_delay=self.config.retry_delay,
-                connection_attempts=self.config.connection_attempts
-            )
-            
-            # Establish connection
-            self.connection = pika.BlockingConnection(conn_params)
-            self.channel = self.connection.channel()
-            
-            # Declare exchange
-            self.channel.exchange_declare(
-                exchange=self.exchange_name,
-                exchange_type=self.exchange_type,
-                durable=True
-            )
-            
-            # Declare queues
-            self.channel.queue_declare(
-                queue=self.ocr_request_queue,
-                durable=True
-            )
-            
-            self.channel.queue_declare(
-                queue=self.data_processing_queue,
-                durable=True
-            )
-            
-            # Bind queues to exchange
-            self.channel.queue_bind(
-                queue=self.ocr_request_queue,
-                exchange=self.exchange_name,
-                routing_key='ocr.request'
-            )
-            
-            self.channel.queue_bind(
-                queue=self.data_processing_queue,
-                exchange=self.exchange_name,
-                routing_key='data.processing'
-            )
-            
-            # Set QoS prefetch count
-            self.channel.basic_qos(prefetch_count=self.config.prefetch_count)
-            
-            self.connected = True
-            logger.info(f"Successfully connected to RabbitMQ at {self.config.host}:{self.config.port}")
-            
-        except (AMQPConnectionError, AMQPChannelError, AMQPError) as e:
-            logger.error(f"Failed to initialize RabbitMQ connection: {str(e)}")
-            self.connected = False
-            raise ServiceError(
-                message=f"Failed to initialize RabbitMQ connection: {str(e)}",
-                category=ErrorCategory.CONNECTION,
-                details={"host": self.config.host, "port": self.config.port}
-            )
-    
-    def with_connection(func: Callable) -> Callable:
-        """
-        Decorator to ensure a valid RabbitMQ connection before executing a function.
-        Implements connection recovery if the connection is lost.
+    def __init__(self, config: Optional[RabbitMQConfig] = None):
+        """Initialize the QueueService with the given configuration.
         
         Args:
-            func: The function to wrap with connection handling.
-            
-        Returns:
-            The wrapped function with connection handling.
+            config: RabbitMQ configuration (optional, loaded from environment if not provided)
         """
-        @wraps(func)
-        def wrapper(self, *args, **kwargs):
-            if not self.connected or not self.connection or self.connection.is_closed or \
-               not self.channel or self.channel.is_closed:
-                logger.warning("RabbitMQ connection is not established or was closed. Attempting to reconnect...")
-                try:
-                    self._initialize_connection()
-                except ServiceError as e:
-                    logger.error(f"Failed to reconnect to RabbitMQ: {str(e)}")
-                    raise
+        self.config = config or get_rabbitmq_config()
+        self.connection = RabbitMQConnection(self.config)
+        self.callback: Optional[Callable] = None
+        self.running = False
+        
+        logger.info("Initialized QueueService with RabbitMQ configuration")
+    
+    def start(self) -> Result[bool]:
+        """Start the QueueService, connecting to RabbitMQ and setting up exchanges and queues.
+        
+        Returns:
+            Result: Success or failure of the operation
+        """
+        try:
+            logger.info("Starting QueueService")
             
-            try:
-                return func(self, *args, **kwargs)
-            except (AMQPConnectionError, AMQPChannelError, AMQPError) as e:
-                logger.error(f"RabbitMQ operation failed: {str(e)}")
-                self.connected = False
-                raise ServiceError(
-                    message=f"RabbitMQ operation failed: {str(e)}",
-                    category=ErrorCategory.CONNECTION,
-                    details={"function": func.__name__, "args": args, "kwargs": kwargs}
+            # Connect to RabbitMQ
+            self.connection.connect()
+            
+            # Set up exchanges and queues
+            self._setup_exchanges_and_queues()
+            
+            self.running = True
+            logger.info("QueueService started successfully")
+            return Result.ok(True)
+        except Exception as e:
+            logger.error(f"Failed to start QueueService: {str(e)}")
+            return Result.err(e)
+    
+    def stop(self) -> Result[bool]:
+        """Stop the QueueService, closing the RabbitMQ connection.
+        
+        Returns:
+            Result: Success or failure of the operation
+        """
+        try:
+            logger.info("Stopping QueueService")
+            
+            # Close the RabbitMQ connection
+            self.connection.close()
+            
+            self.running = False
+            logger.info("QueueService stopped successfully")
+            return Result.ok(True)
+        except Exception as e:
+            logger.error(f"Failed to stop QueueService: {str(e)}")
+            return Result.err(e)
+    
+    def _setup_exchanges_and_queues(self) -> None:
+        """Set up exchanges and queues based on configuration.
+        
+        This method declares the exchanges and queues specified in the configuration,
+        and binds the queues to the exchanges with the appropriate routing keys.
+        """
+        logger.info("Setting up exchanges and queues")
+        
+        # Declare exchanges
+        for exchange_config in self.config.exchanges:
+            self.connection.declare_exchange(
+                exchange=exchange_config.name,
+                exchange_type=exchange_config.exchange_type,
+                durable=exchange_config.durable
+            )
+        
+        # Declare queues and bind to exchanges
+        for queue_config in self.config.queues:
+            self.connection.declare_queue(
+                queue=queue_config.name,
+                durable=queue_config.durable,
+                arguments=queue_config.arguments
+            )
+            
+            # Bind queue to exchanges
+            for binding in queue_config.bindings:
+                self.connection.bind_queue(
+                    queue=queue_config.name,
+                    exchange=binding['exchange'],
+                    routing_key=binding.get('routing_key', '')
                 )
-        
-        return wrapper
     
-    def with_retry(func: Callable[..., Result[T]]) -> Callable[..., Result[T]]:
-        """
-        Decorator to implement retry logic with exponential backoff for RabbitMQ operations.
+    def register_callback(self, callback: Callable) -> None:
+        """Register a callback function for processing messages.
+        
+        The callback function should accept the following parameters:
+        - channel: The RabbitMQ channel
+        - method: The delivery method
+        - properties: The message properties
+        - body: The message body
         
         Args:
-            func: The function to wrap with retry logic.
-            
-        Returns:
-            The wrapped function with retry logic.
+            callback: Callback function for processing messages
         """
-        @wraps(func)
-        def wrapper(self, *args, **kwargs) -> Result[T]:
-            retries = 0
-            last_error = None
+        self.callback = callback
+        logger.debug("Registered message processing callback")
+    
+    def _message_handler(self, channel: BlockingChannel, method: spec.Basic.Deliver,
+                        properties: spec.BasicProperties, body: bytes) -> None:
+        """Handle incoming messages from RabbitMQ.
+        
+        This method is called when a message is received from RabbitMQ. It deserializes
+        the message, calls the registered callback function, and acknowledges or rejects
+        the message based on the result.
+        
+        Args:
+            channel: The RabbitMQ channel
+            method: The delivery method
+            properties: The message properties
+            body: The message body
+        """
+        message_id = properties.message_id or "unknown"
+        delivery_tag = method.delivery_tag
+        
+        logger.info(f"Received message {message_id} with delivery tag {delivery_tag}")
+        
+        try:
+            # Deserialize the message
+            payload, headers = utils_deserialize_message(body, properties)
             
-            while retries <= self.max_retries:
+            # Call the callback function if registered
+            if self.callback:
                 try:
-                    result = func(self, *args, **kwargs)
-                    if result.success:
-                        if retries > 0:
-                            logger.info(f"Operation succeeded after {retries} retries")
-                        return result
+                    self.callback(channel, method, properties, body, payload, headers)
+                    
+                    # Acknowledge the message
+                    self.connection.acknowledge_message(delivery_tag)
+                    logger.debug(f"Acknowledged message {message_id}")
+                except Exception as e:
+                    # Log the error
+                    error_context = create_error_context(e, {
+                        'message_id': message_id,
+                        'delivery_tag': delivery_tag
+                    })
+                    logger.error(f"Error processing message: {error_context}")
+                    
+                    # Check if the message should be requeued
+                    retry_count = get_retry_count(properties.headers or {})
+                    max_retries = 3  # Maximum number of retries
+                    
+                    if retry_count < max_retries:
+                        # Reject the message and requeue it
+                        self.connection.reject_message(delivery_tag, requeue=True)
+                        logger.warning(f"Requeued message {message_id} for retry (attempt {retry_count + 1})")
                     else:
-                        last_error = result.error
-                except ServiceError as e:
-                    last_error = e
-                
-                retries += 1
-                if retries <= self.max_retries:
-                    # Calculate exponential backoff with jitter
-                    delay = min(self.config.max_delay, self.retry_delay * (2 ** (retries - 1)))
-                    logger.warning(f"Retrying operation after {delay:.2f}s (attempt {retries}/{self.max_retries})")
-                    time.sleep(delay)
+                        # Reject the message without requeuing (send to dead-letter queue)
+                        self.connection.reject_message(delivery_tag, requeue=False)
+                        logger.warning(f"Rejected message {message_id} after {retry_count} retries")
+            else:
+                # No callback registered, acknowledge the message
+                self.connection.acknowledge_message(delivery_tag)
+                logger.warning(f"No callback registered, acknowledged message {message_id}")
+        except Exception as e:
+            # Error deserializing the message
+            logger.error(f"Error deserializing message {message_id}: {str(e)}")
             
-            logger.error(f"Operation failed after {self.max_retries} retries: {str(last_error)}")
-            return Result(success=False, error=last_error)
-        
-        return wrapper
+            # Reject the message without requeuing (send to dead-letter queue)
+            self.connection.reject_message(delivery_tag, requeue=False)
+            logger.warning(f"Rejected message {message_id} due to deserialization error")
     
-    @with_connection
-    @with_retry
-    def publish_message(self, payload: MessagePayload, routing_key: str, 
-                       headers: Optional[MessageHeaders] = None,
+    def consume_messages(self, queue: str = "ocr.request", auto_ack: bool = False,
+                        prefetch_count: int = 10) -> Result[bool]:
+        """Start consuming messages from the specified queue.
+        
+        This method starts consuming messages from the specified queue, calling the
+        registered callback function for each message received. It implements error
+        handling and connection recovery for RabbitMQ.
+        
+        Args:
+            queue: Queue to consume from (default: 'ocr.request')
+            auto_ack: Whether to automatically acknowledge messages (default: False)
+            prefetch_count: Number of messages to prefetch (default: 10)
+            
+        Returns:
+            Result: Success or failure of the operation
+        """
+        if not self.running:
+            return Result.err(RuntimeError("QueueService not started"))
+        
+        if not self.callback:
+            return Result.err(RuntimeError("No callback registered"))
+        
+        try:
+            logger.info(f"Starting to consume messages from queue '{queue}'")
+            
+            # Ensure connection is established
+            self.connection.ensure_connection()
+            
+            # Set QoS (prefetch count)
+            self.connection.channel.basic_qos(prefetch_count=prefetch_count)
+            
+            # Start consuming
+            self.connection.consume_messages(
+                queue=queue,
+                callback=self._message_handler,
+                auto_ack=auto_ack,
+                prefetch_count=prefetch_count
+            )
+            
+            return Result.ok(True)
+        except Exception as e:
+            logger.error(f"Failed to consume messages from queue '{queue}': {str(e)}")
+            return Result.err(e)
+    
+    @with_connection_retry(max_retries=3, initial_delay=1.0, max_delay=10.0, backoff_factor=2.0)
+    def publish_message(self, exchange: str, routing_key: str, payload: MessagePayload,
+                       headers: Optional[Dict[str, Any]] = None,
                        options: Optional[PublishOptions] = None) -> Result[bool]:
-        """
-        Publish a message to the RabbitMQ exchange with the specified routing key.
+        """Publish a message to RabbitMQ with retry logic.
+        
+        This method publishes a message to RabbitMQ with retry logic for handling
+        connection failures. It serializes the message payload to JSON and applies
+        the specified headers and options.
         
         Args:
-            payload: The message payload to publish.
-            routing_key: The routing key for the message.
-            headers: Optional headers for the message.
-            options: Optional publishing options.
+            exchange: Exchange to publish to
+            routing_key: Routing key for the message
+            payload: Message payload
+            headers: Message headers (optional)
+            options: Publishing options (optional)
             
         Returns:
-            Result indicating success or failure of the operation.
+            Result: Success or failure of the operation
         """
+        if not self.running:
+            return Result.err(RuntimeError("QueueService not started"))
+        
         try:
-            if not self.channel:
-                return Result(success=False, error=ServiceError(
-                    message="Channel not initialized",
-                    category=ErrorCategory.CONNECTION
-                ))
+            logger.info(f"Publishing message to exchange '{exchange}' with routing key '{routing_key}'")
             
-            # Serialize payload to JSON
-            message_body = json.dumps(payload).encode('utf-8')
+            # Ensure connection is established
+            self.connection.ensure_connection()
             
-            # Set up message properties
-            properties = pika.BasicProperties(
-                delivery_mode=2,  # Make message persistent
-                content_type='application/json',
-                content_encoding='utf-8',
-                headers=headers or {},
-                app_id=app_config.service_name,
-                timestamp=int(time.time()),
-                message_id=payload.get('id', ''),
-                correlation_id=payload.get('correlation_id', ''),
-                **({} if not options else options)
-            )
+            # Serialize the message payload
+            serialized_payload, headers_dict = utils_serialize_message(payload, headers)
             
-            # Publish message
-            self.channel.basic_publish(
-                exchange=self.exchange_name,
+            # Publish the message
+            result = self.connection.publish_message(
+                exchange=exchange,
                 routing_key=routing_key,
-                body=message_body,
-                properties=properties
+                body=serialized_payload,
+                headers=headers_dict,
+                options=options
             )
             
-            logger.info(f"Published message to exchange '{self.exchange_name}' with routing key '{routing_key}'")
-            return Result(success=True, data=True)
-            
-        except (AMQPConnectionError, AMQPChannelError, AMQPError) as e:
-            logger.error(f"Failed to publish message: {str(e)}")
-            return Result(success=False, error=ServiceError(
-                message=f"Failed to publish message: {str(e)}",
-                category=ErrorCategory.MESSAGING,
-                details={"exchange": self.exchange_name, "routing_key": routing_key}
-            ))
+            if result:
+                logger.debug(f"Successfully published message to exchange '{exchange}'")
+                return Result.ok(True)
+            else:
+                logger.warning(f"Failed to publish message to exchange '{exchange}'")
+                return Result.err(RuntimeError("Failed to publish message"))
         except Exception as e:
-            logger.error(f"Unexpected error publishing message: {str(e)}")
-            return Result(success=False, error=ServiceError(
-                message=f"Unexpected error publishing message: {str(e)}",
-                category=ErrorCategory.UNKNOWN,
-                details={"exchange": self.exchange_name, "routing_key": routing_key}
-            ))
+            logger.error(f"Error publishing message to exchange '{exchange}': {str(e)}")
+            return Result.err(e)
     
-    @with_connection
-    def start_consuming(self, callback: Callable[[MessagePayload, MessageHeaders, BlockingChannel, spec.Basic.Deliver], None],
-                      options: Optional[ConsumeOptions] = None) -> None:
-        """
-        Start consuming messages from the OCR request queue.
+    def publish_extraction_results(self, document_id: str, application_id: str,
+                                 storage_path: str, extraction_results: Dict[str, Any],
+                                 confidence_scores: Dict[str, float],
+                                 document_type: str, processing_time_ms: float,
+                                 requires_verification: bool = False,
+                                 verification_fields: Optional[List[str]] = None) -> Result[bool]:
+        """Publish extraction results to the Data Service.
+        
+        This method creates a standardized message payload with the extraction results
+        and publishes it to the Data Service via RabbitMQ. It includes confidence scores,
+        processing time, and verification flags.
         
         Args:
-            callback: The callback function to process received messages.
-            options: Optional consumption options.
-        """
-        if not self.channel:
-            raise ServiceError(
-                message="Channel not initialized",
-                category=ErrorCategory.CONNECTION
-            )
-        
-        def _message_handler(ch: BlockingChannel, method: spec.Basic.Deliver, 
-                           properties: spec.BasicProperties, body: bytes) -> None:
-            """
-            Internal message handler that deserializes the message and calls the user callback.
+            document_id: ID of the document
+            application_id: ID of the application
+            storage_path: S3 storage path for the document
+            extraction_results: OCR extraction results
+            confidence_scores: Confidence scores for extracted fields
+            document_type: Type of document
+            processing_time_ms: Processing time in milliseconds
+            requires_verification: Whether human verification is required
+            verification_fields: Fields requiring verification
             
-            Args:
-                ch: The channel object.
-                method: The delivery method.
-                properties: The message properties.
-                body: The message body.
-            """
-            try:
-                # Deserialize message body
-                payload = json.loads(body.decode('utf-8'))
-                headers = properties.headers or {}
-                
-                # Log message receipt
-                logger.info(f"Received message from queue '{self.ocr_request_queue}' with routing key '{method.routing_key}'")
-                
-                # Call user callback
-                callback(payload, headers, ch, method)
-                
-            except json.JSONDecodeError as e:
-                logger.error(f"Failed to decode message: {str(e)}")
-                # Reject the message without requeue if it's not valid JSON
-                ch.basic_reject(delivery_tag=method.delivery_tag, requeue=False)
-            except Exception as e:
-                logger.error(f"Error processing message: {str(e)}")
-                # Reject the message with requeue to try again later
-                ch.basic_reject(delivery_tag=method.delivery_tag, requeue=True)
-        
-        # Start consuming from the queue
-        self.consumer_tag = self.channel.basic_consume(
-            queue=self.ocr_request_queue,
-            on_message_callback=_message_handler,
-            auto_ack=False  # Manual acknowledgment
-        )
-        
-        logger.info(f"Started consuming messages from queue '{self.ocr_request_queue}'")
-        
+        Returns:
+            Result: Success or failure of the operation
+        """
         try:
-            # Start consuming loop
-            self.channel.start_consuming()
-        except KeyboardInterrupt:
-            logger.info("Stopping consumer due to keyboard interrupt")
-            self.stop_consuming()
-        except Exception as e:
-            logger.error(f"Error in consumer: {str(e)}")
-            self.stop_consuming()
-            raise ServiceError(
-                message=f"Error in consumer: {str(e)}",
-                category=ErrorCategory.MESSAGING
+            # Create the message payload
+            payload = create_message_payload(
+                document_id=document_id,
+                document_type=document_type,
+                application_id=application_id,
+                storage_path=storage_path,
+                content_type="application/json",
+                source_service="ocr-service",
+                status=MessageStatus.COMPLETED.value,
+                extraction_results=extraction_results,
+                confidence_scores=confidence_scores,
+                processing_time_ms=processing_time_ms,
+                requires_verification=requires_verification,
+                verification_fields=verification_fields
             )
+            
+            # Create publish options
+            options = PublishOptions.for_data_service(document_id)
+            
+            # Publish the message
+            return self.publish_message(
+                exchange="mca.data.processing",
+                routing_key="data.extraction.complete",
+                payload=payload,
+                options=options
+            )
+        except Exception as e:
+            logger.error(f"Error publishing extraction results for document {document_id}: {str(e)}")
+            return Result.err(e)
     
-    @with_connection
-    def stop_consuming(self) -> None:
-        """
-        Stop consuming messages from the queue.
-        """
-        if self.channel and self.consumer_tag:
-            try:
-                self.channel.basic_cancel(self.consumer_tag)
-                logger.info("Stopped consuming messages")
-            except (AMQPConnectionError, AMQPChannelError, AMQPError) as e:
-                logger.error(f"Error stopping consumer: {str(e)}")
-            finally:
-                self.consumer_tag = None
-    
-    @with_connection
-    def acknowledge_message(self, delivery_tag: int) -> None:
-        """
-        Acknowledge a message as successfully processed.
+    def publish_extraction_error(self, document_id: str, application_id: str,
+                               storage_path: str, error: Dict[str, Any],
+                               document_type: str) -> Result[bool]:
+        """Publish extraction error to the Data Service.
+        
+        This method creates a standardized message payload with the extraction error
+        and publishes it to the Data Service via RabbitMQ.
         
         Args:
-            delivery_tag: The delivery tag of the message to acknowledge.
+            document_id: ID of the document
+            application_id: ID of the application
+            storage_path: S3 storage path for the document
+            error: Error information
+            document_type: Type of document
+            
+        Returns:
+            Result: Success or failure of the operation
         """
-        if self.channel:
-            self.channel.basic_ack(delivery_tag=delivery_tag)
-            logger.debug(f"Acknowledged message with delivery tag {delivery_tag}")
+        try:
+            # Create the message payload
+            payload = create_message_payload(
+                document_id=document_id,
+                document_type=document_type,
+                application_id=application_id,
+                storage_path=storage_path,
+                content_type="application/json",
+                source_service="ocr-service",
+                status=MessageStatus.FAILED.value,
+                error=error
+            )
+            
+            # Create publish options
+            options = PublishOptions.for_data_service(document_id, routing_key="data.extraction.error")
+            
+            # Publish the message
+            return self.publish_message(
+                exchange="mca.data.processing",
+                routing_key="data.extraction.error",
+                payload=payload,
+                options=options
+            )
+        except Exception as e:
+            logger.error(f"Error publishing extraction error for document {document_id}: {str(e)}")
+            return Result.err(e)
     
-    @with_connection
-    def reject_message(self, delivery_tag: int, requeue: bool = False) -> None:
-        """
-        Reject a message as failed to process.
-        
-        Args:
-            delivery_tag: The delivery tag of the message to reject.
-            requeue: Whether to requeue the message for later processing.
-        """
-        if self.channel:
-            self.channel.basic_reject(delivery_tag=delivery_tag, requeue=requeue)
-            logger.debug(f"Rejected message with delivery tag {delivery_tag}, requeue={requeue}")
-    
-    def close(self) -> None:
-        """
-        Close the RabbitMQ connection and channel.
-        """
-        if self.consumer_tag:
-            self.stop_consuming()
-        
-        if self.channel and not self.channel.is_closed:
-            try:
-                self.channel.close()
-                logger.debug("Closed RabbitMQ channel")
-            except Exception as e:
-                logger.warning(f"Error closing channel: {str(e)}")
-        
-        if self.connection and not self.connection.is_closed:
-            try:
-                self.connection.close()
-                logger.info("Closed RabbitMQ connection")
-            except Exception as e:
-                logger.warning(f"Error closing connection: {str(e)}")
-        
-        self.connected = False
-        self.channel = None
-        self.connection = None
-    
-    def __enter__(self):
-        """
-        Context manager entry point.
+    def is_running(self) -> bool:
+        """Check if the QueueService is running.
         
         Returns:
-            The QueueService instance.
+            bool: True if the service is running, False otherwise
         """
-        return self
+        return self.running and self.connection.connection is not None and self.connection.connection.is_open
     
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def health_check(self) -> Dict[str, Any]:
+        """Perform a health check on the QueueService.
+        
+        This method checks the status of the RabbitMQ connection and returns
+        a dictionary with health check information.
+        
+        Returns:
+            Dict[str, Any]: Health check information
         """
-        Context manager exit point.
+        is_running = self.is_running()
         
-        Args:
-            exc_type: The exception type, if any.
-            exc_val: The exception value, if any.
-            exc_tb: The exception traceback, if any.
-        """
-        self.close()
-
-
-# Example usage
-def example_callback(payload: MessagePayload, headers: MessageHeaders, 
-                    channel: BlockingChannel, method: spec.Basic.Deliver) -> None:
-    """
-    Example callback function for processing OCR request messages.
-    
-    Args:
-        payload: The message payload.
-        headers: The message headers.
-        channel: The RabbitMQ channel.
-        method: The delivery method.
-    """
-    try:
-        # Process the message
-        document_id = payload.get('document_id')
-        document_type = payload.get('document_type')
-        s3_path = payload.get('s3_path')
-        
-        logger.info(f"Processing document {document_id} of type {document_type} from {s3_path}")
-        
-        # TODO: Implement OCR processing logic
-        
-        # Acknowledge the message as processed
-        channel.basic_ack(delivery_tag=method.delivery_tag)
-        
-        # Prepare result message for Data Service
-        result_payload = {
-            'document_id': document_id,
-            'document_type': document_type,
-            's3_path': s3_path,
-            'extraction_results': {
-                'fields': [],
-                'confidence': 0.95,
-                'processing_time': 1.5
-            },
-            'correlation_id': payload.get('correlation_id', ''),
-            'timestamp': time.time()
+        return {
+            "status": "healthy" if is_running else "unhealthy",
+            "details": {
+                "running": self.running,
+                "connected": is_running,
+                "connection": {
+                    "host": self.config.host,
+                    "port": self.config.port,
+                    "virtual_host": self.config.virtual_host
+                }
+            }
         }
-        
-        # Create queue service instance
-        queue_service = QueueService()
-        
-        # Publish result to Data Service
-        result = queue_service.publish_message(
-            payload=result_payload,
-            routing_key='data.processing',
-            headers={'source': 'ocr-service'}
-        )
-        
-        if not result.success:
-            logger.error(f"Failed to publish result: {result.error}")
-        
-    except Exception as e:
-        logger.error(f"Error processing message: {str(e)}")
-        # Reject the message with requeue
-        channel.basic_reject(delivery_tag=method.delivery_tag, requeue=True)
-
-
-# Main entry point for testing
-if __name__ == "__main__":
-    # Configure logging
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
-    
-    # Create queue service
-    queue_service = QueueService()
-    
-    try:
-        # Start consuming messages
-        queue_service.start_consuming(example_callback)
-    except KeyboardInterrupt:
-        print("Interrupted by user, shutting down...")
-    finally:
-        # Close connection
-        queue_service.close()
