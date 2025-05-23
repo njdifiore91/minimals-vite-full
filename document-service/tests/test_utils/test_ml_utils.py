@@ -4,775 +4,878 @@
 """
 Unit tests for the machine learning utilities in the Document Service.
 
-These tests verify that the model loading, feature extraction, prediction,
-and confidence scoring functions work correctly. They ensure that document
-classification models (SVM, Random Forest) perform as expected.
+This module contains tests for the ML utilities used in document classification,
+including model loading, feature extraction, prediction, and confidence scoring.
+These tests ensure that the document classification models (SVM, Random Forest)
+perform as expected and meet the requirements specified in the technical specification.
 """
 
 import os
 import json
+import pickle
 import pytest
 import numpy as np
-import pandas as pd
-from unittest.mock import MagicMock, patch, mock_open
-from pathlib import Path
-from typing import Dict, List, Any, Tuple
-from sklearn.base import BaseEstimator
-from sklearn.svm import SVC
+from unittest.mock import patch, MagicMock, mock_open
+from datetime import datetime
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.pipeline import Pipeline
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.decomposition import TruncatedSVD
-from sklearn.preprocessing import StandardScaler
-from joblib import dump, load
+from sklearn.svm import SVC
 
 # Import the module to test
-import sys
-from pathlib import Path
-sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
-from src.utils import ml_utils
-from src.config import model_config
+from document_service.utils import ml_utils
+from document_service.types.documents import Document, DocumentType, DocumentMetadata
+from document_service.types.classification import ClassificationResult, ConfidenceScore, ModelMetadata
+from document_service.models.feature_extraction import FeatureExtractor
 
 
-# ============================================================================
-# Test Model Loading and Saving
-# ============================================================================
+# ===== Model Loading Tests =====
 
-@patch('src.utils.ml_utils.load')
-def test_load_model_success(mock_load, mock_ml_pipeline):
-    """Test successful model loading."""
-    # Setup
-    model_path = "models/test_model.pkl"
-    model_metadata = {
-        "model_version": "1.0.0",
-        "timestamp": "2023-01-01T00:00:00Z",
-        "metrics": {"accuracy": 0.95}
-    }
-    mock_load.return_value = {
-        "model": mock_ml_pipeline,
-        "metadata": model_metadata
-    }
+@pytest.mark.parametrize("model_type", ["svm", "random_forest", "ensemble"])
+def test_load_model_success(monkeypatch, model_type):
+    """
+    Test that load_model successfully loads a model from disk.
     
-    # Execute
-    model, metadata = ml_utils.load_model(model_path)
+    Args:
+        monkeypatch: Pytest monkeypatch fixture
+        model_type: Type of model to load
+    """
+    # Mock the get_model_path function to return a test path
+    monkeypatch.setattr(ml_utils, "get_model_path", lambda x: f"/tmp/test_{x}_model.pkl")
     
-    # Assert
-    mock_load.assert_called_once_with(model_path)
-    assert model == mock_ml_pipeline
-    assert metadata == model_metadata
-    assert metadata["model_version"] == "1.0.0"
+    # Mock os.path.exists to return True
+    monkeypatch.setattr(os.path, "exists", lambda x: True)
+    
+    # Create a mock model
+    mock_model = MagicMock()
+    if model_type == "svm":
+        mock_model.__class__ = SVC
+    else:
+        mock_model.__class__ = RandomForestClassifier
+    
+    # Mock joblib.load to return the mock model
+    monkeypatch.setattr(ml_utils.joblib, "load", lambda x: mock_model)
+    
+    # Call the function
+    model = ml_utils.load_model(model_type)
+    
+    # Assert that the model was loaded
+    assert model is mock_model
 
 
-@patch('src.utils.ml_utils.load')
-@patch('os.path.exists')
-def test_load_model_file_not_found(mock_exists, mock_load):
-    """Test model loading when file doesn't exist."""
-    # Setup
-    model_path = "models/nonexistent_model.pkl"
-    mock_exists.return_value = False
+def test_load_model_file_not_found(monkeypatch):
+    """
+    Test that load_model raises FileNotFoundError when the model file doesn't exist.
     
-    # Execute and Assert
+    Args:
+        monkeypatch: Pytest monkeypatch fixture
+    """
+    # Mock the get_model_path function to return a test path
+    monkeypatch.setattr(ml_utils, "get_model_path", lambda x: "/tmp/nonexistent_model.pkl")
+    
+    # Mock os.path.exists to return False
+    monkeypatch.setattr(os.path, "exists", lambda x: False)
+    
+    # Call the function and assert that it raises FileNotFoundError
     with pytest.raises(FileNotFoundError):
-        ml_utils.load_model(model_path)
+        ml_utils.load_model("svm")
+
+
+def test_load_model_joblib_fallback_to_pickle(monkeypatch):
+    """
+    Test that load_model falls back to pickle if joblib fails.
     
-    mock_exists.assert_called_once_with(model_path)
-    mock_load.assert_not_called()
-
-
-@patch('src.utils.ml_utils.load')
-@patch('os.path.exists')
-def test_load_model_invalid_format(mock_exists, mock_load):
-    """Test model loading with invalid format."""
-    # Setup
-    model_path = "models/invalid_model.pkl"
-    mock_exists.return_value = True
-    mock_load.return_value = {"invalid": "format"}
+    Args:
+        monkeypatch: Pytest monkeypatch fixture
+    """
+    # Mock the get_model_path function to return a test path
+    monkeypatch.setattr(ml_utils, "get_model_path", lambda x: "/tmp/test_model.pkl")
     
-    # Execute and Assert
-    with pytest.raises(ValueError):
-        ml_utils.load_model(model_path)
+    # Mock os.path.exists to return True
+    monkeypatch.setattr(os.path, "exists", lambda x: True)
     
-    mock_exists.assert_called_once_with(model_path)
-    mock_load.assert_called_once_with(model_path)
+    # Create a mock model
+    mock_model = MagicMock()
+    mock_model.__class__ = RandomForestClassifier
+    
+    # Mock joblib.load to raise an exception
+    def mock_joblib_load(path):
+        raise Exception("Joblib load failed")
+    
+    monkeypatch.setattr(ml_utils.joblib, "load", mock_joblib_load)
+    
+    # Mock pickle.load to return the mock model
+    mock_file = MagicMock()
+    mock_file.__enter__.return_value = mock_file
+    mock_file.read.return_value = b"mock model data"
+    
+    monkeypatch.setattr("builtins.open", lambda *args, **kwargs: mock_file)
+    monkeypatch.setattr(ml_utils.pickle, "load", lambda x: mock_model)
+    
+    # Call the function
+    model = ml_utils.load_model("random_forest")
+    
+    # Assert that the model was loaded
+    assert model is mock_model
 
 
-@patch('src.utils.ml_utils.dump')
-@patch('os.makedirs')
-@patch('src.utils.time_utils.get_iso_timestamp')
-def test_save_model_success(mock_timestamp, mock_makedirs, mock_dump, mock_ml_pipeline):
-    """Test successful model saving."""
-    # Setup
-    model_path = "models/test_model.pkl"
-    model_metadata = {
-        "model_version": "1.0.0",
-        "metrics": {"accuracy": 0.95}
+def test_load_all_models(monkeypatch):
+    """
+    Test that load_all_models loads all available models.
+    
+    Args:
+        monkeypatch: Pytest monkeypatch fixture
+    """
+    # Mock the get_model_config function to return a test config
+    mock_config = {
+        "paths": {
+            "svm": "/tmp/svm_model.pkl",
+            "random_forest": "/tmp/rf_model.pkl",
+            "ensemble": "/tmp/ensemble_model.pkl"
+        }
     }
-    mock_timestamp.return_value = "2023-01-01T00:00:00Z"
+    monkeypatch.setattr(ml_utils, "get_model_config", lambda: mock_config)
     
-    # Execute
-    result = ml_utils.save_model(mock_ml_pipeline, model_metadata, model_path)
+    # Mock the load_model function to return mock models
+    mock_svm = MagicMock()
+    mock_svm.__class__ = SVC
     
-    # Assert
-    mock_makedirs.assert_called_once_with(os.path.dirname(model_path), exist_ok=True)
-    mock_dump.assert_called_once()
-    assert result == model_path
-    assert "timestamp" in model_metadata
-    assert model_metadata["timestamp"] == "2023-01-01T00:00:00Z"
+    mock_rf = MagicMock()
+    mock_rf.__class__ = RandomForestClassifier
+    
+    mock_ensemble = MagicMock()
+    
+    def mock_load_model(model_type):
+        if model_type == "svm":
+            return mock_svm
+        elif model_type == "random_forest":
+            return mock_rf
+        elif model_type == "ensemble":
+            return mock_ensemble
+        else:
+            raise ValueError(f"Unknown model type: {model_type}")
+    
+    monkeypatch.setattr(ml_utils, "load_model", mock_load_model)
+    
+    # Call the function
+    models = ml_utils.load_all_models()
+    
+    # Assert that all models were loaded
+    assert len(models) == 3
+    assert models["svm"] is mock_svm
+    assert models["random_forest"] is mock_rf
+    assert models["ensemble"] is mock_ensemble
 
 
-@patch('src.utils.ml_utils.dump')
-@patch('os.makedirs')
-def test_save_model_error(mock_makedirs, mock_dump, mock_ml_pipeline):
-    """Test model saving with error."""
-    # Setup
-    model_path = "models/test_model.pkl"
-    model_metadata = {"model_version": "1.0.0"}
-    mock_dump.side_effect = IOError("Failed to save model")
+def test_get_model_metadata_with_file(monkeypatch):
+    """
+    Test that get_model_metadata loads metadata from a file.
     
-    # Execute and Assert
-    with pytest.raises(Exception):
-        ml_utils.save_model(mock_ml_pipeline, model_metadata, model_path)
+    Args:
+        monkeypatch: Pytest monkeypatch fixture
+    """
+    # Mock the get_model_config function to return a test config
+    mock_config = {"version": "1.0.0"}
+    monkeypatch.setattr(ml_utils, "get_model_config", lambda: mock_config)
     
-    mock_makedirs.assert_called_once_with(os.path.dirname(model_path), exist_ok=True)
-    mock_dump.assert_called_once()
-
-
-# ============================================================================
-# Test Feature Extraction
-# ============================================================================
-
-def test_create_feature_extractor_default_config():
-    """Test creating a feature extractor with default configuration."""
-    # Execute
-    extractor = ml_utils.create_feature_extractor()
+    # Mock the get_model_path function to return a test path
+    monkeypatch.setattr(ml_utils, "get_model_path", lambda x: "/tmp/test_model.pkl")
     
-    # Assert
-    assert isinstance(extractor, Pipeline)
-    assert len(extractor.steps) > 0
-    assert extractor.steps[0][0] == 'tfidf'
-    assert isinstance(extractor.steps[0][1], TfidfVectorizer)
-
-
-def test_create_feature_extractor_custom_config():
-    """Test creating a feature extractor with custom configuration."""
-    # Setup
-    config = {
-        "tfidf": {
-            "max_features": 5000,
-            "min_df": 2,
-            "max_df": 0.9,
-            "ngram_range": (1, 3),
-            "stop_words": None
-        },
-        "use_svd": True,
-        "svd": {
-            "n_components": 50,
-            "random_state": 123
-        },
-        "use_scaling": True
-    }
+    # Mock os.path.exists to return True for both model and metadata
+    def mock_exists(path):
+        return True
     
-    # Execute
-    extractor = ml_utils.create_feature_extractor(config)
+    monkeypatch.setattr(os.path, "exists", mock_exists)
     
-    # Assert
-    assert isinstance(extractor, Pipeline)
-    assert len(extractor.steps) == 3  # tfidf, svd, scaler
-    
-    # Check TF-IDF configuration
-    tfidf = extractor.steps[0][1]
-    assert tfidf.max_features == 5000
-    assert tfidf.min_df == 2
-    assert tfidf.max_df == 0.9
-    assert tfidf.ngram_range == (1, 3)
-    assert tfidf.stop_words is None
-    
-    # Check SVD configuration
-    svd = extractor.steps[1][1]
-    assert isinstance(svd, TruncatedSVD)
-    assert svd.n_components == 50
-    assert svd.random_state == 123
-    
-    # Check scaler
-    assert isinstance(extractor.steps[2][1], StandardScaler)
-
-
-def test_create_feature_extractor_no_svd_no_scaling():
-    """Test creating a feature extractor without SVD and scaling."""
-    # Setup
-    config = {
-        "tfidf": {
-            "max_features": 1000,
-            "min_df": 1,
-            "max_df": 0.95,
-            "ngram_range": (1, 1),
-            "stop_words": "english"
-        },
-        "use_svd": False,
-        "use_scaling": False
+    # Mock metadata file content
+    metadata_content = {
+        "model_type": "random_forest",
+        "version": "1.0.0",
+        "created_at": "2023-01-01T00:00:00",
+        "accuracy": 0.95,
+        "f1_score": 0.94,
+        "training_parameters": {"n_estimators": 100}
     }
     
-    # Execute
-    extractor = ml_utils.create_feature_extractor(config)
+    # Mock open and json.load
+    mock_file = MagicMock()
+    mock_file.__enter__.return_value = mock_file
+    monkeypatch.setattr("builtins.open", lambda *args, **kwargs: mock_file)
+    monkeypatch.setattr(json, "load", lambda x: metadata_content)
     
-    # Assert
-    assert isinstance(extractor, Pipeline)
-    assert len(extractor.steps) == 1  # Only tfidf
-    assert extractor.steps[0][0] == 'tfidf'
-    assert isinstance(extractor.steps[0][1], TfidfVectorizer)
+    # Call the function
+    metadata = ml_utils.get_model_metadata("random_forest")
+    
+    # Assert that the metadata was loaded correctly
+    assert metadata.model_type == "random_forest"
+    assert metadata.version == "1.0.0"
+    assert isinstance(metadata.created_at, datetime)
+    assert metadata.accuracy == 0.95
+    assert metadata.f1_score == 0.94
+    assert metadata.training_parameters == {"n_estimators": 100}
 
 
-def test_extract_features_with_new_extractor():
-    """Test feature extraction with a new extractor."""
-    # Setup
-    documents = [
-        "This is a sample document for testing feature extraction.",
-        "Another document with different content for testing.",
-        "A third document to ensure we have enough samples."
+def test_get_model_metadata_without_file(monkeypatch):
+    """
+    Test that get_model_metadata returns basic metadata when the file doesn't exist.
+    
+    Args:
+        monkeypatch: Pytest monkeypatch fixture
+    """
+    # Mock the get_model_config function to return a test config
+    mock_config = {"version": "1.0.0"}
+    monkeypatch.setattr(ml_utils, "get_model_config", lambda: mock_config)
+    
+    # Mock the get_model_path function to return a test path
+    monkeypatch.setattr(ml_utils, "get_model_path", lambda x: "/tmp/test_model.pkl")
+    
+    # Mock os.path.exists to return True for model but False for metadata
+    def mock_exists(path):
+        return ".json" not in path
+    
+    monkeypatch.setattr(os.path, "exists", mock_exists)
+    
+    # Mock os.path.getctime to return a timestamp
+    monkeypatch.setattr(os.path, "getctime", lambda x: 1672531200)  # 2023-01-01 00:00:00
+    
+    # Call the function
+    metadata = ml_utils.get_model_metadata("random_forest")
+    
+    # Assert that basic metadata was returned
+    assert metadata.model_type == "random_forest"
+    assert metadata.version == "1.0.0"
+    assert isinstance(metadata.created_at, datetime)
+    assert metadata.accuracy is None
+    assert metadata.f1_score is None
+    assert metadata.training_parameters is None
+
+
+# ===== Feature Extraction Tests =====
+
+def test_create_feature_extractor():
+    """
+    Test that create_feature_extractor creates a feature extractor with the specified configuration.
+    """
+    # Create a test configuration
+    config = {"feature_extraction": {"max_features": 1000}}
+    
+    # Mock the get_model_config function to return the test config
+    with patch("document_service.utils.ml_utils.get_model_config", return_value=config):
+        # Call the function
+        extractor = ml_utils.create_feature_extractor()
+        
+        # Assert that a FeatureExtractor was created
+        assert isinstance(extractor, FeatureExtractor)
+
+
+def test_extract_features_from_document(monkeypatch):
+    """
+    Test that extract_features_from_document extracts features from a document.
+    
+    Args:
+        monkeypatch: Pytest monkeypatch fixture
+    """
+    # Create a mock document
+    mock_document = MagicMock(spec=Document)
+    mock_document.metadata = MagicMock()
+    mock_document.metadata.id = "test-doc-123"
+    
+    # Create a mock feature extractor
+    mock_extractor = MagicMock(spec=FeatureExtractor)
+    mock_extractor.is_fitted = True
+    mock_extractor.extract_features_from_document.return_value = pd.Series([0.1, 0.2, 0.3])
+    
+    # Call the function
+    with patch("document_service.utils.ml_utils.create_feature_extractor", return_value=mock_extractor):
+        features = ml_utils.extract_features_from_document(mock_document, mock_extractor)
+    
+    # Assert that features were extracted
+    assert isinstance(features, np.ndarray)
+    assert features.shape == (3,)
+    assert np.allclose(features, np.array([0.1, 0.2, 0.3]))
+    
+    # Assert that the extractor was called with the document
+    mock_extractor.extract_features_from_document.assert_called_once_with(mock_document)
+
+
+def test_extract_features_from_document_not_fitted(monkeypatch):
+    """
+    Test that extract_features_from_document handles the case when the extractor is not fitted.
+    
+    Args:
+        monkeypatch: Pytest monkeypatch fixture
+    """
+    # Create a mock document
+    mock_document = MagicMock(spec=Document)
+    mock_document.metadata = MagicMock()
+    mock_document.metadata.id = "test-doc-123"
+    
+    # Create a mock feature extractor
+    mock_extractor = MagicMock(spec=FeatureExtractor)
+    mock_extractor.is_fitted = False
+    
+    # Mock the text extraction and preprocessing classes
+    mock_text_extractor = MagicMock()
+    mock_text_extractor.extract_text.return_value = "test document text"
+    
+    mock_text_preprocessor = MagicMock()
+    mock_text_preprocessor.preprocess.return_value = "processed test document text"
+    
+    mock_metadata_extractor = MagicMock()
+    mock_metadata_extractor.extract_metadata_features.return_value = {"size": 1000, "page_count": 2}
+    
+    # Patch the imports
+    with patch("document_service.models.feature_extraction.TextExtractor", return_value=mock_text_extractor), \
+         patch("document_service.models.feature_extraction.TextPreprocessor", return_value=mock_text_preprocessor), \
+         patch("document_service.models.feature_extraction.MetadataExtractor", return_value=mock_metadata_extractor):
+        
+        # Call the function
+        features = ml_utils.extract_features_from_document(mock_document, mock_extractor)
+    
+    # Assert that features were extracted using the simplified approach
+    assert isinstance(features, np.ndarray)
+    assert features.shape == (2,)  # Two metadata features
+    assert np.allclose(features, np.array([1000, 2]))
+
+
+# ===== Prediction Tests =====
+
+def test_predict_document_type(monkeypatch, mock_random_forest_classifier):
+    """
+    Test that predict_document_type correctly predicts the document type.
+    
+    Args:
+        monkeypatch: Pytest monkeypatch fixture
+        mock_random_forest_classifier: Mock RandomForestClassifier fixture
+    """
+    # Create a mock document
+    mock_document = MagicMock(spec=Document)
+    mock_document.metadata = MagicMock()
+    mock_document.metadata.id = "test-doc-123"
+    
+    # Mock the extract_features_from_document function
+    mock_features = np.array([0.1, 0.2, 0.3])
+    monkeypatch.setattr(ml_utils, "extract_features_from_document", lambda doc, extractor: mock_features)
+    
+    # Mock the get_model_config function
+    mock_config = {
+        "document_categories": ["tax_return", "loan_application"],
+        "version": "1.0.0"
+    }
+    monkeypatch.setattr(ml_utils, "get_model_config", lambda: mock_config)
+    
+    # Mock the get_confidence_threshold function
+    monkeypatch.setattr(ml_utils, "get_confidence_threshold", lambda doc_type: 0.8)
+    
+    # Configure the mock classifier
+    mock_random_forest_classifier.predict.return_value = np.array(["loan_application"])
+    mock_random_forest_classifier.predict_proba.return_value = np.array([[0.05, 0.95]])
+    mock_random_forest_classifier.classes_ = np.array(["tax_return", "loan_application"])
+    mock_random_forest_classifier._estimator_type = "classifier"
+    
+    # Call the function
+    result = ml_utils.predict_document_type(mock_document, mock_random_forest_classifier)
+    
+    # Assert that the prediction was made correctly
+    assert isinstance(result, ClassificationResult)
+    assert result.document_id == "test-doc-123"
+    assert result.document_type == "loan_application"
+    assert result.confidence_scores == {"tax_return": 0.05, "loan_application": 0.95}
+    assert result.prediction_time > 0
+    assert result.model_type == "classifier"
+    assert result.model_version == "1.0.0"
+    assert result.threshold_applied is True
+    assert result.requires_review is False  # 0.95 > 0.8
+
+
+def test_predict_document_type_low_confidence(monkeypatch, mock_random_forest_classifier):
+    """
+    Test that predict_document_type correctly flags documents with low confidence for review.
+    
+    Args:
+        monkeypatch: Pytest monkeypatch fixture
+        mock_random_forest_classifier: Mock RandomForestClassifier fixture
+    """
+    # Create a mock document
+    mock_document = MagicMock(spec=Document)
+    mock_document.metadata = MagicMock()
+    mock_document.metadata.id = "test-doc-123"
+    
+    # Mock the extract_features_from_document function
+    mock_features = np.array([0.1, 0.2, 0.3])
+    monkeypatch.setattr(ml_utils, "extract_features_from_document", lambda doc, extractor: mock_features)
+    
+    # Mock the get_model_config function
+    mock_config = {
+        "document_categories": ["tax_return", "loan_application"],
+        "version": "1.0.0"
+    }
+    monkeypatch.setattr(ml_utils, "get_model_config", lambda: mock_config)
+    
+    # Mock the get_confidence_threshold function
+    monkeypatch.setattr(ml_utils, "get_confidence_threshold", lambda doc_type: 0.8)
+    
+    # Configure the mock classifier
+    mock_random_forest_classifier.predict.return_value = np.array(["loan_application"])
+    mock_random_forest_classifier.predict_proba.return_value = np.array([[0.3, 0.7]])
+    mock_random_forest_classifier.classes_ = np.array(["tax_return", "loan_application"])
+    mock_random_forest_classifier._estimator_type = "classifier"
+    
+    # Call the function
+    result = ml_utils.predict_document_type(mock_document, mock_random_forest_classifier)
+    
+    # Assert that the prediction was made correctly and flagged for review
+    assert isinstance(result, ClassificationResult)
+    assert result.document_type == "loan_application"
+    assert result.confidence_scores == {"tax_return": 0.3, "loan_application": 0.7}
+    assert result.requires_review is True  # 0.7 < 0.8
+
+
+def test_predict_document_type_with_svm_decision_function(monkeypatch, mock_svm_classifier):
+    """
+    Test that predict_document_type works with SVM models that use decision_function instead of predict_proba.
+    
+    Args:
+        monkeypatch: Pytest monkeypatch fixture
+        mock_svm_classifier: Mock SVM classifier fixture
+    """
+    # Create a mock document
+    mock_document = MagicMock(spec=Document)
+    mock_document.metadata = MagicMock()
+    mock_document.metadata.id = "test-doc-123"
+    
+    # Mock the extract_features_from_document function
+    mock_features = np.array([0.1, 0.2, 0.3])
+    monkeypatch.setattr(ml_utils, "extract_features_from_document", lambda doc, extractor: mock_features)
+    
+    # Mock the get_model_config function
+    mock_config = {
+        "document_categories": ["tax_return", "loan_application"],
+        "version": "1.0.0"
+    }
+    monkeypatch.setattr(ml_utils, "get_model_config", lambda: mock_config)
+    
+    # Mock the get_confidence_threshold function
+    monkeypatch.setattr(ml_utils, "get_confidence_threshold", lambda doc_type: 0.8)
+    
+    # Configure the mock classifier
+    mock_svm_classifier.predict.return_value = np.array(["loan_application"])
+    # Remove predict_proba
+    del mock_svm_classifier.predict_proba
+    # Add decision_function
+    mock_svm_classifier.decision_function = MagicMock(return_value=np.array([2.0]))  # Positive value for loan_application
+    mock_svm_classifier.classes_ = np.array(["tax_return", "loan_application"])
+    mock_svm_classifier._estimator_type = "classifier"
+    
+    # Call the function
+    result = ml_utils.predict_document_type(mock_document, mock_svm_classifier)
+    
+    # Assert that the prediction was made correctly
+    assert isinstance(result, ClassificationResult)
+    assert result.document_type == "loan_application"
+    # Check that confidence scores were calculated from decision function
+    assert "tax_return" in result.confidence_scores
+    assert "loan_application" in result.confidence_scores
+    assert result.confidence_scores["loan_application"] > 0.5  # Should be high for positive decision value
+
+
+def test_predict_document_types_batch(monkeypatch, mock_random_forest_classifier):
+    """
+    Test that predict_document_types_batch correctly predicts types for a batch of documents.
+    
+    Args:
+        monkeypatch: Pytest monkeypatch fixture
+        mock_random_forest_classifier: Mock RandomForestClassifier fixture
+    """
+    # Create mock documents
+    mock_doc1 = MagicMock(spec=Document)
+    mock_doc1.metadata = MagicMock()
+    mock_doc1.metadata.id = "test-doc-1"
+    
+    mock_doc2 = MagicMock(spec=Document)
+    mock_doc2.metadata = MagicMock()
+    mock_doc2.metadata.id = "test-doc-2"
+    
+    documents = [mock_doc1, mock_doc2]
+    
+    # Mock the extract_features_from_document function
+    def mock_extract_features(doc, extractor):
+        if doc.metadata.id == "test-doc-1":
+            return np.array([0.1, 0.2, 0.3])
+        else:
+            return np.array([0.4, 0.5, 0.6])
+    
+    monkeypatch.setattr(ml_utils, "extract_features_from_document", mock_extract_features)
+    
+    # Mock the get_model_config function
+    mock_config = {
+        "document_categories": ["tax_return", "loan_application"],
+        "version": "1.0.0"
+    }
+    monkeypatch.setattr(ml_utils, "get_model_config", lambda: mock_config)
+    
+    # Mock the get_confidence_threshold function
+    monkeypatch.setattr(ml_utils, "get_confidence_threshold", lambda doc_type: 0.8)
+    
+    # Configure the mock classifier
+    mock_random_forest_classifier.predict.side_effect = [
+        np.array(["loan_application"]),  # For doc1
+        np.array(["tax_return"])         # For doc2
+    ]
+    mock_random_forest_classifier.predict_proba.side_effect = [
+        np.array([[0.05, 0.95]]),  # For doc1
+        np.array([[0.85, 0.15]])   # For doc2
+    ]
+    mock_random_forest_classifier.classes_ = np.array(["tax_return", "loan_application"])
+    mock_random_forest_classifier._estimator_type = "classifier"
+    
+    # Call the function
+    results = ml_utils.predict_document_types_batch(documents, mock_random_forest_classifier)
+    
+    # Assert that the predictions were made correctly
+    assert len(results) == 2
+    assert results[0].document_id == "test-doc-1"
+    assert results[0].document_type == "loan_application"
+    assert results[0].confidence_scores["loan_application"] == 0.95
+    assert results[0].requires_review is False  # 0.95 > 0.8
+    
+    assert results[1].document_id == "test-doc-2"
+    assert results[1].document_type == "tax_return"
+    assert results[1].confidence_scores["tax_return"] == 0.85
+    assert results[1].requires_review is False  # 0.85 > 0.8
+
+
+def test_predict_document_types_batch_with_feature_extraction_error(monkeypatch, mock_random_forest_classifier):
+    """
+    Test that predict_document_types_batch handles feature extraction errors gracefully.
+    
+    Args:
+        monkeypatch: Pytest monkeypatch fixture
+        mock_random_forest_classifier: Mock RandomForestClassifier fixture
+    """
+    # Create mock documents
+    mock_doc1 = MagicMock(spec=Document)
+    mock_doc1.metadata = MagicMock()
+    mock_doc1.metadata.id = "test-doc-1"
+    
+    mock_doc2 = MagicMock(spec=Document)
+    mock_doc2.metadata = MagicMock()
+    mock_doc2.metadata.id = "test-doc-2"
+    
+    documents = [mock_doc1, mock_doc2]
+    
+    # Mock the extract_features_from_document function to raise an exception for doc2
+    def mock_extract_features(doc, extractor):
+        if doc.metadata.id == "test-doc-1":
+            return np.array([0.1, 0.2, 0.3])
+        else:
+            raise Exception("Feature extraction failed")
+    
+    monkeypatch.setattr(ml_utils, "extract_features_from_document", mock_extract_features)
+    
+    # Mock the get_model_config function
+    mock_config = {
+        "document_categories": ["tax_return", "loan_application"],
+        "version": "1.0.0"
+    }
+    monkeypatch.setattr(ml_utils, "get_model_config", lambda: mock_config)
+    
+    # Mock the get_confidence_threshold function
+    monkeypatch.setattr(ml_utils, "get_confidence_threshold", lambda doc_type: 0.8)
+    
+    # Configure the mock classifier
+    mock_random_forest_classifier.predict.return_value = np.array(["loan_application"])
+    mock_random_forest_classifier.predict_proba.return_value = np.array([[0.05, 0.95]])
+    mock_random_forest_classifier.classes_ = np.array(["tax_return", "loan_application"])
+    mock_random_forest_classifier._estimator_type = "classifier"
+    
+    # Call the function
+    results = ml_utils.predict_document_types_batch(documents, mock_random_forest_classifier)
+    
+    # Assert that the predictions were made correctly for doc1 and handled error for doc2
+    assert len(results) == 2
+    assert results[0].document_id == "test-doc-1"
+    assert results[0].document_type == "loan_application"
+    assert results[0].confidence_scores["loan_application"] == 0.95
+    
+    assert results[1].document_id == "test-doc-2"
+    assert results[1].document_type == "unknown"
+    assert all(score == 0.0 for score in results[1].confidence_scores.values())
+    assert results[1].requires_review is True
+
+
+# ===== Confidence Scoring Tests =====
+
+def test_calculate_confidence_score():
+    """
+    Test that calculate_confidence_score correctly calculates confidence scores.
+    """
+    # Create test probabilities
+    probabilities = {
+        "tax_return": 0.2,
+        "loan_application": 0.7,
+        "bank_statement": 0.1
+    }
+    
+    # Mock the get_model_config function
+    with patch("document_service.utils.ml_utils.get_model_config") as mock_get_config:
+        mock_get_config.return_value = {
+            "confidence_thresholds": {
+                "high": 0.9,
+                "medium": 0.7,
+                "low": 0.5
+            }
+        }
+        
+        # Mock the get_confidence_threshold function
+        with patch("document_service.utils.ml_utils.get_confidence_threshold", return_value=0.8):
+            # Call the function
+            score = ml_utils.calculate_confidence_score(probabilities, "loan_application")
+    
+    # Assert that the confidence score was calculated correctly
+    assert isinstance(score, ConfidenceScore)
+    assert score.value == 0.7
+    assert score.level == "medium"  # 0.7 >= 0.7 (medium threshold)
+    assert score.margin == 0.5  # 0.7 - 0.2 = 0.5
+    assert score.threshold == 0.8
+    assert score.requires_review is True  # 0.7 < 0.8
+
+
+def test_get_confidence_level():
+    """
+    Test that get_confidence_level returns the correct confidence level.
+    """
+    # Mock the get_model_config function
+    with patch("document_service.utils.ml_utils.get_model_config") as mock_get_config:
+        mock_get_config.return_value = {
+            "confidence_thresholds": {
+                "high": 0.9,
+                "medium": 0.7,
+                "low": 0.5
+            }
+        }
+        
+        # Test different confidence values
+        assert ml_utils.get_confidence_level(0.95) == "high"    # 0.95 >= 0.9
+        assert ml_utils.get_confidence_level(0.8) == "medium"  # 0.8 >= 0.7
+        assert ml_utils.get_confidence_level(0.6) == "low"     # 0.6 >= 0.5
+        assert ml_utils.get_confidence_level(0.3) == "very_low"  # 0.3 < 0.5
+
+
+# ===== Model Evaluation Tests =====
+
+def test_evaluate_model_performance():
+    """
+    Test that evaluate_model_performance correctly evaluates model performance.
+    """
+    # Create test data
+    X_test = np.array([[0.1, 0.2], [0.3, 0.4], [0.5, 0.6], [0.7, 0.8]])
+    y_test = np.array(["tax_return", "loan_application", "tax_return", "loan_application"])
+    
+    # Create a mock model
+    mock_model = MagicMock()
+    mock_model.predict.return_value = np.array(["tax_return", "loan_application", "tax_return", "loan_application"])
+    mock_model.predict_proba.return_value = np.array([
+        [0.9, 0.1],
+        [0.2, 0.8],
+        [0.7, 0.3],
+        [0.1, 0.9]
+    ])
+    
+    # Call the function
+    with patch("document_service.utils.ml_utils.accuracy_score", return_value=1.0), \
+         patch("document_service.utils.ml_utils.precision_score", return_value=1.0), \
+         patch("document_service.utils.ml_utils.recall_score", return_value=1.0), \
+         patch("document_service.utils.ml_utils.f1_score", return_value=1.0), \
+         patch("document_service.utils.ml_utils.confusion_matrix", return_value=np.array([[2, 0], [0, 2]])):
+        
+        metrics = ml_utils.evaluate_model_performance(mock_model, X_test, y_test)
+    
+    # Assert that the metrics were calculated correctly
+    assert metrics["accuracy"] == 1.0
+    assert metrics["precision"] == 1.0
+    assert metrics["recall"] == 1.0
+    assert metrics["f1_score"] == 1.0
+    assert metrics["confusion_matrix"] == [[2, 0], [0, 2]]
+    assert metrics["average_confidence"] > 0.0
+    assert metrics["sample_count"] == 4
+
+
+def test_monitor_prediction_performance():
+    """
+    Test that monitor_prediction_performance correctly calculates monitoring metrics.
+    """
+    # Create test predictions
+    predictions = [
+        ClassificationResult(
+            document_id="doc1",
+            document_type="loan_application",
+            confidence_scores={"tax_return": 0.1, "loan_application": 0.9},
+            prediction_time=0.1,
+            model_type="classifier",
+            model_version="1.0.0",
+            threshold_applied=True,
+            requires_review=False
+        ),
+        ClassificationResult(
+            document_id="doc2",
+            document_type="tax_return",
+            confidence_scores={"tax_return": 0.7, "loan_application": 0.3},
+            prediction_time=0.2,
+            model_type="classifier",
+            model_version="1.0.0",
+            threshold_applied=True,
+            requires_review=True
+        ),
+        ClassificationResult(
+            document_id="doc3",
+            document_type="unknown",
+            confidence_scores={"tax_return": 0.0, "loan_application": 0.0},
+            prediction_time=0.3,
+            model_type="classifier",
+            model_version="1.0.0",
+            threshold_applied=False,
+            requires_review=True,
+            error="Classification failed"
+        )
     ]
     
-    # Execute
-    features = ml_utils.extract_features(documents)
+    # Call the function
+    metrics = ml_utils.monitor_prediction_performance(predictions)
     
-    # Assert
-    assert isinstance(features, np.ndarray)
-    assert features.shape[0] == len(documents)  # Number of samples
+    # Assert that the metrics were calculated correctly
+    assert metrics["total_predictions"] == 3
+    assert metrics["requires_review_count"] == 2
+    assert metrics["requires_review_percentage"] == 2/3
+    assert metrics["error_count"] == 1
+    assert metrics["error_percentage"] == 1/3
+    assert "loan_application" in metrics["average_confidence_by_type"]
+    assert "tax_return" in metrics["average_confidence_by_type"]
+    assert metrics["average_confidence_by_type"]["loan_application"] == 0.9
+    assert metrics["average_confidence_by_type"]["tax_return"] == 0.7
+    assert metrics["average_prediction_time"] == 0.2  # (0.1 + 0.2 + 0.3) / 3
 
 
-def test_extract_features_with_existing_extractor():
-    """Test feature extraction with an existing extractor."""
-    # Setup
-    documents = [
-        "This is a sample document for testing feature extraction.",
-        "Another document with different content for testing.",
-        "A third document to ensure we have enough samples."
-    ]
-    extractor = ml_utils.create_feature_extractor()
+# ===== Model Versioning Tests =====
+
+def test_get_model_version():
+    """
+    Test that get_model_version returns the correct model version.
+    """
+    # Mock the get_model_config function
+    with patch("document_service.utils.ml_utils.get_model_config") as mock_get_config:
+        mock_get_config.return_value = {"version": "1.0.0"}
+        
+        # Call the function
+        version = ml_utils.get_model_version()
     
-    # Train the extractor on some initial documents
-    extractor.fit(["Initial document for fitting the extractor."])
+    # Assert that the version was returned correctly
+    assert version == "1.0.0"
+
+
+def test_check_model_compatibility_random_forest():
+    """
+    Test that check_model_compatibility correctly checks compatibility for RandomForestClassifier.
+    """
+    # Create a mock RandomForestClassifier
+    mock_rf = MagicMock(spec=RandomForestClassifier)
+    mock_rf.n_estimators = 100
+    mock_rf.criterion = "gini"
+    mock_rf.max_depth = None
     
-    # Execute
-    features = ml_utils.extract_features(documents, extractor)
+    # Call the function
+    result = ml_utils.check_model_compatibility(mock_rf)
     
-    # Assert
-    assert isinstance(features, np.ndarray)
-    assert features.shape[0] == len(documents)  # Number of samples
-
-
-def test_extract_features_empty_documents():
-    """Test feature extraction with empty document list."""
-    # Setup
-    documents = []
-    
-    # Execute and Assert
-    with pytest.raises(ValueError):
-        ml_utils.extract_features(documents)
-
-
-def test_extract_features_invalid_documents():
-    """Test feature extraction with invalid document types."""
-    # Setup
-    documents = ["Valid document", 123, "Another valid document"]
-    
-    # Execute and Assert
-    with pytest.raises(ValueError):
-        ml_utils.extract_features(documents)
-
-
-# ============================================================================
-# Test Prediction and Confidence Scoring
-# ============================================================================
-
-def test_get_prediction_confidence_max_prob():
-    """Test confidence calculation using max probability method."""
-    # Setup
-    probabilities = np.array([
-        [0.1, 0.2, 0.7],
-        [0.3, 0.6, 0.1],
-        [0.25, 0.25, 0.5]
-    ])
-    
-    # Execute
-    confidence = ml_utils.get_prediction_confidence(probabilities, method='max_prob')
-    
-    # Assert
-    assert isinstance(confidence, np.ndarray)
-    assert confidence.shape == (3,)
-    assert np.allclose(confidence, np.array([0.7, 0.6, 0.5]))
-
-
-def test_get_prediction_confidence_margin():
-    """Test confidence calculation using margin method."""
-    # Setup
-    probabilities = np.array([
-        [0.1, 0.2, 0.7],  # Margin: 0.7 - 0.2 = 0.5
-        [0.3, 0.6, 0.1],  # Margin: 0.6 - 0.3 = 0.3
-        [0.25, 0.25, 0.5]  # Margin: 0.5 - 0.25 = 0.25
-    ])
-    
-    # Execute
-    confidence = ml_utils.get_prediction_confidence(probabilities, method='margin')
-    
-    # Assert
-    assert isinstance(confidence, np.ndarray)
-    assert confidence.shape == (3,)
-    assert np.allclose(confidence, np.array([0.5, 0.3, 0.25]))
-
-
-def test_get_prediction_confidence_entropy():
-    """Test confidence calculation using entropy method."""
-    # Setup
-    probabilities = np.array([
-        [0.1, 0.2, 0.7],  # Less uniform, higher confidence
-        [0.33, 0.33, 0.34],  # More uniform, lower confidence
-        [0.25, 0.25, 0.5]  # Somewhat uniform, medium confidence
-    ])
-    
-    # Execute
-    confidence = ml_utils.get_prediction_confidence(probabilities, method='entropy')
-    
-    # Assert
-    assert isinstance(confidence, np.ndarray)
-    assert confidence.shape == (3,)
-    # First should have highest confidence, second lowest
-    assert confidence[0] > confidence[2] > confidence[1]
-
-
-def test_get_prediction_confidence_invalid_method():
-    """Test confidence calculation with invalid method."""
-    # Setup
-    probabilities = np.array([[0.1, 0.2, 0.7]])
-    
-    # Execute and Assert
-    with pytest.raises(ValueError):
-        ml_utils.get_prediction_confidence(probabilities, method='invalid_method')
-
-
-def test_predict_with_confidence(mock_ml_pipeline):
-    """Test prediction with confidence calculation."""
-    # Setup
-    features = np.array([[1, 2, 3], [4, 5, 6]])
-    mock_ml_pipeline.predict.return_value = np.array(['application_form', 'tax_return'])
-    mock_ml_pipeline.predict_proba.return_value = np.array([
-        [0.1, 0.2, 0.7],
-        [0.3, 0.6, 0.1]
-    ])
-    
-    # Execute
-    predictions, probabilities, confidence = ml_utils.predict_with_confidence(
-        mock_ml_pipeline, features, confidence_method='max_prob', confidence_threshold=0.6
-    )
-    
-    # Assert
-    assert isinstance(predictions, np.ndarray)
-    assert isinstance(probabilities, np.ndarray)
-    assert isinstance(confidence, np.ndarray)
-    assert predictions.shape == (2,)
-    assert probabilities.shape == (2, 3)
-    assert confidence.shape == (2,)
-    assert np.allclose(confidence, np.array([0.7, 0.6]))
-    mock_ml_pipeline.predict.assert_called_once_with(features)
-    mock_ml_pipeline.predict_proba.assert_called_once_with(features)
-
-
-def test_predict_with_confidence_no_proba():
-    """Test prediction with a model that doesn't support probability estimation."""
-    # Setup
-    features = np.array([[1, 2, 3]])
-    model = MagicMock(spec=BaseEstimator)
-    model.predict.return_value = np.array(['application_form'])
-    # No predict_proba method
-    
-    # Execute and Assert
-    with pytest.raises(ValueError):
-        ml_utils.predict_with_confidence(model, features)
-
-
-# ============================================================================
-# Test Model Evaluation and Performance Tracking
-# ============================================================================
-
-def test_evaluate_model_performance(mock_ml_pipeline):
-    """Test model performance evaluation."""
-    # Setup
-    X_test = np.array([[1, 2, 3], [4, 5, 6], [7, 8, 9]])
-    y_test = np.array(['application_form', 'tax_return', 'application_form'])
-    mock_ml_pipeline.predict.return_value = np.array(['application_form', 'tax_return', 'application_form'])
-    class_names = ['application_form', 'tax_return', 'bank_statement']
-    
-    # Execute
-    metrics = ml_utils.evaluate_model_performance(mock_ml_pipeline, X_test, y_test, class_names)
-    
-    # Assert
-    assert isinstance(metrics, dict)
-    assert 'accuracy' in metrics
-    assert 'precision' in metrics
-    assert 'recall' in metrics
-    assert 'f1' in metrics
-    assert 'confusion_matrix' in metrics
-    assert 'support' in metrics
-    assert 'timestamp' in metrics
-    assert 'class_metrics' in metrics
-    assert metrics['accuracy'] == 1.0  # Perfect predictions in this mock
-    assert len(metrics['class_metrics']) == len(class_names)
-
-
-def test_evaluate_model_performance_without_class_names(mock_ml_pipeline):
-    """Test model performance evaluation without class names."""
-    # Setup
-    X_test = np.array([[1, 2, 3], [4, 5, 6], [7, 8, 9]])
-    y_test = np.array(['application_form', 'tax_return', 'application_form'])
-    mock_ml_pipeline.predict.return_value = np.array(['application_form', 'tax_return', 'application_form'])
-    
-    # Execute
-    metrics = ml_utils.evaluate_model_performance(mock_ml_pipeline, X_test, y_test)
-    
-    # Assert
-    assert isinstance(metrics, dict)
-    assert 'accuracy' in metrics
-    assert 'precision' in metrics
-    assert 'recall' in metrics
-    assert 'f1' in metrics
-    assert 'confusion_matrix' in metrics
-    assert 'support' in metrics
-    assert 'timestamp' in metrics
-    assert 'class_metrics' not in metrics
-    assert metrics['accuracy'] == 1.0  # Perfect predictions in this mock
-
-
-@patch('src.utils.ml_utils.logger')
-def test_track_model_performance(mock_logger):
-    """Test model performance tracking."""
-    # Setup
-    model_name = "test_model"
-    metrics = {
-        'accuracy': 0.95,
-        'precision': 0.94,
-        'recall': 0.93,
-        'f1': 0.935,
-        'confusion_matrix': [[10, 1], [2, 20]],
-        'support': 33,
-        'timestamp': '2023-01-01T00:00:00Z'
-    }
-    
-    # Execute
-    ml_utils.track_model_performance(model_name, metrics)
-    
-    # Assert
-    mock_logger.info.assert_called_once()
-    # Check that the log message contains the metrics
-    log_message = mock_logger.info.call_args[0][0]
-    assert model_name in log_message
-    assert str(metrics['accuracy']) in log_message
-    assert str(metrics['precision']) in log_message
-    assert str(metrics['recall']) in log_message
-    assert str(metrics['f1']) in log_message
-
-
-# ============================================================================
-# Test Model Validation
-# ============================================================================
-
-def test_validate_model_valid(mock_ml_pipeline):
-    """Test model validation with a valid model."""
-    # Setup
-    expected_classes = ['bank_statement', 'tax_return', 'identity_document', 
-                        'business_license', 'utility_bill', 'application_form']
-    mock_ml_pipeline.classes_ = np.array(expected_classes)
-    
-    # Execute
-    result = ml_utils.validate_model(mock_ml_pipeline, expected_classes)
-    
-    # Assert
+    # Assert that the model is compatible
     assert result is True
 
 
-def test_validate_model_missing_method():
-    """Test model validation with missing required method."""
-    # Setup
-    model = MagicMock(spec=BaseEstimator)
-    # Missing predict_proba method
-    model.fit = MagicMock()
-    model.predict = MagicMock()
-    expected_classes = ['application_form', 'tax_return']
+def test_check_model_compatibility_svm():
+    """
+    Test that check_model_compatibility correctly checks compatibility for SVC.
+    """
+    # Create a mock SVC
+    mock_svm = MagicMock(spec=SVC)
+    mock_svm.C = 1.0
+    mock_svm.kernel = "linear"
+    mock_svm.gamma = "scale"
     
-    # Execute
-    result = ml_utils.validate_model(model, expected_classes)
+    # Call the function
+    result = ml_utils.check_model_compatibility(mock_svm)
     
-    # Assert
-    assert result is False
+    # Assert that the model is compatible
+    assert result is True
 
 
-def test_validate_model_wrong_classes(mock_ml_pipeline):
-    """Test model validation with incorrect classes."""
-    # Setup
-    expected_classes = ['application_form', 'tax_return', 'bank_statement']
-    mock_ml_pipeline.classes_ = np.array(['application_form', 'tax_return'])
-    
-    # Execute
-    result = ml_utils.validate_model(mock_ml_pipeline, expected_classes)
-    
-    # Assert
-    assert result is False
-
-
-# ============================================================================
-# Test Model Version Information
-# ============================================================================
-
-@patch('src.utils.ml_utils.load_model')
-def test_get_model_version_info(mock_load_model):
-    """Test getting model version information."""
-    # Setup
-    model_path = "models/test_model.pkl"
+def test_check_model_compatibility_other():
+    """
+    Test that check_model_compatibility correctly checks compatibility for other model types.
+    """
+    # Create a mock model that's not RandomForestClassifier or SVC
     mock_model = MagicMock()
-    mock_metadata = {
-        "model_version": "1.0.0",
-        "timestamp": "2023-01-01T00:00:00Z",
-        "parameters": {"C": 1.0, "kernel": "rbf"},
-        "metrics": {"accuracy": 0.95, "f1": 0.94}
-    }
-    mock_load_model.return_value = (mock_model, mock_metadata)
+    mock_model.predict = MagicMock()
     
-    # Execute
-    version_info = ml_utils.get_model_version_info(model_path)
+    # Call the function
+    result = ml_utils.check_model_compatibility(mock_model)
     
-    # Assert
-    assert isinstance(version_info, dict)
-    assert version_info["version"] == "1.0.0"
-    assert version_info["timestamp"] == "2023-01-01T00:00:00Z"
-    assert version_info["parameters"] == {"C": 1.0, "kernel": "rbf"}
-    assert version_info["accuracy"] == 0.95
-    assert version_info["f1"] == 0.94
+    # Assert that the model is compatible if it has a predict method
+    assert result is True
 
 
-@patch('src.utils.ml_utils.load_model')
-def test_get_model_version_info_file_not_found(mock_load_model):
-    """Test getting model version information when file doesn't exist."""
-    # Setup
-    model_path = "models/nonexistent_model.pkl"
-    mock_load_model.side_effect = FileNotFoundError("File not found")
+def test_validate_model():
+    """
+    Test that validate_model correctly validates a model.
+    """
+    # Create a mock model
+    mock_model = MagicMock()
+    mock_model.predict = MagicMock(return_value=np.array(["tax_return"]))
+    mock_model.classes_ = np.array(["tax_return", "loan_application"])
     
-    # Execute and Assert
-    with pytest.raises(FileNotFoundError):
-        ml_utils.get_model_version_info(model_path)
-
-
-@patch('src.utils.ml_utils.load_model')
-@patch('src.utils.ml_utils.logger')
-def test_get_model_version_info_error(mock_logger, mock_load_model):
-    """Test getting model version information with an error."""
-    # Setup
-    model_path = "models/error_model.pkl"
-    mock_load_model.side_effect = Exception("Test error")
+    # Create test data
+    X_sample = np.array([[0.1, 0.2, 0.3]])
+    expected_classes = {"tax_return", "loan_application"}
     
-    # Execute
-    version_info = ml_utils.get_model_version_info(model_path)
+    # Call the function
+    result = ml_utils.validate_model(mock_model, X_sample, expected_classes)
     
-    # Assert
-    assert isinstance(version_info, dict)
-    assert version_info["version"] == "unknown"
-    assert "error" in version_info
-    assert version_info["error"] == "Test error"
-    mock_logger.error.assert_called_once()
+    # Assert that the model is valid
+    assert result is True
+    mock_model.predict.assert_called_once_with(X_sample)
 
 
-@patch('src.utils.ml_utils.get_model_version_info')
-def test_compare_model_versions(mock_get_version_info):
-    """Test comparing multiple model versions."""
-    # Setup
-    model_paths = ["models/model_v1.pkl", "models/model_v2.pkl"]
-    mock_get_version_info.side_effect = [
-        {"version": "1.0.0", "timestamp": "2023-01-01T00:00:00Z", "accuracy": 0.90, "f1": 0.89},
-        {"version": "2.0.0", "timestamp": "2023-02-01T00:00:00Z", "accuracy": 0.95, "f1": 0.94}
-    ]
+def test_validate_model_missing_classes():
+    """
+    Test that validate_model correctly identifies models with missing classes.
+    """
+    # Create a mock model
+    mock_model = MagicMock()
+    mock_model.predict = MagicMock(return_value=np.array(["tax_return"]))
+    mock_model.classes_ = np.array(["tax_return"])  # Missing loan_application
     
-    # Execute
-    comparison = ml_utils.compare_model_versions(model_paths)
+    # Create test data
+    X_sample = np.array([[0.1, 0.2, 0.3]])
+    expected_classes = {"tax_return", "loan_application"}
     
-    # Assert
-    assert isinstance(comparison, pd.DataFrame)
-    assert len(comparison) == 2
-    assert "version" in comparison.columns
-    assert "timestamp" in comparison.columns
-    assert "accuracy" in comparison.columns
-    assert "f1" in comparison.columns
-    assert "path" in comparison.columns
-    assert comparison.iloc[0]["version"] == "1.0.0"
-    assert comparison.iloc[1]["version"] == "2.0.0"
-
-
-@patch('src.utils.ml_utils.get_model_version_info')
-@patch('src.utils.ml_utils.logger')
-def test_compare_model_versions_with_error(mock_logger, mock_get_version_info):
-    """Test comparing model versions with an error for one model."""
-    # Setup
-    model_paths = ["models/model_v1.pkl", "models/error_model.pkl"]
-    mock_get_version_info.side_effect = [
-        {"version": "1.0.0", "timestamp": "2023-01-01T00:00:00Z", "accuracy": 0.90, "f1": 0.89},
-        Exception("Test error")
-    ]
+    # Call the function
+    result = ml_utils.validate_model(mock_model, X_sample, expected_classes)
     
-    # Execute
-    comparison = ml_utils.compare_model_versions(model_paths)
+    # Assert that the model is invalid due to missing classes
+    assert result is False
+
+
+def test_validate_model_prediction_error():
+    """
+    Test that validate_model correctly handles prediction errors.
+    """
+    # Create a mock model
+    mock_model = MagicMock()
+    mock_model.predict = MagicMock(side_effect=Exception("Prediction failed"))
+    mock_model.classes_ = np.array(["tax_return", "loan_application"])
     
-    # Assert
-    assert isinstance(comparison, pd.DataFrame)
-    assert len(comparison) == 1  # Only one successful model
-    assert comparison.iloc[0]["version"] == "1.0.0"
-    mock_logger.warning.assert_called_once()
-
-
-@patch('src.utils.ml_utils.get_model_version_info')
-def test_compare_model_versions_empty(mock_get_version_info):
-    """Test comparing model versions with no valid models."""
-    # Setup
-    model_paths = []
+    # Create test data
+    X_sample = np.array([[0.1, 0.2, 0.3]])
+    expected_classes = {"tax_return", "loan_application"}
     
-    # Execute
-    comparison = ml_utils.compare_model_versions(model_paths)
+    # Call the function
+    result = ml_utils.validate_model(mock_model, X_sample, expected_classes)
     
-    # Assert
-    assert isinstance(comparison, pd.DataFrame)
-    assert len(comparison) == 0
-    assert "version" in comparison.columns
-    assert "timestamp" in comparison.columns
-    assert "accuracy" in comparison.columns
-    assert "f1" in comparison.columns
-    assert "path" in comparison.columns
-
-
-# ============================================================================
-# Test Feature Importance and Model Size
-# ============================================================================
-
-def test_get_feature_importance_with_feature_importances():
-    """Test getting feature importance from a model with feature_importances_."""
-    # Setup
-    model = MagicMock(spec=RandomForestClassifier)
-    model.feature_importances_ = np.array([0.3, 0.5, 0.2])
-    feature_names = ["feature1", "feature2", "feature3"]
-    
-    # Execute
-    importance = ml_utils.get_feature_importance(model, feature_names)
-    
-    # Assert
-    assert isinstance(importance, dict)
-    assert len(importance) == 3
-    assert importance["feature2"] > importance["feature1"] > importance["feature3"]
-    assert importance["feature2"] == 0.5
-
-
-def test_get_feature_importance_with_coef():
-    """Test getting feature importance from a model with coef_."""
-    # Setup
-    model = MagicMock(spec=SVC)
-    # Multi-class coefficients (3 classes, 3 features)
-    model.coef_ = np.array([
-        [0.1, 0.2, 0.3],
-        [-0.2, 0.4, 0.1],
-        [0.3, -0.1, 0.2]
-    ])
-    feature_names = ["feature1", "feature2", "feature3"]
-    
-    # Execute
-    importance = ml_utils.get_feature_importance(model, feature_names)
-    
-    # Assert
-    assert isinstance(importance, dict)
-    assert len(importance) == 3
-    # Average absolute values: feature1=0.2, feature2=0.23333, feature3=0.2
-    assert importance["feature2"] > importance["feature1"]
-    assert importance["feature2"] > importance["feature3"]
-
-
-def test_get_feature_importance_no_importance_attr():
-    """Test getting feature importance from a model without importance attributes."""
-    # Setup
-    model = MagicMock(spec=BaseEstimator)
-    # No feature_importances_ or coef_ attributes
-    
-    # Execute
-    importance = ml_utils.get_feature_importance(model)
-    
-    # Assert
-    assert isinstance(importance, dict)
-    assert len(importance) == 0
-
-
-def test_get_feature_importance_mismatched_names():
-    """Test getting feature importance with mismatched feature names."""
-    # Setup
-    model = MagicMock(spec=RandomForestClassifier)
-    model.feature_importances_ = np.array([0.3, 0.5, 0.2])
-    feature_names = ["feature1", "feature2"]  # Too few names
-    
-    # Execute
-    importance = ml_utils.get_feature_importance(model, feature_names)
-    
-    # Assert
-    assert isinstance(importance, dict)
-    assert len(importance) == 3
-    assert "feature_0" in importance or "feature0" in importance
-    assert "feature_1" in importance or "feature1" in importance
-    assert "feature_2" in importance or "feature2" in importance
-
-
-@patch('tempfile.NamedTemporaryFile')
-@patch('os.path.getsize')
-@patch('src.utils.ml_utils.dump')
-def test_get_model_size(mock_dump, mock_getsize, mock_tempfile, mock_ml_pipeline):
-    """Test getting the model size."""
-    # Setup
-    mock_tempfile.return_value.__enter__.return_value.name = "temp_model.pkl"
-    mock_getsize.return_value = 1024 * 1024  # 1 MB
-    
-    # Execute
-    size = ml_utils.get_model_size(mock_ml_pipeline)
-    
-    # Assert
-    assert isinstance(size, str)
-    assert "1.00 MB" in size
-    mock_dump.assert_called_once()
-    mock_getsize.assert_called_once()
-
-
-@patch('tempfile.NamedTemporaryFile')
-@patch('os.path.getsize')
-@patch('src.utils.ml_utils.dump')
-def test_get_model_size_small(mock_dump, mock_getsize, mock_tempfile, mock_ml_pipeline):
-    """Test getting a small model size."""
-    # Setup
-    mock_tempfile.return_value.__enter__.return_value.name = "temp_model.pkl"
-    mock_getsize.return_value = 512  # 512 bytes
-    
-    # Execute
-    size = ml_utils.get_model_size(mock_ml_pipeline)
-    
-    # Assert
-    assert isinstance(size, str)
-    assert "512.00 B" in size or "0.50 KB" in size
-    mock_dump.assert_called_once()
-    mock_getsize.assert_called_once()
-
-
-# ============================================================================
-# Integration Tests
-# ============================================================================
-
-@pytest.mark.integration
-def test_end_to_end_classification_workflow():
-    """Test the end-to-end document classification workflow."""
-    # This test would be implemented in an integration test suite
-    # It would test the full workflow from loading a model to classifying documents
-    # For now, we'll just mark it as a placeholder
-    pass
-
-
-# ============================================================================
-# Main Test Runner
-# ============================================================================
-
-if __name__ == "__main__":
-    pytest.main(['-xvs', __file__])
+    # Assert that the model is invalid due to prediction error
+    assert result is False
