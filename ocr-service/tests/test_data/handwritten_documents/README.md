@@ -2,320 +2,194 @@
 
 ## Overview
 
-This directory contains test data for validating the OCR Service's ability to extract data from handwritten documents with high accuracy. As specified in the MCA Application Processing System requirements, the OCR Service must achieve 99% data extraction accuracy through AI and machine learning, including for handwritten text.
+This directory contains test data for evaluating the OCR Service's ability to extract text from handwritten documents with high accuracy. As specified in the technical requirements, the OCR Service must achieve 99% data extraction accuracy through AI and machine learning for handwritten text processing.
 
-The test samples in this directory represent a diverse range of handwritten document types, writing styles, and quality levels to ensure comprehensive testing of the OCR system's handwriting recognition capabilities. These samples are essential for validating the system's ability to process real-world handwritten mortgage application documents.
+## Purpose
 
-## Directory Structure
+The handwritten document test samples serve several critical purposes:
 
-The handwritten documents test data is organized as follows:
-
-```
-handwritten_documents/
-├── README.md                      # This documentation file
-├── handwriting_styles.md          # Detailed catalog of handwriting styles
-├── sample_manifest.json           # Configuration file defining test samples
-├── .gitignore                     # Git configuration to exclude binary files
-├── application_forms/             # Handwritten MCA application forms
-│   ├── complete/                  # Fully completed application forms
-│   └── partial/                   # Partially completed application forms
-├── financial_information/         # Handwritten financial documents
-│   ├── income_statements/         # Income declarations and statements
-│   └── expense_records/           # Expense records and receipts
-├── identification/                # Handwritten identification information
-│   ├── signatures/                # Signature samples with variations
-│   └── personal_information/      # Handwritten personal details
-└── mixed_quality/                 # Documents with varying quality levels
-    ├── high_quality/              # Clear, well-formed handwriting
-    ├── medium_quality/            # Average legibility handwriting
-    └── low_quality/               # Challenging, difficult-to-read handwriting
-```
+1. **Validation of OCR Accuracy**: Verify that the OCR Service meets the 99% accuracy requirement for handwritten text extraction
+2. **Model Training and Evaluation**: Provide diverse samples for training and evaluating TensorFlow models
+3. **Regression Testing**: Ensure that code changes don't negatively impact handwritten text recognition capabilities
+4. **Performance Benchmarking**: Establish baseline performance metrics for handwritten text processing
+5. **Edge Case Identification**: Test the system's ability to handle challenging handwriting styles and document conditions
 
 ## Document Types
 
-This test data directory includes the following types of handwritten documents:
+This test folder includes the following types of handwritten documents:
 
-### 1. Application Forms
+| Document Type | Description | Quantity | Naming Pattern |
+|---------------|-------------|----------|----------------|
+| Application Forms | Merchant Cash Advance application forms with handwritten fields | 20 | `app_form_[001-020].{jpg,png,pdf}` |
+| Financial Statements | Handwritten financial records and statements | 15 | `fin_stmt_[001-015].{jpg,png,pdf}` |
+| Personal Notes | Free-form handwritten notes related to applications | 10 | `notes_[001-010].{jpg,png,pdf}` |
+| Signatures | Isolated signature samples for verification testing | 25 | `sig_[001-025].{jpg,png,pdf}` |
+| Mixed Content | Documents containing both handwritten and typed text | 15 | `mixed_[001-015].{jpg,png,pdf}` |
+| Field Entries | Individual handwritten field entries (names, addresses, etc.) | 30 | `field_[type]_[001-030].{jpg,png,pdf}` |
 
-Handwritten MCA (Merchant Cash Advance) application forms containing various fields such as:
-- Business information (name, address, type)
-- Owner details (name, contact information)
-- Financial information (requested amount, revenue)
-- References and bank details
-- Signatures and dates
+## Handwriting Style Variations
 
-These forms test the system's ability to extract structured information from form fields with handwritten content.
+To ensure robust OCR testing, the samples include various handwriting styles:
 
-### 2. Financial Information
+1. **Cursive**: Connected flowing script (approximately 40% of samples)
+2. **Print**: Disconnected handwritten characters (approximately 35% of samples)
+3. **Mixed**: Combination of cursive and print styles (approximately 25% of samples)
 
-Handwritten financial documents including:
-- Income statements and declarations
-- Expense records and receipts
-- Financial calculations and projections
-- Bank account information
-- Transaction records
+Additionally, the samples vary in:
 
-These documents test the system's ability to extract numerical data, financial notation, and tabular information from handwritten sources.
+- **Legibility**: From very neat to challenging handwriting
+- **Pen/Pencil Type**: Ballpoint, gel, pencil, marker
+- **Writing Pressure**: Light, medium, heavy
+- **Line Spacing**: Tight, normal, wide
+- **Writing Angle**: Vertical, slanted
 
-### 3. Identification Information
+For detailed information about the handwriting styles included, refer to the `handwriting_styles.md` file in this directory.
 
-Handwritten identification documents including:
-- Signature samples with multiple variations
-- Personal identification information
-- Contact details
-- Handwritten notes and annotations
+## Quality Variations
 
-These documents test the system's ability to process highly variable personal identifiers, particularly signatures which present unique challenges for OCR systems.
+The test data includes documents with various quality characteristics to test OCR robustness:
 
-### 4. Mixed Content Documents
+- **Clean Documents**: High-quality scans with clear handwriting
+- **Degraded Documents**: Samples with fading, smudging, or aging effects
+- **Noisy Documents**: Samples with background noise, stains, or artifacts
+- **Low-Contrast Documents**: Samples with poor contrast between text and background
+- **Skewed Documents**: Samples with text not perfectly aligned horizontally
 
-Documents containing a mixture of handwritten and typed content, including:
-- Forms with typed fields and handwritten responses
-- Typed documents with handwritten annotations
-- Documents with handwritten corrections or additions
+## Metadata and Expected Results
 
-These documents test the system's ability to distinguish between and correctly process both handwritten and typed text within the same document.
+Each test document has corresponding metadata and expected OCR results defined in the `sample_manifest.json` file. This manifest includes:
 
-## Handwriting Styles
+- Document identifier
+- Document type
+- Handwriting style
+- Quality characteristics
+- Expected text content
+- Field positions and boundaries
+- Expected confidence scores
 
-The test data includes a diverse range of handwriting styles to ensure the OCR system can handle real-world variation. For detailed information about each style and its specific challenges, refer to the [handwriting_styles.md](./handwriting_styles.md) file. The main categories include:
+The manifest is used by the test suite to validate OCR extraction results against known values.
 
-1. **Print Handwriting**: Separated characters similar to printed text (highest expected accuracy)
-2. **Cursive Handwriting**: Connected characters with flowing strokes (challenging for OCR)
-3. **Mixed Handwriting**: Combination of print and cursive styles
-4. **Artistic/Stylized Handwriting**: Highly personalized with decorative elements
-5. **Rapid/Hasty Handwriting**: Quickly written with minimal attention to legibility
-6. **Block/All-Caps Handwriting**: Text written entirely in capital letters
-7. **Handwriting with Special Characters**: Includes non-alphabetic characters and symbols
+## Usage Guidelines
 
-Each style presents unique challenges for OCR processing and requires specific approaches for accurate text extraction.
-
-## Document Quality Variations
-
-To test OCR robustness, the test data includes documents with varying quality levels:
-
-1. **High Quality**:
-   - Clear, well-formed handwriting
-   - High contrast between text and background
-   - Clean document with no artifacts
-   - Consistent pen pressure and line thickness
-   - Expected OCR accuracy: 85-95%
-
-2. **Medium Quality**:
-   - Average legibility
-   - Some variation in contrast or pen pressure
-   - Minor artifacts or background noise
-   - Slight inconsistencies in writing style
-   - Expected OCR accuracy: 75-85%
-
-3. **Low Quality**:
-   - Difficult-to-read handwriting
-   - Poor contrast or faded text
-   - Significant artifacts, smudges, or background noise
-   - Highly inconsistent writing style or pressure
-   - Expected OCR accuracy: 60-75%
-
-## Naming Conventions
-
-Test files follow a consistent naming convention to facilitate organization and automated testing:
-
-```
-[document_type]_[handwriting_style]_[quality]_[sequence].pdf
-```
-
-Where:
-- `document_type`: Indicates the document category (app_form, financial, id, mixed)
-- `handwriting_style`: Indicates the primary handwriting style (print, cursive, mixed, artistic, rapid, block, special)
-- `quality`: Indicates the document quality (high, medium, low)
-- `sequence`: A unique identifier number (001, 002, etc.)
-
-Examples:
-- `app_form_print_high_001.pdf`: High-quality application form with print handwriting
-- `financial_cursive_medium_003.pdf`: Medium-quality financial document with cursive handwriting
-- `id_mixed_low_002.pdf`: Low-quality identification document with mixed handwriting
-
-## Using the Test Data
-
-### Loading Test Documents
-
-The test data can be loaded using the fixtures defined in `conftest.py`. Example:
+### Using Test Data in Unit Tests
 
 ```python
-def test_handwritten_extraction(handwritten_application_form):
-    # handwritten_application_form is a fixture that loads a test document
-    ocr_service = OCRService()
-    result = ocr_service.process_document(handwritten_application_form)
+import os
+import json
+from pathlib import Path
+
+# Load the sample manifest
+MANIFEST_PATH = Path(__file__).parent / "sample_manifest.json"
+with open(MANIFEST_PATH, "r") as f:
+    manifest = json.load(f)
+
+# Get a test document path
+def get_test_document_path(doc_id):
+    doc_info = manifest.get(doc_id)
+    if not doc_info:
+        raise ValueError(f"Document ID {doc_id} not found in manifest")
     
-    # Verify extraction accuracy against expected values
-    assert result.extracted_fields["business_name"] == "Acme Corporation"
-    assert result.confidence_scores["business_name"] >= 0.85
+    return Path(__file__).parent / doc_info["file_path"]
+
+# Get expected OCR results for a document
+def get_expected_results(doc_id):
+    doc_info = manifest.get(doc_id)
+    if not doc_info:
+        raise ValueError(f"Document ID {doc_id} not found in manifest")
+    
+    return doc_info["expected_text"], doc_info["expected_confidence"]
 ```
 
-### Testing Different Handwriting Styles
-
-Test across different handwriting styles to ensure robust recognition:
+### Using Test Data in Integration Tests
 
 ```python
-@pytest.mark.parametrize("handwriting_style", [
-    "print",
-    "cursive",
-    "mixed",
-    "artistic",
-    "rapid",
-    "block"
+import pytest
+from ocr_service.models import HandwrittenTextModel
+from ocr_service.utils import calculate_accuracy
+
+@pytest.mark.parametrize("doc_id", [
+    "app_form_001",
+    "fin_stmt_003",
+    "notes_002",
+    "sig_010",
+    "mixed_005"
 ])
-def test_handwriting_style_extraction(handwriting_style, request):
-    # Load a document with the specified handwriting style
-    document = request.getfixturevalue(f"handwritten_{handwriting_style}_sample")
+def test_handwritten_ocr_accuracy(doc_id, test_document_fixture):
+    # Get test document and expected results
+    doc_path, expected_text, expected_confidence = test_document_fixture(doc_id)
     
-    # Process with OCR service
-    ocr_service = OCRService()
-    result = ocr_service.process_document(document)
+    # Process document with OCR model
+    model = HandwrittenTextModel()
+    extracted_text, confidence = model.process_document(doc_path)
     
-    # Verify extraction meets minimum accuracy for the style
-    expected_accuracy = get_expected_accuracy_for_style(handwriting_style)
-    assert result.overall_accuracy >= expected_accuracy
+    # Calculate accuracy
+    accuracy = calculate_accuracy(extracted_text, expected_text)
+    
+    # Assert high accuracy (99% as per requirements)
+    assert accuracy >= 0.99, f"OCR accuracy below threshold: {accuracy}"
+    
+    # Assert confidence score is within expected range
+    assert abs(confidence - expected_confidence) < 0.05, \
+        f"Confidence score {confidence} differs from expected {expected_confidence}"
 ```
 
-### Testing Confidence Scoring
+## Guidelines for Adding New Test Documents
 
-Test that confidence scores accurately reflect extraction certainty:
+When adding new handwritten document samples to this test folder, please follow these guidelines:
 
-```python
-def test_confidence_scoring(handwritten_document_with_metadata):
-    # Process document with OCR service
-    ocr_service = OCRService()
-    result = ocr_service.process_document(handwritten_document_with_metadata)
-    
-    # Get expected values from metadata
-    expected_fields = handwritten_document_with_metadata.metadata["expected_fields"]
-    
-    # Verify confidence scores correlate with extraction accuracy
-    for field_name, expected in expected_fields.items():
-        extracted_value = result.extracted_fields[field_name]
-        confidence = result.confidence_scores[field_name]
-        
-        # Check if confidence score accurately reflects extraction quality
-        if extracted_value == expected["value"]:
-            assert confidence >= expected["expected_confidence"]
-        else:
-            # If extraction is incorrect, confidence should be lower
-            assert confidence < expected["expected_confidence"]
-```
+1. **File Format**: Use high-quality images (300 DPI or higher) in PNG or JPG format, or PDF files
+2. **Naming Convention**: Follow the established naming patterns for the document type
+3. **Metadata**: Add complete metadata for the new document to `sample_manifest.json`
+4. **Ground Truth**: Include the exact text content as ground truth for accuracy validation
+5. **Diversity**: Ensure new samples add diversity in terms of handwriting style, content, or quality
+6. **Permission**: Ensure you have appropriate rights to use the document for testing purposes
+7. **Anonymization**: Remove or replace any personally identifiable information (PII)
 
-## Adding New Test Documents
-
-To add new handwritten document test samples:
-
-1. **Prepare the Document**:
-   - Create or obtain a handwritten document that tests specific OCR capabilities
-   - Ensure the document represents real-world use cases for the MCA system
-   - Document the expected text content and field values
-
-2. **Name the File** according to the naming convention described above
-
-3. **Place the File** in the appropriate subdirectory based on document type and quality
-
-4. **Update the Manifest**:
-   - Add an entry to `sample_manifest.json` with document metadata
-   - Include expected field values and positions
-   - Specify expected confidence scores for each field
-
-5. **Create Test Fixtures** if needed in `conftest.py`
-
-6. **Verify Integration** with the test suite by running relevant tests
-
-Example manifest entry for a new document:
+### Metadata Template for New Documents
 
 ```json
 {
-  "id": "app_form_cursive_medium_005",
-  "file_path": "handwritten_documents/application_forms/medium_quality/app_form_cursive_medium_005.pdf",
-  "document_type": "APPLICATION_FORM",
-  "text_type": "HANDWRITTEN",
-  "handwriting_style": "CURSIVE",
-  "quality": "MEDIUM",
-  "description": "MCA application form with cursive handwriting, medium quality",
-  "expected_fields": {
-    "business_name": {
-      "value": "Johnson Consulting Group",
-      "position": {"x1": 120, "y1": 150, "x2": 350, "y2": 170},
-      "expected_confidence": 0.82
-    },
-    "owner_name": {
-      "value": "Sarah Johnson",
-      "position": {"x1": 120, "y1": 200, "x2": 350, "y2": 220},
-      "expected_confidence": 0.85
-    },
-    "requested_amount": {
-      "value": "75000",
-      "position": {"x1": 120, "y1": 250, "x2": 250, "y2": 270},
-      "expected_confidence": 0.80
-    }
-    // Additional fields...
-  },
-  "expected_classification_confidence": 0.95,
-  "expected_overall_confidence": 0.83
+  "doc_id": {
+    "file_path": "relative/path/to/file.png",
+    "document_type": "application_form",
+    "handwriting_style": "cursive",
+    "quality": "clean",
+    "expected_text": "Exact text content of the document",
+    "fields": [
+      {
+        "name": "field_name",
+        "coordinates": [x1, y1, x2, y2],
+        "expected_value": "field value",
+        "expected_confidence": 0.98
+      }
+    ],
+    "expected_confidence": 0.97
+  }
 }
 ```
 
-## Expected Accuracy
+## Performance Expectations
 
-The OCR Service is expected to achieve the following accuracy levels for handwritten documents:
+As specified in the technical requirements, the OCR Service must achieve:
 
-| Document Type | Handwriting Style | Quality | Expected Field Accuracy | Expected Overall Accuracy |
-|---------------|-------------------|---------|------------------------|---------------------------|
-| Application Form | Print | High | 90-95% | 92% |
-| Application Form | Print | Medium | 85-90% | 87% |
-| Application Form | Print | Low | 75-85% | 80% |
-| Application Form | Cursive | High | 85-90% | 87% |
-| Application Form | Cursive | Medium | 75-85% | 80% |
-| Application Form | Cursive | Low | 65-75% | 70% |
-| Application Form | Mixed | High | 85-90% | 87% |
-| Financial Document | Print | High | 90-95% | 92% |
-| Financial Document | Cursive | Medium | 75-85% | 80% |
-| ID Document | Mixed | High | 85-90% | 87% |
+- **99% accuracy** for handwritten text extraction
+- **Processing time** under 5 minutes from receipt to completion
+- **Confidence scoring** for all extracted fields
 
-These accuracy targets are defined in the `test_parameters` section of the parent `metadata.json` file and are used to validate the OCR Service's performance against the 99% overall system accuracy requirement.
+The test suite uses these documents to validate these performance metrics.
 
-## Confidence Thresholds
+## Integration with Test Framework
 
-The following confidence thresholds should be used for verification decisions:
+These test documents are automatically loaded by the test framework using the fixtures defined in `tests/conftest.py`. The framework handles:
 
-| Handwriting Style | Automation Threshold | Verification Threshold | Notes |
-|-------------------|----------------------|------------------------|-------|
-| Print             | ≥ 0.85              | < 0.75                 | High automation potential |
-| Cursive           | ≥ 0.75              | < 0.65                 | May require more verification |
-| Mixed             | ≥ 0.80              | < 0.70                 | Context-dependent verification |
-| Artistic          | ≥ 0.70              | < 0.60                 | Higher verification rate expected |
-| Rapid/Hasty       | ≥ 0.70              | < 0.60                 | Field-dependent thresholds |
-| Block/All-Caps    | ≥ 0.80              | < 0.70                 | Good automation candidate |
-| Special Characters | ≥ 0.75              | < 0.65                 | Symbol-dependent verification |
+1. Loading the appropriate test documents based on test parameters
+2. Providing expected results for validation
+3. Calculating accuracy metrics
+4. Reporting detailed results for failed tests
 
-Fields with confidence scores:
-- Above the "Automation Threshold" can be processed automatically
-- Below the "Verification Threshold" must be flagged for human review
-- Between these thresholds should be handled based on field criticality
+## Related Documentation
 
-## Binary Files and Version Control
-
-Actual document files (PDF, TIFF, PNG, JPEG) are excluded from version control using the `.gitignore` file in this directory. This prevents large binary files from bloating the repository while maintaining necessary metadata.
-
-To obtain the actual test documents:
-
-1. Download them from the shared document repository (contact the OCR team for access)
-2. Place them in the appropriate subdirectories according to the paths defined in `sample_manifest.json`
-3. Run the verification script to ensure all documents are correctly placed:
-
-```bash
-python -m ocr_service.tests.verify_test_data --type handwritten
-```
-
-## References
-
-- [Handwriting Styles Catalog](./handwriting_styles.md): Detailed information about handwriting styles and their challenges
-- [Sample Manifest](./sample_manifest.json): Configuration file defining all test samples
-- [OCR Service Implementation](../../src/services/ocr_service.py): Core OCR service implementation
-- [Handwritten Text Model](../../src/models/handwritten_text_model.py): Specialized model for handwritten text recognition
-- [Test Fixtures](../../tests/conftest.py): Test fixtures for loading handwritten document samples
-- [Technical Specification](../../../README.md): Overall system requirements and specifications
+- See `handwriting_styles.md` for detailed information about handwriting variations
+- See `../README.md` for overall test data organization
+- See `../../test_models/test_handwritten_text_model.py` for model-specific tests
+- See `../../../src/models/handwritten_text_model.py` for implementation details
