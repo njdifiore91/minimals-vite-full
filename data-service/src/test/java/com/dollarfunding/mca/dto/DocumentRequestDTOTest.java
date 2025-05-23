@@ -1,27 +1,27 @@
 package com.dollarfunding.mca.dto;
 
 import com.dollarfunding.mca.entity.DocumentType;
-import com.dollarfunding.mca.util.JsonUtil;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.validation.ConstraintViolation;
+import jakarta.validation.Validation;
+import jakarta.validation.Validator;
+import jakarta.validation.ValidatorFactory;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.NullAndEmptySource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.web.multipart.MultipartFile;
 
-import javax.validation.ConstraintViolation;
-import javax.validation.Validation;
-import javax.validation.Validator;
-import javax.validation.ValidatorFactory;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -33,816 +33,370 @@ import static org.junit.jupiter.api.Assertions.*;
  * handles document classification metadata correctly, and supports multipart
  * file uploads appropriately.
  */
-@DisplayName("DocumentRequestDTO Tests")
-class DocumentRequestDTOTest {
+@DisplayName("Document Request DTO Tests")
+public class DocumentRequestDTOTest {
 
     private Validator validator;
     private ObjectMapper objectMapper;
-    private DocumentRequestDTO validDto;
     private UUID testApplicationId;
-    private Map<String, Object> testMetadata;
-    private Map<String, Double> testConfidenceScores;
-
+    
     @BeforeEach
     void setUp() {
-        // Initialize validator
         ValidatorFactory factory = Validation.buildDefaultValidatorFactory();
         validator = factory.getValidator();
-        
-        // Initialize ObjectMapper
-        objectMapper = JsonUtil.getObjectMapper();
-        
-        // Create test application ID
+        objectMapper = new ObjectMapper();
         testApplicationId = UUID.randomUUID();
-        
-        // Create test metadata
-        testMetadata = new HashMap<>();
-        testMetadata.put("pageCount", 5);
-        testMetadata.put("documentDate", "2023-01-15");
-        testMetadata.put("issuer", "First National Bank");
-        
-        // Create test confidence scores
-        testConfidenceScores = new HashMap<>();
-        testConfidenceScores.put("classification", 0.95);
-        testConfidenceScores.put("accountNumber", 0.87);
-        testConfidenceScores.put("balance", 0.92);
-        
-        // Create a valid DTO for testing
-        validDto = new DocumentRequestDTO(
-                testApplicationId,
-                DocumentType.BANK_STATEMENT,
-                "bank_statement",
-                testMetadata,
-                testConfidenceScores,
-                "bank_statement_jan_2023.pdf",
-                "application/pdf"
+    }
+    
+    /**
+     * Test data provider for invalid document request scenarios.
+     */
+    static Stream<Arguments> invalidDocumentRequestProvider() {
+        return Stream.of(
+            Arguments.of(null, DocumentType.BANK_STATEMENT, "applicationId", "Application ID is required"),
+            Arguments.of(UUID.randomUUID(), null, "type", "Document type is required")
+        );
+    }
+    
+    /**
+     * Test data provider for invalid content type values.
+     */
+    static Stream<Arguments> invalidContentTypeProvider() {
+        return Stream.of(
+            Arguments.of("invalid content type with spaces", "contentType", "Invalid content type format"),
+            Arguments.of("invalid@content#type", "contentType", "Invalid content type format")
         );
     }
 
-    @Nested
-    @DisplayName("Validation Tests")
-    class ValidationTests {
-
-        @Test
-        @DisplayName("Valid DTO should pass validation")
-        void validDtoShouldPassValidation() {
-            // When
-            Set<ConstraintViolation<DocumentRequestDTO>> violations = validator.validate(validDto);
-            
-            // Then
-            assertTrue(violations.isEmpty(), "Valid DTO should not have validation violations");
-        }
-
-        @Test
-        @DisplayName("DTO with null application ID should fail validation")
-        void dtoWithNullApplicationIdShouldFailValidation() {
-            // Given
-            DocumentRequestDTO dto = new DocumentRequestDTO(
-                    null,
-                    DocumentType.BANK_STATEMENT,
-                    "bank_statement",
-                    testMetadata,
-                    testConfidenceScores,
-                    "bank_statement_jan_2023.pdf",
-                    "application/pdf"
-            );
-            
-            // When
-            Set<ConstraintViolation<DocumentRequestDTO>> violations = validator.validate(dto);
-            
-            // Then
-            assertFalse(violations.isEmpty(), "DTO with null application ID should have validation violations");
-            assertEquals(1, violations.size(), "Should have exactly one violation");
-            
-            ConstraintViolation<DocumentRequestDTO> violation = violations.iterator().next();
-            assertEquals("applicationId", violation.getPropertyPath().toString(), "Violation should be on applicationId field");
-            assertEquals("Application ID is required", violation.getMessage(), "Violation message should match annotation");
-        }
-
-        @Test
-        @DisplayName("DTO with null document type should fail validation")
-        void dtoWithNullDocumentTypeShouldFailValidation() {
-            // Given
-            DocumentRequestDTO dto = new DocumentRequestDTO(
-                    testApplicationId,
-                    null,
-                    "bank_statement",
-                    testMetadata,
-                    testConfidenceScores,
-                    "bank_statement_jan_2023.pdf",
-                    "application/pdf"
-            );
-            
-            // When
-            Set<ConstraintViolation<DocumentRequestDTO>> violations = validator.validate(dto);
-            
-            // Then
-            assertFalse(violations.isEmpty(), "DTO with null document type should have validation violations");
-            assertEquals(1, violations.size(), "Should have exactly one violation");
-            
-            ConstraintViolation<DocumentRequestDTO> violation = violations.iterator().next();
-            assertEquals("type", violation.getPropertyPath().toString(), "Violation should be on type field");
-            assertEquals("Document type is required", violation.getMessage(), "Violation message should match annotation");
-        }
-
-        @Test
-        @DisplayName("DTO with oversized filename should fail validation")
-        void dtoWithOversizedFilenameShouldFailValidation() {
-            // Given
-            StringBuilder largeFilename = new StringBuilder();
-            for (int i = 0; i < 300; i++) {
-                largeFilename.append("a");
-            }
-            largeFilename.append(".pdf");
-            
-            DocumentRequestDTO dto = new DocumentRequestDTO(
-                    testApplicationId,
-                    DocumentType.BANK_STATEMENT,
-                    "bank_statement",
-                    testMetadata,
-                    testConfidenceScores,
-                    largeFilename.toString(),
-                    "application/pdf"
-            );
-            
-            // When
-            Set<ConstraintViolation<DocumentRequestDTO>> violations = validator.validate(dto);
-            
-            // Then
-            assertFalse(violations.isEmpty(), "DTO with oversized filename should have validation violations");
-            
-            boolean hasFilenameSizeViolation = violations.stream()
-                    .anyMatch(v -> v.getPropertyPath().toString().equals("originalFilename") && 
-                              v.getMessage().contains("cannot exceed 255 characters"));
-            
-            assertTrue(hasFilenameSizeViolation, "Should have a size violation on originalFilename field");
-        }
+    @Test
+    @DisplayName("Should create a valid DTO with all required fields")
+    void shouldCreateValidDTO() {
+        // Given
+        DocumentRequestDTO dto = new DocumentRequestDTO(testApplicationId, DocumentType.BANK_STATEMENT);
         
-        @Test
-        @DisplayName("DTO with oversized content type should fail validation")
-        void dtoWithOversizedContentTypeShouldFailValidation() {
-            // Given
-            StringBuilder largeContentType = new StringBuilder();
-            for (int i = 0; i < 150; i++) {
-                largeContentType.append("a");
-            }
-            
-            DocumentRequestDTO dto = new DocumentRequestDTO(
-                    testApplicationId,
-                    DocumentType.BANK_STATEMENT,
-                    "bank_statement",
-                    testMetadata,
-                    testConfidenceScores,
-                    "bank_statement_jan_2023.pdf",
-                    largeContentType.toString()
-            );
-            
-            // When
-            Set<ConstraintViolation<DocumentRequestDTO>> violations = validator.validate(dto);
-            
-            // Then
-            assertFalse(violations.isEmpty(), "DTO with oversized content type should have validation violations");
-            
-            boolean hasContentTypeSizeViolation = violations.stream()
-                    .anyMatch(v -> v.getPropertyPath().toString().equals("contentType") && 
-                              v.getMessage().contains("cannot exceed 100 characters"));
-            
-            assertTrue(hasContentTypeSizeViolation, "Should have a size violation on contentType field");
-        }
+        // When
+        Set<ConstraintViolation<DocumentRequestDTO>> violations = validator.validate(dto);
         
-        @Test
-        @DisplayName("DTO with null metadata should be initialized with empty map")
-        void dtoWithNullMetadataShouldBeInitializedWithEmptyMap() {
-            // Given
-            DocumentRequestDTO dto = new DocumentRequestDTO(
-                    testApplicationId,
-                    DocumentType.BANK_STATEMENT,
-                    "bank_statement",
-                    null,
-                    testConfidenceScores,
-                    "bank_statement_jan_2023.pdf",
-                    "application/pdf"
-            );
-            
-            // Then
-            assertNotNull(dto.getMetadata(), "Metadata should not be null");
-            assertTrue(dto.getMetadata().isEmpty(), "Metadata should be empty");
-        }
-        
-        @Test
-        @DisplayName("DTO with null confidence scores should be initialized with empty map")
-        void dtoWithNullConfidenceScoresShouldBeInitializedWithEmptyMap() {
-            // Given
-            DocumentRequestDTO dto = new DocumentRequestDTO(
-                    testApplicationId,
-                    DocumentType.BANK_STATEMENT,
-                    "bank_statement",
-                    testMetadata,
-                    null,
-                    "bank_statement_jan_2023.pdf",
-                    "application/pdf"
-            );
-            
-            // Then
-            assertNotNull(dto.getConfidenceScores(), "Confidence scores should not be null");
-            assertTrue(dto.getConfidenceScores().isEmpty(), "Confidence scores should be empty");
-        }
-        
-        @Test
-        @DisplayName("isValidForCreation should return true for valid DTO")
-        void isValidForCreationShouldReturnTrueForValidDto() {
-            // Then
-            assertTrue(validDto.isValidForCreation(), "Valid DTO should be valid for creation");
-        }
-        
-        @Test
-        @DisplayName("isValidForCreation should return false for DTO with null application ID")
-        void isValidForCreationShouldReturnFalseForDtoWithNullApplicationId() {
-            // Given
-            DocumentRequestDTO dto = new DocumentRequestDTO(
-                    null,
-                    DocumentType.BANK_STATEMENT,
-                    "bank_statement",
-                    testMetadata,
-                    testConfidenceScores,
-                    "bank_statement_jan_2023.pdf",
-                    "application/pdf"
-            );
-            
-            // Then
-            assertFalse(dto.isValidForCreation(), "DTO with null application ID should not be valid for creation");
-        }
-        
-        @Test
-        @DisplayName("isValidForCreation should return false for DTO with null document type")
-        void isValidForCreationShouldReturnFalseForDtoWithNullDocumentType() {
-            // Given
-            DocumentRequestDTO dto = new DocumentRequestDTO(
-                    testApplicationId,
-                    null,
-                    "bank_statement",
-                    testMetadata,
-                    testConfidenceScores,
-                    "bank_statement_jan_2023.pdf",
-                    "application/pdf"
-            );
-            
-            // Then
-            assertFalse(dto.isValidForCreation(), "DTO with null document type should not be valid for creation");
-        }
-        
-        @Test
-        @DisplayName("isValidForUpdate should return true for valid DTO and document ID")
-        void isValidForUpdateShouldReturnTrueForValidDtoAndDocumentId() {
-            // Given
-            UUID documentId = UUID.randomUUID();
-            
-            // Then
-            assertTrue(validDto.isValidForUpdate(documentId), "Valid DTO should be valid for update");
-        }
-        
-        @Test
-        @DisplayName("isValidForUpdate should return false for null document ID")
-        void isValidForUpdateShouldReturnFalseForNullDocumentId() {
-            // Then
-            assertFalse(validDto.isValidForUpdate(null), "DTO with null document ID should not be valid for update");
-        }
-        
-        @Test
-        @DisplayName("isValidForUpdate should return false for DTO with null application ID")
-        void isValidForUpdateShouldReturnFalseForDtoWithNullApplicationId() {
-            // Given
-            UUID documentId = UUID.randomUUID();
-            DocumentRequestDTO dto = new DocumentRequestDTO(
-                    null,
-                    DocumentType.BANK_STATEMENT,
-                    "bank_statement",
-                    testMetadata,
-                    testConfidenceScores,
-                    "bank_statement_jan_2023.pdf",
-                    "application/pdf"
-            );
-            
-            // Then
-            assertFalse(dto.isValidForUpdate(documentId), "DTO with null application ID should not be valid for update");
-        }
+        // Then
+        assertTrue(violations.isEmpty(), "No validation violations should be present");
     }
-
-    @Nested
-    @DisplayName("JSON Serialization/Deserialization Tests")
-    class JsonTests {
-
-        @Test
-        @DisplayName("DTO should serialize to JSON correctly")
-        void dtoShouldSerializeToJsonCorrectly() throws Exception {
-            // When
-            String json = objectMapper.writeValueAsString(validDto);
-            
-            // Then
-            assertNotNull(json, "JSON should not be null");
-            assertTrue(json.contains("\"applicationId\":\"" + testApplicationId + "\""), "JSON should contain applicationId field");
-            assertTrue(json.contains("\"type\":\"BANK_STATEMENT\""), "JSON should contain type field");
-            assertTrue(json.contains("\"classification\":\"bank_statement\""), "JSON should contain classification field");
-            assertTrue(json.contains("\"metadata\":"), "JSON should contain metadata field");
-            assertTrue(json.contains("\"confidenceScores\":"), "JSON should contain confidenceScores field");
-            assertTrue(json.contains("\"originalFilename\":\"bank_statement_jan_2023.pdf\""), "JSON should contain originalFilename field");
-            assertTrue(json.contains("\"contentType\":\"application/pdf\""), "JSON should contain contentType field");
-        }
-
-        @Test
-        @DisplayName("JSON should deserialize to DTO correctly")
-        void jsonShouldDeserializeToDtoCorrectly() throws Exception {
-            // Given
-            UUID testId = UUID.randomUUID();
-            String json = "{\"applicationId\":\"" + testId + "\",\"type\":\"TAX_RETURN\",\"classification\":\"tax_return\",\"metadata\":{\"year\":2022,\"type\":\"1040\"},\"confidenceScores\":{\"classification\":0.98,\"ein\":0.85},\"originalFilename\":\"tax_return_2022.pdf\",\"contentType\":\"application/pdf\"}";
-            
-            // When
-            DocumentRequestDTO dto = objectMapper.readValue(json, DocumentRequestDTO.class);
-            
-            // Then
-            assertNotNull(dto, "DTO should not be null");
-            assertEquals(testId, dto.getApplicationId(), "Application ID should match");
-            assertEquals(DocumentType.TAX_RETURN, dto.getType(), "Document type should match");
-            assertEquals("tax_return", dto.getClassification(), "Classification should match");
-            assertNotNull(dto.getMetadata(), "Metadata should not be null");
-            assertEquals(2, dto.getMetadata().size(), "Metadata should have correct number of entries");
-            assertEquals(2022, dto.getMetadata().get("year"), "Metadata values should match");
-            assertNotNull(dto.getConfidenceScores(), "Confidence scores should not be null");
-            assertEquals(2, dto.getConfidenceScores().size(), "Confidence scores should have correct number of entries");
-            assertEquals(0.98, dto.getConfidenceScores().get("classification"), 0.001, "Confidence score values should match");
-            assertEquals("tax_return_2022.pdf", dto.getOriginalFilename(), "Original filename should match");
-            assertEquals("application/pdf", dto.getContentType(), "Content type should match");
-        }
-
-        @Test
-        @DisplayName("DTO should ignore unknown JSON properties")
-        void dtoShouldIgnoreUnknownJsonProperties() throws Exception {
-            // Given
-            UUID testId = UUID.randomUUID();
-            String json = "{\"applicationId\":\"" + testId + "\",\"type\":\"INVOICE\",\"unknown_field\":\"value\",\"metadata\":{\"invoiceNumber\":\"INV-12345\"}}";
-            
-            // When
-            DocumentRequestDTO dto = objectMapper.readValue(json, DocumentRequestDTO.class);
-            
-            // Then
-            assertNotNull(dto, "DTO should not be null");
-            assertEquals(testId, dto.getApplicationId(), "Application ID should match");
-            assertEquals(DocumentType.INVOICE, dto.getType(), "Document type should match");
-            assertNotNull(dto.getMetadata(), "Metadata should not be null");
-            assertEquals("INV-12345", dto.getMetadata().get("invoiceNumber"), "Metadata values should match");
-            // Unknown field should be ignored without exception
-        }
+    
+    @ParameterizedTest
+    @DisplayName("Should validate required fields")
+    @MethodSource("invalidDocumentRequestProvider")
+    void shouldValidateRequiredFields(UUID applicationId, DocumentType type, String fieldName, String expectedMessage) {
+        // Given
+        DocumentRequestDTO dto = new DocumentRequestDTO();
+        dto.setApplicationId(applicationId);
+        dto.setType(type);
         
-        @Test
-        @DisplayName("DTO should handle null fields correctly during serialization")
-        void dtoShouldHandleNullFieldsCorrectlyDuringSerialization() throws Exception {
-            // Given
-            DocumentRequestDTO dto = new DocumentRequestDTO(
-                    testApplicationId,
-                    DocumentType.BUSINESS_LICENSE,
-                    null,  // null classification
-                    new HashMap<>(),  // empty metadata
-                    new HashMap<>(),  // empty confidence scores
-                    null,  // null original filename
-                    null   // null content type
-            );
-            
-            // When
-            String json = objectMapper.writeValueAsString(dto);
-            
-            // Then
-            assertNotNull(json, "JSON should not be null");
-            assertTrue(json.contains("\"applicationId\":"), "JSON should contain applicationId field");
-            assertTrue(json.contains("\"type\":\"BUSINESS_LICENSE\""), "JSON should contain type field");
-            assertFalse(json.contains("\"classification\":"), "JSON should not contain null classification field");
-            assertTrue(json.contains("\"metadata\":{}"), "JSON should contain empty metadata field");
-            assertTrue(json.contains("\"confidenceScores\":{}"), "JSON should contain empty confidenceScores field");
-            assertFalse(json.contains("\"originalFilename\":"), "JSON should not contain null originalFilename field");
-            assertFalse(json.contains("\"contentType\":"), "JSON should not contain null contentType field");
-        }
+        // When
+        Set<ConstraintViolation<DocumentRequestDTO>> violations = validator.validate(dto);
+        
+        // Then
+        assertFalse(violations.isEmpty(), "Validation violations should be present");
+        ConstraintViolation<DocumentRequestDTO> violation = violations.iterator().next();
+        assertEquals(fieldName, violation.getPropertyPath().toString(), "Violation should be for the correct field");
+        assertEquals(expectedMessage, violation.getMessage(), "Violation message should match expected");
     }
-
-    @Nested
-    @DisplayName("Metadata and Confidence Score Tests")
-    class MetadataAndConfidenceScoreTests {
-
-        @Test
-        @DisplayName("addMetadata should add entry to metadata map")
-        void addMetadataShouldAddEntryToMetadataMap() {
-            // Given
-            DocumentRequestDTO dto = new DocumentRequestDTO(
-                    testApplicationId,
-                    DocumentType.BANK_STATEMENT
-            );
-            
-            // When
-            dto.addMetadata("accountNumber", "123456789");
-            
-            // Then
-            assertNotNull(dto.getMetadata(), "Metadata should not be null");
-            assertEquals(1, dto.getMetadata().size(), "Metadata should have one entry");
-            assertEquals("123456789", dto.getMetadata().get("accountNumber"), "Metadata value should match");
-        }
-
-        @Test
-        @DisplayName("addMetadata should initialize metadata map if null")
-        void addMetadataShouldInitializeMetadataMapIfNull() {
-            // Given
-            DocumentRequestDTO dto = new DocumentRequestDTO();
-            dto.setApplicationId(testApplicationId);
-            dto.setType(DocumentType.BANK_STATEMENT);
-            dto.setMetadata(null);  // Explicitly set to null
-            
-            // When
-            dto.addMetadata("accountNumber", "123456789");
-            
-            // Then
-            assertNotNull(dto.getMetadata(), "Metadata should not be null");
-            assertEquals(1, dto.getMetadata().size(), "Metadata should have one entry");
-            assertEquals("123456789", dto.getMetadata().get("accountNumber"), "Metadata value should match");
-        }
-
-        @Test
-        @DisplayName("addConfidenceScore should add entry to confidence scores map")
-        void addConfidenceScoreShouldAddEntryToConfidenceScoresMap() {
-            // Given
-            DocumentRequestDTO dto = new DocumentRequestDTO(
-                    testApplicationId,
-                    DocumentType.BANK_STATEMENT
-            );
-            
-            // When
-            dto.addConfidenceScore("accountNumber", 0.95);
-            
-            // Then
-            assertNotNull(dto.getConfidenceScores(), "Confidence scores should not be null");
-            assertEquals(1, dto.getConfidenceScores().size(), "Confidence scores should have one entry");
-            assertEquals(0.95, dto.getConfidenceScores().get("accountNumber"), 0.001, "Confidence score value should match");
-        }
-
-        @Test
-        @DisplayName("addConfidenceScore should initialize confidence scores map if null")
-        void addConfidenceScoreShouldInitializeConfidenceScoresMapIfNull() {
-            // Given
-            DocumentRequestDTO dto = new DocumentRequestDTO();
-            dto.setApplicationId(testApplicationId);
-            dto.setType(DocumentType.BANK_STATEMENT);
-            dto.setConfidenceScores(null);  // Explicitly set to null
-            
-            // When
-            dto.addConfidenceScore("accountNumber", 0.95);
-            
-            // Then
-            assertNotNull(dto.getConfidenceScores(), "Confidence scores should not be null");
-            assertEquals(1, dto.getConfidenceScores().size(), "Confidence scores should have one entry");
-            assertEquals(0.95, dto.getConfidenceScores().get("accountNumber"), 0.001, "Confidence score value should match");
-        }
-
-        @Test
-        @DisplayName("withAdditionalMetadata should create new DTO with combined metadata")
-        void withAdditionalMetadataShouldCreateNewDtoWithCombinedMetadata() {
-            // Given
-            Map<String, Object> additionalMetadata = new HashMap<>();
-            additionalMetadata.put("accountType", "Checking");
-            additionalMetadata.put("bankName", "First National Bank");
-            
-            // When
-            DocumentRequestDTO newDto = validDto.withAdditionalMetadata(additionalMetadata);
-            
-            // Then
-            assertNotNull(newDto, "New DTO should not be null");
-            assertNotSame(validDto, newDto, "Should return a new DTO instance");
-            assertEquals(testApplicationId, newDto.getApplicationId(), "Application ID should match");
-            assertEquals(DocumentType.BANK_STATEMENT, newDto.getType(), "Document type should match");
-            assertEquals("bank_statement", newDto.getClassification(), "Classification should match");
-            assertNotNull(newDto.getMetadata(), "Metadata should not be null");
-            assertEquals(5, newDto.getMetadata().size(), "Metadata should have combined entries");
-            assertEquals("Checking", newDto.getMetadata().get("accountType"), "New metadata values should be present");
-            assertEquals(5, newDto.getMetadata().get("pageCount"), "Original metadata values should be preserved");
-        }
-
-        @Test
-        @DisplayName("withAdditionalMetadata should return same DTO if additional metadata is null")
-        void withAdditionalMetadataShouldReturnSameDtoIfAdditionalMetadataIsNull() {
-            // When
-            DocumentRequestDTO newDto = validDto.withAdditionalMetadata(null);
-            
-            // Then
-            assertSame(validDto, newDto, "Should return the same DTO instance");
-        }
-
-        @Test
-        @DisplayName("withAdditionalMetadata should return same DTO if additional metadata is empty")
-        void withAdditionalMetadataShouldReturnSameDtoIfAdditionalMetadataIsEmpty() {
-            // When
-            DocumentRequestDTO newDto = validDto.withAdditionalMetadata(new HashMap<>());
-            
-            // Then
-            assertSame(validDto, newDto, "Should return the same DTO instance");
-        }
-
-        @Test
-        @DisplayName("withAdditionalConfidenceScores should create new DTO with combined confidence scores")
-        void withAdditionalConfidenceScoresShouldCreateNewDtoWithCombinedConfidenceScores() {
-            // Given
-            Map<String, Double> additionalScores = new HashMap<>();
-            additionalScores.put("accountType", 0.88);
-            additionalScores.put("bankName", 0.97);
-            
-            // When
-            DocumentRequestDTO newDto = validDto.withAdditionalConfidenceScores(additionalScores);
-            
-            // Then
-            assertNotNull(newDto, "New DTO should not be null");
-            assertNotSame(validDto, newDto, "Should return a new DTO instance");
-            assertEquals(testApplicationId, newDto.getApplicationId(), "Application ID should match");
-            assertEquals(DocumentType.BANK_STATEMENT, newDto.getType(), "Document type should match");
-            assertEquals("bank_statement", newDto.getClassification(), "Classification should match");
-            assertNotNull(newDto.getConfidenceScores(), "Confidence scores should not be null");
-            assertEquals(5, newDto.getConfidenceScores().size(), "Confidence scores should have combined entries");
-            assertEquals(0.88, newDto.getConfidenceScores().get("accountType"), 0.001, "New confidence score values should be present");
-            assertEquals(0.95, newDto.getConfidenceScores().get("classification"), 0.001, "Original confidence score values should be preserved");
-        }
-
-        @Test
-        @DisplayName("withAdditionalConfidenceScores should return same DTO if additional scores is null")
-        void withAdditionalConfidenceScoresShouldReturnSameDtoIfAdditionalScoresIsNull() {
-            // When
-            DocumentRequestDTO newDto = validDto.withAdditionalConfidenceScores(null);
-            
-            // Then
-            assertSame(validDto, newDto, "Should return the same DTO instance");
-        }
-
-        @Test
-        @DisplayName("withAdditionalConfidenceScores should return same DTO if additional scores is empty")
-        void withAdditionalConfidenceScoresShouldReturnSameDtoIfAdditionalScoresIsEmpty() {
-            // When
-            DocumentRequestDTO newDto = validDto.withAdditionalConfidenceScores(new HashMap<>());
-            
-            // Then
-            assertSame(validDto, newDto, "Should return the same DTO instance");
-        }
+    
+    @ParameterizedTest
+    @DisplayName("Should validate content type format")
+    @MethodSource("invalidContentTypeProvider")
+    void shouldValidateContentTypeFormat(String contentType, String fieldName, String expectedMessage) {
+        // Given
+        DocumentRequestDTO dto = new DocumentRequestDTO(testApplicationId, DocumentType.BANK_STATEMENT);
+        dto.setContentType(contentType);
+        
+        // When
+        Set<ConstraintViolation<DocumentRequestDTO>> violations = validator.validate(dto);
+        
+        // Then
+        assertFalse(violations.isEmpty(), "Validation violations should be present");
+        ConstraintViolation<DocumentRequestDTO> violation = violations.iterator().next();
+        assertEquals(fieldName, violation.getPropertyPath().toString(), "Violation should be for the correct field");
+        assertEquals(expectedMessage, violation.getMessage(), "Violation message should match expected");
     }
-
-    @Nested
-    @DisplayName("Multipart File Tests")
-    class MultipartFileTests {
-
-        @Test
-        @DisplayName("DTO should handle multipart file information correctly")
-        void dtoShouldHandleMultipartFileInformationCorrectly() {
-            // Given
-            byte[] content = "Test file content".getBytes();
-            MockMultipartFile multipartFile = new MockMultipartFile(
-                    "document",
-                    "test_document.pdf",
-                    "application/pdf",
-                    content
-            );
-            
-            DocumentRequestDTO dto = new DocumentRequestDTO(
-                    testApplicationId,
-                    DocumentType.BANK_STATEMENT
-            );
-            
-            // When - simulate extracting information from MultipartFile
-            dto.setOriginalFilename(multipartFile.getOriginalFilename());
-            dto.setContentType(multipartFile.getContentType());
-            
-            // Then
-            assertEquals("test_document.pdf", dto.getOriginalFilename(), "Original filename should match");
-            assertEquals("application/pdf", dto.getContentType(), "Content type should match");
-        }
-
-        @Test
-        @DisplayName("DTO should handle multipart file with null filename and content type")
-        void dtoShouldHandleMultipartFileWithNullFilenameAndContentType() {
-            // Given
-            byte[] content = "Test file content".getBytes();
-            MockMultipartFile multipartFile = new MockMultipartFile(
-                    "document",
-                    null,  // null filename
-                    null,  // null content type
-                    content
-            );
-            
-            DocumentRequestDTO dto = new DocumentRequestDTO(
-                    testApplicationId,
-                    DocumentType.BANK_STATEMENT
-            );
-            
-            // When - simulate extracting information from MultipartFile
-            dto.setOriginalFilename(multipartFile.getOriginalFilename());
-            dto.setContentType(multipartFile.getContentType());
-            
-            // Then
-            assertNull(dto.getOriginalFilename(), "Original filename should be null");
-            assertNull(dto.getContentType(), "Content type should be null");
-        }
+    
+    @ParameterizedTest
+    @DisplayName("Should validate filename length")
+    @ValueSource(strings = {
+        "This is an extremely long filename that exceeds the maximum allowed length of 255 characters. It contains a lot of unnecessary text just to make it longer than the limit. This is an extremely long filename that exceeds the maximum allowed length of 255 characters. It contains a lot of unnecessary text just to make it longer than the limit."
+    })
+    void shouldValidateFilenameLength(String filename) {
+        // Given
+        DocumentRequestDTO dto = new DocumentRequestDTO(testApplicationId, DocumentType.BANK_STATEMENT);
+        dto.setFilename(filename);
+        
+        // When
+        Set<ConstraintViolation<DocumentRequestDTO>> violations = validator.validate(dto);
+        
+        // Then
+        assertFalse(violations.isEmpty(), "Validation violations should be present");
+        ConstraintViolation<DocumentRequestDTO> violation = violations.iterator().next();
+        assertEquals("filename", violation.getPropertyPath().toString(), "Violation should be for the filename field");
+        assertEquals("Filename cannot exceed 255 characters", violation.getMessage(), "Violation message should match expected");
     }
-
-    @Nested
-    @DisplayName("Builder Pattern Tests")
-    class BuilderPatternTests {
-
-        @Test
-        @DisplayName("Builder should create valid DTO with required fields")
-        void builderShouldCreateValidDtoWithRequiredFields() {
-            // When
-            DocumentRequestDTO dto = new DocumentRequestDTO.Builder(testApplicationId, DocumentType.BANK_STATEMENT)
-                    .build();
-            
-            // Then
-            assertNotNull(dto, "DTO should not be null");
-            assertEquals(testApplicationId, dto.getApplicationId(), "Application ID should match");
-            assertEquals(DocumentType.BANK_STATEMENT, dto.getType(), "Document type should match");
-            assertNotNull(dto.getMetadata(), "Metadata should not be null");
-            assertTrue(dto.getMetadata().isEmpty(), "Metadata should be empty");
-            assertNotNull(dto.getConfidenceScores(), "Confidence scores should not be null");
-            assertTrue(dto.getConfidenceScores().isEmpty(), "Confidence scores should be empty");
-        }
-
-        @Test
-        @DisplayName("Builder should create valid DTO with all fields")
-        void builderShouldCreateValidDtoWithAllFields() {
-            // When
-            DocumentRequestDTO dto = new DocumentRequestDTO.Builder(testApplicationId, DocumentType.BANK_STATEMENT)
-                    .withClassification("bank_statement")
-                    .withMetadata(testMetadata)
-                    .withConfidenceScores(testConfidenceScores)
-                    .withOriginalFilename("bank_statement_jan_2023.pdf")
-                    .withContentType("application/pdf")
-                    .build();
-            
-            // Then
-            assertNotNull(dto, "DTO should not be null");
-            assertEquals(testApplicationId, dto.getApplicationId(), "Application ID should match");
-            assertEquals(DocumentType.BANK_STATEMENT, dto.getType(), "Document type should match");
-            assertEquals("bank_statement", dto.getClassification(), "Classification should match");
-            assertEquals(testMetadata, dto.getMetadata(), "Metadata should match");
-            assertEquals(testConfidenceScores, dto.getConfidenceScores(), "Confidence scores should match");
-            assertEquals("bank_statement_jan_2023.pdf", dto.getOriginalFilename(), "Original filename should match");
-            assertEquals("application/pdf", dto.getContentType(), "Content type should match");
-        }
-
-        @Test
-        @DisplayName("Builder should add metadata entries correctly")
-        void builderShouldAddMetadataEntriesCorrectly() {
-            // When
-            DocumentRequestDTO dto = new DocumentRequestDTO.Builder(testApplicationId, DocumentType.BANK_STATEMENT)
-                    .addMetadata("accountNumber", "123456789")
-                    .addMetadata("accountType", "Checking")
-                    .build();
-            
-            // Then
-            assertNotNull(dto, "DTO should not be null");
-            assertNotNull(dto.getMetadata(), "Metadata should not be null");
-            assertEquals(2, dto.getMetadata().size(), "Metadata should have correct number of entries");
-            assertEquals("123456789", dto.getMetadata().get("accountNumber"), "Metadata values should match");
-            assertEquals("Checking", dto.getMetadata().get("accountType"), "Metadata values should match");
-        }
-
-        @Test
-        @DisplayName("Builder should add confidence score entries correctly")
-        void builderShouldAddConfidenceScoreEntriesCorrectly() {
-            // When
-            DocumentRequestDTO dto = new DocumentRequestDTO.Builder(testApplicationId, DocumentType.BANK_STATEMENT)
-                    .addConfidenceScore("accountNumber", 0.95)
-                    .addConfidenceScore("accountType", 0.88)
-                    .build();
-            
-            // Then
-            assertNotNull(dto, "DTO should not be null");
-            assertNotNull(dto.getConfidenceScores(), "Confidence scores should not be null");
-            assertEquals(2, dto.getConfidenceScores().size(), "Confidence scores should have correct number of entries");
-            assertEquals(0.95, dto.getConfidenceScores().get("accountNumber"), 0.001, "Confidence score values should match");
-            assertEquals(0.88, dto.getConfidenceScores().get("accountType"), 0.001, "Confidence score values should match");
-        }
+    
+    @Test
+    @DisplayName("Should serialize to JSON correctly")
+    void shouldSerializeToJsonCorrectly() throws Exception {
+        // Given
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("pageCount", 5);
+        metadata.put("documentDate", "2023-01-15");
+        
+        Map<String, Double> confidenceScores = new HashMap<>();
+        confidenceScores.put("accountNumber", 0.95);
+        confidenceScores.put("bankName", 0.98);
+        
+        DocumentRequestDTO dto = new DocumentRequestDTO.Builder(testApplicationId, DocumentType.BANK_STATEMENT)
+                .withClassification("bank_statement")
+                .withContentType("application/pdf")
+                .withFilename("bank_statement_jan_2023.pdf")
+                .withContainsPii(true)
+                .withIsFinancial(true)
+                .withClassificationConfidence(0.97)
+                .withMetadata(metadata)
+                .addConfidenceScores(confidenceScores)
+                .build();
+        
+        // When
+        String json = objectMapper.writeValueAsString(dto);
+        
+        // Then
+        assertTrue(json.contains("\"application_id\":\"" + testApplicationId + "\""), "JSON should contain application_id field");
+        assertTrue(json.contains("\"type\":\"BANK_STATEMENT\""), "JSON should contain type field");
+        assertTrue(json.contains("\"classification\":\"bank_statement\""), "JSON should contain classification field");
+        assertTrue(json.contains("\"content_type\":\"application/pdf\""), "JSON should contain content_type field");
+        assertTrue(json.contains("\"filename\":\"bank_statement_jan_2023.pdf\""), "JSON should contain filename field");
+        assertTrue(json.contains("\"contains_pii\":true"), "JSON should contain contains_pii field");
+        assertTrue(json.contains("\"is_financial\":true"), "JSON should contain is_financial field");
+        assertTrue(json.contains("\"classification_confidence\":0.97"), "JSON should contain classification_confidence field");
+        assertTrue(json.contains("\"metadata\":"), "JSON should contain metadata field");
+        assertTrue(json.contains("\"pageCount\":5"), "JSON should contain metadata pageCount field");
+        assertTrue(json.contains("\"documentDate\":\"2023-01-15\""), "JSON should contain metadata documentDate field");
+        assertTrue(json.contains("\"confidenceScores\":"), "JSON should contain confidenceScores in metadata");
+        assertTrue(json.contains("\"accountNumber\":0.95"), "JSON should contain accountNumber confidence score");
+        assertTrue(json.contains("\"bankName\":0.98"), "JSON should contain bankName confidence score");
     }
-
-    @Nested
-    @DisplayName("Document Type Tests")
-    class DocumentTypeTests {
-
-        @ParameterizedTest
-        @EnumSource(DocumentType.class)
-        @DisplayName("DTO should accept all document types")
-        void dtoShouldAcceptAllDocumentTypes(DocumentType documentType) {
-            // Given
-            DocumentRequestDTO dto = new DocumentRequestDTO(
-                    testApplicationId,
-                    documentType
-            );
-            
-            // When
-            Set<ConstraintViolation<DocumentRequestDTO>> violations = validator.validate(dto);
-            
-            // Then
-            assertTrue(violations.isEmpty(), "DTO should accept document type: " + documentType);
-            assertEquals(documentType, dto.getType(), "Document type should match");
-        }
-
-        @Test
-        @DisplayName("DTO should handle financial document types correctly")
-        void dtoShouldHandleFinancialDocumentTypesCorrectly() {
-            // Given
-            DocumentType[] financialTypes = {
-                    DocumentType.BANK_STATEMENT,
-                    DocumentType.TAX_RETURN,
-                    DocumentType.INVOICE
-            };
-            
-            for (DocumentType type : financialTypes) {
-                // When
-                DocumentRequestDTO dto = new DocumentRequestDTO(
-                        testApplicationId,
-                        type
-                );
-                
-                // Then
-                assertTrue(type.isFinancialDocument(), "Document type should be identified as financial: " + type);
-                assertEquals(type, dto.getType(), "Document type should match");
-            }
-        }
-
-        @Test
-        @DisplayName("DTO should handle PII document types correctly")
-        void dtoShouldHandlePiiDocumentTypesCorrectly() {
-            // Given
-            DocumentType[] piiTypes = {
-                    DocumentType.ID_VERIFICATION,
-                    DocumentType.TAX_RETURN
-            };
-            
-            for (DocumentType type : piiTypes) {
-                // When
-                DocumentRequestDTO dto = new DocumentRequestDTO(
-                        testApplicationId,
-                        type
-                );
-                
-                // Then
-                assertTrue(type.containsPII(), "Document type should be identified as containing PII: " + type);
-                assertEquals(type, dto.getType(), "Document type should match");
-            }
-        }
+    
+    @Test
+    @DisplayName("Should deserialize from JSON correctly")
+    void shouldDeserializeFromJsonCorrectly() throws Exception {
+        // Given
+        String uuid = UUID.randomUUID().toString();
+        String json = String.format("{\"application_id\":\"%s\",\"type\":\"BANK_STATEMENT\",\"classification\":\"bank_statement\",\"content_type\":\"application/pdf\",\"filename\":\"bank_statement_jan_2023.pdf\",\"contains_pii\":true,\"is_financial\":true,\"classification_confidence\":0.97,\"metadata\":{\"pageCount\":5,\"documentDate\":\"2023-01-15\",\"confidenceScores\":{\"accountNumber\":0.95,\"bankName\":0.98}}}", uuid);
+        
+        // When
+        DocumentRequestDTO dto = objectMapper.readValue(json, DocumentRequestDTO.class);
+        
+        // Then
+        assertEquals(UUID.fromString(uuid), dto.getApplicationId(), "Application ID should be deserialized correctly");
+        assertEquals(DocumentType.BANK_STATEMENT, dto.getType(), "Document type should be deserialized correctly");
+        assertEquals("bank_statement", dto.getClassification(), "Classification should be deserialized correctly");
+        assertEquals("application/pdf", dto.getContentType(), "Content type should be deserialized correctly");
+        assertEquals("bank_statement_jan_2023.pdf", dto.getFilename(), "Filename should be deserialized correctly");
+        assertTrue(dto.getContainsPii(), "Contains PII flag should be deserialized correctly");
+        assertTrue(dto.getIsFinancial(), "Is financial flag should be deserialized correctly");
+        assertEquals(0.97, dto.getClassificationConfidence(), "Classification confidence should be deserialized correctly");
+        assertNotNull(dto.getMetadata(), "Metadata should not be null");
+        assertEquals(5, dto.getMetadataValue("pageCount"), "Metadata pageCount should be deserialized correctly");
+        assertEquals("2023-01-15", dto.getMetadataValue("documentDate"), "Metadata documentDate should be deserialized correctly");
+        
+        Map<String, Double> confidenceScores = dto.getConfidenceScores();
+        assertNotNull(confidenceScores, "Confidence scores should not be null");
+        assertEquals(0.95, confidenceScores.get("accountNumber"), "accountNumber confidence score should be deserialized correctly");
+        assertEquals(0.98, confidenceScores.get("bankName"), "bankName confidence score should be deserialized correctly");
     }
-
-    @Nested
-    @DisplayName("Miscellaneous Tests")
-    class MiscellaneousTests {
-
-        @Test
-        @DisplayName("toString method should include all fields")
-        void toStringMethodShouldIncludeAllFields() {
-            // When
-            String toString = validDto.toString();
+    
+    @Test
+    @DisplayName("Should handle multipart file upload")
+    void shouldHandleMultipartFileUpload() {
+        // Given
+        byte[] content = "Sample PDF content".getBytes();
+        MockMultipartFile file = new MockMultipartFile(
+                "document",
+                "bank_statement.pdf",
+                "application/pdf",
+                content);
+        
+        // When
+        DocumentRequestDTO dto = createDtoFromMultipartFile(file, testApplicationId, DocumentType.BANK_STATEMENT);
+        
+        // Then
+        assertEquals(testApplicationId, dto.getApplicationId(), "Application ID should be set correctly");
+        assertEquals(DocumentType.BANK_STATEMENT, dto.getType(), "Document type should be set correctly");
+        assertEquals("bank_statement.pdf", dto.getFilename(), "Filename should be set from multipart file");
+        assertEquals("application/pdf", dto.getContentType(), "Content type should be set from multipart file");
+        assertNotNull(dto.getBase64Content(), "Base64 content should be set");
+        assertTrue(dto.hasBase64Content(), "hasBase64Content() should return true");
+    }
+    
+    @Test
+    @DisplayName("Should handle document classification metadata")
+    void shouldHandleDocumentClassificationMetadata() {
+        // Given
+        DocumentRequestDTO dto = new DocumentRequestDTO(testApplicationId, DocumentType.BANK_STATEMENT);
+        dto.setClassification("bank_statement");
+        dto.setClassificationConfidence(0.97);
+        
+        Map<String, Double> confidenceScores = new HashMap<>();
+        confidenceScores.put("accountNumber", 0.95);
+        confidenceScores.put("bankName", 0.98);
+        dto.addConfidenceScores(confidenceScores);
+        
+        // Then
+        assertEquals("bank_statement", dto.getClassification(), "Classification should be set correctly");
+        assertEquals(0.97, dto.getClassificationConfidence(), "Classification confidence should be set correctly");
+        
+        Map<String, Double> retrievedScores = dto.getConfidenceScores();
+        assertNotNull(retrievedScores, "Confidence scores should not be null");
+        assertEquals(0.95, retrievedScores.get("accountNumber"), "accountNumber confidence score should be set correctly");
+        assertEquals(0.98, retrievedScores.get("bankName"), "bankName confidence score should be set correctly");
+    }
+    
+    @Test
+    @DisplayName("Should handle null confidence scores")
+    void shouldHandleNullConfidenceScores() {
+        // Given
+        DocumentRequestDTO dto = new DocumentRequestDTO(testApplicationId, DocumentType.BANK_STATEMENT);
+        
+        // When
+        dto.addConfidenceScores(null);
+        
+        // Then
+        Map<String, Double> retrievedScores = dto.getConfidenceScores();
+        assertNotNull(retrievedScores, "Confidence scores should not be null even when adding null");
+        assertTrue(retrievedScores.isEmpty(), "Confidence scores should be empty when adding null");
+    }
+    
+    @Test
+    @DisplayName("Should handle empty confidence scores")
+    void shouldHandleEmptyConfidenceScores() {
+        // Given
+        DocumentRequestDTO dto = new DocumentRequestDTO(testApplicationId, DocumentType.BANK_STATEMENT);
+        
+        // When
+        dto.addConfidenceScores(new HashMap<>());
+        
+        // Then
+        Map<String, Double> retrievedScores = dto.getConfidenceScores();
+        assertNotNull(retrievedScores, "Confidence scores should not be null even when adding empty map");
+        assertTrue(retrievedScores.isEmpty(), "Confidence scores should be empty when adding empty map");
+    }
+    
+    @Test
+    @DisplayName("Should check if request is valid for creation")
+    void shouldCheckIfRequestIsValidForCreation() {
+        // Given
+        DocumentRequestDTO validDto = new DocumentRequestDTO(testApplicationId, DocumentType.BANK_STATEMENT);
+        DocumentRequestDTO invalidDto1 = new DocumentRequestDTO(null, DocumentType.BANK_STATEMENT);
+        DocumentRequestDTO invalidDto2 = new DocumentRequestDTO(testApplicationId, null);
+        DocumentRequestDTO invalidDto3 = new DocumentRequestDTO(null, null);
+        
+        // Then
+        assertTrue(validDto.isValidForCreation(), "DTO with all required fields should be valid for creation");
+        assertFalse(invalidDto1.isValidForCreation(), "DTO without application ID should not be valid for creation");
+        assertFalse(invalidDto2.isValidForCreation(), "DTO without document type should not be valid for creation");
+        assertFalse(invalidDto3.isValidForCreation(), "DTO without any required fields should not be valid for creation");
+    }
+    
+    @Test
+    @DisplayName("Should check if document has metadata")
+    void shouldCheckIfDocumentHasMetadata() {
+        // Given
+        DocumentRequestDTO dtoWithMetadata = new DocumentRequestDTO(testApplicationId, DocumentType.BANK_STATEMENT);
+        dtoWithMetadata.addMetadata("key", "value");
+        
+        DocumentRequestDTO dtoWithEmptyMetadata = new DocumentRequestDTO(testApplicationId, DocumentType.BANK_STATEMENT);
+        dtoWithEmptyMetadata.setMetadata(new HashMap<>());
+        
+        DocumentRequestDTO dtoWithNullMetadata = new DocumentRequestDTO(testApplicationId, DocumentType.BANK_STATEMENT);
+        dtoWithNullMetadata.setMetadata(null);
+        
+        // Then
+        assertTrue(dtoWithMetadata.hasMetadata(), "DTO with metadata should return true for hasMetadata()");
+        assertFalse(dtoWithEmptyMetadata.hasMetadata(), "DTO with empty metadata should return false for hasMetadata()");
+        assertFalse(dtoWithNullMetadata.hasMetadata(), "DTO with null metadata should return false for hasMetadata()");
+    }
+    
+    @Test
+    @DisplayName("Should get and add metadata correctly")
+    void shouldGetAndAddMetadataCorrectly() {
+        // Given
+        DocumentRequestDTO dto = new DocumentRequestDTO(testApplicationId, DocumentType.BANK_STATEMENT);
+        
+        // When
+        dto.addMetadata("stringKey", "stringValue");
+        dto.addMetadata("intKey", 123);
+        dto.addMetadata("boolKey", true);
+        
+        // Then
+        assertEquals("stringValue", dto.getMetadataValue("stringKey"), "Should get string metadata correctly");
+        assertEquals(123, dto.getMetadataValue("intKey"), "Should get integer metadata correctly");
+        assertEquals(true, dto.getMetadataValue("boolKey"), "Should get boolean metadata correctly");
+        assertNull(dto.getMetadataValue("nonexistent"), "Should return null for nonexistent metadata");
+        
+        // When metadata is null
+        DocumentRequestDTO nullMetadataDto = new DocumentRequestDTO();
+        nullMetadataDto.setMetadata(null);
+        
+        // Then
+        assertNull(nullMetadataDto.getMetadataValue("key"), "Should return null when metadata is null");
+        
+        // When adding to null metadata
+        nullMetadataDto.addMetadata("key", "value");
+        
+        // Then
+        assertEquals("value", nullMetadataDto.getMetadataValue("key"), "Should initialize metadata when adding to null");
+    }
+    
+    @Test
+    @DisplayName("Should handle builder pattern correctly")
+    void shouldHandleBuilderPatternCorrectly() {
+        // Given/When
+        DocumentRequestDTO dto = new DocumentRequestDTO.Builder(testApplicationId, DocumentType.BANK_STATEMENT)
+                .withClassification("bank_statement")
+                .withContentType("application/pdf")
+                .withFilename("bank_statement.pdf")
+                .withContainsPii(true)
+                .withIsFinancial(true)
+                .withClassificationConfidence(0.97)
+                .withBase64Content("base64content")
+                .addMetadata("key", "value")
+                .build();
+        
+        // Then
+        assertEquals(testApplicationId, dto.getApplicationId(), "Builder should set application ID correctly");
+        assertEquals(DocumentType.BANK_STATEMENT, dto.getType(), "Builder should set document type correctly");
+        assertEquals("bank_statement", dto.getClassification(), "Builder should set classification correctly");
+        assertEquals("application/pdf", dto.getContentType(), "Builder should set content type correctly");
+        assertEquals("bank_statement.pdf", dto.getFilename(), "Builder should set filename correctly");
+        assertTrue(dto.getContainsPii(), "Builder should set contains PII flag correctly");
+        assertTrue(dto.getIsFinancial(), "Builder should set is financial flag correctly");
+        assertEquals(0.97, dto.getClassificationConfidence(), "Builder should set classification confidence correctly");
+        assertEquals("base64content", dto.getBase64Content(), "Builder should set base64 content correctly");
+        assertEquals("value", dto.getMetadataValue("key"), "Builder should set metadata correctly");
+    }
+    
+    /**
+     * Helper method to create a DocumentRequestDTO from a MultipartFile.
+     * This simulates what would happen in a controller when handling file uploads.
+     */
+    private DocumentRequestDTO createDtoFromMultipartFile(MultipartFile file, UUID applicationId, DocumentType type) {
+        try {
+            DocumentRequestDTO dto = new DocumentRequestDTO(applicationId, type);
+            dto.setFilename(file.getOriginalFilename());
+            dto.setContentType(file.getContentType());
             
-            // Then
-            assertTrue(toString.contains("applicationId="), "toString should include applicationId field");
-            assertTrue(toString.contains("type="), "toString should include type field");
-            assertTrue(toString.contains("classification="), "toString should include classification field");
-            assertTrue(toString.contains("hasMetadata="), "toString should include hasMetadata field");
-            assertTrue(toString.contains("hasConfidenceScores="), "toString should include hasConfidenceScores field");
-            assertTrue(toString.contains("originalFilename="), "toString should include originalFilename field");
-            assertTrue(toString.contains("contentType="), "toString should include contentType field");
-        }
-
-        @Test
-        @DisplayName("Default constructor should initialize empty maps")
-        void defaultConstructorShouldInitializeEmptyMaps() {
-            // When
-            DocumentRequestDTO dto = new DocumentRequestDTO();
+            // Convert file content to Base64 (simplified for test)
+            String base64Content = java.util.Base64.getEncoder().encodeToString(file.getBytes());
+            dto.setBase64Content(base64Content);
             
-            // Then
-            assertNull(dto.getApplicationId(), "Application ID should be null");
-            assertNull(dto.getType(), "Document type should be null");
-            assertNull(dto.getClassification(), "Classification should be null");
-            assertNotNull(dto.getMetadata(), "Metadata should not be null");
-            assertTrue(dto.getMetadata().isEmpty(), "Metadata should be empty");
-            assertNotNull(dto.getConfidenceScores(), "Confidence scores should not be null");
-            assertTrue(dto.getConfidenceScores().isEmpty(), "Confidence scores should be empty");
-            assertNull(dto.getOriginalFilename(), "Original filename should be null");
-            assertNull(dto.getContentType(), "Content type should be null");
-        }
-
-        @Test
-        @DisplayName("Required fields constructor should initialize empty maps")
-        void requiredFieldsConstructorShouldInitializeEmptyMaps() {
-            // When
-            DocumentRequestDTO dto = new DocumentRequestDTO(testApplicationId, DocumentType.BANK_STATEMENT);
-            
-            // Then
-            assertEquals(testApplicationId, dto.getApplicationId(), "Application ID should match");
-            assertEquals(DocumentType.BANK_STATEMENT, dto.getType(), "Document type should match");
-            assertNull(dto.getClassification(), "Classification should be null");
-            assertNotNull(dto.getMetadata(), "Metadata should not be null");
-            assertTrue(dto.getMetadata().isEmpty(), "Metadata should be empty");
-            assertNotNull(dto.getConfidenceScores(), "Confidence scores should not be null");
-            assertTrue(dto.getConfidenceScores().isEmpty(), "Confidence scores should be empty");
-            assertNull(dto.getOriginalFilename(), "Original filename should be null");
-            assertNull(dto.getContentType(), "Content type should be null");
+            return dto;
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to create DTO from multipart file", e);
         }
     }
 }
