@@ -1,115 +1,111 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+"""Test Models Package for Dollar Funding MCA OCR Service.
 
-"""
-OCR Service Test Models Package
-
-This package contains test modules for the TensorFlow models used in the OCR Service
-of the Merchant Cash Advance (MCA) Application Processing System. It provides a
-structured testing framework for verifying model functionality, accuracy, and performance.
-
-The test modules in this package validate that the OCR models correctly extract data
-from various document types with 99% accuracy using machine learning techniques. They
-cover both typed and handwritten text recognition, as well as document structure analysis.
+This package contains test modules for validating the OCR models used in the
+Dollar Funding MCA Application Processing System. The tests verify that the models
+correctly extract data from various document types with high accuracy, including
+both typed and handwritten text.
 
 Test Modules:
     - test_base_model: Tests for the abstract base class for OCR models
-    - test_typed_text_model: Tests for the typed/printed text recognition model
-    - test_handwritten_text_model: Tests for the handwritten text recognition model
-    - test_hybrid_recognition_model: Tests for the combined model for mixed content
-    - test_structure_recognition_model: Tests for document structure analysis
+    - test_typed_text_model: Tests for typed/printed text recognition model
+    - test_handwritten_text_model: Tests for handwritten text recognition model
+    - test_hybrid_recognition_model: Tests for mixed text type recognition model
+    - test_structure_recognition_model: Tests for document structure recognition model
     - test_model_factory: Tests for the model factory class
     - test_confidence_scoring: Tests for confidence scoring utilities
 
-Test Fixtures:
-    - Shared test fixtures are defined in conftest.py
-    - These include document test data, TensorFlow environment setup, and model mocks
+Usage:
+    # Run all model tests
+    pytest ocr-service/tests/test_models
 
-All tests validate that models meet the system requirements:
-    - 99% data extraction accuracy
-    - Processing applications in under 5 minutes
-    - GPU acceleration with CUDA-compatible hardware
+    # Run specific model test
+    pytest ocr-service/tests/test_models/test_typed_text_model.py
 """
 
+# Version information
 __version__ = '1.0.0'
-__author__ = 'Dollar Funding MCA Team'
+__author__ = 'Dollar Funding'
+__description__ = 'Test suite for TensorFlow OCR models'
 
-# Import test utilities and fixtures from conftest
+# Import common test utilities that may be needed across test modules
+from ..conftest import *
+
+# Make test utilities available for import across test files
 from .conftest import (
     # TensorFlow environment fixtures
-    tf_config,
-    mock_gpu_environment,
+    tf_gpu_mock,
     tf_session,
     
-    # Document test data fixtures
+    # Test image fixtures
+    sample_typed_image,
+    sample_handwritten_image,
+    sample_mixed_image,
+    sample_table_image,
+    
+    # Model configuration fixtures
+    base_model_config,
+    typed_model_config,
+    handwritten_model_config,
+    hybrid_model_config,
+    structure_model_config,
+    
+    # Mock model fixtures
+    mock_base_model,
+    mock_typed_model,
+    mock_handwritten_model,
+    mock_hybrid_model,
+    mock_structure_model,
+    mock_model_factory,
+    
+    # Helper functions
+    accuracy_calculator,
+    performance_timer,
+    document_preprocessor,
+    confidence_score_validator,
+    
+    # Test data manifests
     metadata,
-    typed_document_paths,
-    handwritten_document_paths,
-    mixed_document_paths,
-    table_document_paths,
-    form_document_paths,
-    image_document_paths,
-    document_by_id,
-    load_test_document,
-    
-    # Model initialization fixtures
-    mock_typed_text_model,
-    mock_handwritten_text_model,
-    mock_hybrid_text_model,
-    mock_structure_recognition_model,
-    
-    # Accuracy and performance measurement utilities
-    calculate_accuracy,
-    measure_performance,
-    accuracy_metrics,
-    
-    # Document preprocessing utilities
-    preprocess_document,
-    apply_image_distortions,
-    
-    # Additional test utilities
-    expected_field_values,
-    create_test_image
+    typed_document_manifest,
+    handwritten_document_manifest,
+    mixed_document_manifest
 )
 
-# Define public API
+# Define what should be available when importing from this package
 __all__ = [
-    # Version info
-    '__version__',
-    '__author__',
-    
     # TensorFlow environment fixtures
-    'tf_config',
-    'mock_gpu_environment',
+    'tf_gpu_mock',
     'tf_session',
     
-    # Document test data fixtures
+    # Test image fixtures
+    'sample_typed_image',
+    'sample_handwritten_image',
+    'sample_mixed_image',
+    'sample_table_image',
+    
+    # Model configuration fixtures
+    'base_model_config',
+    'typed_model_config',
+    'handwritten_model_config',
+    'hybrid_model_config',
+    'structure_model_config',
+    
+    # Mock model fixtures
+    'mock_base_model',
+    'mock_typed_model',
+    'mock_handwritten_model',
+    'mock_hybrid_model',
+    'mock_structure_model',
+    'mock_model_factory',
+    
+    # Helper functions
+    'accuracy_calculator',
+    'performance_timer',
+    'document_preprocessor',
+    'confidence_score_validator',
+    
+    # Test data manifests
     'metadata',
-    'typed_document_paths',
-    'handwritten_document_paths',
-    'mixed_document_paths',
-    'table_document_paths',
-    'form_document_paths',
-    'image_document_paths',
-    'document_by_id',
-    'load_test_document',
-    
-    # Model initialization fixtures
-    'mock_typed_text_model',
-    'mock_handwritten_text_model',
-    'mock_hybrid_text_model',
-    'mock_structure_recognition_model',
-    
-    # Accuracy and performance measurement utilities
-    'calculate_accuracy',
-    'measure_performance',
-    'accuracy_metrics',
-    
-    # Document preprocessing utilities
-    'preprocess_document',
-    'apply_image_distortions',
-    
-    # Additional test utilities
-    'expected_field_values',
-    'create_test_image'
+    'typed_document_manifest',
+    'handwritten_document_manifest',
+    'mixed_document_manifest'
 ]
