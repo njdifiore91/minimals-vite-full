@@ -2,242 +2,157 @@ package com.dollarfunding.mca.service;
 
 import com.dollarfunding.mca.dto.DocumentRequestDTO;
 import com.dollarfunding.mca.dto.DocumentResponseDTO;
-import com.dollarfunding.mca.entity.Document;
 import com.dollarfunding.mca.entity.DocumentType;
 
+import org.springframework.core.io.Resource;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.web.multipart.MultipartFile;
 
-import java.io.InputStream;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 
 /**
- * Service interface for managing documents in the MCA application.
- * Provides methods for storing, retrieving, and managing documents and their metadata.
- * Integrates with S3-compatible storage with AES-256 encryption for secure document storage.
+ * Service interface that defines the contract for document management in the MCA application.
+ * It provides methods for storing, retrieving, and managing documents and their metadata.
+ * This interface is implemented by DocumentServiceImpl and used by DocumentController to handle
+ * document-related operations, including S3 storage integration, classification metadata management,
+ * and document association with applications.
  */
 public interface DocumentService {
 
     /**
-     * Stores a document in S3-compatible storage with AES-256 encryption.
-     * 
-     * @param file The document file to store
-     * @param documentRequest The document metadata
-     * @return The stored document with metadata
+     * Stores a document file with its metadata and associates it with an application if specified.
+     * Implements AES-256 encryption for document storage in S3-compatible storage.
+     *
+     * @param file The document file to be stored
+     * @param documentRequestDTO Metadata for the document including type and application association
+     * @return DocumentResponseDTO containing the stored document metadata and access URL
      */
-    DocumentResponseDTO storeDocument(MultipartFile file, DocumentRequestDTO documentRequest);
-    
+    DocumentResponseDTO storeDocument(MultipartFile file, DocumentRequestDTO documentRequestDTO);
+
     /**
-     * Retrieves a document by its ID.
-     * 
+     * Retrieves document metadata by its ID.
+     *
      * @param id The document ID
-     * @return The document if found
+     * @return DocumentResponseDTO containing the document metadata and access URL
      */
-    Optional<DocumentResponseDTO> getDocumentById(Long id);
-    
+    DocumentResponseDTO getDocumentById(Long id);
+
     /**
-     * Retrieves all documents associated with an application.
-     * 
-     * @param applicationId The application ID
-     * @return List of documents associated with the application
+     * Retrieves the actual content of a document by its ID.
+     * Returns a map containing the document resource, filename, and content type.
+     *
+     * @param id The document ID
+     * @return Map containing the document resource, filename, and content type
      */
-    List<DocumentResponseDTO> getDocumentsByApplicationId(Long applicationId);
-    
+    Map<String, Object> getDocumentContent(Long id);
+
     /**
-     * Retrieves all documents associated with an application with pagination.
-     * 
+     * Retrieves all documents associated with a specific application.
+     *
      * @param applicationId The application ID
      * @param pageable Pagination information
-     * @return Page of documents associated with the application
+     * @return Page of DocumentResponseDTO objects
      */
     Page<DocumentResponseDTO> getDocumentsByApplicationId(Long applicationId, Pageable pageable);
-    
+
     /**
-     * Retrieves documents by type.
-     * 
-     * @param documentType The document type
+     * Retrieves all documents of a specific type.
+     *
+     * @param type The document type
      * @param pageable Pagination information
-     * @return Page of documents of the specified type
+     * @return Page of DocumentResponseDTO objects
      */
-    Page<DocumentResponseDTO> getDocumentsByType(DocumentType documentType, Pageable pageable);
-    
+    Page<DocumentResponseDTO> getDocumentsByType(DocumentType type, Pageable pageable);
+
     /**
-     * Generates a secure, time-limited URL for accessing a document.
-     * 
-     * @param documentId The document ID
-     * @param expirationMinutes The URL expiration time in minutes (default: 15)
-     * @return The secure URL for document access
-     */
-    String generateSecureUrl(Long documentId, Integer expirationMinutes);
-    
-    /**
-     * Generates a secure, time-limited URL for accessing a document with default expiration time.
-     * 
-     * @param documentId The document ID
-     * @return The secure URL for document access
-     */
-    String generateSecureUrl(Long documentId);
-    
-    /**
-     * Updates document metadata.
-     * 
+     * Updates the metadata of an existing document.
+     *
      * @param id The document ID
-     * @param documentRequest The updated document metadata
-     * @return The updated document
+     * @param documentRequestDTO Updated document metadata
+     * @return DocumentResponseDTO containing the updated document metadata
      */
-    DocumentResponseDTO updateDocumentMetadata(Long id, DocumentRequestDTO documentRequest);
-    
+    DocumentResponseDTO updateDocumentMetadata(Long id, DocumentRequestDTO documentRequestDTO);
+
     /**
      * Deletes a document by its ID.
-     * 
+     * This removes both the metadata from the database and the actual file from S3 storage.
+     *
      * @param id The document ID
-     * @return true if the document was deleted, false otherwise
      */
-    boolean deleteDocument(Long id);
-    
+    void deleteDocument(Long id);
+
     /**
-     * Associates a document with an application.
-     * 
+     * Triggers document classification for an existing document.
+     * This process analyzes the document content and updates its classification metadata.
+     *
+     * @param id The document ID
+     * @return DocumentResponseDTO containing the classified document metadata
+     */
+    DocumentResponseDTO classifyDocument(Long id);
+
+    /**
+     * Retrieves a list of all available document types with their descriptions.
+     *
+     * @return List of maps containing document type values and descriptions
+     */
+    List<Map<String, String>> getDocumentTypes();
+
+    /**
+     * Generates a pre-signed URL for direct document upload to S3 storage.
+     * This allows clients to upload large files directly to S3 without going through the application server.
+     *
+     * @param documentRequestDTO Document metadata including type and filename
+     * @return Map containing the pre-signed URL and upload ID
+     */
+    Map<String, String> generatePresignedUrl(DocumentRequestDTO documentRequestDTO);
+
+    /**
+     * Completes a multipart upload initiated with a pre-signed URL.
+     * This finalizes the upload and saves the document metadata in the database.
+     *
+     * @param uploadId The upload ID from the pre-signed URL process
+     * @param documentRequestDTO Document metadata
+     * @return DocumentResponseDTO containing the uploaded document metadata
+     */
+    DocumentResponseDTO completeMultipartUpload(String uploadId, DocumentRequestDTO documentRequestDTO);
+
+    /**
+     * Generates a secure, time-limited URL for accessing a document.
+     * Implements security controls to ensure only authorized users can access documents.
+     *
+     * @param id The document ID
+     * @param expirationMinutes Number of minutes until the URL expires (default: 15)
+     * @return String containing the secure URL
+     */
+    String generateSecureUrl(Long id, Integer expirationMinutes);
+
+    /**
+     * Associates an existing document with an application.
+     * This is used when documents are uploaded before an application is created.
+     *
      * @param documentId The document ID
      * @param applicationId The application ID
-     * @return The updated document
+     * @return DocumentResponseDTO containing the updated document metadata
      */
-    DocumentResponseDTO associateWithApplication(Long documentId, Long applicationId);
-    
+    DocumentResponseDTO associateDocumentWithApplication(Long documentId, Long applicationId);
+
     /**
-     * Retrieves the document content as an input stream.
-     * 
-     * @param documentId The document ID
-     * @return The document content as an input stream
-     */
-    InputStream getDocumentContent(Long documentId);
-    
-    /**
-     * Updates document classification metadata.
-     * 
-     * @param documentId The document ID
-     * @param classification The document classification
-     * @param confidenceScore The classification confidence score (0-100)
-     * @return The updated document
-     */
-    DocumentResponseDTO updateDocumentClassification(Long documentId, String classification, Double confidenceScore);
-    
-    /**
-     * Updates document classification metadata with additional metadata.
-     * 
-     * @param documentId The document ID
-     * @param classification The document classification
-     * @param confidenceScore The classification confidence score (0-100)
-     * @param additionalMetadata Additional metadata as key-value pairs
-     * @return The updated document
-     */
-    DocumentResponseDTO updateDocumentClassification(Long documentId, String classification, 
-                                                   Double confidenceScore, Map<String, Object> additionalMetadata);
-    
-    /**
-     * Searches for documents based on metadata criteria.
-     * 
-     * @param searchCriteria The search criteria as key-value pairs
-     * @param pageable Pagination information
-     * @return Page of documents matching the search criteria
-     */
-    Page<DocumentResponseDTO> searchDocuments(Map<String, Object> searchCriteria, Pageable pageable);
-    
-    /**
-     * Checks if a document exists by ID.
-     * 
+     * Extracts text content from a document using OCR if necessary.
+     * This is used for document searching and indexing.
+     *
      * @param id The document ID
-     * @return true if the document exists, false otherwise
+     * @return String containing the extracted text content
      */
-    boolean documentExists(Long id);
-    
+    String extractDocumentText(Long id);
+
     /**
-     * Retrieves the total count of documents by type.
-     * 
-     * @param documentType The document type
-     * @return The count of documents of the specified type
+     * Validates a document's structure and content against expected templates.
+     * This is used to ensure documents meet required standards before processing.
+     *
+     * @param id The document ID
+     * @return Map containing validation results with confidence scores
      */
-    long countDocumentsByType(DocumentType documentType);
-    
-    /**
-     * Retrieves the total count of documents by application ID.
-     * 
-     * @param applicationId The application ID
-     * @return The count of documents associated with the application
-     */
-    long countDocumentsByApplicationId(Long applicationId);
-    
-    /**
-     * Validates document metadata against business rules.
-     * 
-     * @param documentRequest The document metadata to validate
-     * @return true if the document metadata is valid, false otherwise
-     */
-    boolean validateDocumentMetadata(DocumentRequestDTO documentRequest);
-    
-    /**
-     * Processes a document for OCR and data extraction.
-     * This method is typically called after document classification.
-     * 
-     * @param documentId The document ID
-     * @return The processed document with extracted data
-     */
-    DocumentResponseDTO processDocumentForExtraction(Long documentId);
-    
-    /**
-     * Retrieves documents that require manual review due to low confidence scores.
-     * 
-     * @param confidenceThreshold The confidence threshold (0-100)
-     * @param pageable Pagination information
-     * @return Page of documents requiring manual review
-     */
-    Page<DocumentResponseDTO> getDocumentsRequiringReview(Double confidenceThreshold, Pageable pageable);
-    
-    /**
-     * Marks a document as reviewed by a user.
-     * 
-     * @param documentId The document ID
-     * @param reviewerId The ID of the user who reviewed the document
-     * @param approved Whether the document was approved
-     * @param comments Review comments
-     * @return The updated document
-     */
-    DocumentResponseDTO markDocumentAsReviewed(Long documentId, Long reviewerId, boolean approved, String comments);
-    
-    /**
-     * Retrieves document versions history.
-     * 
-     * @param documentId The document ID
-     * @return List of document versions
-     */
-    List<DocumentResponseDTO> getDocumentVersions(Long documentId);
-    
-    /**
-     * Creates a new version of an existing document.
-     * 
-     * @param documentId The original document ID
-     * @param file The new document file
-     * @param documentRequest The new document metadata
-     * @return The new document version
-     */
-    DocumentResponseDTO createDocumentVersion(Long documentId, MultipartFile file, DocumentRequestDTO documentRequest);
-    
-    /**
-     * Converts a Document entity to a DocumentResponseDTO.
-     * 
-     * @param document The Document entity
-     * @return The DocumentResponseDTO
-     */
-    DocumentResponseDTO convertToDTO(Document document);
-    
-    /**
-     * Converts a DocumentRequestDTO to a Document entity.
-     * 
-     * @param documentRequest The DocumentRequestDTO
-     * @return The Document entity
-     */
-    Document convertToEntity(DocumentRequestDTO documentRequest);
+    Map<String, Object> validateDocumentStructure(Long id);
 }
