@@ -5,358 +5,393 @@
 Core application setup module for the OCR Service.
 
 This module configures the OCR Service components and provides the main application instance.
-It initializes logger, loads configuration, and creates service instances for OCR processing,
-queue management, and storage. This file is the central hub that connects all service
-components together.
-
-Requirements:
-- OCR Service must be implemented as a Python microservice using TensorFlow
-- Service must implement consistent health check endpoints for Kubernetes probes
-- Configuration must be loaded from environment variables for containerized deployment
-- Service must extract data from documents with 99% accuracy
+It initializes the logger, loads configuration, and creates service instances for OCR processing,
+queue management, and storage. This file is the central hub that connects all service components together.
 """
 
 import logging
-import threading
-import time
-from typing import Dict, Any, Optional
+import os
+import sys
+from typing import Dict, Optional, Any
 
 import fastapi
-from fastapi import FastAPI, Depends
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, Depends, HTTPException, status
 
 # Import configuration modules
-from config import app_config, rabbitmq_config, s3_config, tensorflow_config, logging_config
+from config import app_config, logging_config, rabbitmq_config, s3_config, tensorflow_config
 
 # Import service modules
-from services import OCRService, QueueService, StorageService, FieldExtractionService, ConfidenceService
+from services import OCRService, QueueService, StorageService
+from services.confidence_service import ConfidenceService
+from services.field_extraction_service import FieldExtractionService
 
 # Import API routers
 from api import router as api_router
 
-# Import utility modules
-from utils.logging_utils import setup_logger
-from utils.error_utils import ServiceError
-
-# Initialize logger
-logger = logging.getLogger(__name__)
+# Import type definitions
+from types.config import ServiceConfig
+from types.errors import ServiceError, ErrorCategory
 
 
-class OCRServiceApp:
+class OCRApplication:
     """
     Main application class for the OCR Service.
     
-    This class initializes and manages all components of the OCR Service,
-    including FastAPI for health checks, service instances for OCR processing,
-    queue management, and storage operations.
+    This class manages the lifecycle of the OCR Service, including initialization,
+    startup, and shutdown. It creates and configures all required service components
+    and provides the FastAPI application instance.
     """
     
     def __init__(self):
         """
-        Initialize the OCR Service application.
+        Initialize the OCR Application.
         
         Sets up logging, loads configuration, and creates service instances.
-        Does not start any services or connections until start() is called.
+        Does not start any services or connections - use start() for that.
         """
-        # Initialize logger
-        setup_logger(logging_config)
-        logger.info(f"Initializing OCR Service v{app_config.VERSION}")
+        self.logger = self._setup_logging()
+        self.logger.info("Initializing OCR Service application")
+        
+        # Load and validate configuration
+        self.config = self._load_config()
+        self.logger.info(f"Loaded configuration for environment: {self.config.environment}")
         
         # Create FastAPI application
-        self.app = FastAPI(
-            title="OCR Service",
-            description="Merchant Cash Advance OCR Service for document data extraction",
-            version=app_config.VERSION,
-            docs_url="/docs" if app_config.ENVIRONMENT != "production" else None,
-            redoc_url="/redoc" if app_config.ENVIRONMENT != "production" else None,
+        self.app = self._create_fastapi_app()
+        
+        # Initialize service instances (but don't start connections yet)
+        self.storage_service = None
+        self.queue_service = None
+        self.ocr_service = None
+        self.field_extraction_service = None
+        self.confidence_service = None
+        
+        self.logger.info("OCR Service application initialized")
+    
+    def _setup_logging(self) -> logging.Logger:
+        """
+        Set up the logging system for the OCR Service.
+        
+        Returns:
+            logging.Logger: Configured logger instance
+        """
+        # Get log level from environment or use default
+        log_level_name = os.environ.get("LOG_LEVEL", "INFO").upper()
+        log_level = getattr(logging, log_level_name, logging.INFO)
+        
+        # Configure root logger
+        logging.basicConfig(
+            level=log_level,
+            format=logging_config.LOG_FORMAT,
+            handlers=[
+                logging.StreamHandler(sys.stdout)
+            ]
         )
         
-        # Configure CORS
-        self.app.add_middleware(
-            CORSMiddleware,
-            allow_origins=["*"],  # Restrict in production
-            allow_credentials=True,
-            allow_methods=["GET", "POST"],
-            allow_headers=["*"],
-        )
+        # Create and return logger for this module
+        logger = logging.getLogger("ocr_service")
+        logger.setLevel(log_level)
         
-        # Initialize service instances (but don't connect yet)
-        self._init_services()
-        
-        # Include API routers
-        self.app.include_router(api_router)
-        
-        # Add application state
-        self.app.state.ocr_service = self.ocr_service
-        self.app.state.queue_service = self.queue_service
-        self.app.state.storage_service = self.storage_service
-        self.app.state.field_extraction_service = self.field_extraction_service
-        self.app.state.confidence_service = self.confidence_service
-        self.app.state.is_healthy = False
-        self.app.state.is_ready = False
-        
-        # Initialize threading event for stopping the application
-        self._stop_event = threading.Event()
-        
-        # Initialize processing thread
-        self._processing_thread = None
-        
-        logger.info("OCR Service application initialized")
+        return logger
     
-    def _init_services(self):
+    def _load_config(self) -> ServiceConfig:
         """
-        Initialize service instances.
+        Load and validate configuration from environment variables.
         
-        Creates instances of all required services but does not start them.
-        Services are started in the start() method.
+        Returns:
+            ServiceConfig: Validated configuration object
+        
+        Raises:
+            ServiceError: If required configuration is missing or invalid
         """
-        logger.info("Initializing service instances...")
-        
         try:
-            # Initialize storage service for S3 document access
-            self.storage_service = StorageService(
-                s3_config=s3_config,
-                environment=app_config.ENVIRONMENT
+            # Load application configuration
+            config = app_config.load_config()
+            
+            # Validate required configuration
+            self._validate_config(config)
+            
+            return config
+        except Exception as e:
+            self.logger.error(f"Failed to load configuration: {str(e)}")
+            raise ServiceError(
+                message="Failed to load configuration",
+                category=ErrorCategory.CONFIGURATION,
+                details={"error": str(e)}
             )
-            logger.info("Storage service initialized")
-            
-            # Initialize OCR service for document processing
-            self.ocr_service = OCRService(
-                tensorflow_config=tensorflow_config,
-                environment=app_config.ENVIRONMENT
-            )
-            logger.info("OCR service initialized")
-            
-            # Initialize field extraction service
-            self.field_extraction_service = FieldExtractionService()
-            logger.info("Field extraction service initialized")
-            
-            # Initialize confidence service
-            self.confidence_service = ConfidenceService()
-            logger.info("Confidence service initialized")
-            
-            # Initialize queue service for RabbitMQ messaging
-            self.queue_service = QueueService(
-                rabbitmq_config=rabbitmq_config,
-                environment=app_config.ENVIRONMENT,
-                message_handler=self._process_message
-            )
-            logger.info("Queue service initialized")
-            
-        except Exception as e:
-            logger.error(f"Error initializing services: {str(e)}")
-            raise ServiceError("Failed to initialize services", str(e))
     
-    def start(self):
+    def _validate_config(self, config: ServiceConfig) -> None:
         """
-        Start the OCR Service application.
-        
-        Connects to required services (RabbitMQ, S3), loads OCR models,
-        and starts the message processing thread.
-        """
-        logger.info("Starting OCR Service application...")
-        
-        try:
-            # Connect to S3 storage
-            logger.info("Connecting to S3 storage...")
-            self.storage_service.connect()
-            logger.info("Connected to S3 storage")
-            
-            # Load OCR models
-            logger.info("Loading OCR models...")
-            self.ocr_service.load_models()
-            logger.info("OCR models loaded successfully")
-            
-            # Connect to RabbitMQ
-            logger.info("Connecting to RabbitMQ...")
-            self.queue_service.connect()
-            logger.info("Connected to RabbitMQ")
-            
-            # Start message processing thread
-            self._stop_event.clear()
-            self._processing_thread = threading.Thread(
-                target=self._message_processing_loop,
-                daemon=True
-            )
-            self._processing_thread.start()
-            logger.info("Message processing thread started")
-            
-            # Update application state
-            self.app.state.is_healthy = True
-            self.app.state.is_ready = True
-            
-            logger.info("OCR Service application started successfully")
-            
-        except Exception as e:
-            logger.error(f"Error starting application: {str(e)}")
-            self.stop()
-            raise ServiceError("Failed to start application", str(e))
-    
-    def stop(self):
-        """
-        Stop the OCR Service application.
-        
-        Closes connections to RabbitMQ and S3, stops the message processing thread,
-        and releases resources.
-        """
-        logger.info("Stopping OCR Service application...")
-        
-        # Update application state
-        self.app.state.is_healthy = False
-        self.app.state.is_ready = False
-        
-        # Signal processing thread to stop
-        self._stop_event.set()
-        
-        # Wait for processing thread to finish (with timeout)
-        if self._processing_thread and self._processing_thread.is_alive():
-            logger.info("Waiting for message processing thread to finish...")
-            self._processing_thread.join(timeout=5.0)
-            if self._processing_thread.is_alive():
-                logger.warning("Message processing thread did not finish in time")
-        
-        # Close RabbitMQ connection
-        try:
-            if hasattr(self, 'queue_service'):
-                logger.info("Closing RabbitMQ connection...")
-                self.queue_service.disconnect()
-                logger.info("RabbitMQ connection closed")
-        except Exception as e:
-            logger.error(f"Error closing RabbitMQ connection: {str(e)}")
-        
-        # Close S3 connection
-        try:
-            if hasattr(self, 'storage_service'):
-                logger.info("Closing S3 connection...")
-                self.storage_service.disconnect()
-                logger.info("S3 connection closed")
-        except Exception as e:
-            logger.error(f"Error closing S3 connection: {str(e)}")
-        
-        # Unload OCR models to free GPU memory
-        try:
-            if hasattr(self, 'ocr_service'):
-                logger.info("Unloading OCR models...")
-                self.ocr_service.unload_models()
-                logger.info("OCR models unloaded")
-        except Exception as e:
-            logger.error(f"Error unloading OCR models: {str(e)}")
-        
-        logger.info("OCR Service application stopped")
-    
-    def _message_processing_loop(self):
-        """
-        Main message processing loop.
-        
-        Runs in a separate thread and processes messages from RabbitMQ.
-        Continues until stop_event is set.
-        """
-        logger.info("Message processing loop started")
-        
-        while not self._stop_event.is_set():
-            try:
-                # Start consuming messages (this will block until a message is received)
-                self.queue_service.start_consuming()
-                
-                # Sleep briefly to prevent CPU spinning if consumption fails
-                time.sleep(0.1)
-                
-            except Exception as e:
-                logger.error(f"Error in message processing loop: {str(e)}")
-                # Sleep before retrying to prevent rapid reconnection attempts
-                time.sleep(5.0)
-                
-                # Try to reconnect if connection was lost
-                try:
-                    self.queue_service.reconnect()
-                except Exception as reconnect_error:
-                    logger.error(f"Failed to reconnect to RabbitMQ: {str(reconnect_error)}")
-        
-        logger.info("Message processing loop stopped")
-    
-    def _process_message(self, message: Dict[str, Any]) -> bool:
-        """
-        Process a message from RabbitMQ.
-        
-        This is the main document processing function that orchestrates the OCR pipeline:
-        1. Download document from S3
-        2. Extract text using OCR
-        3. Extract structured fields
-        4. Calculate confidence scores
-        5. Publish results to RabbitMQ
+        Validate that all required configuration is present and valid.
         
         Args:
-            message: The message payload from RabbitMQ
-            
-        Returns:
-            bool: True if processing was successful, False otherwise
+            config: ServiceConfig object to validate
+        
+        Raises:
+            ServiceError: If required configuration is missing or invalid
         """
-        document_id = message.get('document_id')
-        logger.info(f"Processing document: {document_id}")
+        # Check for required TensorFlow configuration
+        if not config.tensorflow or not config.tensorflow.model_path:
+            raise ServiceError(
+                message="TensorFlow model path not configured",
+                category=ErrorCategory.CONFIGURATION,
+                details={"missing": "tensorflow.model_path"}
+            )
+        
+        # Check for required RabbitMQ configuration
+        if not config.rabbitmq or not config.rabbitmq.host:
+            raise ServiceError(
+                message="RabbitMQ host not configured",
+                category=ErrorCategory.CONFIGURATION,
+                details={"missing": "rabbitmq.host"}
+            )
+        
+        # Check for required S3 configuration
+        if not config.s3 or not config.s3.endpoint:
+            raise ServiceError(
+                message="S3 endpoint not configured",
+                category=ErrorCategory.CONFIGURATION,
+                details={"missing": "s3.endpoint"}
+            )
+    
+    def _create_fastapi_app(self) -> FastAPI:
+        """
+        Create and configure the FastAPI application.
+        
+        Returns:
+            FastAPI: Configured FastAPI application instance
+        """
+        app = FastAPI(
+            title="OCR Service",
+            description="Merchant Cash Advance OCR Service for document data extraction",
+            version="1.0.0",
+            docs_url="/docs" if os.environ.get("ENVIRONMENT", "development") != "production" else None,
+            redoc_url="/redoc" if os.environ.get("ENVIRONMENT", "development") != "production" else None,
+        )
+        
+        # Add API router
+        app.include_router(api_router)
+        
+        # Add startup and shutdown event handlers
+        app.add_event_handler("startup", self.start)
+        app.add_event_handler("shutdown", self.stop)
+        
+        # Add exception handlers
+        app.add_exception_handler(ServiceError, self._handle_service_error)
+        app.add_exception_handler(Exception, self._handle_general_exception)
+        
+        return app
+    
+    async def _handle_service_error(self, request: fastapi.Request, exc: ServiceError) -> fastapi.responses.JSONResponse:
+        """
+        Handle ServiceError exceptions and return appropriate HTTP responses.
+        
+        Args:
+            request: FastAPI request object
+            exc: ServiceError exception
+        
+        Returns:
+            JSONResponse: Formatted error response
+        """
+        self.logger.error(f"Service error: {exc.message}", extra={"details": exc.details, "category": exc.category})
+        
+        # Map error categories to HTTP status codes
+        status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
+        if exc.category == ErrorCategory.VALIDATION:
+            status_code = status.HTTP_400_BAD_REQUEST
+        elif exc.category == ErrorCategory.AUTHENTICATION:
+            status_code = status.HTTP_401_UNAUTHORIZED
+        elif exc.category == ErrorCategory.AUTHORIZATION:
+            status_code = status.HTTP_403_FORBIDDEN
+        elif exc.category == ErrorCategory.NOT_FOUND:
+            status_code = status.HTTP_404_NOT_FOUND
+        
+        return fastapi.responses.JSONResponse(
+            status_code=status_code,
+            content={
+                "error": exc.message,
+                "category": exc.category,
+                "details": exc.details
+            }
+        )
+    
+    async def _handle_general_exception(self, request: fastapi.Request, exc: Exception) -> fastapi.responses.JSONResponse:
+        """
+        Handle general exceptions and return appropriate HTTP responses.
+        
+        Args:
+            request: FastAPI request object
+            exc: Exception instance
+        
+        Returns:
+            JSONResponse: Formatted error response
+        """
+        self.logger.error(f"Unhandled exception: {str(exc)}", exc_info=True)
+        
+        return fastapi.responses.JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={
+                "error": "Internal server error",
+                "details": str(exc) if os.environ.get("ENVIRONMENT", "development") != "production" else None
+            }
+        )
+    
+    async def start(self) -> None:
+        """
+        Start the OCR Service and initialize all connections.
+        
+        This method is called during FastAPI startup and initializes all service
+        components, including storage, queue, and OCR processing services.
+        """
+        self.logger.info("Starting OCR Service")
         
         try:
-            # 1. Download document from S3
-            document = self.storage_service.download_document(document_id)
-            logger.info(f"Downloaded document {document_id} from S3")
-            
-            # 2. Extract text using OCR
-            ocr_result = self.ocr_service.process_document(document)
-            logger.info(f"OCR processing completed for document {document_id}")
-            
-            # 3. Extract structured fields
-            extracted_data = self.field_extraction_service.extract_fields(
-                ocr_result, 
-                document_type=message.get('document_type')
+            # Initialize storage service
+            self.logger.info("Initializing storage service")
+            self.storage_service = StorageService(
+                config=s3_config.get_s3_config(self.config),
+                logger=logging.getLogger("ocr_service.storage")
             )
-            logger.info(f"Field extraction completed for document {document_id}")
+            await self.storage_service.connect()
             
-            # 4. Calculate confidence scores
-            scored_data = self.confidence_service.calculate_confidence(extracted_data)
-            logger.info(f"Confidence scoring completed for document {document_id}")
-            
-            # 5. Upload results to S3
-            result_key = self.storage_service.upload_extraction_result(
-                document_id, 
-                scored_data
+            # Initialize queue service
+            self.logger.info("Initializing queue service")
+            self.queue_service = QueueService(
+                config=rabbitmq_config.get_rabbitmq_config(self.config),
+                logger=logging.getLogger("ocr_service.queue")
             )
-            logger.info(f"Extraction results uploaded to S3 for document {document_id}")
+            await self.queue_service.connect()
             
-            # 6. Publish results to RabbitMQ
-            result_message = {
-                'document_id': document_id,
-                'extraction_result_key': result_key,
-                'confidence_score': scored_data.get('overall_confidence', 0.0),
-                'processing_time': scored_data.get('processing_time', 0.0),
-                'requires_review': scored_data.get('requires_review', False),
-                'timestamp': time.time()
-            }
+            # Initialize confidence service
+            self.logger.info("Initializing confidence service")
+            self.confidence_service = ConfidenceService(
+                config=self.config,
+                logger=logging.getLogger("ocr_service.confidence")
+            )
             
-            self.queue_service.publish_result(result_message)
-            logger.info(f"Published extraction results for document {document_id}")
+            # Initialize field extraction service
+            self.logger.info("Initializing field extraction service")
+            self.field_extraction_service = FieldExtractionService(
+                config=self.config,
+                logger=logging.getLogger("ocr_service.field_extraction")
+            )
             
-            return True
+            # Initialize OCR service
+            self.logger.info("Initializing OCR service")
+            self.ocr_service = OCRService(
+                config=tensorflow_config.get_tensorflow_config(self.config),
+                storage_service=self.storage_service,
+                queue_service=self.queue_service,
+                confidence_service=self.confidence_service,
+                field_extraction_service=self.field_extraction_service,
+                logger=logging.getLogger("ocr_service.ocr")
+            )
+            await self.ocr_service.initialize()
             
+            # Start processing
+            self.logger.info("Starting OCR processing")
+            await self.ocr_service.start_processing()
+            
+            self.logger.info("OCR Service started successfully")
         except Exception as e:
-            logger.error(f"Error processing document {document_id}: {str(e)}")
-            
-            # Publish error message
-            error_message = {
-                'document_id': document_id,
-                'error': str(e),
-                'timestamp': time.time()
-            }
-            
+            self.logger.error(f"Failed to start OCR Service: {str(e)}", exc_info=True)
+            # Re-raise to prevent FastAPI from starting with incomplete initialization
+            raise
+    
+    async def stop(self) -> None:
+        """
+        Stop the OCR Service and close all connections.
+        
+        This method is called during FastAPI shutdown and ensures that all
+        connections are properly closed and resources are released.
+        """
+        self.logger.info("Stopping OCR Service")
+        
+        # Stop services in reverse order of initialization
+        if self.ocr_service:
+            self.logger.info("Stopping OCR service")
             try:
-                self.queue_service.publish_error(error_message)
-                logger.info(f"Published error message for document {document_id}")
-            except Exception as publish_error:
-                logger.error(f"Failed to publish error message: {str(publish_error)}")
-            
-            return False
+                await self.ocr_service.stop_processing()
+            except Exception as e:
+                self.logger.error(f"Error stopping OCR service: {str(e)}")
+        
+        if self.queue_service:
+            self.logger.info("Closing queue connection")
+            try:
+                await self.queue_service.disconnect()
+            except Exception as e:
+                self.logger.error(f"Error disconnecting from queue: {str(e)}")
+        
+        if self.storage_service:
+            self.logger.info("Closing storage connection")
+            try:
+                await self.storage_service.disconnect()
+            except Exception as e:
+                self.logger.error(f"Error disconnecting from storage: {str(e)}")
+        
+        self.logger.info("OCR Service stopped")
 
 
-# Create a single application instance
-app_instance = OCRServiceApp()
+# Create the application instance
+app_instance = OCRApplication()
 
-# Export FastAPI app for ASGI servers
+# Export the FastAPI app for ASGI servers
 app = app_instance.app
+
+
+# Health check endpoints for Kubernetes probes
+@app.get("/health/liveness", tags=["health"])
+async def liveness_probe():
+    """
+    Liveness probe for Kubernetes.
+    
+    This endpoint verifies that the application is running and responsive.
+    It does not check dependencies, only that the application itself is alive.
+    
+    Returns:
+        dict: Status information
+    """
+    return {"status": "alive", "service": "ocr-service"}
+
+
+@app.get("/health/readiness", tags=["health"])
+async def readiness_probe():
+    """
+    Readiness probe for Kubernetes.
+    
+    This endpoint verifies that the application is ready to accept traffic.
+    It checks that all dependencies (RabbitMQ, S3, GPU) are available and
+    the service is fully initialized.
+    
+    Returns:
+        dict: Status information with dependency checks
+    
+    Raises:
+        HTTPException: If the service is not ready
+    """
+    # Check if services are initialized
+    if not app_instance.ocr_service or not app_instance.queue_service or not app_instance.storage_service:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Service is starting up"
+        )
+    
+    # Check service health
+    health_status = {
+        "status": "ready",
+        "service": "ocr-service",
+        "dependencies": {
+            "rabbitmq": "healthy" if app_instance.queue_service.is_connected() else "unhealthy",
+            "storage": "healthy" if app_instance.storage_service.is_connected() else "unhealthy",
+            "gpu": "healthy" if app_instance.ocr_service.is_gpu_available() else "unhealthy"
+        }
+    }
+    
+    # If any dependency is unhealthy, return 503
+    if any(status != "healthy" for status in health_status["dependencies"].values()):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=health_status
+        )
+    
+    return health_status
