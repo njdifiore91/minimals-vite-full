@@ -2,54 +2,42 @@
 # -*- coding: utf-8 -*-
 
 """
-OCR Service Services Package
+OCR Service - Services Package
 
-This package provides service components for the OCR Service microservice, offering
-a cohesive API surface for service functionality throughout the application. It includes
-services for OCR processing, queue management, storage operations, field extraction,
-and confidence scoring.
+This module serves as the central entry point for the OCR Service services module.
+It imports and re-exports all service components to present a single, cohesive API surface,
+simplifying service imports throughout the application and ensuring consistent service usage.
 
-By centralizing service imports in this package, we ensure consistent service usage
-across the application and provide a clean import interface for developers.
+Services included:
+- OCRService: Core OCR processing service that orchestrates TensorFlow models for text extraction
+- QueueService: RabbitMQ message handling service for consuming and publishing messages
+- StorageService: S3-compatible storage operations for document retrieval and storage
+- FieldExtractionService: Specialized service for extracting structured data from OCR results
+- ConfidenceService: Evaluates the confidence of extracted fields and flags uncertain extractions
 
-Example usage:
-    from services import OCRService, QueueService, StorageService
-    
-    ocr_service = OCRService()
-    result = ocr_service.process_document(document)
+Usage examples:
+    from services import OCRService
+    from services import QueueService
+    from services import StorageService
+    from services import FieldExtractionService
+    from services import ConfidenceService
+
+    # Or import all services
+    from services import *
 """
 
-from __future__ import annotations
-
-# Import and re-export OCR service
+# Import all services to expose them at the package level
 from .ocr_service import OCRService
-
-# Import and re-export queue service
 from .queue_service import QueueService
-
-# Import and re-export storage service
 from .storage_service import StorageService
-
-# Import and re-export field extraction service
 from .field_extraction_service import FieldExtractionService
-
-# Import and re-export confidence service
 from .confidence_service import ConfidenceService
 
-# Define __all__ to explicitly specify exported names
+# Define __all__ to control what is imported with 'from services import *'
 __all__ = [
-    # OCR processing service
     'OCRService',
-    
-    # Queue management service
     'QueueService',
-    
-    # Storage operations service
     'StorageService',
-    
-    # Field extraction service
     'FieldExtractionService',
-    
-    # Confidence scoring service
-    'ConfidenceService',
+    'ConfidenceService'
 ]
