@@ -1,53 +1,17 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
-"""
-Logging Configuration for OCR Service
-
-This module configures the logging system for the OCR Service. It defines log levels,
-formats, handlers, and context enrichment to enable comprehensive logging for monitoring,
-debugging, and troubleshooting the service's operation.
-
-The configuration supports different environments (development, staging, production)
-and ensures that all processing failures, potential issues, and normal operations are
-properly recorded with appropriate context information.
-
-Features:
-- Environment-specific log levels
-- Structured logging with consistent formats
-- Console and file handlers with appropriate configuration
-- Request context enrichment with correlation IDs
-- Log rotation to prevent disk space issues
-"""
-
 import os
 import sys
-import json
 import logging
 import logging.config
-import logging.handlers
+import json
 from datetime import datetime
+import uuid
 from typing import Dict, Any, Optional
 
-# Import contextvars for storing request-specific context
-from contextvars import ContextVar
+# Define the service name for logging
+SERVICE_NAME = "ocr-service"
 
-# Try to import app_config, but don't fail if it's not available yet
-try:
-    from .app_config import app_config
-except ImportError:
-    # Default configuration if app_config is not available
-    app_config = {
-        "service": {
-            "name": "ocr-service",
-            "version": "1.0.0"
-        },
-        "environment": os.getenv("ENVIRONMENT", "development")
-    }
-
-# Context variables for request tracking
-request_id_var: ContextVar[str] = ContextVar('request_id', default='')
-user_id_var: ContextVar[str] = ContextVar('user_id', default='')
+# Get environment or default to development
+ENVIRONMENT = os.environ.get("ENVIRONMENT", "development").lower()
 
 # Define log levels based on environment
 LOG_LEVELS = {
@@ -59,290 +23,227 @@ LOG_LEVELS = {
 # Default log level if environment is not recognized
 DEFAULT_LOG_LEVEL = logging.INFO
 
-# Log directory for file logs
-LOG_DIR = os.getenv("LOG_DIR", "/var/log/ocr-service")
+# Get the appropriate log level for the current environment
+LOG_LEVEL = LOG_LEVELS.get(ENVIRONMENT, DEFAULT_LOG_LEVEL)
 
-# Maximum log file size for rotation (10 MB)
-MAX_LOG_SIZE_BYTES = 10 * 1024 * 1024
+# Define log directory for file handlers
+LOG_DIR = os.environ.get("LOG_DIR", "/var/log/ocr-service")
 
-# Number of backup log files to keep
-BACKUP_COUNT = 10
+# Ensure log directory exists
+os.makedirs(LOG_DIR, exist_ok=True)
 
-# Log format with timestamp, service name, log level, and message
-LOG_FORMAT = "%(asctime)s [%(levelname)s] [%(service)s] [%(request_id)s] %(name)s - %(message)s"
-
-# Date format for logs
-DATE_FORMAT = "%Y-%m-%d %H:%M:%S.%f"
-
-
-class ContextEnricher(logging.Filter):
-    """
-    Filter that enriches log records with context information.
-    
-    This filter adds request_id, user_id, service name, and other context
-    information to each log record for better traceability.
-    """
-    
-    def __init__(self):
-        super().__init__()
-    
-    def filter(self, record):
-        # Add request_id from context or use default
-        record.request_id = request_id_var.get() or 'no-request-id'
-        
-        # Add user_id from context if available
-        user_id = user_id_var.get()
-        if user_id:
-            record.user_id = user_id
-        else:
-            record.user_id = 'no-user-id'
-        
-        # Add service information
-        record.service = f"{app_config['service']['name']}-{app_config['service']['version']}"
-        
-        # Add environment information
-        record.environment = app_config['environment']
-        
-        return True
-
-
+# Custom JSON formatter for structured logging
 class JsonFormatter(logging.Formatter):
-    """
-    Custom formatter that outputs log records as JSON.
-    
-    This formatter converts log records to JSON format for easier parsing
-    and analysis by log aggregation tools.
-    """
+    """Custom formatter that outputs logs as JSON objects for better parsing"""
     
     def format(self, record):
-        log_data = {
-            "timestamp": self.formatTime(record, self.datefmt),
+        log_record = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "service": SERVICE_NAME,
             "level": record.levelname,
-            "service": getattr(record, 'service', app_config['service']['name']),
-            "request_id": getattr(record, 'request_id', 'no-request-id'),
-            "name": record.name,
             "message": record.getMessage(),
-            "environment": getattr(record, 'environment', app_config['environment'])
+            "logger": record.name,
+            "path": record.pathname,
+            "function": record.funcName,
+            "line": record.lineno,
+            "environment": ENVIRONMENT
         }
-        
-        # Add user_id if available
-        if hasattr(record, 'user_id'):
-            log_data["user_id"] = record.user_id
         
         # Add exception info if available
         if record.exc_info:
-            log_data["exception"] = self.formatException(record.exc_info)
-        
-        # Add any extra attributes
-        for key, value in record.__dict__.items():
-            if key not in ["args", "asctime", "created", "exc_info", "exc_text", "filename",
-                          "funcName", "id", "levelname", "levelno", "lineno", "module",
-                          "msecs", "message", "msg", "name", "pathname", "process",
-                          "processName", "relativeCreated", "stack_info", "thread", "threadName",
-                          "service", "request_id", "user_id", "environment"] and not key.startswith("_"):
-                log_data[key] = value
-        
-        return json.dumps(log_data)
+            log_record["exception"] = self.formatException(record.exc_info)
+            
+        # Add any extra contextual information
+        if hasattr(record, "request_id"):
+            log_record["request_id"] = record.request_id
+            
+        if hasattr(record, "document_id"):
+            log_record["document_id"] = record.document_id
+            
+        if hasattr(record, "application_id"):
+            log_record["application_id"] = record.application_id
+            
+        if hasattr(record, "processing_time"):
+            log_record["processing_time_ms"] = record.processing_time
+            
+        if hasattr(record, "extra") and isinstance(record.extra, dict):
+            for key, value in record.extra.items():
+                log_record[key] = value
+                
+        return json.dumps(log_record)
 
-
-def set_request_context(request_id: str, user_id: Optional[str] = None) -> None:
-    """
-    Set the request context for the current execution context.
-    
-    This function should be called at the beginning of each request processing
-    to set the request_id and user_id for all subsequent log messages.
-    
-    Args:
-        request_id: The unique identifier for the current request
-        user_id: The identifier of the user making the request (if available)
-    """
-    request_id_var.set(request_id)
-    if user_id:
-        user_id_var.set(user_id)
-
-
-def clear_request_context() -> None:
-    """
-    Clear the request context after request processing is complete.
-    
-    This function should be called at the end of each request processing
-    to clear the request_id and user_id from the context.
-    """
-    request_id_var.set('')
-    user_id_var.set('')
-
-
-def get_logging_config() -> Dict[str, Any]:
-    """
-    Get the logging configuration dictionary.
-    
-    This function returns a dictionary with the logging configuration
-    that can be used with logging.config.dictConfig().
-    
-    Returns:
-        Dict[str, Any]: The logging configuration dictionary
-    """
-    # Determine log level based on environment
-    environment = app_config['environment']
-    log_level = LOG_LEVELS.get(environment, DEFAULT_LOG_LEVEL)
-    
-    # Ensure log directory exists for file handler
-    os.makedirs(LOG_DIR, exist_ok=True)
-    
-    # Define handlers based on environment
-    handlers = ["console"]
-    if environment in ["staging", "production"]:
-        handlers.append("file")
-        handlers.append("error_file")
-    
-    # Define logging configuration
-    config = {
-        "version": 1,
-        "disable_existing_loggers": False,
-        "formatters": {
-            "standard": {
-                "format": LOG_FORMAT,
-                "datefmt": DATE_FORMAT
-            },
-            "json": {
-                "()" : JsonFormatter,
-                "datefmt": DATE_FORMAT
-            }
+# Define the logging configuration dictionary
+LOGGING_CONFIG = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "json": {
+            "()" : JsonFormatter
         },
-        "filters": {
-            "context_enricher": {
-                "()" : ContextEnricher
-            }
+        "standard": {
+            "format": "%(asctime)s [%(levelname)s] %(name)s - %(message)s",
+            "datefmt": "%Y-%m-%d %H:%M:%S"
+        }
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "level": LOG_LEVEL,
+            "formatter": "standard" if ENVIRONMENT == "development" else "json",
+            "stream": sys.stdout
         },
-        "handlers": {
-            "console": {
-                "class": "logging.StreamHandler",
-                "level": log_level,
-                "formatter": "standard" if environment == "development" else "json",
-                "filters": ["context_enricher"],
-                "stream": "ext://sys.stdout"
-            },
-            "file": {
-                "class": "logging.handlers.RotatingFileHandler",
-                "level": log_level,
-                "formatter": "json",
-                "filters": ["context_enricher"],
-                "filename": f"{LOG_DIR}/ocr-service.log",
-                "maxBytes": MAX_LOG_SIZE_BYTES,
-                "backupCount": BACKUP_COUNT,
-                "encoding": "utf8"
-            },
-            "error_file": {
-                "class": "logging.handlers.RotatingFileHandler",
-                "level": "ERROR",
-                "formatter": "json",
-                "filters": ["context_enricher"],
-                "filename": f"{LOG_DIR}/ocr-service-error.log",
-                "maxBytes": MAX_LOG_SIZE_BYTES,
-                "backupCount": BACKUP_COUNT,
-                "encoding": "utf8"
-            }
+        "file": {
+            "class": "logging.handlers.RotatingFileHandler",
+            "level": LOG_LEVEL,
+            "formatter": "json",
+            "filename": f"{LOG_DIR}/{SERVICE_NAME}.log",
+            "maxBytes": 10485760,  # 10MB
+            "backupCount": 10
         },
-        "loggers": {
-            "": {  # Root logger
-                "level": log_level,
-                "handlers": handlers,
-                "propagate": True
-            },
-            "ocr-service": {
-                "level": log_level,
-                "handlers": handlers,
-                "propagate": False
-            },
-            # Add specific loggers for different components
-            "ocr-service.api": {
-                "level": log_level,
-                "handlers": handlers,
-                "propagate": False
-            },
-            "ocr-service.models": {
-                "level": log_level,
-                "handlers": handlers,
-                "propagate": False
-            },
-            "ocr-service.services": {
-                "level": log_level,
-                "handlers": handlers,
-                "propagate": False
-            },
-            # Reduce log level for noisy third-party libraries
-            "tensorflow": {
-                "level": "WARNING",
-                "handlers": handlers,
-                "propagate": False
-            },
-            "pika": {
-                "level": "WARNING",
-                "handlers": handlers,
-                "propagate": False
-            },
-            "boto3": {
-                "level": "WARNING",
-                "handlers": handlers,
-                "propagate": False
-            },
-            "botocore": {
-                "level": "WARNING",
-                "handlers": handlers,
-                "propagate": False
-            }
+        "error_file": {
+            "class": "logging.handlers.RotatingFileHandler",
+            "level": logging.ERROR,
+            "formatter": "json",
+            "filename": f"{LOG_DIR}/{SERVICE_NAME}_error.log",
+            "maxBytes": 10485760,  # 10MB
+            "backupCount": 10
+        }
+    },
+    "loggers": {
+        "": {  # Root logger
+            "handlers": ["console"],
+            "level": LOG_LEVEL,
+            "propagate": True
+        },
+        "ocr_service": {
+            "handlers": ["console", "file", "error_file"] if ENVIRONMENT != "development" else ["console"],
+            "level": LOG_LEVEL,
+            "propagate": False
+        },
+        "ocr_service.api": {
+            "handlers": ["console", "file", "error_file"] if ENVIRONMENT != "development" else ["console"],
+            "level": LOG_LEVEL,
+            "propagate": False
+        },
+        "ocr_service.models": {
+            "handlers": ["console", "file", "error_file"] if ENVIRONMENT != "development" else ["console"],
+            "level": LOG_LEVEL,
+            "propagate": False
+        },
+        "ocr_service.services": {
+            "handlers": ["console", "file", "error_file"] if ENVIRONMENT != "development" else ["console"],
+            "level": LOG_LEVEL,
+            "propagate": False
+        },
+        "tensorflow": {
+            "handlers": ["console", "file"] if ENVIRONMENT != "development" else ["console"],
+            "level": logging.WARNING,  # Reduce TensorFlow verbosity
+            "propagate": False
         }
     }
-    
-    return config
+}
 
-
-def configure_logging() -> None:
-    """
-    Configure the logging system for the OCR Service.
-    
-    This function configures the logging system using the configuration
-    returned by get_logging_config().
-    """
+# Configure additional handlers for production environment
+if ENVIRONMENT == "production":
+    # Add Datadog handler if available
     try:
-        # Get logging configuration
-        config = get_logging_config()
-        
-        # Configure logging
-        logging.config.dictConfig(config)
-        
-        # Log successful configuration
-        logger = logging.getLogger("ocr-service")
-        logger.info("Logging configured successfully", extra={"config_type": "logging"})
-        
-    except Exception as e:
-        # If logging configuration fails, set up a basic configuration
-        # and log the error to stderr
-        logging.basicConfig(
-            level=logging.INFO,
-            format=LOG_FORMAT,
-            datefmt=DATE_FORMAT,
-            stream=sys.stderr
-        )
-        logger = logging.getLogger("ocr-service")
-        logger.error(f"Failed to configure logging: {str(e)}", exc_info=True)
+        import datadog_logger
+        LOGGING_CONFIG["handlers"]["datadog"] = {
+            "class": "datadog_logger.DatadogLogHandler",
+            "level": LOG_LEVEL,
+            "formatter": "json",
+            "service": SERVICE_NAME,
+            "tags": [f"env:{ENVIRONMENT}", f"service:{SERVICE_NAME}"]
+        }
+        # Add datadog handler to all loggers
+        for logger in LOGGING_CONFIG["loggers"].values():
+            if "datadog" not in logger["handlers"]:
+                logger["handlers"].append("datadog")
+    except ImportError:
+        pass
 
+# Function to initialize logging
+def setup_logging():
+    """Initialize the logging configuration"""
+    logging.config.dictConfig(LOGGING_CONFIG)
+    logging.info(f"{SERVICE_NAME} logging initialized with level {logging.getLevelName(LOG_LEVEL)} for {ENVIRONMENT} environment")
 
+# Context manager for request tracking
+class LogContext:
+    """Context manager for adding request context to logs"""
+    
+    def __init__(self, logger, **context):
+        self.logger = logger
+        self.context = context
+        self.old_context = {}
+        
+    def __enter__(self):
+        # Generate request_id if not provided
+        if "request_id" not in self.context:
+            self.context["request_id"] = str(uuid.uuid4())
+            
+        # Save old context and set new context
+        for handler in self.logger.handlers:
+            old_context = getattr(handler, "_context", {})
+            self.old_context[handler] = old_context.copy()
+            
+            # Create or update context
+            if not hasattr(handler, "_context"):
+                handler._context = {}
+            handler._context.update(self.context)
+            
+        return self.context.get("request_id")
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        # Restore old context
+        for handler in self.logger.handlers:
+            if handler in self.old_context:
+                handler._context = self.old_context[handler]
+
+# Function to get a logger with context enrichment
 def get_logger(name: str) -> logging.Logger:
-    """
-    Get a logger with the specified name.
+    """Get a logger with the specified name and context enrichment"""
+    logger = logging.getLogger(name)
     
-    This function returns a logger with the specified name, which will
-    inherit the configuration from the root logger.
+    # Add context method to logger
+    def context(self, **kwargs) -> LogContext:
+        return LogContext(self, **kwargs)
     
-    Args:
-        name: The name of the logger
+    # Add the context method to the logger
+    logger.context = context.__get__(logger)
+    
+    return logger
+
+# Function to add context to a log record
+def add_context_to_record(record: logging.LogRecord, context: Dict[str, Any]) -> None:
+    """Add context information to a log record"""
+    for key, value in context.items():
+        setattr(record, key, value)
+
+# Custom filter to add context from handler to records
+class ContextFilter(logging.Filter):
+    """Filter that adds context from handler to log records"""
+    
+    def filter(self, record):
+        # Add context from handler if available
+        handler = getattr(record, "handler", None)
+        if handler and hasattr(handler, "_context"):
+            add_context_to_record(record, handler._context)
+        return True
+
+# Apply context filter to all handlers
+def apply_context_filter():
+    """Apply context filter to all handlers"""
+    context_filter = ContextFilter()
+    for handler in logging.root.handlers:
+        handler.addFilter(context_filter)
         
-    Returns:
-        logging.Logger: The logger instance
-    """
-    return logging.getLogger(name)
+    # Also apply to all named loggers
+    for name in logging.root.manager.loggerDict:
+        logger = logging.getLogger(name)
+        for handler in logger.handlers:
+            handler.addFilter(context_filter)
 
-
-# Configure logging when this module is imported
-configure_logging()
+# Initialize logging when this module is imported
+setup_logging()
+apply_context_filter()
