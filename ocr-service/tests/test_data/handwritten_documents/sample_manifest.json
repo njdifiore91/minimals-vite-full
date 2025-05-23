@@ -1,732 +1,836 @@
 {
-  "version": "1.0.0",
-  "description": "Manifest of handwritten document test samples for OCR service testing",
-  "last_updated": "2025-05-21",
-  "document_count": 12,
-  "handwriting_styles": [
-    "PRINT",
-    "CURSIVE",
-    "MIXED",
-    "BLOCK_LETTERS"
+  "manifest_version": "1.0.0",
+  "description": "Manifest of sample handwritten documents for OCR testing",
+  "last_updated": "2023-05-25",
+  "document_categories": [
+    "application_forms",
+    "financial_documents",
+    "notes",
+    "signatures",
+    "identity_documents"
   ],
   "quality_levels": [
-    "HIGH",
-    "MEDIUM",
-    "LOW"
+    "high",
+    "medium",
+    "low"
   ],
-  "documents": {
-    "application_forms": [
-      {
-        "id": "app_form_handwritten_001",
-        "file_path": "application_forms/mca_application_handwritten.pdf",
-        "document_type": "APPLICATION_FORM",
-        "handwriting_style": "PRINT",
-        "quality": "MEDIUM",
-        "description": "MCA application form with handwritten information in print style",
-        "expected_fields": {
-          "business_name": {
-            "value": "Johnson Plumbing",
-            "position": {"x1": 120, "y1": 150, "x2": 350, "y2": 170},
+  "handwriting_styles": [
+    "cursive",
+    "print",
+    "mixed",
+    "block_letters",
+    "calligraphy"
+  ],
+  "documents": [
+    {
+      "id": "hw_app_form_001",
+      "filename": "mca_application_handwritten.pdf",
+      "category": "application_forms",
+      "document_type": "loan_application",
+      "quality": "high",
+      "orientation": "portrait",
+      "page_count": 3,
+      "characteristics": {
+        "resolution": "300dpi",
+        "handwriting_style": "print",
+        "legibility": "high",
+        "has_tables": true,
+        "has_checkboxes": true,
+        "has_signatures": true,
+        "complexity": "high"
+      },
+      "expected_extraction": {
+        "fields": [
+          {
+            "name": "business_name",
+            "expected_value": "Global Ventures LLC",
+            "position": {"page": 1, "top": 150, "left": 200, "bottom": 175, "right": 400},
+            "expected_confidence": 0.92
+          },
+          {
+            "name": "dba_name",
+            "expected_value": "Global Business Solutions",
+            "position": {"page": 1, "top": 180, "left": 200, "bottom": 205, "right": 450},
+            "expected_confidence": 0.90
+          },
+          {
+            "name": "ein",
+            "expected_value": "45-6789012",
+            "position": {"page": 1, "top": 210, "left": 200, "bottom": 235, "right": 300},
+            "expected_confidence": 0.94
+          },
+          {
+            "name": "business_address",
+            "expected_value": "789 Enterprise Way, Suite 300, Commerce City, NY 10001",
+            "position": {"page": 1, "top": 240, "left": 200, "bottom": 265, "right": 550},
+            "expected_confidence": 0.88
+          },
+          {
+            "name": "business_phone",
+            "expected_value": "(555) 987-6543",
+            "position": {"page": 1, "top": 270, "left": 200, "bottom": 295, "right": 350},
+            "expected_confidence": 0.93
+          },
+          {
+            "name": "business_email",
+            "expected_value": "info@globalventures.com",
+            "position": {"page": 1, "top": 300, "left": 200, "bottom": 325, "right": 400},
+            "expected_confidence": 0.91
+          },
+          {
+            "name": "funding_amount_requested",
+            "expected_value": "$300,000.00",
+            "position": {"page": 1, "top": 350, "left": 200, "bottom": 375, "right": 350},
+            "expected_confidence": 0.94
+          },
+          {
+            "name": "business_start_date",
+            "expected_value": "03/15/2018",
+            "position": {"page": 1, "top": 400, "left": 200, "bottom": 425, "right": 300},
+            "expected_confidence": 0.92
+          },
+          {
+            "name": "owner_name",
+            "expected_value": "Sarah J. Williams",
+            "position": {"page": 2, "top": 150, "left": 200, "bottom": 175, "right": 400},
+            "expected_confidence": 0.93
+          },
+          {
+            "name": "owner_ssn",
+            "expected_value": "XXX-XX-5678",
+            "position": {"page": 2, "top": 180, "left": 200, "bottom": 205, "right": 300},
+            "expected_confidence": 0.90
+          },
+          {
+            "name": "owner_address",
+            "expected_value": "123 Maple Drive, Commerce City, NY 10001",
+            "position": {"page": 2, "top": 210, "left": 200, "bottom": 235, "right": 500},
+            "expected_confidence": 0.87
+          },
+          {
+            "name": "owner_phone",
+            "expected_value": "(555) 123-4567",
+            "position": {"page": 2, "top": 240, "left": 200, "bottom": 265, "right": 350},
+            "expected_confidence": 0.92
+          },
+          {
+            "name": "owner_email",
+            "expected_value": "sarah.williams@globalventures.com",
+            "position": {"page": 2, "top": 270, "left": 200, "bottom": 295, "right": 450},
+            "expected_confidence": 0.89
+          },
+          {
+            "name": "business_type",
+            "expected_value": "LLC",
+            "position": {"page": 2, "top": 300, "left": 200, "bottom": 325, "right": 350},
+            "expected_confidence": 0.95
+          },
+          {
+            "name": "industry",
+            "expected_value": "Retail",
+            "position": {"page": 2, "top": 330, "left": 200, "bottom": 355, "right": 350},
+            "expected_confidence": 0.93
+          },
+          {
+            "name": "annual_revenue",
+            "expected_value": "$1,750,000.00",
+            "position": {"page": 2, "top": 360, "left": 200, "bottom": 385, "right": 350},
+            "expected_confidence": 0.91
+          },
+          {
+            "name": "signature",
+            "expected_value": "Sarah Williams",
+            "position": {"page": 3, "top": 500, "left": 200, "bottom": 550, "right": 400},
             "expected_confidence": 0.85
           },
-          "dba_name": {
-            "value": "Johnson's",
-            "position": {"x1": 120, "y1": 180, "x2": 350, "y2": 200},
-            "expected_confidence": 0.82
-          },
-          "ein": {
-            "value": "45-6789012",
-            "position": {"x1": 120, "y1": 210, "x2": 250, "y2": 230},
+          {
+            "name": "date_signed",
+            "expected_value": "05/15/2023",
+            "position": {"page": 3, "top": 500, "left": 450, "bottom": 525, "right": 550},
+            "expected_confidence": 0.92
+          }
+        ],
+        "tables": [
+          {
+            "name": "bank_accounts",
+            "position": {"page": 2, "top": 400, "left": 100, "bottom": 550, "right": 700},
+            "expected_confidence": 0.88,
+            "rows": 3,
+            "columns": 4,
+            "headers": ["Account Type", "Bank Name", "Account Number", "Current Balance"],
+            "data": [
+              ["Checking", "First Metro Bank", "XXXX7890", "$67,890.12"],
+              ["Savings", "First Metro Bank", "XXXX4321", "$145,678.90"]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "hw_fin_doc_001",
+      "filename": "personal_financial_statement.pdf",
+      "category": "financial_documents",
+      "document_type": "financial_statement",
+      "quality": "medium",
+      "orientation": "portrait",
+      "page_count": 2,
+      "characteristics": {
+        "resolution": "240dpi",
+        "handwriting_style": "mixed",
+        "legibility": "medium",
+        "has_tables": true,
+        "has_checkboxes": true,
+        "has_signatures": true,
+        "complexity": "high"
+      },
+      "expected_extraction": {
+        "fields": [
+          {
+            "name": "applicant_name",
+            "expected_value": "Sarah J. Williams",
+            "position": {"page": 1, "top": 150, "left": 200, "bottom": 175, "right": 400},
             "expected_confidence": 0.88
           },
-          "business_address": {
-            "value": "789 Elm Street, Anytown, TX 75001",
-            "position": {"x1": 120, "y1": 240, "x2": 450, "y2": 260},
-            "expected_confidence": 0.80
-          },
-          "business_phone": {
-            "value": "(555) 234-5678",
-            "position": {"x1": 120, "y1": 270, "x2": 250, "y2": 290},
-            "expected_confidence": 0.84
-          },
-          "business_email": {
-            "value": "bob@johnsonplumbing.com",
-            "position": {"x1": 120, "y1": 300, "x2": 300, "y2": 320},
-            "expected_confidence": 0.81
-          },
-          "owner_name": {
-            "value": "Robert Johnson",
-            "position": {"x1": 120, "y1": 330, "x2": 250, "y2": 350},
+          {
+            "name": "applicant_ssn",
+            "expected_value": "XXX-XX-5678",
+            "position": {"page": 1, "top": 180, "left": 200, "bottom": 205, "right": 300},
             "expected_confidence": 0.86
           },
-          "owner_title": {
-            "value": "Owner",
-            "position": {"x1": 120, "y1": 360, "x2": 180, "y2": 380},
-            "expected_confidence": 0.88
+          {
+            "name": "statement_date",
+            "expected_value": "05/01/2023",
+            "position": {"page": 1, "top": 210, "left": 200, "bottom": 235, "right": 300},
+            "expected_confidence": 0.89
           },
-          "funding_amount": {
-            "value": "$75,000.00",
-            "position": {"x1": 120, "y1": 390, "x2": 220, "y2": 410},
+          {
+            "name": "total_assets",
+            "expected_value": "$2,345,000.00",
+            "position": {"page": 1, "top": 500, "left": 500, "bottom": 525, "right": 650},
+            "expected_confidence": 0.87
+          },
+          {
+            "name": "total_liabilities",
+            "expected_value": "$1,123,000.00",
+            "position": {"page": 1, "top": 530, "left": 500, "bottom": 555, "right": 650},
+            "expected_confidence": 0.86
+          },
+          {
+            "name": "net_worth",
+            "expected_value": "$1,222,000.00",
+            "position": {"page": 1, "top": 560, "left": 500, "bottom": 585, "right": 650},
+            "expected_confidence": 0.85
+          },
+          {
+            "name": "annual_income",
+            "expected_value": "$350,000.00",
+            "position": {"page": 2, "top": 200, "left": 500, "bottom": 225, "right": 650},
+            "expected_confidence": 0.84
+          },
+          {
+            "name": "signature",
+            "expected_value": "Sarah Williams",
+            "position": {"page": 2, "top": 600, "left": 200, "bottom": 650, "right": 400},
             "expected_confidence": 0.82
           },
-          "business_start_date": {
-            "value": "06/10/2010",
-            "position": {"x1": 120, "y1": 420, "x2": 220, "y2": 440},
+          {
+            "name": "date_signed",
+            "expected_value": "05/01/2023",
+            "position": {"page": 2, "top": 600, "left": 450, "bottom": 625, "right": 550},
+            "expected_confidence": 0.88
+          }
+        ],
+        "tables": [
+          {
+            "name": "assets",
+            "position": {"page": 1, "top": 250, "left": 100, "bottom": 450, "right": 650},
+            "expected_confidence": 0.83,
+            "rows": 6,
+            "columns": 2,
+            "headers": ["Asset Description", "Value"],
+            "data": [
+              ["Cash in Banks", "$245,000.00"],
+              ["Real Estate - Primary Residence", "$950,000.00"],
+              ["Real Estate - Investment Property", "$750,000.00"],
+              ["Stocks and Bonds", "$325,000.00"],
+              ["Retirement Accounts", "$75,000.00"]
+            ]
+          },
+          {
+            "name": "liabilities",
+            "position": {"page": 2, "top": 50, "left": 100, "bottom": 180, "right": 650},
+            "expected_confidence": 0.82,
+            "rows": 4,
+            "columns": 2,
+            "headers": ["Liability Description", "Amount"],
+            "data": [
+              ["Mortgage - Primary Residence", "$650,000.00"],
+              ["Mortgage - Investment Property", "$425,000.00"],
+              ["Auto Loans", "$35,000.00"],
+              ["Credit Card Debt", "$13,000.00"]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "hw_note_001",
+      "filename": "business_plan_notes.pdf",
+      "category": "notes",
+      "document_type": "business_notes",
+      "quality": "medium",
+      "orientation": "portrait",
+      "page_count": 3,
+      "characteristics": {
+        "resolution": "240dpi",
+        "handwriting_style": "cursive",
+        "legibility": "medium",
+        "has_tables": false,
+        "has_checkboxes": false,
+        "has_signatures": true,
+        "complexity": "medium"
+      },
+      "expected_extraction": {
+        "fields": [
+          {
+            "name": "title",
+            "expected_value": "Global Ventures Expansion Plan",
+            "position": {"page": 1, "top": 100, "left": 200, "bottom": 125, "right": 500},
             "expected_confidence": 0.83
           },
-          "monthly_revenue": {
-            "value": "$35,000.00",
-            "position": {"x1": 120, "y1": 450, "x2": 220, "y2": 470},
-            "expected_confidence": 0.80
+          {
+            "name": "author",
+            "expected_value": "Sarah Williams",
+            "position": {"page": 1, "top": 130, "left": 200, "bottom": 155, "right": 400},
+            "expected_confidence": 0.85
           },
-          "industry_type": {
-            "value": "Construction",
-            "position": {"x1": 120, "y1": 480, "x2": 220, "y2": 500},
+          {
+            "name": "date",
+            "expected_value": "04/25/2023",
+            "position": {"page": 1, "top": 160, "left": 200, "bottom": 185, "right": 300},
+            "expected_confidence": 0.87
+          },
+          {
+            "name": "expansion_cost",
+            "expected_value": "$300,000",
+            "position": {"page": 2, "top": 350, "left": 300, "bottom": 375, "right": 400},
             "expected_confidence": 0.84
-          }
-        },
-        "expected_classification_confidence": 0.95,
-        "expected_overall_confidence": 0.83
-      },
-      {
-        "id": "app_form_handwritten_002",
-        "file_path": "application_forms/mca_application_cursive.pdf",
-        "document_type": "APPLICATION_FORM",
-        "handwriting_style": "CURSIVE",
-        "quality": "MEDIUM",
-        "description": "MCA application form with cursive handwriting",
-        "expected_fields": {
-          "business_name": {
-            "value": "Garcia's Restaurant",
-            "position": {"x1": 120, "y1": 150, "x2": 350, "y2": 170},
-            "expected_confidence": 0.78
           },
-          "dba_name": {
-            "value": "Garcia's",
-            "position": {"x1": 120, "y1": 180, "x2": 350, "y2": 200},
-            "expected_confidence": 0.80
-          },
-          "ein": {
-            "value": "56-7890123",
-            "position": {"x1": 120, "y1": 210, "x2": 250, "y2": 230},
+          {
+            "name": "projected_revenue",
+            "expected_value": "$750,000",
+            "position": {"page": 2, "top": 400, "left": 300, "bottom": 425, "right": 400},
             "expected_confidence": 0.82
           },
-          "business_address": {
-            "value": "321 Pine Road, Somewhere, FL 33101",
-            "position": {"x1": 120, "y1": 240, "x2": 450, "y2": 260},
+          {
+            "name": "signature",
+            "expected_value": "Sarah Williams",
+            "position": {"page": 3, "top": 500, "left": 400, "bottom": 550, "right": 600},
+            "expected_confidence": 0.80
+          }
+        ],
+        "text_blocks": [
+          {
+            "name": "executive_summary",
+            "position": {"page": 1, "top": 200, "left": 100, "bottom": 500, "right": 700},
+            "expected_confidence": 0.78,
+            "expected_text_snippet": "Global Ventures plans to expand operations to the West Coast market with a new retail location in San Francisco"
+          },
+          {
+            "name": "financial_projections",
+            "position": {"page": 2, "top": 200, "left": 100, "bottom": 450, "right": 700},
+            "expected_confidence": 0.75,
+            "expected_text_snippet": "First year revenue projections indicate a potential return on investment within 18 months of opening"
+          },
+          {
+            "name": "action_items",
+            "position": {"page": 3, "top": 100, "left": 100, "bottom": 400, "right": 700},
+            "expected_confidence": 0.76,
+            "expected_text_snippet": "Secure retail space lease by June 2023, Begin hiring process by July 2023, Complete renovations by September 2023"
+          }
+        ]
+      }
+    },
+    {
+      "id": "hw_signature_001",
+      "filename": "signature_samples.pdf",
+      "category": "signatures",
+      "document_type": "signature_page",
+      "quality": "high",
+      "orientation": "portrait",
+      "page_count": 1,
+      "characteristics": {
+        "resolution": "300dpi",
+        "handwriting_style": "cursive",
+        "legibility": "variable",
+        "has_tables": false,
+        "has_checkboxes": false,
+        "has_signatures": true,
+        "complexity": "low"
+      },
+      "expected_extraction": {
+        "fields": [
+          {
+            "name": "signature_1_name",
+            "expected_value": "Sarah J. Williams",
+            "position": {"page": 1, "top": 150, "left": 100, "bottom": 175, "right": 300},
+            "expected_confidence": 0.92
+          },
+          {
+            "name": "signature_1",
+            "expected_value": "Sarah Williams",
+            "position": {"page": 1, "top": 180, "left": 100, "bottom": 230, "right": 300},
+            "expected_confidence": 0.85
+          },
+          {
+            "name": "signature_1_date",
+            "expected_value": "05/15/2023",
+            "position": {"page": 1, "top": 235, "left": 100, "bottom": 260, "right": 200},
+            "expected_confidence": 0.90
+          },
+          {
+            "name": "signature_2_name",
+            "expected_value": "Michael R. Johnson",
+            "position": {"page": 1, "top": 300, "left": 100, "bottom": 325, "right": 300},
+            "expected_confidence": 0.91
+          },
+          {
+            "name": "signature_2",
+            "expected_value": "Michael Johnson",
+            "position": {"page": 1, "top": 330, "left": 100, "bottom": 380, "right": 300},
+            "expected_confidence": 0.83
+          },
+          {
+            "name": "signature_2_date",
+            "expected_value": "05/15/2023",
+            "position": {"page": 1, "top": 385, "left": 100, "bottom": 410, "right": 200},
+            "expected_confidence": 0.89
+          },
+          {
+            "name": "signature_3_name",
+            "expected_value": "David A. Thompson",
+            "position": {"page": 1, "top": 450, "left": 100, "bottom": 475, "right": 300},
+            "expected_confidence": 0.90
+          },
+          {
+            "name": "signature_3",
+            "expected_value": "David Thompson",
+            "position": {"page": 1, "top": 480, "left": 100, "bottom": 530, "right": 300},
+            "expected_confidence": 0.82
+          },
+          {
+            "name": "signature_3_date",
+            "expected_value": "05/16/2023",
+            "position": {"page": 1, "top": 535, "left": 100, "bottom": 560, "right": 200},
+            "expected_confidence": 0.88
+          }
+        ]
+      }
+    },
+    {
+      "id": "hw_app_form_002",
+      "filename": "mca_application_low_quality.pdf",
+      "category": "application_forms",
+      "document_type": "loan_application",
+      "quality": "low",
+      "orientation": "portrait",
+      "page_count": 3,
+      "characteristics": {
+        "resolution": "150dpi",
+        "handwriting_style": "mixed",
+        "legibility": "low",
+        "has_tables": true,
+        "has_checkboxes": true,
+        "has_signatures": true,
+        "complexity": "high",
+        "issues": ["smudges", "faded_ink", "uneven_pressure", "skewed"]
+      },
+      "expected_extraction": {
+        "fields": [
+          {
+            "name": "business_name",
+            "expected_value": "Riverside Cafe",
+            "position": {"page": 1, "top": 150, "left": 200, "bottom": 175, "right": 400},
             "expected_confidence": 0.75
           },
-          "business_phone": {
-            "value": "(555) 345-6789",
-            "position": {"x1": 120, "y1": 270, "x2": 250, "y2": 290},
-            "expected_confidence": 0.81
-          },
-          "business_email": {
-            "value": "maria@garciasrestaurant.com",
-            "position": {"x1": 120, "y1": 300, "x2": 300, "y2": 320},
-            "expected_confidence": 0.76
-          },
-          "owner_name": {
-            "value": "Maria Garcia",
-            "position": {"x1": 120, "y1": 330, "x2": 250, "y2": 350},
-            "expected_confidence": 0.79
-          },
-          "owner_title": {
-            "value": "Owner",
-            "position": {"x1": 120, "y1": 360, "x2": 180, "y2": 380},
-            "expected_confidence": 0.83
-          },
-          "funding_amount": {
-            "value": "$50,000.00",
-            "position": {"x1": 120, "y1": 390, "x2": 220, "y2": 410},
-            "expected_confidence": 0.77
-          },
-          "business_start_date": {
-            "value": "09/15/2012",
-            "position": {"x1": 120, "y1": 420, "x2": 220, "y2": 440},
-            "expected_confidence": 0.78
-          },
-          "monthly_revenue": {
-            "value": "$40,000.00",
-            "position": {"x1": 120, "y1": 450, "x2": 220, "y2": 470},
-            "expected_confidence": 0.76
-          },
-          "industry_type": {
-            "value": "Restaurant",
-            "position": {"x1": 120, "y1": 480, "x2": 220, "y2": 500},
-            "expected_confidence": 0.80
-          }
-        },
-        "expected_classification_confidence": 0.92,
-        "expected_overall_confidence": 0.79
-      },
-      {
-        "id": "app_form_handwritten_003",
-        "file_path": "application_forms/mca_application_low_quality.pdf",
-        "document_type": "APPLICATION_FORM",
-        "handwriting_style": "MIXED",
-        "quality": "LOW",
-        "description": "MCA application form with mixed handwriting styles and low quality (faded ink, smudges)",
-        "expected_fields": {
-          "business_name": {
-            "value": "Wilson Consulting",
-            "position": {"x1": 120, "y1": 150, "x2": 350, "y2": 170},
+          {
+            "name": "dba_name",
+            "expected_value": "Riverside Coffee & Bakery",
+            "position": {"page": 1, "top": 180, "left": 200, "bottom": 205, "right": 450},
             "expected_confidence": 0.72
           },
-          "dba_name": {
-            "value": "Wilson & Associates",
-            "position": {"x1": 120, "y1": 180, "x2": 350, "y2": 200},
+          {
+            "name": "ein",
+            "expected_value": "87-6543210",
+            "position": {"page": 1, "top": 210, "left": 200, "bottom": 235, "right": 300},
+            "expected_confidence": 0.78
+          },
+          {
+            "name": "business_address",
+            "expected_value": "456 River Road, Riverside, CA 92501",
+            "position": {"page": 1, "top": 240, "left": 200, "bottom": 265, "right": 550},
             "expected_confidence": 0.70
           },
-          "ein": {
-            "value": "78-9012345",
-            "position": {"x1": 120, "y1": 210, "x2": 250, "y2": 230},
-            "expected_confidence": 0.75
+          {
+            "name": "funding_amount_requested",
+            "expected_value": "$75,000.00",
+            "position": {"page": 1, "top": 350, "left": 200, "bottom": 375, "right": 350},
+            "expected_confidence": 0.76
           },
-          "business_address": {
-            "value": "567 Oak Lane, Suite 200, Metropolis, IL 60614",
-            "position": {"x1": 120, "y1": 240, "x2": 450, "y2": 260},
+          {
+            "name": "owner_name",
+            "expected_value": "Robert L. Martinez",
+            "position": {"page": 2, "top": 150, "left": 200, "bottom": 175, "right": 400},
+            "expected_confidence": 0.74
+          },
+          {
+            "name": "signature",
+            "expected_value": "Robert Martinez",
+            "position": {"page": 3, "top": 500, "left": 200, "bottom": 550, "right": 400},
             "expected_confidence": 0.68
-          },
-          "business_phone": {
-            "value": "(555) 456-7890",
-            "position": {"x1": 120, "y1": 270, "x2": 250, "y2": 290},
-            "expected_confidence": 0.73
-          },
-          "business_email": {
-            "value": "david@wilsonconsulting.com",
-            "position": {"x1": 120, "y1": 300, "x2": 300, "y2": 320},
-            "expected_confidence": 0.69
-          },
-          "owner_name": {
-            "value": "David Wilson",
-            "position": {"x1": 120, "y1": 330, "x2": 250, "y2": 350},
-            "expected_confidence": 0.74
-          },
-          "owner_title": {
-            "value": "President",
-            "position": {"x1": 120, "y1": 360, "x2": 180, "y2": 380},
-            "expected_confidence": 0.76
-          },
-          "funding_amount": {
-            "value": "$125,000.00",
-            "position": {"x1": 120, "y1": 390, "x2": 220, "y2": 410},
-            "expected_confidence": 0.71
-          },
-          "business_start_date": {
-            "value": "03/22/2014",
-            "position": {"x1": 120, "y1": 420, "x2": 220, "y2": 440},
-            "expected_confidence": 0.72
-          },
-          "monthly_revenue": {
-            "value": "$55,000.00",
-            "position": {"x1": 120, "y1": 450, "x2": 220, "y2": 470},
-            "expected_confidence": 0.70
-          },
-          "industry_type": {
-            "value": "Consulting",
-            "position": {"x1": 120, "y1": 480, "x2": 220, "y2": 500},
-            "expected_confidence": 0.73
           }
-        },
-        "expected_classification_confidence": 0.88,
-        "expected_overall_confidence": 0.72,
-        "challenging_factors": ["faded ink", "smudges", "inconsistent handwriting"]
+        ],
+        "tables": [
+          {
+            "name": "bank_accounts",
+            "position": {"page": 2, "top": 400, "left": 100, "bottom": 550, "right": 700},
+            "expected_confidence": 0.65,
+            "rows": 3,
+            "columns": 4,
+            "headers": ["Account Type", "Bank Name", "Account Number", "Current Balance"],
+            "data": [
+              ["Checking", "Riverside Community Bank", "XXXX3456", "$12,345.67"],
+              ["Savings", "Riverside Community Bank", "XXXX7890", "$5,432.10"]
+            ]
+          }
+        ]
       }
-    ],
-    "financial_documents": [
-      {
-        "id": "bank_statement_handwritten_001",
-        "file_path": "financial_documents/bank_statement_annotated.pdf",
-        "document_type": "BANK_STATEMENT",
-        "handwriting_style": "PRINT",
-        "quality": "MEDIUM",
-        "description": "Bank statement with handwritten annotations and calculations",
-        "expected_fields": {
-          "annotation_1": {
-            "value": "Business expense",
-            "position": {"x1": 550, "y1": 300, "x2": 650, "y2": 320},
-            "expected_confidence": 0.85
-          },
-          "annotation_2": {
-            "value": "New equipment purchase",
-            "position": {"x1": 550, "y1": 350, "x2": 650, "y2": 370},
-            "expected_confidence": 0.83
-          },
-          "annotation_3": {
-            "value": "Loan payment",
-            "position": {"x1": 550, "y1": 400, "x2": 650, "y2": 420},
-            "expected_confidence": 0.86
-          },
-          "calculation_1": {
-            "value": "$5,432.10 + $2,345.67 = $7,777.77",
-            "position": {"x1": 550, "y1": 450, "x2": 700, "y2": 470},
-            "expected_confidence": 0.82
-          },
-          "calculation_2": {
-            "value": "$12,500.00 - $3,456.78 = $9,043.22",
-            "position": {"x1": 550, "y1": 500, "x2": 700, "y2": 520},
-            "expected_confidence": 0.81
-          }
-        },
-        "expected_classification_confidence": 0.94,
-        "expected_overall_confidence": 0.83
+    },
+    {
+      "id": "hw_id_doc_001",
+      "filename": "identity_verification_form.pdf",
+      "category": "identity_documents",
+      "document_type": "verification_form",
+      "quality": "high",
+      "orientation": "portrait",
+      "page_count": 1,
+      "characteristics": {
+        "resolution": "300dpi",
+        "handwriting_style": "print",
+        "legibility": "high",
+        "has_tables": false,
+        "has_checkboxes": true,
+        "has_signatures": true,
+        "complexity": "medium"
       },
-      {
-        "id": "invoice_handwritten_001",
-        "file_path": "financial_documents/handwritten_invoice.pdf",
-        "document_type": "INVOICE",
-        "handwriting_style": "PRINT",
-        "quality": "MEDIUM",
-        "description": "Handwritten invoice for services rendered",
-        "expected_fields": {
-          "invoice_number": {
-            "value": "INV-2025-0123",
-            "position": {"x1": 450, "y1": 150, "x2": 550, "y2": 170},
-            "expected_confidence": 0.87
+      "expected_extraction": {
+        "fields": [
+          {
+            "name": "full_name",
+            "expected_value": "Sarah Jane Williams",
+            "position": {"page": 1, "top": 150, "left": 200, "bottom": 175, "right": 450},
+            "expected_confidence": 0.94
           },
-          "invoice_date": {
-            "value": "05/10/2025",
-            "position": {"x1": 450, "y1": 180, "x2": 550, "y2": 200},
-            "expected_confidence": 0.88
+          {
+            "name": "date_of_birth",
+            "expected_value": "06/12/1975",
+            "position": {"page": 1, "top": 180, "left": 200, "bottom": 205, "right": 300},
+            "expected_confidence": 0.93
           },
-          "due_date": {
-            "value": "06/10/2025",
-            "position": {"x1": 450, "y1": 210, "x2": 550, "y2": 230},
-            "expected_confidence": 0.88
+          {
+            "name": "ssn",
+            "expected_value": "XXX-XX-5678",
+            "position": {"page": 1, "top": 210, "left": 200, "bottom": 235, "right": 300},
+            "expected_confidence": 0.92
           },
-          "vendor_name": {
-            "value": "Johnson Plumbing",
-            "position": {"x1": 100, "y1": 120, "x2": 300, "y2": 140},
-            "expected_confidence": 0.86
+          {
+            "name": "drivers_license",
+            "expected_value": "NY12345678",
+            "position": {"page": 1, "top": 240, "left": 200, "bottom": 265, "right": 350},
+            "expected_confidence": 0.91
           },
-          "customer_name": {
-            "value": "Smith Auto Repair",
-            "position": {"x1": 100, "y1": 250, "x2": 300, "y2": 270},
-            "expected_confidence": 0.85
-          },
-          "service_1": {
-            "value": "Plumbing repair - main line",
-            "position": {"x1": 100, "y1": 350, "x2": 400, "y2": 370},
-            "expected_confidence": 0.83
-          },
-          "amount_1": {
-            "value": "$750.00",
-            "position": {"x1": 450, "y1": 350, "x2": 550, "y2": 370},
-            "expected_confidence": 0.87
-          },
-          "service_2": {
-            "value": "Water heater installation",
-            "position": {"x1": 100, "y1": 380, "x2": 400, "y2": 400},
-            "expected_confidence": 0.84
-          },
-          "amount_2": {
-            "value": "$1,200.00",
-            "position": {"x1": 450, "y1": 380, "x2": 550, "y2": 400},
-            "expected_confidence": 0.86
-          },
-          "subtotal": {
-            "value": "$1,950.00",
-            "position": {"x1": 450, "y1": 450, "x2": 550, "y2": 470},
-            "expected_confidence": 0.85
-          },
-          "tax": {
-            "value": "$156.00",
-            "position": {"x1": 450, "y1": 480, "x2": 550, "y2": 500},
-            "expected_confidence": 0.86
-          },
-          "total": {
-            "value": "$2,106.00",
-            "position": {"x1": 450, "y1": 510, "x2": 550, "y2": 530},
-            "expected_confidence": 0.87
-          }
-        },
-        "expected_classification_confidence": 0.91,
-        "expected_overall_confidence": 0.86
-      },
-      {
-        "id": "receipt_handwritten_001",
-        "file_path": "financial_documents/handwritten_receipt.pdf",
-        "document_type": "INVOICE",
-        "handwriting_style": "MIXED",
-        "quality": "LOW",
-        "description": "Handwritten receipt with mixed handwriting styles and low quality",
-        "expected_fields": {
-          "receipt_number": {
-            "value": "REC-5678",
-            "position": {"x1": 400, "y1": 100, "x2": 500, "y2": 120},
-            "expected_confidence": 0.76
-          },
-          "date": {
-            "value": "04/25/2025",
-            "position": {"x1": 400, "y1": 130, "x2": 500, "y2": 150},
-            "expected_confidence": 0.78
-          },
-          "vendor_name": {
-            "value": "City Hardware Store",
-            "position": {"x1": 100, "y1": 100, "x2": 300, "y2": 120},
-            "expected_confidence": 0.75
-          },
-          "customer_name": {
-            "value": "Johnson Plumbing",
-            "position": {"x1": 100, "y1": 160, "x2": 300, "y2": 180},
-            "expected_confidence": 0.74
-          },
-          "item_1": {
-            "value": "Copper pipe fittings",
-            "position": {"x1": 100, "y1": 200, "x2": 350, "y2": 220},
-            "expected_confidence": 0.72
-          },
-          "amount_1": {
-            "value": "$45.75",
-            "position": {"x1": 400, "y1": 200, "x2": 500, "y2": 220},
-            "expected_confidence": 0.77
-          },
-          "item_2": {
-            "value": "PVC pipes",
-            "position": {"x1": 100, "y1": 230, "x2": 350, "y2": 250},
-            "expected_confidence": 0.75
-          },
-          "amount_2": {
-            "value": "$32.50",
-            "position": {"x1": 400, "y1": 230, "x2": 500, "y2": 250},
-            "expected_confidence": 0.76
-          },
-          "item_3": {
-            "value": "Pipe wrench",
-            "position": {"x1": 100, "y1": 260, "x2": 350, "y2": 280},
-            "expected_confidence": 0.74
-          },
-          "amount_3": {
-            "value": "$28.99",
-            "position": {"x1": 400, "y1": 260, "x2": 500, "y2": 280},
-            "expected_confidence": 0.75
-          },
-          "total": {
-            "value": "$107.24",
-            "position": {"x1": 400, "y1": 300, "x2": 500, "y2": 320},
-            "expected_confidence": 0.78
-          }
-        },
-        "expected_classification_confidence": 0.87,
-        "expected_overall_confidence": 0.75,
-        "challenging_factors": ["faded ink", "cramped writing", "inconsistent spacing"]
-      }
-    ],
-    "business_documents": [
-      {
-        "id": "contract_handwritten_001",
-        "file_path": "business_documents/handwritten_contract.pdf",
-        "document_type": "BUSINESS_DOCUMENT",
-        "handwriting_style": "MIXED",
-        "quality": "MEDIUM",
-        "description": "Handwritten contract with signatures and annotations",
-        "expected_fields": {
-          "contract_title": {
-            "value": "Service Agreement",
-            "position": {"x1": 250, "y1": 100, "x2": 450, "y2": 130},
-            "expected_confidence": 0.87
-          },
-          "contract_date": {
-            "value": "05/05/2025",
-            "position": {"x1": 450, "y1": 150, "x2": 550, "y2": 170},
-            "expected_confidence": 0.88
-          },
-          "party_1": {
-            "value": "Johnson Plumbing",
-            "position": {"x1": 150, "y1": 200, "x2": 350, "y2": 220},
-            "expected_confidence": 0.86
-          },
-          "party_2": {
-            "value": "Smith Auto Repair",
-            "position": {"x1": 150, "y1": 230, "x2": 350, "y2": 250},
-            "expected_confidence": 0.85
-          },
-          "service_description": {
-            "value": "Monthly maintenance of all plumbing systems",
-            "position": {"x1": 150, "y1": 300, "x2": 550, "y2": 320},
-            "expected_confidence": 0.82
-          },
-          "payment_terms": {
-            "value": "$350 per month, due on the 1st of each month",
-            "position": {"x1": 150, "y1": 350, "x2": 550, "y2": 370},
-            "expected_confidence": 0.83
-          },
-          "contract_duration": {
-            "value": "12 months from signing date",
-            "position": {"x1": 150, "y1": 400, "x2": 450, "y2": 420},
-            "expected_confidence": 0.84
-          },
-          "signature_1": {
-            "value": "Robert Johnson",
-            "position": {"x1": 150, "y1": 500, "x2": 300, "y2": 530},
-            "expected_confidence": 0.80
-          },
-          "signature_2": {
-            "value": "Michael Smith",
-            "position": {"x1": 400, "y1": 500, "x2": 550, "y2": 530},
-            "expected_confidence": 0.81
-          }
-        },
-        "expected_classification_confidence": 0.90,
-        "expected_overall_confidence": 0.84
-      },
-      {
-        "id": "business_plan_handwritten_001",
-        "file_path": "business_documents/handwritten_business_plan.pdf",
-        "document_type": "BUSINESS_DOCUMENT",
-        "handwriting_style": "PRINT",
-        "quality": "HIGH",
-        "description": "Handwritten business plan with neat print handwriting",
-        "expected_fields": {
-          "title": {
-            "value": "Business Expansion Plan",
-            "position": {"x1": 200, "y1": 100, "x2": 500, "y2": 130},
+          {
+            "name": "home_address",
+            "expected_value": "123 Maple Drive, Commerce City, NY 10001",
+            "position": {"page": 1, "top": 270, "left": 200, "bottom": 295, "right": 550},
             "expected_confidence": 0.89
           },
-          "business_name": {
-            "value": "Garcia's Restaurant",
-            "position": {"x1": 200, "y1": 150, "x2": 400, "y2": 170},
-            "expected_confidence": 0.88
+          {
+            "name": "phone_number",
+            "expected_value": "(555) 123-4567",
+            "position": {"page": 1, "top": 300, "left": 200, "bottom": 325, "right": 350},
+            "expected_confidence": 0.93
           },
-          "prepared_by": {
-            "value": "Maria Garcia",
-            "position": {"x1": 200, "y1": 180, "x2": 350, "y2": 200},
-            "expected_confidence": 0.89
-          },
-          "date": {
-            "value": "05/01/2025",
-            "position": {"x1": 400, "y1": 180, "x2": 500, "y2": 200},
+          {
+            "name": "email_address",
+            "expected_value": "sarah.williams@globalventures.com",
+            "position": {"page": 1, "top": 330, "left": 200, "bottom": 355, "right": 500},
             "expected_confidence": 0.90
           },
-          "expansion_cost": {
-            "value": "$175,000",
-            "position": {"x1": 300, "y1": 300, "x2": 400, "y2": 320},
-            "expected_confidence": 0.87
-          },
-          "projected_revenue": {
-            "value": "$350,000 annually",
-            "position": {"x1": 300, "y1": 350, "x2": 450, "y2": 370},
+          {
+            "name": "signature",
+            "expected_value": "Sarah Williams",
+            "position": {"page": 1, "top": 500, "left": 200, "bottom": 550, "right": 400},
             "expected_confidence": 0.86
           },
-          "roi_period": {
-            "value": "18 months",
-            "position": {"x1": 300, "y1": 400, "x2": 400, "y2": 420},
-            "expected_confidence": 0.88
+          {
+            "name": "date_signed",
+            "expected_value": "05/15/2023",
+            "position": {"page": 1, "top": 500, "left": 450, "bottom": 525, "right": 550},
+            "expected_confidence": 0.92
           }
-        },
-        "expected_classification_confidence": 0.92,
-        "expected_overall_confidence": 0.88
+        ],
+        "checkboxes": [
+          {
+            "name": "id_verification_method_drivers_license",
+            "expected_value": true,
+            "position": {"page": 1, "top": 380, "left": 200, "bottom": 395, "right": 215},
+            "expected_confidence": 0.95
+          },
+          {
+            "name": "id_verification_method_passport",
+            "expected_value": false,
+            "position": {"page": 1, "top": 400, "left": 200, "bottom": 415, "right": 215},
+            "expected_confidence": 0.95
+          },
+          {
+            "name": "id_verification_method_state_id",
+            "expected_value": false,
+            "position": {"page": 1, "top": 420, "left": 200, "bottom": 435, "right": 215},
+            "expected_confidence": 0.95
+          }
+        ]
       }
-    ],
-    "identity_documents": [
-      {
-        "id": "signature_sample_001",
-        "file_path": "identity_documents/signature_sample.pdf",
-        "document_type": "ID_DOCUMENT",
-        "handwriting_style": "CURSIVE",
-        "quality": "HIGH",
-        "description": "Sample signature page with multiple signatures",
-        "expected_fields": {
-          "signature_1": {
-            "value": "Robert Johnson",
-            "position": {"x1": 200, "y1": 200, "x2": 400, "y2": 230},
-            "expected_confidence": 0.82
-          },
-          "date_1": {
-            "value": "05/10/2025",
-            "position": {"x1": 450, "y1": 200, "x2": 550, "y2": 220},
-            "expected_confidence": 0.88
-          },
-          "signature_2": {
-            "value": "Maria Garcia",
-            "position": {"x1": 200, "y1": 300, "x2": 400, "y2": 330},
-            "expected_confidence": 0.80
-          },
-          "date_2": {
-            "value": "05/11/2025",
-            "position": {"x1": 450, "y1": 300, "x2": 550, "y2": 320},
-            "expected_confidence": 0.87
-          },
-          "signature_3": {
-            "value": "David Wilson",
-            "position": {"x1": 200, "y1": 400, "x2": 400, "y2": 430},
-            "expected_confidence": 0.81
-          },
-          "date_3": {
-            "value": "05/12/2025",
-            "position": {"x1": 450, "y1": 400, "x2": 550, "y2": 420},
-            "expected_confidence": 0.88
-          }
-        },
-        "expected_classification_confidence": 0.94,
-        "expected_overall_confidence": 0.84
-      },
-      {
-        "id": "id_card_handwritten_001",
-        "file_path": "identity_documents/handwritten_id_card.pdf",
-        "document_type": "ID_DOCUMENT",
-        "handwriting_style": "BLOCK_LETTERS",
-        "quality": "MEDIUM",
-        "description": "Handwritten identification card with block letters",
-        "expected_fields": {
-          "name": {
-            "value": "ROBERT JOHNSON",
-            "position": {"x1": 200, "y1": 150, "x2": 400, "y2": 170},
-            "expected_confidence": 0.89
-          },
-          "id_number": {
-            "value": "ID-12345678",
-            "position": {"x1": 200, "y1": 200, "x2": 350, "y2": 220},
-            "expected_confidence": 0.90
-          },
-          "issue_date": {
-            "value": "01/15/2023",
-            "position": {"x1": 200, "y1": 250, "x2": 300, "y2": 270},
-            "expected_confidence": 0.88
-          },
-          "expiry_date": {
-            "value": "01/15/2028",
-            "position": {"x1": 350, "y1": 250, "x2": 450, "y2": 270},
-            "expected_confidence": 0.87
-          },
-          "signature": {
-            "value": "Robert Johnson",
-            "position": {"x1": 200, "y1": 300, "x2": 400, "y2": 330},
-            "expected_confidence": 0.82
-          }
-        },
-        "expected_classification_confidence": 0.93,
-        "expected_overall_confidence": 0.87
-      }
-    ],
-    "mixed_content": [
-      {
-        "id": "notes_handwritten_001",
-        "file_path": "mixed_content/meeting_notes.pdf",
-        "document_type": "OTHER",
-        "handwriting_style": "MIXED",
-        "quality": "MEDIUM",
-        "description": "Handwritten meeting notes with diagrams and calculations",
-        "expected_fields": {
-          "meeting_title": {
-            "value": "Expansion Planning Meeting",
-            "position": {"x1": 200, "y1": 100, "x2": 500, "y2": 130},
-            "expected_confidence": 0.84
-          },
-          "date": {
-            "value": "05/15/2025",
-            "position": {"x1": 200, "y1": 150, "x2": 300, "y2": 170},
-            "expected_confidence": 0.86
-          },
-          "attendees": {
-            "value": "Robert, Maria, David, Susan",
-            "position": {"x1": 200, "y1": 180, "x2": 450, "y2": 200},
-            "expected_confidence": 0.82
-          },
-          "action_item_1": {
-            "value": "Contact bank about financing options",
-            "position": {"x1": 200, "y1": 300, "x2": 500, "y2": 320},
-            "expected_confidence": 0.80
-          },
-          "action_item_2": {
-            "value": "Prepare updated business plan by 5/30",
-            "position": {"x1": 200, "y1": 330, "x2": 500, "y2": 350},
-            "expected_confidence": 0.81
-          },
-          "calculation": {
-            "value": "$175K investment / $40K monthly profit = 4.4 months payback",
-            "position": {"x1": 200, "y1": 400, "x2": 600, "y2": 420},
-            "expected_confidence": 0.78
-          }
-        },
-        "expected_classification_confidence": 0.88,
-        "expected_overall_confidence": 0.82
-      },
-      {
-        "id": "form_with_annotations_001",
-        "file_path": "mixed_content/form_with_annotations.pdf",
-        "document_type": "APPLICATION_FORM",
-        "handwriting_style": "MIXED",
-        "quality": "MEDIUM",
-        "description": "Printed form with handwritten annotations and corrections",
-        "expected_fields": {
-          "business_name": {
-            "value": "Wilson Consulting",
-            "position": {"x1": 200, "y1": 150, "x2": 400, "y2": 170},
-            "expected_confidence": 0.83
-          },
-          "correction_1": {
-            "value": "Changed to LLC as of 4/1/2025",
-            "position": {"x1": 450, "y1": 150, "x2": 650, "y2": 170},
-            "expected_confidence": 0.79
-          },
-          "business_address": {
-            "value": "567 Oak Lane, Suite 200, Metropolis, IL 60614",
-            "position": {"x1": 200, "y1": 200, "x2": 550, "y2": 220},
-            "expected_confidence": 0.81
-          },
-          "correction_2": {
-            "value": "Moving to Suite 300 on 6/1/2025",
-            "position": {"x1": 450, "y1": 200, "x2": 650, "y2": 220},
-            "expected_confidence": 0.78
-          },
-          "funding_amount": {
-            "value": "$125,000.00",
-            "position": {"x1": 200, "y1": 250, "x2": 350, "y2": 270},
-            "expected_confidence": 0.84
-          },
-          "correction_3": {
-            "value": "Increased from $100K due to new project",
-            "position": {"x1": 450, "y1": 250, "x2": 650, "y2": 270},
-            "expected_confidence": 0.77
-          }
-        },
-        "expected_classification_confidence": 0.90,
-        "expected_overall_confidence": 0.80
-      }
-    ]
-  },
-  "confidence_thresholds": {
-    "high_confidence": 0.90,
-    "medium_confidence": 0.75,
-    "low_confidence": 0.60,
-    "human_review_threshold": 0.75
-  },
-  "test_parameters": {
-    "handwritten_text_accuracy_target": 0.85,
-    "print_style_accuracy_target": 0.88,
-    "cursive_style_accuracy_target": 0.80,
-    "mixed_style_accuracy_target": 0.82,
-    "block_letters_accuracy_target": 0.90,
-    "classification_accuracy_target": 0.95,
-    "field_extraction_accuracy_target": 0.85,
-    "overall_accuracy_target": 0.85
-  },
-  "challenging_scenarios": [
-    {
-      "scenario": "Cursive Handwriting",
-      "description": "Cursive handwriting presents challenges for OCR due to connected letters and variable styles",
-      "expected_confidence_impact": "-10% to -15% compared to print handwriting",
-      "mitigation_strategy": "Enhanced training on cursive datasets and post-processing algorithms"
-    },
-    {
-      "scenario": "Low Quality Documents",
-      "description": "Faded ink, smudges, and poor contrast reduce OCR accuracy",
-      "expected_confidence_impact": "-15% to -20% compared to high quality documents",
-      "mitigation_strategy": "Image preprocessing with adaptive thresholding and contrast enhancement"
-    },
-    {
-      "scenario": "Mixed Handwriting Styles",
-      "description": "Documents with multiple handwriting styles from different individuals",
-      "expected_confidence_impact": "-5% to -10% compared to consistent handwriting",
-      "mitigation_strategy": "Segmentation-based approach with style-specific OCR models"
-    },
-    {
-      "scenario": "Overlapping Content",
-      "description": "Annotations that overlap with existing text or form elements",
-      "expected_confidence_impact": "-10% to -15% for affected regions",
-      "mitigation_strategy": "Layer separation techniques and contextual analysis"
     }
-  ]
+  ],
+  "test_parameters": {
+    "confidence_thresholds": {
+      "high_quality": 0.90,
+      "medium_quality": 0.80,
+      "low_quality": 0.70
+    },
+    "accuracy_metrics": {
+      "field_extraction": {
+        "exact_match": "Value must match exactly, including capitalization and punctuation",
+        "fuzzy_match": "Value must have Levenshtein distance <= 3 for short fields, <= 7 for long fields",
+        "numeric_match": "Numeric values must be within 0.1% of expected value"
+      },
+      "position_tolerance": {
+        "high_quality": {"x": 15, "y": 10},
+        "medium_quality": {"x": 20, "y": 15},
+        "low_quality": {"x": 30, "y": 20}
+      }
+    },
+    "performance_requirements": {
+      "processing_time": {
+        "per_page": "< 3 seconds",
+        "per_document": "< 15 seconds"
+      },
+      "memory_usage": "< 1.5GB per document",
+      "gpu_acceleration": "Required for production environment"
+    }
+  },
+  "handwriting_analysis": {
+    "style_characteristics": {
+      "cursive": {
+        "description": "Connected flowing script where letters are joined together",
+        "challenges": ["letter connectivity", "variable slant", "inconsistent spacing", "ambiguous character boundaries", "loop variations"],
+        "expected_confidence_impact": "-10% compared to print",
+        "common_errors": {
+          "character_confusions": ["e/i", "a/o", "u/v", "n/m", "r/s"],
+          "segmentation_issues": "Difficulty separating connected characters",
+          "context_dependency": "Character recognition highly dependent on surrounding characters"
+        },
+        "test_focus_areas": ["signature fields", "notes", "personal information fields"]
+      },
+      "print": {
+        "description": "Disconnected letters written individually",
+        "challenges": ["character ambiguity", "inconsistent character formation", "stroke variations", "alignment issues"],
+        "expected_confidence_impact": "baseline for comparison",
+        "common_errors": {
+          "character_confusions": ["0/O", "1/l/I", "5/S", "8/B", "2/Z"],
+          "segmentation_issues": "Inconsistent spacing between characters and words",
+          "context_dependency": "Less context-dependent than cursive but affected by individual writing habits"
+        },
+        "test_focus_areas": ["form fields", "numerical data", "addresses"]
+      },
+      "mixed": {
+        "description": "Combination of cursive and print styles",
+        "challenges": ["style transitions", "inconsistent character formation", "variable spacing", "unpredictable connectivity"],
+        "expected_confidence_impact": "-15% compared to print",
+        "common_errors": {
+          "character_confusions": ["combines issues from both cursive and print"],
+          "segmentation_issues": "Unpredictable transitions between connected and disconnected text",
+          "context_dependency": "Highly variable depending on writer's habits and fatigue"
+        },
+        "test_focus_areas": ["longer form fields", "notes", "explanatory text"]
+      },
+      "block_letters": {
+        "description": "All capital letters written individually",
+        "challenges": ["lack of case differentiation", "spacing inconsistencies", "rigid formation"],
+        "expected_confidence_impact": "+5% compared to print",
+        "common_errors": {
+          "character_confusions": ["E/F", "M/N", "D/O", "C/G", "P/R"],
+          "segmentation_issues": "Generally fewer segmentation issues but spacing can be inconsistent",
+          "context_dependency": "Less context-dependent due to standardized character shapes"
+        },
+        "test_focus_areas": ["form headers", "emphasized information", "short codes and identifiers"]
+      },
+      "calligraphy": {
+        "description": "Decorative, artistic handwriting style",
+        "challenges": ["decorative elements", "extreme character variations", "unusual proportions", "flourishes", "non-standard formations"],
+        "expected_confidence_impact": "-25% compared to print",
+        "common_errors": {
+          "character_confusions": ["highly variable based on specific calligraphic style"],
+          "segmentation_issues": "Decorative elements often confused with character components",
+          "context_dependency": "Highly style-dependent with significant variations between writers"
+        },
+        "test_focus_areas": ["signatures", "document titles", "certificates"]
+      }
+    },
+    "document_specific_challenges": {
+      "loan_applications": {
+        "critical_fields": ["business_name", "ein", "funding_amount_requested", "signature"],
+        "common_issues": "Mixed numerical and text data with varying writing styles across multiple pages",
+        "accuracy_requirements": "≥ 95% for numerical fields, ≥ 90% for text fields"
+      },
+      "financial_statements": {
+        "critical_fields": ["total_assets", "total_liabilities", "net_worth", "signature"],
+        "common_issues": "Complex numerical data with currency symbols and decimal alignment",
+        "accuracy_requirements": "≥ 97% for numerical fields, ≥ 90% for text fields"
+      },
+      "business_notes": {
+        "critical_fields": ["expansion_cost", "projected_revenue", "action_items"],
+        "common_issues": "Unstructured text with varying legibility and organization",
+        "accuracy_requirements": "≥ 85% for text blocks, ≥ 92% for numerical values"
+      },
+      "signature_pages": {
+        "critical_fields": ["signature", "date_signed", "printed_name"],
+        "common_issues": "Highly variable signature styles with potential for flourishes and stylization",
+        "accuracy_requirements": "≥ 90% for printed name, ≥ 85% for signature recognition"
+      },
+      "identity_verification": {
+        "critical_fields": ["full_name", "date_of_birth", "ssn", "drivers_license"],
+        "common_issues": "Mixture of alphanumeric data with specific formatting requirements",
+        "accuracy_requirements": "≥ 98% for identification numbers, ≥ 95% for personal information"
+      }
+    },
+    
+    "legibility_factors": {
+      "high": {
+        "description": "Clear, consistent handwriting with good spacing and alignment",
+        "expected_confidence_impact": "baseline for comparison"
+      },
+      "medium": {
+        "description": "Generally readable but with some inconsistencies in formation or spacing",
+        "expected_confidence_impact": "-10% compared to high legibility"
+      },
+      "low": {
+        "description": "Difficult to read with significant inconsistencies, poor spacing, or formation issues",
+        "expected_confidence_impact": "-25% compared to high legibility"
+      },
+      "variable": {
+        "description": "Quality varies significantly within the document",
+        "expected_confidence_impact": "varies by region, -5% to -20% compared to high legibility"
+      }
+    }
+  },
+  "related_manifests": [
+    "../typed_documents/sample_manifest.json",
+    "../mixed_documents/sample_manifest.json"
+  ],
+  "testing_guidelines": {
+    "test_execution": {
+      "baseline_tests": "Run tests against high-quality print handwriting samples first to establish baseline performance",
+      "style_variation_tests": "Test each handwriting style separately to isolate style-specific challenges",
+      "quality_degradation_tests": "Test performance degradation across quality levels to establish confidence thresholds",
+      "field_type_tests": "Test specific field types (numbers, dates, addresses) to measure type-specific accuracy"
+    },
+    "test_scenarios": [
+      {
+        "name": "baseline_accuracy",
+        "description": "Validate basic OCR accuracy on high-quality handwritten documents",
+        "documents": ["hw_app_form_001", "hw_id_doc_001"],
+        "success_criteria": "All fields extracted with confidence scores meeting or exceeding expected values",
+        "execution_frequency": "Every build"
+      },
+      {
+        "name": "cursive_recognition",
+        "description": "Test OCR performance specifically on cursive handwriting",
+        "documents": ["hw_note_001", "hw_signature_001"],
+        "success_criteria": "Field extraction accuracy within 10% of baseline print handwriting performance",
+        "execution_frequency": "Daily"
+      },
+      {
+        "name": "low_quality_resilience",
+        "description": "Validate OCR performance on low-quality handwritten documents",
+        "documents": ["hw_app_form_002"],
+        "success_criteria": "Critical fields extracted with minimum 70% confidence",
+        "execution_frequency": "Daily"
+      },
+      {
+        "name": "numerical_accuracy",
+        "description": "Test accuracy of numerical field extraction across document types",
+        "documents": ["hw_app_form_001", "hw_fin_doc_001", "hw_note_001"],
+        "target_fields": ["funding_amount_requested", "total_assets", "total_liabilities", "expansion_cost", "projected_revenue"],
+        "success_criteria": "Numerical values extracted with 95% accuracy and correct formatting",
+        "execution_frequency": "Every build"
+      },
+      {
+        "name": "signature_verification",
+        "description": "Test signature extraction and verification capabilities",
+        "documents": ["hw_signature_001", "hw_app_form_001", "hw_fin_doc_001"],
+        "target_fields": ["signature", "signature_1", "signature_2", "signature_3"],
+        "success_criteria": "Signatures extracted with minimum 80% confidence and correct attribution",
+        "execution_frequency": "Weekly"
+      },
+      {
+        "name": "mixed_style_handling",
+        "description": "Test OCR performance on documents with mixed handwriting styles",
+        "documents": ["hw_fin_doc_001", "hw_app_form_002"],
+        "success_criteria": "Field extraction accuracy within 15% of baseline print handwriting performance",
+        "execution_frequency": "Weekly"
+      },
+      {
+        "name": "form_structure_recognition",
+        "description": "Test ability to recognize form structure and correctly map fields in handwritten forms",
+        "documents": ["hw_app_form_001", "hw_id_doc_001"],
+        "success_criteria": "Correct field mapping for 95% of form fields regardless of handwriting quality",
+        "execution_frequency": "Weekly"
+      },
+      {
+        "name": "performance_benchmark",
+        "description": "Measure processing time and resource usage across all handwritten document types",
+        "documents": ["hw_app_form_001", "hw_fin_doc_001", "hw_note_001", "hw_signature_001", "hw_app_form_002", "hw_id_doc_001"],
+        "success_criteria": "Processing time within specified limits, memory usage below thresholds",
+        "execution_frequency": "Weekly"
+      }
+    ],
+    
+    "validation_methods": {
+      "character_level": "Validate character-by-character accuracy for critical fields like EIN, SSN, and account numbers",
+      "field_level": "Validate complete field extraction accuracy using exact and fuzzy matching as appropriate",
+      "semantic_level": "Validate that extracted information maintains correct semantic meaning even with minor character errors"
+    },
+    "performance_benchmarks": {
+      "accuracy_targets": {
+        "high_quality_print": "≥ 95% field-level accuracy",
+        "high_quality_cursive": "≥ 90% field-level accuracy",
+        "medium_quality_print": "≥ 85% field-level accuracy",
+        "medium_quality_cursive": "≥ 80% field-level accuracy",
+        "low_quality_print": "≥ 75% field-level accuracy",
+        "low_quality_cursive": "≥ 70% field-level accuracy"
+      },
+      "speed_targets": {
+        "high_quality": "< 3 seconds per page",
+        "medium_quality": "< 4 seconds per page",
+        "low_quality": "< 5 seconds per page"
+      }
+    },
+    "test_data_management": {
+      "sample_rotation": "Regularly rotate test samples to prevent model overfitting to specific test cases",
+      "sample_augmentation": "Create additional test samples through controlled degradation of existing samples",
+      "real_world_validation": "Periodically validate against new real-world samples to ensure continued accuracy"
+    }
+  }
 }
