@@ -1,362 +1,411 @@
 package com.dollarfunding.mca.config;
 
+import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
-
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.autoconfigure.jdbc.DataSourceProperties;
-import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
-import org.springframework.context.annotation.Profile;
-import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
+import org.springframework.core.env.Environment;
 import org.springframework.jdbc.datasource.LazyConnectionDataSourceProxy;
 import org.springframework.jdbc.datasource.lookup.AbstractRoutingDataSource;
-import org.springframework.orm.jpa.JpaTransactionManager;
-import org.springframework.orm.jpa.LocalContainerEntityManagerFactoryBean;
-import org.springframework.orm.jpa.vendor.HibernateJpaVendorAdapter;
+import org.aspectj.lang.ProceedingJoinPoint;
+import org.aspectj.lang.annotation.Around;
+import org.aspectj.lang.annotation.Aspect;
+import org.springframework.context.annotation.EnableAspectJAutoProxy;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.EnableTransactionManagement;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import javax.sql.DataSource;
+import java.lang.annotation.ElementType;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+import java.lang.annotation.Target;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Properties;
+import java.util.concurrent.atomic.AtomicInteger;
+
+/**
+ * Custom annotation to mark methods that should use read replicas.
+ * This can be used in service methods that only perform read operations.
+ * 
+ * Example usage:
+ * <pre>
+ * {@code
+ * @Service
+ * public class ApplicationService {
+ *     
+ *     @ReadOnlyOperation
+ *     public List<Application> findAllApplications() {
+ *         // This method will use a read replica
+ *         return applicationRepository.findAll();
+ *     }
+ *     
+ *     public Application saveApplication(Application application) {
+ *         // This method will use the primary database
+ *         return applicationRepository.save(application);
+ *     }
+ * }
+ * }
+ * </pre>
+ * 
+ * The annotation works by wrapping the method execution in a read-only transaction,
+ * which signals to the routing data source to use a read replica.
+ */
+@Target({ElementType.METHOD})
+@Retention(RetentionPolicy.RUNTIME)
+public @interface ReadOnlyOperation {
+}
 
 /**
  * Database configuration for the MCA application.
  * 
  * This class configures the PostgreSQL database connection with primary and read replica support.
- * It sets up connection pooling, transaction management, and routing of read/write operations
- * to the appropriate database instance.
+ * It sets up connection pooling with HikariCP and configures transaction management.
  * 
  * Key features:
  * - Primary database for write operations
- * - Read replicas for read operations to improve performance
- * - HikariCP connection pool with optimized settings
+ * - Read replicas for read operations
+ * - Connection pooling with optimized settings
  * - Transaction management with appropriate isolation levels
- * - JPA/Hibernate properties for efficient database operations
+ * - Support for multiple environments (dev, staging, prod)
+ * - @ReadOnlyOperation annotation for explicitly marking read-only methods
+ * 
+ * Read/Write Splitting:
+ * This configuration automatically routes read operations to read replicas and write operations
+ * to the primary database. It uses Spring's transaction synchronization to determine if a
+ * transaction is read-only, and routes accordingly. There are two ways to trigger read-only routing:
+ * 
+ * 1. Using @Transactional(readOnly = true):
+ *    <pre>
+ *    {@code
+ *    @Service
+ *    public class ApplicationService {
+ *        
+ *        @Transactional(readOnly = true)
+ *        public List<Application> findAllApplications() {
+ *            // This method will use a read replica
+ *            return applicationRepository.findAll();
+ *        }
+ *    }
+ *    }
+ *    </pre>
+ * 
+ * 2. Using the custom @ReadOnlyOperation annotation:
+ *    <pre>
+ *    {@code
+ *    @Service
+ *    public class ApplicationService {
+ *        
+ *        @ReadOnlyOperation
+ *        public List<Application> findAllApplications() {
+ *            // This method will use a read replica
+ *            return applicationRepository.findAll();
+ *        }
+ *    }
+ *    }
+ *    </pre>
+ * 
+ * Load Balancing:
+ * When multiple read replicas are configured, this implementation uses a round-robin
+ * strategy to distribute read operations across all available replicas. This helps to
+ * balance the load and improve overall system performance.
  */
 @Configuration
 @EnableTransactionManagement
-@EnableJpaRepositories(basePackages = "com.dollarfunding.mca.repository")
+@EnableAspectJAutoProxy
 public class DatabaseConfig {
 
+    @Autowired
+    private Environment env;
+
+    @Value("${spring.datasource.url}")
+    private String primaryDbUrl;
+
+    @Value("${spring.datasource.username}")
+    private String username;
+
+    @Value("${spring.datasource.password}")
+    private String password;
+
+    @Value("${spring.datasource.driver-class-name}")
+    private String driverClassName;
+
+    @Value("${spring.datasource.hikari.maximum-pool-size:10}")
+    private int maximumPoolSize;
+
+    @Value("${spring.datasource.hikari.minimum-idle:5}")
+    private int minimumIdle;
+
+    @Value("${spring.datasource.hikari.idle-timeout:30000}")
+    private long idleTimeout;
+
+    @Value("${spring.datasource.hikari.connection-timeout:30000}")
+    private long connectionTimeout;
+
+    @Value("${spring.datasource.hikari.max-lifetime:2000000}")
+    private long maxLifetime;
+
+    @Value("${spring.datasource.hikari.auto-commit:false}")
+    private boolean autoCommit;
+
+    @Value("${spring.datasource.hikari.pool-name:MCAHikariCP}")
+    private String poolName;
+
+    @Value("${spring.datasource.hikari.read-only-replicas:false}")
+    private boolean readOnlyReplicas;
+
+    @Value("${spring.datasource.hikari.replica-urls:}")
+    private String replicaUrls;
+
     /**
-     * Enum representing the database operation type.
-     * Used by the routing data source to determine which data source to use.
+     * Enum representing database types for routing.
      */
-    public enum OperationType {
-        READ, WRITE
+    public enum DbType {
+        PRIMARY, REPLICA
     }
 
     /**
-     * ThreadLocal variable to store the current operation type.
-     * This is used by the routing data source to determine which data source to use.
+     * Creates the primary database data source with HikariCP connection pooling.
+     * 
+     * @return DataSource for the primary database
      */
-    private static final ThreadLocal<OperationType> currentOperation = new ThreadLocal<OperationType>() {
+    @Bean(name = "primaryDataSource")
+    public DataSource primaryDataSource() {
+        HikariConfig config = new HikariConfig();
+        config.setJdbcUrl(primaryDbUrl);
+        config.setUsername(username);
+        config.setPassword(password);
+        config.setDriverClassName(driverClassName);
+        config.setMaximumPoolSize(maximumPoolSize);
+        config.setMinimumIdle(minimumIdle);
+        config.setIdleTimeout(idleTimeout);
+        config.setConnectionTimeout(connectionTimeout);
+        config.setMaxLifetime(maxLifetime);
+        config.setAutoCommit(autoCommit);
+        config.setPoolName(poolName + "-Primary");
+        
+        // Set PostgreSQL specific properties
+        config.addDataSourceProperty("cachePrepStmts", "true");
+        config.addDataSourceProperty("prepStmtCacheSize", "250");
+        config.addDataSourceProperty("prepStmtCacheSqlLimit", "2048");
+        config.addDataSourceProperty("useServerPrepStmts", "true");
+        
+        // Set transaction isolation level to READ COMMITTED (PostgreSQL default)
+        config.setTransactionIsolation("TRANSACTION_READ_COMMITTED");
+        
+        return new HikariDataSource(config);
+    }
+
+    /**
+     * Creates read replica data sources with HikariCP connection pooling.
+     * 
+     * @return List of DataSource objects for read replicas
+     */
+    @Bean(name = "replicaDataSources")
+    public List<DataSource> replicaDataSources() {
+        if (!readOnlyReplicas || replicaUrls == null || replicaUrls.isEmpty()) {
+            return List.of();
+        }
+
+        String[] replicaUrlArray = replicaUrls.split(",");
+        return Arrays.stream(replicaUrlArray)
+                .map(url -> {
+                    HikariConfig config = new HikariConfig();
+                    config.setJdbcUrl(url.trim());
+                    config.setUsername(username);
+                    config.setPassword(password);
+                    config.setDriverClassName(driverClassName);
+                    config.setMaximumPoolSize(maximumPoolSize);
+                    config.setMinimumIdle(minimumIdle);
+                    config.setIdleTimeout(idleTimeout);
+                    config.setConnectionTimeout(connectionTimeout);
+                    config.setMaxLifetime(maxLifetime);
+                    config.setAutoCommit(autoCommit);
+                    config.setReadOnly(true); // Read replicas are read-only
+                    config.setPoolName(poolName + "-Replica-" + url.hashCode());
+                    
+                    // Set PostgreSQL specific properties
+                    config.addDataSourceProperty("cachePrepStmts", "true");
+                    config.addDataSourceProperty("prepStmtCacheSize", "250");
+                    config.addDataSourceProperty("prepStmtCacheSqlLimit", "2048");
+                    config.addDataSourceProperty("useServerPrepStmts", "true");
+                    
+                    // Set transaction isolation level to READ COMMITTED (PostgreSQL default)
+                    config.setTransactionIsolation("TRANSACTION_READ_COMMITTED");
+                    
+                    return new HikariDataSource(config);
+                })
+                .toList();
+    }
+
+    /**
+     * Custom implementation of AbstractRoutingDataSource that routes database requests
+     * to either the primary database or a read replica based on the transaction context.
+     * It implements a simple round-robin load balancing strategy for multiple replicas.
+     */
+    public static class RoutingDataSource extends AbstractRoutingDataSource {
+        private final AtomicInteger replicaCounter = new AtomicInteger(0);
+        private int replicaCount = 1;
+        
+        public void setReplicaCount(int count) {
+            this.replicaCount = Math.max(1, count);
+        }
+        
         @Override
-        protected OperationType initialValue() {
-            return OperationType.WRITE; // Default to write operation
-        }
-    };
-
-    /**
-     * Sets the current operation type for the current thread.
-     * 
-     * @param operationType The operation type to set
-     */
-    public static void setCurrentOperation(OperationType operationType) {
-        currentOperation.set(operationType);
-    }
-
-    /**
-     * Gets the current operation type for the current thread.
-     * 
-     * @return The current operation type
-     */
-    public static OperationType getCurrentOperation() {
-        return currentOperation.get();
-    }
-
-    /**
-     * Clears the current operation type for the current thread.
-     */
-    public static void clearCurrentOperation() {
-        currentOperation.remove();
-    }
-
-    /**
-     * Primary data source properties configuration.
-     * 
-     * @return DataSourceProperties for the primary data source
-     */
-    @Bean
-    @Primary
-    @ConfigurationProperties("spring.datasource")
-    public DataSourceProperties primaryDataSourceProperties() {
-        return new DataSourceProperties();
-    }
-
-    /**
-     * Primary data source configuration with HikariCP connection pool.
-     * This data source is used for write operations.
-     * 
-     * @return The configured primary data source
-     */
-    @Bean
-    @Primary
-    @ConfigurationProperties("spring.datasource.hikari")
-    public HikariDataSource primaryDataSource() {
-        HikariDataSource dataSource = primaryDataSourceProperties()
-                .initializeDataSourceBuilder()
-                .type(HikariDataSource.class)
-                .build();
-        
-        dataSource.setPoolName("PrimaryHikariPool");
-        return dataSource;
-    }
-
-    /**
-     * Read replica data source properties configuration.
-     * 
-     * @return DataSourceProperties for the read replica data source
-     */
-    @Bean
-    @ConfigurationProperties("spring.datasource.replica")
-    public DataSourceProperties replicaDataSourceProperties() {
-        return new DataSourceProperties();
-    }
-
-    /**
-     * Read replica data source configuration.
-     * This method creates a data source for each read replica configured in the application properties.
-     * 
-     * @param replicaUrls List of replica URLs from application properties
-     * @param replicaUsername Username for read replicas
-     * @param replicaPassword Password for read replicas
-     * @return Map of read replica data sources
-     */
-    @Bean
-    public Map<String, DataSource> readReplicaDataSources(
-            @Value("${spring.datasource.replica.nodes:#{null}}")
-            List<Map<String, String>> replicaNodes,
-            @Value("${spring.datasource.replica.enabled:false}")
-            boolean replicaEnabled) {
-        
-        Map<String, DataSource> replicaDataSources = new HashMap<>();
-        
-        // If replicas are not enabled or no replica nodes are configured, return empty map
-        if (!replicaEnabled || replicaNodes == null || replicaNodes.isEmpty()) {
-            return replicaDataSources;
-        }
-        
-        // Create a data source for each replica node
-        for (int i = 0; i < replicaNodes.size(); i++) {
-            Map<String, String> node = replicaNodes.get(i);
-            String url = node.get("url");
-            String username = node.get("username");
-            String password = node.get("password");
-            
-            if (url != null && !url.isEmpty()) {
-                HikariDataSource replicaDataSource = new HikariDataSource();
-                replicaDataSource.setJdbcUrl(url);
-                replicaDataSource.setUsername(username);
-                replicaDataSource.setPassword(password);
-                replicaDataSource.setPoolName("ReplicaHikariPool-" + i);
-                
-                // Copy connection pool settings from primary data source
-                HikariDataSource primaryDs = primaryDataSource();
-                replicaDataSource.setMaximumPoolSize(primaryDs.getMaximumPoolSize());
-                replicaDataSource.setMinimumIdle(primaryDs.getMinimumIdle());
-                replicaDataSource.setIdleTimeout(primaryDs.getIdleTimeout());
-                replicaDataSource.setMaxLifetime(primaryDs.getMaxLifetime());
-                replicaDataSource.setConnectionTimeout(primaryDs.getConnectionTimeout());
-                replicaDataSource.setReadOnly(true); // Ensure replica is read-only
-                
-                replicaDataSources.put("replica-" + i, replicaDataSource);
-            }
-        }
-        
-        return replicaDataSources;
-    }
-
-    /**
-     * Routing data source that directs read/write operations to the appropriate data source.
-     * Write operations go to the primary data source, while read operations are distributed
-     * across the read replicas.
-     * 
-     * @param primaryDataSource The primary data source
-     * @param readReplicaDataSources Map of read replica data sources
-     * @return The configured routing data source
-     */
-    @Bean
-    public AbstractRoutingDataSource routingDataSource(
-            @Qualifier("primaryDataSource") DataSource primaryDataSource,
-            @Qualifier("readReplicaDataSources") Map<String, DataSource> readReplicaDataSources) {
-        
-        AbstractRoutingDataSource routingDataSource = new AbstractRoutingDataSource() {
-            @Override
-            protected Object determineCurrentLookupKey() {
-                OperationType operationType = getCurrentOperation();
-                
-                // If operation is READ and we have replicas, use a replica
-                if (operationType == OperationType.READ && !readReplicaDataSources.isEmpty()) {
-                    // Simple round-robin selection among replicas
-                    int replicaIndex = (int) (System.nanoTime() % readReplicaDataSources.size());
-                    return "replica-" + replicaIndex;
+        protected Object determineCurrentLookupKey() {
+            // Use read replica if the current transaction is read-only
+            if (TransactionSynchronizationManager.isCurrentTransactionReadOnly()) {
+                if (replicaCount <= 1) {
+                    return DbType.REPLICA;
+                } else {
+                    // Round-robin load balancing across multiple replicas
+                    int replicaIndex = replicaCounter.getAndIncrement() % replicaCount;
+                    if (replicaCounter.get() > 10000) { // Reset to prevent overflow
+                        replicaCounter.set(0);
+                    }
+                    return "REPLICA_" + replicaIndex;
                 }
-                
-                // Default to primary for WRITE operations or if no replicas are available
-                return "primary";
             }
-        };
+            return DbType.PRIMARY;
+        }
+    }
+
+    /**
+     * Creates a routing data source that directs read operations to replicas
+     * and write operations to the primary database.
+     * 
+     * @param primaryDataSource The primary database data source
+     * @param replicaDataSources List of read replica data sources
+     * @return RoutingDataSource that can switch between primary and replicas
+     */
+    @Bean(name = "routingDataSource")
+    public DataSource routingDataSource(
+            @Qualifier("primaryDataSource") DataSource primaryDataSource,
+            @Qualifier("replicaDataSources") List<DataSource> replicaDataSources) {
         
-        // Set up data sources map
-        Map<Object, Object> dataSources = new HashMap<>();
-        dataSources.put("primary", primaryDataSource);
-        readReplicaDataSources.forEach(dataSources::put);
+        RoutingDataSource routingDataSource = new RoutingDataSource();
         
-        routingDataSource.setTargetDataSources(dataSources);
-        routingDataSource.setDefaultTargetDataSource(primaryDataSource); // Default to primary
+        Map<Object, Object> targetDataSources = new HashMap<>();
+        targetDataSources.put(DbType.PRIMARY, primaryDataSource);
+        
+        if (replicaDataSources.isEmpty()) {
+            // No replicas available, use primary for all operations
+            targetDataSources.put(DbType.REPLICA, primaryDataSource);
+            routingDataSource.setReplicaCount(1);
+        } else if (replicaDataSources.size() == 1) {
+            // Single replica available
+            targetDataSources.put(DbType.REPLICA, replicaDataSources.get(0));
+            routingDataSource.setReplicaCount(1);
+        } else {
+            // Multiple replicas available, set up load balancing
+            for (int i = 0; i < replicaDataSources.size(); i++) {
+                targetDataSources.put("REPLICA_" + i, replicaDataSources.get(i));
+            }
+            routingDataSource.setReplicaCount(replicaDataSources.size());
+        }
+        
+        routingDataSource.setTargetDataSources(targetDataSources);
+        routingDataSource.setDefaultTargetDataSource(primaryDataSource);
         
         return routingDataSource;
     }
 
     /**
-     * Lazy connection data source proxy to defer actual connection acquisition until needed.
-     * This improves performance by not acquiring a connection until it's actually used.
+     * Creates a lazy connection data source proxy to defer physical connection acquisition
+     * until the connection is actually used.
      * 
      * @param routingDataSource The routing data source
-     * @return The lazy connection data source proxy
+     * @return LazyConnectionDataSourceProxy wrapping the routing data source
      */
-    @Bean
-    public LazyConnectionDataSourceProxy lazyConnectionDataSource(
-            @Qualifier("routingDataSource") AbstractRoutingDataSource routingDataSource) {
+    @Primary
+    @Bean(name = "dataSource")
+    public DataSource dataSource(@Qualifier("routingDataSource") DataSource routingDataSource) {
         return new LazyConnectionDataSourceProxy(routingDataSource);
     }
 
     /**
-     * The actual data source used by the application.
-     * This is the data source that should be injected into repositories and services.
+     * Creates a transaction manager that is aware of the read/write splitting configuration.
+     * This ensures that read-only transactions are properly routed to replicas.
      * 
-     * @param lazyConnectionDataSource The lazy connection data source proxy
-     * @return The final data source
+     * @param dataSource The configured data source
+     * @return PlatformTransactionManager for managing transactions
      */
     @Bean
-    public DataSource dataSource(
-            @Qualifier("lazyConnectionDataSource") LazyConnectionDataSourceProxy lazyConnectionDataSource) {
-        return lazyConnectionDataSource;
+    public PlatformTransactionManager transactionManager(@Qualifier("dataSource") DataSource dataSource) {
+        return new org.springframework.jdbc.datasource.DataSourceTransactionManager(dataSource);
     }
 
     /**
-     * Entity manager factory configuration.
+     * Configures JPA properties for the EntityManagerFactory.
      * 
-     * @param dataSource The data source
-     * @return The configured entity manager factory
+     * @return Map of JPA properties
      */
     @Bean
-    public LocalContainerEntityManagerFactoryBean entityManagerFactory(
-            @Qualifier("dataSource") DataSource dataSource) {
+    public Map<String, Object> jpaProperties() {
+        Map<String, Object> props = new HashMap<>();
+        props.put("hibernate.dialect", "org.hibernate.dialect.PostgreSQLDialect");
+        props.put("hibernate.format_sql", env.getProperty("spring.jpa.properties.hibernate.format_sql", "true"));
+        props.put("hibernate.jdbc.batch_size", env.getProperty("spring.jpa.properties.hibernate.jdbc.batch_size", Integer.class, 50));
+        props.put("hibernate.order_inserts", env.getProperty("spring.jpa.properties.hibernate.order_inserts", "true"));
+        props.put("hibernate.order_updates", env.getProperty("spring.jpa.properties.hibernate.order_updates", "true"));
+        props.put("hibernate.jdbc.time_zone", "UTC");
         
-        LocalContainerEntityManagerFactoryBean em = new LocalContainerEntityManagerFactoryBean();
-        em.setDataSource(dataSource);
-        em.setPackagesToScan("com.dollarfunding.mca.entity");
-        
-        HibernateJpaVendorAdapter vendorAdapter = new HibernateJpaVendorAdapter();
-        vendorAdapter.setGenerateDdl(false); // We use Flyway for schema management
-        em.setJpaVendorAdapter(vendorAdapter);
-        
-        // Set JPA properties
-        Properties jpaProperties = new Properties();
-        jpaProperties.put("hibernate.dialect", "org.hibernate.dialect.PostgreSQLDialect");
-        jpaProperties.put("hibernate.jdbc.batch_size", 50);
-        jpaProperties.put("hibernate.order_inserts", true);
-        jpaProperties.put("hibernate.order_updates", true);
-        jpaProperties.put("hibernate.jdbc.time_zone", "UTC");
-        jpaProperties.put("hibernate.connection.provider_disables_autocommit", true);
-        
-        // Add query cache settings
-        jpaProperties.put("hibernate.cache.use_second_level_cache", false);
-        jpaProperties.put("hibernate.cache.use_query_cache", false);
-        
-        // Add statement cache settings
-        jpaProperties.put("hibernate.jdbc.use_get_generated_keys", true);
-        
-        em.setJpaProperties(jpaProperties);
-        
-        return em;
-    }
-
-    /**
-     * Transaction manager configuration.
-     * 
-     * @param entityManagerFactory The entity manager factory
-     * @return The configured transaction manager
-     */
-    @Bean
-    public PlatformTransactionManager transactionManager(
-            LocalContainerEntityManagerFactoryBean entityManagerFactory) {
-        
-        JpaTransactionManager transactionManager = new JpaTransactionManager();
-        transactionManager.setEntityManagerFactory(entityManagerFactory.getObject());
-        
-        return transactionManager;
-    }
-
-    /**
-     * Production-specific database configuration.
-     */
-    @Configuration
-    @Profile("production")
-    public static class ProductionDatabaseConfig {
-        
-        /**
-         * Production-specific HikariCP settings for the primary data source.
-         * 
-         * @param dataSource The primary data source
-         * @return The configured primary data source with production settings
-         */
-        @Bean
-        @Primary
-        @ConfigurationProperties("spring.datasource.hikari")
-        public HikariDataSource productionPrimaryDataSource(HikariDataSource dataSource) {
-            // Production-specific settings
-            dataSource.setMaximumPoolSize(20); // Higher pool size for production
-            dataSource.setMinimumIdle(5);
-            dataSource.setIdleTimeout(120000); // 2 minutes
-            dataSource.setMaxLifetime(1800000); // 30 minutes
-            
-            return dataSource;
+        // Add second-level cache configuration if enabled
+        if (Boolean.parseBoolean(env.getProperty("spring.jpa.properties.hibernate.cache.use_second_level_cache", "false"))) {
+            props.put("hibernate.cache.use_second_level_cache", "true");
+            props.put("hibernate.cache.use_query_cache", env.getProperty("spring.jpa.properties.hibernate.cache.use_query_cache", "false"));
+            props.put("hibernate.cache.region.factory_class", env.getProperty(
+                    "spring.jpa.properties.hibernate.cache.region.factory_class", 
+                    "org.hibernate.cache.jcache.JCacheRegionFactory"));
         }
+        
+        // Performance optimizations
+        props.put("hibernate.connection.provider_disables_autocommit", 
+                env.getProperty("spring.jpa.properties.hibernate.connection.provider_disables_autocommit", "true"));
+        props.put("hibernate.query.in_clause_parameter_padding", 
+                env.getProperty("spring.jpa.properties.hibernate.query.in_clause_parameter_padding", "true"));
+        props.put("hibernate.query.fail_on_pagination_over_collection_fetch", 
+                env.getProperty("spring.jpa.properties.hibernate.query.fail_on_pagination_over_collection_fetch", "true"));
+        
+        return props;
     }
-
+    
     /**
-     * Development-specific database configuration.
+     * Aspect that handles the @ReadOnlyOperation annotation.
+     * Methods annotated with @ReadOnlyOperation will be executed in a read-only transaction,
+     * which will be routed to a read replica.
      */
-    @Configuration
-    @Profile("development")
-    public static class DevelopmentDatabaseConfig {
+    @Bean
+    @Aspect
+    public ReadOnlyOperationAspect readOnlyOperationAspect() {
+        return new ReadOnlyOperationAspect();
+    }
+    
+    /**
+     * Aspect implementation for handling @ReadOnlyOperation annotation.
+     */
+    public static class ReadOnlyOperationAspect {
         
         /**
-         * Development-specific HikariCP settings for the primary data source.
+         * Intercepts methods annotated with @ReadOnlyOperation and executes them
+         * in a read-only transaction context.
          * 
-         * @param dataSource The primary data source
-         * @return The configured primary data source with development settings
+         * @param joinPoint The join point representing the intercepted method
+         * @return The result of the method execution
+         * @throws Throwable If an error occurs during method execution
          */
-        @Bean
-        @Primary
-        @ConfigurationProperties("spring.datasource.hikari")
-        public HikariDataSource developmentPrimaryDataSource(HikariDataSource dataSource) {
-            // Development-specific settings
-            dataSource.setMaximumPoolSize(10); // Lower pool size for development
-            dataSource.setMinimumIdle(5);
-            dataSource.setIdleTimeout(300000); // 5 minutes
-            dataSource.setMaxLifetime(1200000); // 20 minutes
-            
-            return dataSource;
+        @Around("@annotation(com.dollarfunding.mca.config.DatabaseConfig.ReadOnlyOperation)")
+        @Transactional(readOnly = true, propagation = Propagation.REQUIRED)
+        public Object enforceReadOnly(ProceedingJoinPoint joinPoint) throws Throwable {
+            return joinPoint.proceed();
         }
     }
 }
