@@ -1,41 +1,77 @@
 /**
- * Webhook Types
- * 
- * This file defines TypeScript interfaces and types for webhook configuration, delivery, and security.
- * It provides type definitions for webhook endpoints, HTTP methods, headers, payloads, signatures,
- * and retry policies to ensure type safety for webhook operations and enable secure and reliable
- * webhook delivery.
+ * @file webhook.ts
+ * @description TypeScript interfaces and types for webhook configuration, delivery, and security.
+ * This file provides type definitions for webhook endpoints, HTTP methods, headers, payloads,
+ * signatures, and retry policies. It ensures type safety for webhook operations and enables
+ * secure and reliable webhook delivery.
  */
 
-import type { IDateValue, IRetryOptions } from './common';
-
-// ----------------------------------------------------------------------
-
 /**
- * Enum representing the HTTP methods supported for webhook requests.
+ * Supported HTTP methods for webhook endpoints.
  */
 export enum WebhookMethod {
   GET = 'GET',
   POST = 'POST',
   PUT = 'PUT',
   PATCH = 'PATCH',
-  DELETE = 'DELETE'
+  DELETE = 'DELETE',
 }
 
 /**
- * Enum representing the possible statuses of a webhook endpoint.
+ * Status of a webhook endpoint.
  */
 export enum WebhookStatus {
-  ACTIVE = 'active',     // Webhook endpoint is active and receiving notifications
-  INACTIVE = 'inactive', // Webhook endpoint is temporarily disabled
-  FAILED = 'failed'      // Webhook endpoint has failed too many times and is disabled
+  /** Webhook is active and receiving notifications */
+  ACTIVE = 'ACTIVE',
+  /** Webhook is temporarily disabled */
+  INACTIVE = 'INACTIVE',
+  /** Webhook has failed too many times and is disabled */
+  FAILED = 'FAILED',
+}
+
+/**
+ * Authentication types supported for webhook endpoints.
+ */
+export enum WebhookAuthType {
+  /** No authentication */
+  NONE = 'NONE',
+  /** Basic HTTP authentication */
+  BASIC = 'BASIC',
+  /** Bearer token authentication */
+  BEARER = 'BEARER',
+  /** API key authentication */
+  API_KEY = 'API_KEY',
+  /** Custom authentication scheme */
+  CUSTOM = 'CUSTOM',
+}
+
+/**
+ * Interface for webhook authentication configuration.
+ */
+export interface IWebhookAuth {
+  /** Type of authentication to use */
+  type: WebhookAuthType;
+  /** Username for BASIC auth */
+  username?: string;
+  /** Password for BASIC auth */
+  password?: string;
+  /** Token for BEARER auth */
+  token?: string;
+  /** API key name for API_KEY auth */
+  apiKeyName?: string;
+  /** API key value for API_KEY auth */
+  apiKeyValue?: string;
+  /** Header name for CUSTOM auth */
+  headerName?: string;
+  /** Header value for CUSTOM auth */
+  headerValue?: string;
 }
 
 /**
  * Interface for webhook endpoint configuration.
  */
 export interface IWebhookConfig {
-  /** Unique identifier for the webhook configuration */
+  /** Unique identifier for the webhook */
   id: string;
   /** Name of the webhook for display purposes */
   name: string;
@@ -43,71 +79,47 @@ export interface IWebhookConfig {
   description?: string;
   /** URL of the webhook endpoint */
   url: string;
-  /** HTTP method to use for the webhook request */
+  /** HTTP method to use when calling the webhook */
   method: WebhookMethod;
-  /** Current status of the webhook endpoint */
+  /** Current status of the webhook */
   status: WebhookStatus;
-  /** Secret key used for signing webhook payloads with HMAC-SHA256 */
-  secret: string;
-  /** Whether to verify SSL certificates when making webhook requests */
-  verifySSL: boolean;
-  /** Timeout in milliseconds for webhook requests */
-  timeoutMs: number;
-  /** Content type for the webhook payload */
-  contentType: string;
-  /** Authentication type (none, basic, bearer, custom) */
-  authType?: 'none' | 'basic' | 'bearer' | 'custom';
-  /** Authentication credentials if using basic auth */
-  basicAuth?: {
-    username: string;
-    password: string;
-  };
-  /** Bearer token if using bearer auth */
-  bearerToken?: string;
-  /** Custom authentication header if using custom auth */
-  customAuth?: {
-    headerName: string;
-    headerValue: string;
-  };
-  /** Event types this webhook should receive */
-  eventTypes: string[];
+  /** Authentication configuration for the webhook */
+  auth?: IWebhookAuth;
+  /** Custom headers to include in webhook requests */
+  headers?: IWebhookHeaders;
+  /** Secret key used for HMAC-SHA256 signature generation */
+  secretKey: string;
   /** Retry policy for failed webhook deliveries */
   retryPolicy: IWebhookRetryPolicy;
-  /** Created timestamp */
-  createdAt: IDateValue;
-  /** Last updated timestamp */
-  updatedAt: IDateValue;
-  /** Last successful delivery timestamp */
-  lastSuccessAt?: IDateValue;
-  /** Last failed delivery timestamp */
-  lastFailureAt?: IDateValue;
-  /** Consecutive failure count */
-  consecutiveFailures: number;
-  /** Maximum allowed consecutive failures before marking as failed */
-  maxConsecutiveFailures: number;
-  /** Tags for categorizing webhooks */
-  tags?: string[];
-  /** Owner or creator of the webhook */
-  ownerId?: string;
-  /** Associated application or merchant ID */
-  applicationId?: string;
+  /** Event types this webhook should receive */
+  eventTypes: string[];
+  /** Timestamp when the webhook was created */
+  createdAt: string;
+  /** Timestamp when the webhook was last updated */
+  updatedAt: string;
+  /** Timestamp when the webhook was last called */
+  lastCalledAt?: string;
+  /** Result of the last webhook call */
+  lastCallResult?: IWebhookDeliveryResult;
 }
 
 /**
- * Interface for HTTP headers used in webhook requests.
+ * Interface for HTTP headers in webhook requests.
  */
 export interface IWebhookHeaders {
-  /** Content type header */
-  'Content-Type': string;
-  /** User agent header */
+  /** Content-Type header, defaults to application/json */
+  'Content-Type'?: string;
+  /** Accept header */
+  'Accept'?: string;
+  /** User-Agent header */
   'User-Agent'?: string;
-  /** Webhook signature header */
+  /** X-Webhook-Signature header for HMAC signature */
   'X-Webhook-Signature'?: string;
-  /** Timestamp of the request */
+  /** X-Webhook-Timestamp header for signature timestamp */
   'X-Webhook-Timestamp'?: string;
-  /** ID of the webhook delivery attempt */
+  /** X-Webhook-ID header for webhook identifier */
   'X-Webhook-ID'?: string;
-  /** Event type that triggered the webhook */
+  /** X-Webhook-Event header for event type */
   'X-Webhook-Event'?: string;
   /** Additional custom headers */
   [key: string]: string | undefined;
@@ -115,31 +127,21 @@ export interface IWebhookHeaders {
 
 /**
  * Interface for structured webhook payload.
+ * All webhook payloads must follow this structure to ensure consistency.
  */
-export interface IWebhookPayload {
-  /** Unique identifier for the webhook event */
+export interface IWebhookPayload<T = unknown> {
+  /** Unique identifier for this webhook delivery */
   id: string;
-  /** Type of event that triggered the webhook */
-  event: string;
   /** Timestamp when the event occurred */
   timestamp: string;
+  /** Type of event that triggered this webhook */
+  eventType: string;
   /** Version of the webhook payload schema */
   version: string;
-  /** Environment the webhook was sent from (development, staging, production) */
-  environment: string;
-  /** Data associated with the webhook event */
-  data: Record<string, any>;
-  /** Additional metadata about the webhook event */
-  metadata?: {
-    /** ID of the application associated with the event */
-    applicationId?: string;
-    /** ID of the merchant associated with the event */
-    merchantId?: string;
-    /** IDs of documents associated with the event */
-    documentIds?: string[];
-    /** Additional custom metadata */
-    [key: string]: any;
-  };
+  /** The actual data payload */
+  data: T;
+  /** Additional metadata about the event */
+  metadata?: Record<string, unknown>;
 }
 
 /**
@@ -149,163 +151,127 @@ export interface IWebhookResponse {
   /** HTTP status code returned by the webhook endpoint */
   statusCode: number;
   /** Response headers */
-  headers: Record<string, string>;
+  headers: Record<string, string | string[] | undefined>;
   /** Response body */
-  body: string;
-  /** Whether the response indicates success (2xx status code) */
-  success: boolean;
-  /** Response time in milliseconds */
-  responseTimeMs: number;
-  /** Timestamp when the response was received */
-  timestamp: IDateValue;
+  body?: unknown;
+  /** Time taken to receive the response in milliseconds */
+  responseTime: number;
+  /** Whether the response is considered successful (2xx status code) */
+  isSuccess: boolean;
   /** Error message if the request failed */
-  error?: string;
-  /** Whether the response indicates the webhook should be retried */
-  shouldRetry: boolean;
+  errorMessage?: string;
 }
 
 /**
- * Interface for HMAC-SHA256 signature generation and validation.
+ * Interface for HMAC-SHA256 signature generation.
  */
 export interface IWebhookSignature {
-  /** Algorithm used for signature generation (sha256) */
-  algorithm: 'sha256';
-  /** Secret key used for signature generation */
-  secret: string;
-  /** Generated signature */
+  /** The generated signature */
   signature: string;
-  /** Timestamp used in signature generation */
+  /** Timestamp used in the signature generation */
   timestamp: string;
-  /** Raw payload that was signed */
-  payload: string;
-  /** Header name where the signature is sent */
-  headerName: string;
-  /** Format of the signature header value */
-  signatureFormat: 't={timestamp},v1={signature}' | 'v1={signature}' | '{signature}';
+  /** Algorithm used for signature generation (always HMAC-SHA256) */
+  algorithm: 'HMAC-SHA256';
+  /** Encoding format of the signature (hex or base64) */
+  encoding: 'hex' | 'base64';
+  /** Headers included in the signature */
+  includedHeaders?: string[];
 }
 
 /**
- * Interface for configuring webhook retry behavior.
+ * Interface for configuring retry behavior for failed webhook deliveries.
  */
-export interface IWebhookRetryPolicy extends IRetryOptions {
-  /** Whether to enable retries for this webhook */
-  enabled: boolean;
-  /** Whether to use exponential backoff for retry delays */
-  useExponentialBackoff: boolean;
-  /** Whether to add jitter to retry delays to prevent thundering herd */
+export interface IWebhookRetryPolicy {
+  /** Maximum number of retry attempts */
+  maxRetries: number;
+  /** Initial retry delay in milliseconds */
+  initialDelayMs: number;
+  /** Backoff factor for exponential backoff (e.g., 2 means each retry waits twice as long as the previous) */
+  backoffFactor: number;
+  /** Maximum delay between retries in milliseconds */
+  maxDelayMs: number;
+  /** Whether to add jitter to retry delays to prevent thundering herd problems */
   useJitter: boolean;
   /** HTTP status codes that should trigger a retry */
   retryableStatusCodes: number[];
-  /** Whether to retry on connection errors */
-  retryOnConnectionError: boolean;
-  /** Whether to retry on timeout errors */
-  retryOnTimeout: boolean;
-  /** Whether to use a dead letter queue for failed webhooks */
-  useDeadLetterQueue: boolean;
-  /** Whether to notify administrators on persistent failures */
-  notifyOnPersistentFailure: boolean;
+  /** Whether to retry on network errors */
+  retryOnNetworkError: boolean;
 }
 
 /**
  * Interface for tracking webhook delivery outcomes.
  */
 export interface IWebhookDeliveryResult {
-  /** Unique identifier for the delivery attempt */
+  /** Unique identifier for this delivery attempt */
   id: string;
   /** ID of the webhook configuration */
   webhookId: string;
-  /** ID of the webhook event */
+  /** ID of the event that triggered this webhook */
   eventId: string;
-  /** URL the webhook was sent to */
-  url: string;
-  /** HTTP method used for the request */
-  method: WebhookMethod;
-  /** Request headers */
-  requestHeaders: IWebhookHeaders;
-  /** Request payload */
-  requestPayload: IWebhookPayload;
-  /** Response from the webhook endpoint */
-  response?: IWebhookResponse;
+  /** Timestamp when the delivery was attempted */
+  timestamp: string;
   /** Whether the delivery was successful */
   success: boolean;
-  /** Timestamp when the delivery was attempted */
-  timestamp: IDateValue;
-  /** Duration of the delivery attempt in milliseconds */
-  durationMs: number;
+  /** HTTP status code returned by the webhook endpoint */
+  statusCode?: number;
   /** Error message if the delivery failed */
-  error?: string;
-  /** Error code if the delivery failed */
-  errorCode?: string;
-  /** Current retry attempt number (0 for initial attempt) */
+  errorMessage?: string;
+  /** Response body from the webhook endpoint */
+  responseBody?: string;
+  /** Time taken to deliver the webhook in milliseconds */
+  deliveryTimeMs: number;
+  /** Number of retry attempts made */
   retryCount: number;
-  /** Maximum number of retries allowed */
-  maxRetries: number;
-  /** Whether the delivery will be retried */
-  willRetry: boolean;
-  /** Timestamp for the next retry attempt */
-  nextRetryAt?: IDateValue;
-  /** IP address the webhook was sent from */
-  sourceIp?: string;
-  /** Signature details if signing was enabled */
-  signature?: {
-    /** Generated signature */
-    value: string;
-    /** Timestamp used in signature generation */
-    timestamp: string;
-    /** Algorithm used for signature generation */
-    algorithm: string;
-  };
+  /** Timestamp of the next retry attempt if applicable */
+  nextRetryAt?: string;
 }
 
 /**
- * Interface for webhook event types that can trigger notifications.
+ * Interface for webhook delivery request.
  */
-export interface IWebhookEventType {
-  /** Unique identifier for the event type */
-  id: string;
-  /** Name of the event type */
-  name: string;
-  /** Description of when this event is triggered */
-  description: string;
-  /** Example payload for this event type */
-  examplePayload: Record<string, any>;
-  /** Schema for validating payloads of this event type */
-  schema: Record<string, any>;
-  /** Whether this event type is enabled */
-  enabled: boolean;
-  /** Categories this event belongs to */
-  categories: string[];
+export interface IWebhookDeliveryRequest {
+  /** The webhook configuration to use */
+  webhook: IWebhookConfig;
+  /** The payload to deliver */
+  payload: IWebhookPayload;
+  /** The signature to include with the request */
+  signature: IWebhookSignature;
+  /** Additional headers to include */
+  additionalHeaders?: Record<string, string>;
+  /** Timeout for the request in milliseconds */
+  timeoutMs?: number;
+  /** Current retry attempt (0 for initial attempt) */
+  retryAttempt?: number;
 }
 
 /**
- * Interface for webhook delivery statistics.
+ * Interface for webhook verification request.
  */
-export interface IWebhookStats {
-  /** Webhook configuration ID */
-  webhookId: string;
-  /** Total number of delivery attempts */
-  totalAttempts: number;
-  /** Number of successful deliveries */
-  successCount: number;
-  /** Number of failed deliveries */
-  failureCount: number;
-  /** Success rate as a percentage */
-  successRate: number;
-  /** Average response time in milliseconds */
-  avgResponseTimeMs: number;
-  /** 95th percentile response time in milliseconds */
-  p95ResponseTimeMs: number;
-  /** 99th percentile response time in milliseconds */
-  p99ResponseTimeMs: number;
-  /** Number of retried deliveries */
-  retryCount: number;
-  /** Average number of retries per delivery */
-  avgRetryCount: number;
-  /** Time period these stats cover */
-  period: {
-    /** Start of the period */
-    start: IDateValue;
-    /** End of the period */
-    end: IDateValue;
-  };
+export interface IWebhookVerificationRequest {
+  /** URL to verify */
+  url: string;
+  /** HTTP method to use */
+  method: WebhookMethod;
+  /** Headers to include */
+  headers?: IWebhookHeaders;
+  /** Authentication to use */
+  auth?: IWebhookAuth;
+  /** Timeout for the request in milliseconds */
+  timeoutMs?: number;
+}
+
+/**
+ * Interface for webhook verification response.
+ */
+export interface IWebhookVerificationResult {
+  /** Whether the verification was successful */
+  success: boolean;
+  /** HTTP status code returned by the webhook endpoint */
+  statusCode?: number;
+  /** Response time in milliseconds */
+  responseTimeMs?: number;
+  /** Error message if the verification failed */
+  errorMessage?: string;
+  /** Detailed error information if available */
+  errorDetails?: Record<string, unknown>;
 }
