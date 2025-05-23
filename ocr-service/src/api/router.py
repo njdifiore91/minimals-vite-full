@@ -2,93 +2,98 @@
 # -*- coding: utf-8 -*-
 
 """
-OCR Service API Router
+Main router file for the OCR Service API.
 
-This module serves as the central routing hub for the OCR Service API.
-It aggregates all API endpoints from various sub-routers and provides
-a unified API surface for the OCR Service.
+This file creates a FastAPI APIRouter instance and includes all sub-routers
+(health, status, diagnostics, ocr) with appropriate prefixes. It serves as the
+central routing hub for the OCR Service API and is mounted in the main FastAPI application.
 
-The router includes endpoints for:
-- Health checks (liveness and readiness probes for Kubernetes)
-- Status monitoring (metrics and performance statistics)
-- Diagnostics (logs, configuration, and troubleshooting)
-- OCR operations (document processing and data extraction)
-
-This router is mounted in the main FastAPI application.
-
-Example usage:
-    from fastapi import FastAPI
-    from api import router
-    
-    app = FastAPI()
-    app.include_router(router)
+The router aggregates the following endpoints:
+- /health/*: Health check endpoints for Kubernetes probes
+- /status/*: Status and metrics endpoints for monitoring
+- /diagnostics/*: Diagnostic endpoints for troubleshooting
+- /ocr/*: OCR processing endpoints for document data extraction
 """
 
 from fastapi import APIRouter
+import logging
 
 # Import sub-routers
-from .health import router as health_router
-from .status import router as status_router
+from .health import health_router
+from .status import status_router
 from .diagnostics import router as diagnostics_router
 from .ocr import router as ocr_router
 
-# Create main router with API metadata
+# Import configuration
+from ..config import app_config
+
+# Create a logger for this module
+logger = logging.getLogger(__name__)
+
+# Create the main API router with metadata
 router = APIRouter(
     prefix="/api/v1",
-    tags=["ocr-service"],
-    responses={
-        404: {"description": "Not found"},
-        500: {"description": "Internal server error"},
-    },
+    tags=["api"],
 )
+
+# Add docstring to the router for better code documentation
+router.__doc__ = """
+Main OCR Service API router.
+
+This router aggregates all OCR Service API endpoints under the /api/v1 prefix.
+It includes health checks, status endpoints, diagnostics, and OCR processing endpoints.
+"""
+
+# Add API metadata
+tags_metadata = [
+    {
+        "name": "api",
+        "description": "Main OCR Service API endpoints"
+    },
+    {
+        "name": "health",
+        "description": "Health check endpoints for Kubernetes probes"
+    },
+    {
+        "name": "status",
+        "description": "Status and metrics endpoints for monitoring"
+    },
+    {
+        "name": "diagnostics",
+        "description": "Diagnostic endpoints for troubleshooting"
+    },
+    {
+        "name": "ocr",
+        "description": "OCR processing endpoints for document data extraction"
+    }
+]
 
 # Include all sub-routers with appropriate prefixes
 router.include_router(
     health_router,
     prefix="/health",
-    tags=["health"],
+    tags=["health"]
 )
 
 router.include_router(
     status_router,
     prefix="/status",
-    tags=["status"],
+    tags=["status"]
 )
 
 router.include_router(
     diagnostics_router,
     prefix="/diagnostics",
-    tags=["diagnostics"],
+    tags=["diagnostics"]
 )
 
 router.include_router(
     ocr_router,
     prefix="/ocr",
-    tags=["ocr"],
+    tags=["ocr"]
 )
 
-# API metadata
-__title__ = "OCR Service API"
-__description__ = "API for the OCR Service that extracts data from documents using TensorFlow"
-__version__ = "1.0.0"
-__docs_url__ = "/api/v1/docs"
-__redoc_url__ = "/api/v1/redoc"
-__openapi_url__ = "/api/v1/openapi.json"
-__openapi_tags__ = [
-    {
-        "name": "health",
-        "description": "Health check endpoints for Kubernetes probes",
-    },
-    {
-        "name": "status",
-        "description": "Status endpoints for monitoring service performance and metrics",
-    },
-    {
-        "name": "diagnostics",
-        "description": "Diagnostic endpoints for troubleshooting and configuration",
-    },
-    {
-        "name": "ocr",
-        "description": "OCR processing endpoints for document data extraction",
-    },
-]
+# Log router initialization
+logger.info(
+    f"Initialized OCR Service API router with version {app_config.SERVICE_VERSION}"
+)
