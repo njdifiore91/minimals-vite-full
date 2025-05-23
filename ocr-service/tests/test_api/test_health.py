@@ -1,379 +1,345 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+"""Tests for the health check endpoints in the OCR Service.
 
-"""
-Tests for the health check endpoints in the OCR Service API.
-
-This module contains tests for the liveness and readiness probe endpoints
-that Kubernetes uses to determine if the service is running correctly and
-ready to accept traffic. It verifies that the endpoints correctly check
-dependencies (RabbitMQ, S3, GPU) and return appropriate status codes.
+This module contains tests for the health check endpoints used by Kubernetes
+to determine if the service is running correctly and ready to accept traffic.
+It tests both the liveness and readiness probe endpoints, as well as the
+dependency checks for RabbitMQ, S3, and GPU availability.
 """
 
 import json
 import pytest
 from unittest.mock import patch, MagicMock
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
 
-# Import the health router to test
-from src.api.health import health_router
-from src.utils import tensorflow_utils
+# Import the health module to access the functions directly for mocking
+from src.api.health import check_rabbitmq_connection, check_s3_connection, check_gpu_availability
+from src.config import app_config, tensorflow_config
 
 
-# Create a test FastAPI app with the health router
-@pytest.fixture
-def test_app():
-    """Create a test FastAPI app with the health router."""
-    app = FastAPI()
-    app.include_router(health_router)
-    return app
+@pytest.mark.asyncio
+async def test_liveness_probe(client):
+    """Test the liveness probe endpoint.
+    
+    This test verifies that the liveness probe endpoint correctly reports
+    that the service is running.
+    
+    Args:
+        client: FastAPI TestClient fixture
+    """
+    # Make a request to the liveness probe endpoint
+    response = client.get("/health/liveness")
+    
+    # Verify the response
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "up"
+    assert "service" in data
+    assert "version" in data
+    assert "timestamp" in data
 
 
-@pytest.fixture
-def test_client(test_app):
-    """Create a TestClient for the test app."""
-    return TestClient(test_app)
+@pytest.mark.asyncio
+async def test_readiness_probe_all_healthy(client, mock_rabbitmq, mock_s3, mock_gpu_available):
+    """Test the readiness probe endpoint when all dependencies are healthy.
+    
+    This test verifies that the readiness probe endpoint correctly reports
+    that the service is ready to accept traffic when all dependencies
+    (RabbitMQ, S3, GPU) are available.
+    
+    Args:
+        client: FastAPI TestClient fixture
+        mock_rabbitmq: Mock RabbitMQ connection fixture
+        mock_s3: Mock S3 storage fixture
+        mock_gpu_available: Mock GPU availability fixture
+    """
+    # Configure mocks to return healthy status
+    mock_rabbitmq.channel.return_value.queue_declare.return_value = True
+    mock_s3.head_bucket.return_value = {"ResponseMetadata": {"HTTPStatusCode": 200}}
+    
+    # Make a request to the readiness probe endpoint
+    response = client.get("/health/readiness")
+    
+    # Verify the response
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "up"
+    assert "service" in data
+    assert "version" in data
+    assert "timestamp" in data
+    
+    # Verify dependency statuses
+    dependencies = data["dependencies"]
+    assert dependencies["rabbitmq"]["status"] == "up"
+    assert dependencies["s3"]["status"] == "up"
+    assert dependencies["gpu"]["status"] == "up"
 
 
-# Tests for the liveness endpoint
-class TestLivenessEndpoint:
-    """Tests for the /health/liveness endpoint."""
-
-    def test_liveness_success(self, test_client):
-        """Test that the liveness endpoint returns 200 OK when the service is running."""
-        # Make a request to the liveness endpoint
-        response = test_client.get("/liveness")
+@pytest.mark.asyncio
+async def test_readiness_probe_rabbitmq_unhealthy(client, mock_s3, mock_gpu_available):
+    """Test the readiness probe endpoint when RabbitMQ is unhealthy.
+    
+    This test verifies that the readiness probe endpoint correctly reports
+    that the service is not ready to accept traffic when RabbitMQ is unavailable.
+    
+    Args:
+        client: FastAPI TestClient fixture
+        mock_s3: Mock S3 storage fixture
+        mock_gpu_available: Mock GPU availability fixture
+    """
+    # Mock the check_rabbitmq_connection function to return unhealthy status
+    async def mock_check_rabbitmq_unhealthy():
+        return {
+            "status": "down",
+            "details": {
+                "connected": False,
+                "error": "Connection refused",
+                "exchange": app_config.RABBITMQ_EXCHANGE,
+                "queue": app_config.RABBITMQ_QUEUE
+            }
+        }
+    
+    # Apply the patch
+    with patch("src.api.health.check_rabbitmq_connection", side_effect=mock_check_rabbitmq_unhealthy):
+        # Make a request to the readiness probe endpoint
+        response = client.get("/health/readiness")
         
-        # Check the response
-        assert response.status_code == 200
+        # Verify the response
+        assert response.status_code == 503  # Service Unavailable
         data = response.json()
-        assert data["status"] == "ok"
-        assert "service" in data
-        assert "version" in data
-        assert "timestamp" in data
-
-    def test_liveness_error_handling(self, test_client):
-        """Test that the liveness endpoint handles errors appropriately."""
-        # Mock an exception during the liveness check
-        with patch("src.api.health.logging_utils.get_current_timestamp", side_effect=Exception("Test error")):
-            response = test_client.get("/liveness")
-            
-            # Check the response
-            assert response.status_code == 500
-            data = response.json()
-            assert data["status"] == "error"
-            assert "message" in data
-            assert "details" in data
-            assert "timestamp" in data
+        assert data["status"] == "down"
+        
+        # Verify dependency statuses
+        dependencies = data["dependencies"]
+        assert dependencies["rabbitmq"]["status"] == "down"
+        assert dependencies["s3"]["status"] == "up"
+        assert dependencies["gpu"]["status"] == "up"
 
 
-# Tests for the readiness endpoint
-class TestReadinessEndpoint:
-    """Tests for the /health/readiness endpoint."""
-
-    def test_readiness_all_healthy(self, test_client):
-        """Test that the readiness endpoint returns 200 OK when all dependencies are healthy."""
-        # Mock all dependency checks to return healthy status
-        with patch("src.api.health.check_rabbitmq_health", return_value={"status": "ok"}):
-            with patch("src.api.health.check_s3_health", return_value={"status": "ok"}):
-                with patch("src.api.health.check_gpu_health", return_value={"status": "ok"}):
-                    response = test_client.get("/readiness")
-                    
-                    # Check the response
-                    assert response.status_code == 200
-                    data = response.json()
-                    assert data["status"] == "ok"
-                    assert "dependencies" in data
-                    assert "rabbitmq" in data["dependencies"]
-                    assert "s3" in data["dependencies"]
-                    assert "gpu" in data["dependencies"]
-                    assert data["dependencies"]["rabbitmq"]["status"] == "ok"
-                    assert data["dependencies"]["s3"]["status"] == "ok"
-                    assert data["dependencies"]["gpu"]["status"] == "ok"
-
-    def test_readiness_rabbitmq_unhealthy(self, test_client):
-        """Test that the readiness endpoint returns 503 when RabbitMQ is unhealthy."""
-        # Mock RabbitMQ check to return unhealthy status
-        with patch("src.api.health.check_rabbitmq_health", return_value={"status": "error", "message": "RabbitMQ connection failed"}):
-            with patch("src.api.health.check_s3_health", return_value={"status": "ok"}):
-                with patch("src.api.health.check_gpu_health", return_value={"status": "ok"}):
-                    response = test_client.get("/readiness")
-                    
-                    # Check the response
-                    assert response.status_code == 503
-                    data = response.json()
-                    assert data["status"] == "degraded"
-                    assert data["dependencies"]["rabbitmq"]["status"] == "error"
-                    assert data["dependencies"]["s3"]["status"] == "ok"
-                    assert data["dependencies"]["gpu"]["status"] == "ok"
-
-    def test_readiness_s3_unhealthy(self, test_client):
-        """Test that the readiness endpoint returns 503 when S3 is unhealthy."""
-        # Mock S3 check to return unhealthy status
-        with patch("src.api.health.check_rabbitmq_health", return_value={"status": "ok"}):
-            with patch("src.api.health.check_s3_health", return_value={"status": "error", "message": "S3 connection failed"}):
-                with patch("src.api.health.check_gpu_health", return_value={"status": "ok"}):
-                    response = test_client.get("/readiness")
-                    
-                    # Check the response
-                    assert response.status_code == 503
-                    data = response.json()
-                    assert data["status"] == "degraded"
-                    assert data["dependencies"]["rabbitmq"]["status"] == "ok"
-                    assert data["dependencies"]["s3"]["status"] == "error"
-                    assert data["dependencies"]["gpu"]["status"] == "ok"
-
-    def test_readiness_gpu_unhealthy(self, test_client):
-        """Test that the readiness endpoint returns 503 when GPU is unhealthy."""
-        # Mock GPU check to return unhealthy status
-        with patch("src.api.health.check_rabbitmq_health", return_value={"status": "ok"}):
-            with patch("src.api.health.check_s3_health", return_value={"status": "ok"}):
-                with patch("src.api.health.check_gpu_health", return_value={"status": "error", "message": "No GPU devices available"}):
-                    response = test_client.get("/readiness")
-                    
-                    # Check the response
-                    assert response.status_code == 503
-                    data = response.json()
-                    assert data["status"] == "degraded"
-                    assert data["dependencies"]["rabbitmq"]["status"] == "ok"
-                    assert data["dependencies"]["s3"]["status"] == "ok"
-                    assert data["dependencies"]["gpu"]["status"] == "error"
-
-    def test_readiness_all_unhealthy(self, test_client):
-        """Test that the readiness endpoint returns 503 when all dependencies are unhealthy."""
-        # Mock all dependency checks to return unhealthy status
-        with patch("src.api.health.check_rabbitmq_health", return_value={"status": "error", "message": "RabbitMQ connection failed"}):
-            with patch("src.api.health.check_s3_health", return_value={"status": "error", "message": "S3 connection failed"}):
-                with patch("src.api.health.check_gpu_health", return_value={"status": "error", "message": "No GPU devices available"}):
-                    response = test_client.get("/readiness")
-                    
-                    # Check the response
-                    assert response.status_code == 503
-                    data = response.json()
-                    assert data["status"] == "degraded"
-                    assert data["dependencies"]["rabbitmq"]["status"] == "error"
-                    assert data["dependencies"]["s3"]["status"] == "error"
-                    assert data["dependencies"]["gpu"]["status"] == "error"
-
-    def test_readiness_error_handling(self, test_client):
-        """Test that the readiness endpoint handles errors appropriately."""
-        # Mock an exception during the readiness check
-        with patch("src.api.health.check_rabbitmq_health", side_effect=Exception("Test error")):
-            response = test_client.get("/readiness")
-            
-            # Check the response
-            assert response.status_code == 500
-            data = response.json()
-            assert data["status"] == "error"
-            assert "message" in data
-            assert "details" in data
-            assert "timestamp" in data
+@pytest.mark.asyncio
+async def test_readiness_probe_s3_unhealthy(client, mock_rabbitmq, mock_gpu_available):
+    """Test the readiness probe endpoint when S3 is unhealthy.
+    
+    This test verifies that the readiness probe endpoint correctly reports
+    that the service is not ready to accept traffic when S3 is unavailable.
+    
+    Args:
+        client: FastAPI TestClient fixture
+        mock_rabbitmq: Mock RabbitMQ connection fixture
+        mock_gpu_available: Mock GPU availability fixture
+    """
+    # Mock the check_s3_connection function to return unhealthy status
+    async def mock_check_s3_unhealthy():
+        return {
+            "status": "down",
+            "details": {
+                "connected": False,
+                "error": "Connection refused",
+                "bucket": app_config.S3_BUCKET,
+                "endpoint": app_config.S3_ENDPOINT
+            }
+        }
+    
+    # Apply the patch
+    with patch("src.api.health.check_s3_connection", side_effect=mock_check_s3_unhealthy):
+        # Make a request to the readiness probe endpoint
+        response = client.get("/health/readiness")
+        
+        # Verify the response
+        assert response.status_code == 503  # Service Unavailable
+        data = response.json()
+        assert data["status"] == "down"
+        
+        # Verify dependency statuses
+        dependencies = data["dependencies"]
+        assert dependencies["rabbitmq"]["status"] == "up"
+        assert dependencies["s3"]["status"] == "down"
+        assert dependencies["gpu"]["status"] == "up"
 
 
-# Tests for the individual health check functions
-class TestHealthCheckFunctions:
-    """Tests for the individual health check functions."""
+@pytest.mark.asyncio
+async def test_readiness_probe_gpu_unhealthy(client, mock_rabbitmq, mock_s3):
+    """Test the readiness probe endpoint when GPU is unhealthy.
+    
+    This test verifies that the readiness probe endpoint correctly reports
+    that the service is not ready to accept traffic when GPU is unavailable.
+    
+    Args:
+        client: FastAPI TestClient fixture
+        mock_rabbitmq: Mock RabbitMQ connection fixture
+        mock_s3: Mock S3 storage fixture
+    """
+    # Mock the check_gpu_availability function to return unhealthy status
+    def mock_check_gpu_unhealthy():
+        return {
+            "status": "down",
+            "details": {
+                "gpu_available": False,
+                "error": "No GPU devices found",
+                "min_vram_required_mb": tensorflow_config.MIN_GPU_MEMORY_MB
+            }
+        }
+    
+    # Apply the patch
+    with patch("src.api.health.check_gpu_availability", side_effect=mock_check_gpu_unhealthy):
+        # Make a request to the readiness probe endpoint
+        response = client.get("/health/readiness")
+        
+        # Verify the response
+        assert response.status_code == 503  # Service Unavailable
+        data = response.json()
+        assert data["status"] == "down"
+        
+        # Verify dependency statuses
+        dependencies = data["dependencies"]
+        assert dependencies["rabbitmq"]["status"] == "up"
+        assert dependencies["s3"]["status"] == "up"
+        assert dependencies["gpu"]["status"] == "down"
 
-    @pytest.mark.asyncio
-    async def test_check_rabbitmq_health_success(self, mock_queue_service):
-        """Test that check_rabbitmq_health returns healthy status when RabbitMQ is available."""
-        # Mock the queue service functions
-        with patch("src.api.health.queue_service.check_connection", return_value=True):
-            with patch("src.api.health.queue_service.check_exchange_exists", return_value=True):
-                with patch("src.api.health.queue_service.check_queue_exists", return_value=True):
-                    # Import the function here to ensure mocks are applied
-                    from src.api.health import check_rabbitmq_health
-                    
-                    # Call the function
-                    result = await check_rabbitmq_health()
-                    
-                    # Check the result
-                    assert result["status"] == "ok"
-                    assert "details" in result
-                    assert result["details"]["connection"] == "connected"
-                    assert "exchange" in result["details"]
-                    assert "queue" in result["details"]
 
-    @pytest.mark.asyncio
-    async def test_check_rabbitmq_health_connection_failure(self):
-        """Test that check_rabbitmq_health returns unhealthy status when RabbitMQ connection fails."""
-        # Mock the queue service functions
-        with patch("src.api.health.queue_service.check_connection", return_value=False):
-            with patch("src.api.health.queue_service.check_exchange_exists", return_value=False):
-                with patch("src.api.health.queue_service.check_queue_exists", return_value=False):
-                    # Import the function here to ensure mocks are applied
-                    from src.api.health import check_rabbitmq_health
-                    
-                    # Call the function
-                    result = await check_rabbitmq_health()
-                    
-                    # Check the result
-                    assert result["status"] == "error"
-                    assert "details" in result
-                    assert result["details"]["connection"] == "disconnected"
-                    assert result["details"]["exchange"] == "unavailable"
-                    assert result["details"]["queue"] == "unavailable"
+@pytest.mark.asyncio
+async def test_readiness_probe_all_unhealthy(client):
+    """Test the readiness probe endpoint when all dependencies are unhealthy.
+    
+    This test verifies that the readiness probe endpoint correctly reports
+    that the service is not ready to accept traffic when all dependencies
+    (RabbitMQ, S3, GPU) are unavailable.
+    
+    Args:
+        client: FastAPI TestClient fixture
+    """
+    # Mock all dependency check functions to return unhealthy status
+    async def mock_check_rabbitmq_unhealthy():
+        return {
+            "status": "down",
+            "details": {
+                "connected": False,
+                "error": "Connection refused",
+                "exchange": app_config.RABBITMQ_EXCHANGE,
+                "queue": app_config.RABBITMQ_QUEUE
+            }
+        }
+    
+    async def mock_check_s3_unhealthy():
+        return {
+            "status": "down",
+            "details": {
+                "connected": False,
+                "error": "Connection refused",
+                "bucket": app_config.S3_BUCKET,
+                "endpoint": app_config.S3_ENDPOINT
+            }
+        }
+    
+    def mock_check_gpu_unhealthy():
+        return {
+            "status": "down",
+            "details": {
+                "gpu_available": False,
+                "error": "No GPU devices found",
+                "min_vram_required_mb": tensorflow_config.MIN_GPU_MEMORY_MB
+            }
+        }
+    
+    # Apply the patches
+    with patch("src.api.health.check_rabbitmq_connection", side_effect=mock_check_rabbitmq_unhealthy), \
+         patch("src.api.health.check_s3_connection", side_effect=mock_check_s3_unhealthy), \
+         patch("src.api.health.check_gpu_availability", side_effect=mock_check_gpu_unhealthy):
+        # Make a request to the readiness probe endpoint
+        response = client.get("/health/readiness")
+        
+        # Verify the response
+        assert response.status_code == 503  # Service Unavailable
+        data = response.json()
+        assert data["status"] == "down"
+        
+        # Verify dependency statuses
+        dependencies = data["dependencies"]
+        assert dependencies["rabbitmq"]["status"] == "down"
+        assert dependencies["s3"]["status"] == "down"
+        assert dependencies["gpu"]["status"] == "down"
 
-    @pytest.mark.asyncio
-    async def test_check_rabbitmq_health_exception(self):
-        """Test that check_rabbitmq_health handles exceptions appropriately."""
-        # Mock the queue service functions to raise an exception
-        with patch("src.api.health.queue_service.check_connection", side_effect=Exception("Test error")):
-            # Import the function here to ensure mocks are applied
-            from src.api.health import check_rabbitmq_health
-            
-            # Call the function
-            result = await check_rabbitmq_health()
-            
-            # Check the result
-            assert result["status"] == "error"
-            assert "details" in result
-            assert "error" in result["details"]
-            assert "message" in result
 
-    @pytest.mark.asyncio
-    async def test_check_s3_health_success(self):
-        """Test that check_s3_health returns healthy status when S3 is available."""
-        # Mock the storage service functions
-        with patch("src.api.health.storage_service.check_connection", return_value=True):
-            with patch("src.api.health.storage_service.check_bucket_exists", return_value=True):
-                # Import the function here to ensure mocks are applied
-                from src.api.health import check_s3_health
-                
-                # Call the function
-                result = await check_s3_health()
-                
-                # Check the result
-                assert result["status"] == "ok"
-                assert "details" in result
-                assert result["details"]["connection"] == "connected"
-                assert "bucket" in result["details"]
-                assert "encryption" in result["details"]
+@pytest.mark.asyncio
+async def test_rabbitmq_connection_check_exception():
+    """Test the RabbitMQ connection check function when an exception occurs.
+    
+    This test verifies that the RabbitMQ connection check function correctly
+    handles exceptions and returns an appropriate error response.
+    """
+    # Mock the queue_service.check_connection function to raise an exception
+    with patch("src.services.queue_service.check_connection", side_effect=Exception("Test exception")):
+        # Call the function directly
+        result = await check_rabbitmq_connection()
+        
+        # Verify the result
+        assert result["status"] == "down"
+        assert result["details"]["connected"] == False
+        assert "error" in result["details"]
+        assert "Test exception" in result["details"]["error"]
 
-    @pytest.mark.asyncio
-    async def test_check_s3_health_connection_failure(self):
-        """Test that check_s3_health returns unhealthy status when S3 connection fails."""
-        # Mock the storage service functions
-        with patch("src.api.health.storage_service.check_connection", return_value=False):
-            with patch("src.api.health.storage_service.check_bucket_exists", return_value=False):
-                # Import the function here to ensure mocks are applied
-                from src.api.health import check_s3_health
-                
-                # Call the function
-                result = await check_s3_health()
-                
-                # Check the result
-                assert result["status"] == "error"
-                assert "details" in result
-                assert result["details"]["connection"] == "disconnected"
-                assert result["details"]["bucket"] == "inaccessible"
 
-    @pytest.mark.asyncio
-    async def test_check_s3_health_exception(self):
-        """Test that check_s3_health handles exceptions appropriately."""
-        # Mock the storage service functions to raise an exception
-        with patch("src.api.health.storage_service.check_connection", side_effect=Exception("Test error")):
-            # Import the function here to ensure mocks are applied
-            from src.api.health import check_s3_health
-            
-            # Call the function
-            result = await check_s3_health()
-            
-            # Check the result
-            assert result["status"] == "error"
-            assert "details" in result
-            assert "error" in result["details"]
-            assert "message" in result
+@pytest.mark.asyncio
+async def test_s3_connection_check_exception():
+    """Test the S3 connection check function when an exception occurs.
+    
+    This test verifies that the S3 connection check function correctly
+    handles exceptions and returns an appropriate error response.
+    """
+    # Mock the storage_service.check_connection function to raise an exception
+    with patch("src.services.storage_service.check_connection", side_effect=Exception("Test exception")):
+        # Call the function directly
+        result = await check_s3_connection()
+        
+        # Verify the result
+        assert result["status"] == "down"
+        assert result["details"]["connected"] == False
+        assert "error" in result["details"]
+        assert "Test exception" in result["details"]["error"]
 
-    def test_check_gpu_health_success(self):
-        """Test that check_gpu_health returns healthy status when GPU is available."""
-        # Mock the tensorflow_utils functions
-        with patch("src.api.health.tensorflow_utils.get_available_gpus", return_value=['/device:GPU:0']):
-            with patch("src.api.health.tensorflow_utils.get_gpu_memory", return_value=10240):  # 10GB
-                with patch("src.api.health.tensorflow_utils.check_gpu_tensorflow_compatibility", return_value=True):
-                    with patch("src.api.health.tensorflow_utils.get_cuda_version", return_value="11.2"):
-                        # Import the function here to ensure mocks are applied
-                        from src.api.health import check_gpu_health
-                        
-                        # Call the function
-                        result = check_gpu_health()
-                        
-                        # Check the result
-                        assert result["status"] == "ok"
-                        assert "details" in result
-                        assert result["details"]["gpu_count"] == 1
-                        assert result["details"]["available_memory_gb"] == 10
-                        assert result["details"]["tensorflow_gpu_enabled"] == True
-                        assert result["details"]["cuda_version"] == "11.2"
 
-    def test_check_gpu_health_no_gpu(self):
-        """Test that check_gpu_health returns unhealthy status when no GPU is available."""
-        # Mock the tensorflow_utils functions
-        with patch("src.api.health.tensorflow_utils.get_available_gpus", return_value=[]):
-            # Import the function here to ensure mocks are applied
-            from src.api.health import check_gpu_health
-            
-            # Call the function
-            result = check_gpu_health()
-            
-            # Check the result
-            assert result["status"] == "error"
-            assert "details" in result
-            assert result["details"]["gpu_count"] == 0
-            assert "message" in result
+def test_gpu_availability_check_exception():
+    """Test the GPU availability check function when an exception occurs.
+    
+    This test verifies that the GPU availability check function correctly
+    handles exceptions and returns an appropriate error response.
+    """
+    # Mock the tf.config.list_physical_devices function to raise an exception
+    with patch("tensorflow.config.list_physical_devices", side_effect=Exception("Test exception")):
+        # Call the function directly
+        result = check_gpu_availability()
+        
+        # Verify the result
+        assert result["status"] == "down"
+        assert result["details"]["gpu_available"] == False
+        assert "error" in result["details"]
+        assert "Test exception" in result["details"]["error"]
 
-    def test_check_gpu_health_insufficient_memory(self):
-        """Test that check_gpu_health returns unhealthy status when GPU memory is insufficient."""
-        # Mock the tensorflow_utils functions
-        with patch("src.api.health.tensorflow_utils.get_available_gpus", return_value=['/device:GPU:0']):
-            with patch("src.api.health.tensorflow_utils.get_gpu_memory", return_value=4096):  # 4GB (less than required 8GB)
-                # Import the function here to ensure mocks are applied
-                from src.api.health import check_gpu_health
-                
-                # Call the function
-                result = check_gpu_health()
-                
-                # Check the result
-                assert result["status"] == "error"
-                assert "details" in result
-                assert result["details"]["gpu_count"] == 1
-                assert result["details"]["available_memory_gb"] == 4
-                assert result["details"]["required_memory_gb"] == 8
-                assert "message" in result
 
-    def test_check_gpu_health_tensorflow_incompatible(self):
-        """Test that check_gpu_health returns unhealthy status when TensorFlow cannot use GPU."""
-        # Mock the tensorflow_utils functions
-        with patch("src.api.health.tensorflow_utils.get_available_gpus", return_value=['/device:GPU:0']):
-            with patch("src.api.health.tensorflow_utils.get_gpu_memory", return_value=10240):  # 10GB
-                with patch("src.api.health.tensorflow_utils.check_gpu_tensorflow_compatibility", return_value=False):
-                    # Import the function here to ensure mocks are applied
-                    from src.api.health import check_gpu_health
-                    
-                    # Call the function
-                    result = check_gpu_health()
-                    
-                    # Check the result
-                    assert result["status"] == "error"
-                    assert "details" in result
-                    assert result["details"]["gpu_count"] == 1
-                    assert result["details"]["available_memory_gb"] == 10
-                    assert result["details"]["tensorflow_gpu_enabled"] == False
-                    assert "message" in result
-
-    def test_check_gpu_health_exception(self):
-        """Test that check_gpu_health handles exceptions appropriately."""
-        # Mock the tensorflow_utils functions to raise an exception
-        with patch("src.api.health.tensorflow_utils.get_available_gpus", side_effect=Exception("Test error")):
-            # Import the function here to ensure mocks are applied
-            from src.api.health import check_gpu_health
-            
-            # Call the function
-            result = check_gpu_health()
-            
-            # Check the result
-            assert result["status"] == "error"
-            assert "details" in result
-            assert "error" in result["details"]
-            assert "message" in result
+@pytest.mark.asyncio
+async def test_gpu_availability_insufficient_memory():
+    """Test the GPU availability check function when GPU memory is insufficient.
+    
+    This test verifies that the GPU availability check function correctly
+    reports that the GPU is unavailable when it has insufficient memory.
+    """
+    # Mock the tf.config.list_physical_devices function to return a GPU device
+    mock_device = MagicMock()
+    mock_device.name = "/device:GPU:0"
+    mock_device.device_type = "GPU"
+    
+    # Mock the tf.config.experimental.get_device_details function to return insufficient memory
+    mock_device_details = {
+        "memory_limit": 1024 * 1024 * 1024,  # 1 GB (less than required)
+        "compute_capability": "7.5"
+    }
+    
+    with patch("tensorflow.config.list_physical_devices", return_value=[mock_device]), \
+         patch("tensorflow.config.experimental.get_device_details", return_value=mock_device_details), \
+         patch("src.config.tensorflow_config.MIN_GPU_MEMORY_MB", 8192):  # 8 GB required
+        # Call the function directly
+        result = check_gpu_availability()
+        
+        # Verify the result
+        assert result["status"] == "down"
+        assert result["details"]["gpu_available"] == True
+        assert result["details"]["meets_requirements"] == False
+        assert result["details"]["min_vram_required_mb"] == 8192
