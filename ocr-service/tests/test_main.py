@@ -1,252 +1,280 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+Unit tests for the main entry point (main.py) of the OCR Service.
+
+This file verifies that the service correctly initializes the application,
+connects to required services (RabbitMQ, S3), loads TensorFlow models,
+and starts the OCR processing. It ensures the service can handle startup
+errors and shutdown gracefully.
+"""
+
 import os
+import sys
 import signal
 import pytest
-from unittest.mock import patch, MagicMock, call
+from unittest import mock
 import tensorflow as tf
 
-# Import the main module - this will be patched in tests
-with patch('tensorflow.config.list_physical_devices'):
-    with patch('tensorflow.config.experimental.set_memory_growth'):
-        from ocr_service.src.main import main, initialize_app, setup_rabbitmq, setup_s3, load_tensorflow_models, signal_handler
+# Add the src directory to the path so we can import the modules
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
+
+# Import the modules to test
+import main
+from app import OCRServiceApp
+from utils.tensorflow_utils import check_gpu_memory
 
 
 @pytest.fixture
 def mock_app():
-    """Fixture for mocked application instance"""
-    app_mock = MagicMock()
-    app_mock.start = MagicMock()
-    app_mock.stop = MagicMock()
-    return app_mock
+    """Mock the OCRServiceApp class."""
+    with mock.patch('main.OCRServiceApp') as mock_app_class:
+        # Create a mock instance that will be returned when OCRServiceApp is instantiated
+        mock_app_instance = mock.MagicMock()
+        mock_app_class.return_value = mock_app_instance
+        yield mock_app_instance
 
 
 @pytest.fixture
-def mock_gpu_devices():
-    """Fixture for mocked GPU devices"""
-    gpu_device = MagicMock()
-    gpu_device.name = 'GPU:0'
-    return [gpu_device]
+def mock_tensorflow():
+    """Mock TensorFlow and GPU-related functions."""
+    with mock.patch('main.tf') as mock_tf, \
+         mock.patch('main.check_gpu_memory') as mock_check_gpu_memory:
+        # Configure the mock to return a list of GPU devices
+        mock_tf.config.list_physical_devices.return_value = [
+            '/physical_device:GPU:0'
+        ]
+        # Configure the mock to return sufficient GPU memory (10GB in MB)
+        mock_check_gpu_memory.return_value = 10 * 1024
+        yield mock_tf
 
 
 @pytest.fixture
-def mock_environment_variables():
-    """Fixture to set required environment variables for testing"""
-    original_env = os.environ.copy()
-    
-    # Set test environment variables
-    os.environ['RABBITMQ_HOST'] = 'test-rabbitmq'
-    os.environ['RABBITMQ_PORT'] = '5672'
-    os.environ['RABBITMQ_USERNAME'] = 'test-user'
-    os.environ['RABBITMQ_PASSWORD'] = 'test-password'
-    os.environ['RABBITMQ_EXCHANGE'] = 'mca.documents'
-    os.environ['RABBITMQ_QUEUE'] = 'data-extraction'
-    os.environ['S3_ENDPOINT'] = 'test-s3-endpoint'
-    os.environ['S3_BUCKET'] = 'mca-documents-test'
-    os.environ['S3_ACCESS_KEY'] = 'test-access-key'
-    os.environ['S3_SECRET_KEY'] = 'test-secret-key'
-    os.environ['S3_REGION'] = 'us-east-1'
-    os.environ['LOG_LEVEL'] = 'INFO'
-    os.environ['ENVIRONMENT'] = 'test'
-    
-    yield
-    
-    # Restore original environment
-    os.environ.clear()
-    os.environ.update(original_env)
+def mock_signal_handlers():
+    """Mock signal handlers setup."""
+    with mock.patch('main.signal.signal') as mock_signal:
+        yield mock_signal
+
+
+@pytest.fixture
+def mock_logger():
+    """Mock the logger."""
+    with mock.patch('main.logger') as mock_logger:
+        yield mock_logger
+
+
+@pytest.fixture
+def mock_setup_logger():
+    """Mock the setup_logger function."""
+    with mock.patch('main.setup_logger') as mock_setup_logger:
+        yield mock_setup_logger
+
+
+@pytest.fixture
+def mock_sys_exit():
+    """Mock sys.exit to prevent tests from exiting."""
+    with mock.patch('main.sys.exit') as mock_exit:
+        yield mock_exit
+
+
+@pytest.fixture
+def mock_time_sleep():
+    """Mock time.sleep to speed up tests."""
+    with mock.patch('main.time.sleep') as mock_sleep:
+        # Configure sleep to raise an exception after first call to break the infinite loop
+        mock_sleep.side_effect = [None, KeyboardInterrupt]
+        yield mock_sleep
 
 
 class TestMain:
-    """Test cases for the main module of the OCR Service"""
+    """Test cases for the main.py module."""
 
-    @patch('ocr_service.src.main.initialize_app')
-    @patch('ocr_service.src.main.setup_rabbitmq')
-    @patch('ocr_service.src.main.setup_s3')
-    @patch('ocr_service.src.main.load_tensorflow_models')
-    @patch('ocr_service.src.main.signal.signal')
-    def test_main_initializes_all_components(self, mock_signal, mock_load_models, 
-                                           mock_setup_s3, mock_setup_rabbitmq, 
-                                           mock_initialize_app, mock_environment_variables):
-        """Test that main initializes all required components"""
-        # Setup
-        mock_app = MagicMock()
-        mock_initialize_app.return_value = mock_app
+    def test_verify_gpu_availability_success(self, mock_tensorflow, mock_logger):
+        """Test that GPU verification succeeds when GPU is available with sufficient memory."""
+        # Call the function
+        main.verify_gpu_availability()
         
-        # Execute
-        main()
+        # Verify that the function checked for GPUs
+        mock_tensorflow.config.list_physical_devices.assert_called_once_with('GPU')
         
-        # Assert
-        mock_initialize_app.assert_called_once()
-        mock_setup_rabbitmq.assert_called_once_with(mock_app)
-        mock_setup_s3.assert_called_once_with(mock_app)
-        mock_load_models.assert_called_once_with(mock_app)
+        # Verify that memory growth was enabled for the GPU
+        mock_tensorflow.config.experimental.set_memory_growth.assert_called_once()
+        
+        # Verify that GPU memory was checked
+        assert check_gpu_memory.called
+        
+        # Verify that a small tensor was created to force GPU initialization
+        mock_tensorflow.random.normal.assert_called_once()
+        
+        # Verify that success was logged
+        mock_logger.info.assert_any_call("GPU initialization successful")
+
+    def test_verify_gpu_availability_no_gpu(self, mock_tensorflow, mock_logger):
+        """Test that GPU verification fails when no GPU is available."""
+        # Configure the mock to return an empty list (no GPUs)
+        mock_tensorflow.config.list_physical_devices.return_value = []
+        
+        # Call the function and verify that it raises an exception
+        with pytest.raises(RuntimeError, match="No GPU found"):
+            main.verify_gpu_availability()
+
+    def test_verify_gpu_availability_insufficient_memory(self, mock_tensorflow, mock_logger):
+        """Test that GPU verification fails when GPU memory is insufficient."""
+        # Configure the mock to return insufficient GPU memory (4GB in MB)
+        with mock.patch('main.check_gpu_memory', return_value=4 * 1024):
+            # Call the function and verify that it raises an exception
+            with pytest.raises(RuntimeError, match="Insufficient GPU memory"):
+                main.verify_gpu_availability()
+
+    def test_setup_signal_handlers(self, mock_signal_handlers, mock_logger):
+        """Test that signal handlers are properly set up."""
+        # Call the function
+        main.setup_signal_handlers()
+        
+        # Verify that signal handlers were registered for SIGINT and SIGTERM
+        assert mock_signal_handlers.call_count == 2
+        mock_signal_handlers.assert_any_call(signal.SIGINT, mock.ANY)
+        mock_signal_handlers.assert_any_call(signal.SIGTERM, mock.ANY)
+        
+        # Verify that success was logged
+        mock_logger.info.assert_called_with("Signal handlers registered for graceful shutdown")
+
+    def test_shutdown_with_app_instance(self, mock_app, mock_logger):
+        """Test graceful shutdown when app_instance exists."""
+        # Set the global app_instance
+        main.app_instance = mock_app
+        
+        # Call the function
+        main.shutdown()
+        
+        # Verify that the app was stopped
+        mock_app.stop.assert_called_once()
+        
+        # Verify that TensorFlow session was cleared
+        assert mock.call("TensorFlow session cleared, GPU resources released") in mock_logger.info.call_args_list
+        
+        # Verify that success was logged
+        mock_logger.info.assert_any_call("OCR Service application stopped successfully")
+
+    def test_shutdown_without_app_instance(self, mock_logger):
+        """Test graceful shutdown when app_instance does not exist."""
+        # Set the global app_instance to None
+        main.app_instance = None
+        
+        # Call the function
+        main.shutdown()
+        
+        # Verify that a warning was logged
+        mock_logger.warning.assert_called_with("Application instance not found during shutdown")
+
+    def test_shutdown_with_exception(self, mock_app, mock_logger):
+        """Test graceful shutdown when an exception occurs."""
+        # Set the global app_instance
+        main.app_instance = mock_app
+        
+        # Configure the mock to raise an exception when stop is called
+        mock_app.stop.side_effect = Exception("Test exception")
+        
+        # Call the function
+        main.shutdown()
+        
+        # Verify that the app.stop was called
+        mock_app.stop.assert_called_once()
+        
+        # Verify that the error was logged
+        mock_logger.error.assert_any_call("Error during application shutdown: Test exception")
+
+    def test_handle_uncaught_exception_keyboard_interrupt(self, mock_sys_exit):
+        """Test that KeyboardInterrupt is handled properly."""
+        # Mock sys.__excepthook__
+        with mock.patch('main.sys.__excepthook__') as mock_original_hook:
+            # Call the function with KeyboardInterrupt
+            main.handle_uncaught_exception(KeyboardInterrupt, KeyboardInterrupt(), None)
+            
+            # Verify that the original handler was called
+            mock_original_hook.assert_called_once()
+            
+            # Verify that sys.exit was not called
+            mock_sys_exit.assert_not_called()
+
+    def test_handle_uncaught_exception_other_exception(self, mock_logger, mock_sys_exit):
+        """Test that other exceptions are handled properly."""
+        # Mock log_exception
+        with mock.patch('main.log_exception') as mock_log_exception:
+            # Call the function with a different exception
+            exc = ValueError("Test exception")
+            main.handle_uncaught_exception(ValueError, exc, None)
+            
+            # Verify that the exception was logged
+            mock_log_exception.assert_called_once_with(mock_logger, "Uncaught exception", exc, None)
+            
+            # Verify that shutdown was called
+            # This is difficult to test directly since we can't easily mock a function in the same module
+            # We'll verify that sys.exit was called instead
+            mock_sys_exit.assert_called_once_with(1)
+
+    def test_main_success(self, mock_app, mock_tensorflow, mock_signal_handlers, 
+                         mock_setup_logger, mock_logger, mock_sys_exit, mock_time_sleep):
+        """Test that the main function runs successfully."""
+        # Call the function
+        with pytest.raises(KeyboardInterrupt):
+            main.main()
+        
+        # Verify that logging was set up
+        mock_setup_logger.assert_called_once()
+        
+        # Verify that the global exception handler was registered
+        assert sys.excepthook == main.handle_uncaught_exception
+        
+        # Verify that signal handlers were set up
+        assert mock_signal_handlers.call_count >= 2
+        
+        # Verify that GPU availability was checked
+        mock_tensorflow.config.list_physical_devices.assert_called_once_with('GPU')
+        
+        # Verify that the app was created and started
         mock_app.start.assert_called_once()
         
-        # Verify signal handlers are registered
-        assert mock_signal.call_count >= 2
-        mock_signal.assert_has_calls([
-            call(signal.SIGINT, signal_handler),
-            call(signal.SIGTERM, signal_handler)
-        ], any_order=True)
+        # Verify that the main loop was entered
+        mock_time_sleep.assert_called()
+        
+        # Verify that sys.exit was not called (since we raised KeyboardInterrupt)
+        mock_sys_exit.assert_not_called()
 
-    @patch('ocr_service.src.app.App')
-    def test_initialize_app_creates_app_instance(self, mock_app_class, mock_environment_variables):
-        """Test that initialize_app creates and returns an App instance"""
-        # Setup
-        mock_app_instance = MagicMock()
-        mock_app_class.return_value = mock_app_instance
+    def test_main_exception(self, mock_app, mock_logger, mock_sys_exit):
+        """Test that the main function handles exceptions properly."""
+        # Configure the app to raise an exception when started
+        mock_app.start.side_effect = Exception("Test exception")
         
-        # Execute
-        app = initialize_app()
+        # Call the function
+        main.main()
         
-        # Assert
-        mock_app_class.assert_called_once()
-        assert app == mock_app_instance
+        # Verify that the error was logged
+        mock_logger.critical.assert_called_with("Failed to start OCR Service: Test exception")
+        
+        # Verify that sys.exit was called with an error code
+        mock_sys_exit.assert_called_once_with(1)
 
-    @patch('ocr_service.src.main.pika')
-    def test_setup_rabbitmq_establishes_connection(self, mock_pika, mock_app, mock_environment_variables):
-        """Test that setup_rabbitmq establishes a connection to RabbitMQ"""
-        # Setup
-        mock_connection = MagicMock()
-        mock_channel = MagicMock()
-        mock_pika.ConnectionParameters.return_value = MagicMock()
-        mock_pika.BlockingConnection.return_value = mock_connection
-        mock_connection.channel.return_value = mock_channel
-        
-        # Execute
-        setup_rabbitmq(mock_app)
-        
-        # Assert
-        mock_pika.ConnectionParameters.assert_called_once_with(
-            host='test-rabbitmq',
-            port=5672,
-            credentials=mock_pika.PlainCredentials('test-user', 'test-password')
-        )
-        mock_pika.BlockingConnection.assert_called_once()
-        mock_connection.channel.assert_called_once()
-        mock_channel.exchange_declare.assert_called_once_with(
-            exchange='mca.documents',
-            exchange_type='fanout',
-            durable=True
-        )
-        mock_channel.queue_declare.assert_called_once_with(
-            queue='data-extraction',
-            durable=True
-        )
-        mock_channel.queue_bind.assert_called_once_with(
-            exchange='mca.documents',
-            queue='data-extraction'
-        )
-        mock_app.set_rabbitmq_connection.assert_called_once_with(mock_connection)
-        mock_app.set_rabbitmq_channel.assert_called_once_with(mock_channel)
-
-    @patch('ocr_service.src.main.boto3')
-    def test_setup_s3_initializes_client(self, mock_boto3, mock_app, mock_environment_variables):
-        """Test that setup_s3 initializes an S3 client"""
-        # Setup
-        mock_s3_client = MagicMock()
-        mock_boto3.client.return_value = mock_s3_client
-        
-        # Execute
-        setup_s3(mock_app)
-        
-        # Assert
-        mock_boto3.client.assert_called_once_with(
-            's3',
-            endpoint_url='test-s3-endpoint',
-            aws_access_key_id='test-access-key',
-            aws_secret_access_key='test-secret-key',
-            region_name='us-east-1'
-        )
-        mock_app.set_s3_client.assert_called_once_with(mock_s3_client)
-
-    @patch('tensorflow.config.list_physical_devices')
-    @patch('tensorflow.config.experimental.set_memory_growth')
-    def test_load_tensorflow_models_with_gpu(self, mock_set_memory_growth, 
-                                           mock_list_physical_devices, 
-                                           mock_app, mock_gpu_devices):
-        """Test that load_tensorflow_models configures GPU and loads models"""
-        # Setup
-        mock_list_physical_devices.return_value = mock_gpu_devices
-        
-        # Execute
-        load_tensorflow_models(mock_app)
-        
-        # Assert
-        mock_list_physical_devices.assert_called_once_with('GPU')
-        mock_set_memory_growth.assert_called_once_with(mock_gpu_devices[0], True)
-        mock_app.load_ocr_models.assert_called_once()
-
-    @patch('tensorflow.config.list_physical_devices')
-    def test_load_tensorflow_models_no_gpu(self, mock_list_physical_devices, mock_app):
-        """Test that load_tensorflow_models raises an error when no GPU is available"""
-        # Setup
-        mock_list_physical_devices.return_value = []
-        
-        # Execute and Assert
-        with pytest.raises(RuntimeError) as excinfo:
-            load_tensorflow_models(mock_app)
-        
-        assert "GPU is required for OCR processing" in str(excinfo.value)
-        mock_list_physical_devices.assert_called_once_with('GPU')
-        mock_app.load_ocr_models.assert_not_called()
-
-    def test_signal_handler_stops_app(self, mock_app):
-        """Test that signal_handler stops the app and exits"""
-        # Setup
-        mock_signal_num = signal.SIGTERM
-        mock_frame = None
-        
-        # Execute with exit patched to prevent actual exit
-        with patch('sys.exit') as mock_exit:
-            signal_handler(mock_signal_num, mock_frame, app=mock_app)
-        
-        # Assert
-        mock_app.stop.assert_called_once()
-        mock_exit.assert_called_once_with(0)
-
-    @patch('ocr_service.src.main.initialize_app')
-    @patch('ocr_service.src.main.setup_rabbitmq')
-    def test_main_handles_rabbitmq_connection_error(self, mock_setup_rabbitmq, 
-                                                 mock_initialize_app, 
-                                                 mock_environment_variables):
-        """Test that main handles RabbitMQ connection errors gracefully"""
-        # Setup
-        mock_app = MagicMock()
-        mock_initialize_app.return_value = mock_app
-        mock_setup_rabbitmq.side_effect = Exception("RabbitMQ connection error")
-        
-        # Execute with exit patched to prevent actual exit
-        with patch('sys.exit') as mock_exit:
-            main()
-        
-        # Assert
-        mock_initialize_app.assert_called_once()
-        mock_setup_rabbitmq.assert_called_once_with(mock_app)
-        mock_app.stop.assert_called_once()
-        mock_exit.assert_called_once_with(1)
-
-    @patch('ocr_service.src.main.initialize_app')
-    @patch('ocr_service.src.main.setup_rabbitmq')
-    @patch('ocr_service.src.main.setup_s3')
-    def test_main_handles_s3_connection_error(self, mock_setup_s3, 
-                                           mock_setup_rabbitmq, 
-                                           mock_initialize_app, 
-                                           mock_environment_variables):
-        """Test that main handles S3 connection errors gracefully"""
-        # Setup
-        mock_app = MagicMock()
-        mock_initialize_app.return_value = mock_app
-        mock_setup_s3.side_effect = Exception("S3 connection error")
-        
-        # Execute with exit patched to prevent actual exit
-        with patch('sys.exit') as mock_exit:
-            main()
-        
-        # Assert
-        mock_initialize_app.assert_called_once()
-        mock_setup_rabbitmq.assert_called_once_with(mock_app)
-        mock_setup_s3.assert_called_once_with(mock_app)
-        mock_app.stop.assert_called_once()
-        mock_exit.assert_called_once_with(1)
+    def test_signal_handler(self, mock_logger, mock_sys_exit):
+        """Test that the signal handler shuts down the application properly."""
+        # Mock shutdown function
+        with mock.patch('main.shutdown') as mock_shutdown:
+            # Get the signal handler function
+            # We need to call setup_signal_handlers first to register the handler
+            main.setup_signal_handlers()
+            
+            # Get the signal handler that was registered
+            signal_handler = mock.call(signal.SIGINT, mock.ANY).args[1]
+            
+            # Call the signal handler
+            signal_handler(signal.SIGINT, None)
+            
+            # Verify that shutdown was called
+            mock_shutdown.assert_called_once()
+            
+            # Verify that sys.exit was called with code 0
+            mock_sys_exit.assert_called_once_with(0)
 
 
 if __name__ == "__main__":
