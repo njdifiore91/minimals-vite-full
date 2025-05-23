@@ -8,11 +8,12 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.web.authentication.WebAuthenticationDetailsSource;
 import org.springframework.util.StringUtils;
 import org.springframework.web.filter.OncePerRequestFilter;
+import com.dollarfunding.mca.security.UserDetailsServiceImpl;
 
-import javax.servlet.FilterChain;
-import javax.servlet.ServletException;
-import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 
 /**
@@ -38,14 +39,17 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     private static final String BEARER_PREFIX = "Bearer ";
 
     private final JwtTokenProvider tokenProvider;
+    private final UserDetailsServiceImpl userDetailsService;
 
     /**
-     * Constructor with JwtTokenProvider dependency.
+     * Constructor with JwtTokenProvider and UserDetailsServiceImpl dependencies.
      *
-     * @param tokenProvider the JWT token provider for token validation
+     * @param tokenProvider     the JWT token provider for token validation
+     * @param userDetailsService the user details service for loading user information
      */
-    public JwtAuthenticationFilter(JwtTokenProvider tokenProvider) {
+    public JwtAuthenticationFilter(JwtTokenProvider tokenProvider, UserDetailsServiceImpl userDetailsService) {
         this.tokenProvider = tokenProvider;
+        this.userDetailsService = userDetailsService;
     }
 
     /**
