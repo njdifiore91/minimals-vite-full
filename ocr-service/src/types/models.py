@@ -1,390 +1,652 @@
-"""
-Type definitions for OCR models used by the OCR Service.
+"""Type definitions for OCR models used by the OCR Service.
 
-This module provides type hints for representing different OCR models (typed, handwritten, hybrid),
-their parameters, and selection logic. It includes types for model configuration, model selection,
-and model results to ensure type safety throughout the OCR processing pipeline.
+This module provides type hints for OCR models, model parameters, and model selection
+used by the OCR Service. It includes types for different OCR models (typed, handwritten, hybrid)
+and their parameters, as well as model selection logic based on document type.
+
+The OCR Service uses TensorFlow for text recognition with GPU acceleration for performance.
 """
 
 from __future__ import annotations
 
 import enum
+import json
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Optional, Protocol, Tuple, TypedDict, Union
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple, Union, ClassVar, Type, Callable
 
 # Import TensorFlow type hints conditionally to avoid runtime dependency
-# This allows the type definitions to be used without requiring TensorFlow to be installed
 try:
     import tensorflow as tf
     TensorType = tf.Tensor
-    ModelType = tf.keras.Model
+    TensorFlowModelType = tf.keras.Model
 except ImportError:
     # Define placeholder types if TensorFlow is not available
     class TensorType:
         pass
     
-    class ModelType:
+    class TensorFlowModelType:
         pass
 
 
 class OCRModelType(enum.Enum):
-    """
-    Types of OCR models supported by the service.
+    """Types of OCR models supported by the OCR Service.
     
-    These model types correspond to different OCR processing pipelines optimized
-    for specific types of text and document formats.
-    """
-    
-    TYPED = "typed"  # Model optimized for typed/printed text
-    HANDWRITTEN = "handwritten"  # Model optimized for handwritten text
-    HYBRID = "hybrid"  # Model that can handle both typed and handwritten text
-
-
-class ModelParameters(TypedDict):
-    """
-    Parameters for configuring OCR models.
-    
-    This type defines the configuration parameters for OCR models, including
-    model paths, input parameters, preprocessing options, and hardware acceleration settings.
+    These model types correspond to different text recognition scenarios:
+    - TYPED: For documents with machine-printed text (invoices, tax forms)
+    - HANDWRITTEN: For documents with handwritten text (forms, notes)
+    - HYBRID: For documents with both typed and handwritten text (applications)
     """
     
-    # Model identification
-    model_name: str  # Name of the model
-    model_version: str  # Version of the model
-    model_type: str  # Type of model (corresponds to OCRModelType values)
+    TYPED = "typed"
+    HANDWRITTEN = "handwritten"
+    HYBRID = "hybrid"
     
-    # Model paths
-    model_path: str  # Path to model weights file
-    vocab_path: str  # Path to vocabulary file
-    
-    # Input parameters
-    input_shape: Tuple[int, int, int]  # Expected input shape (height, width, channels)
-    input_dtype: str  # Expected input data type (e.g., 'float32', 'uint8')
-    max_text_length: int  # Maximum text length the model can handle
-    
-    # Preprocessing options
-    grayscale: bool  # Whether to convert input to grayscale
-    normalize_input: bool  # Whether to normalize input images
-    
-    # Processing parameters
-    batch_size: int  # Batch size for processing
-    use_gpu: bool  # Whether to use GPU acceleration
-    gpu_memory_limit: Optional[int]  # GPU memory limit in MB
-    num_threads: int  # Number of CPU threads to use
-    
-    # Model-specific parameters
-    beam_width: int  # Beam width for beam search decoding
-    language: str  # Language code (e.g., 'en', 'fr')
-    confidence_threshold: float  # Minimum confidence threshold for accepting results
-
-
-class ModelMetrics(TypedDict):
-    """
-    Performance metrics for OCR models.
-    
-    This type defines the performance metrics for evaluating OCR models,
-    including accuracy, error rates, and processing time.
-    """
-    
-    accuracy: float  # Overall accuracy of the model (0.0-1.0)
-    character_error_rate: float  # Character error rate (lower is better)
-    word_error_rate: float  # Word error rate (lower is better)
-    processing_time: float  # Average processing time per page in seconds
-    confidence_score: float  # Average confidence score (0.0-1.0)
-    f1_score: float  # F1 score for text detection
-    precision: float  # Precision for text detection
-    recall: float  # Recall for text detection
-
-
-class ModelResult(TypedDict):
-    """
-    Results of OCR model processing.
-    
-    This type represents the output of an OCR model after processing a document.
-    """
-    
-    text: str  # Extracted text
-    confidence: float  # Overall confidence score (0.0-1.0)
-    bounding_boxes: List[Dict[str, Any]]  # Bounding boxes for text regions
-    word_confidences: List[float]  # Confidence scores for individual words
-    processing_time: float  # Time taken to process the document in seconds
-    page_number: int  # Page number in multi-page documents
-    model_type: str  # Type of model used for extraction
-    warnings: List[str]  # Any warnings during processing
-    language: str  # Detected or specified language
-
-
-class ModelSelectionCriteria(TypedDict, total=False):
-    """
-    Criteria for selecting the appropriate OCR model.
-    
-    This type defines the criteria used to select the appropriate OCR model
-    for a given document. The 'total=False' parameter indicates that all fields are optional.
-    """
-    
-    document_type: str  # Type of document (e.g., 'application', 'tax_return')
-    has_handwriting: Optional[bool]  # Whether the document contains handwriting
-    image_quality: float  # Quality of the image (0.0-1.0)
-    priority: str  # Processing priority ('high', 'medium', 'low')
-    language: str  # Document language
-    content_type: str  # MIME type of the document
-    file_size: int  # Size of the document in bytes
-
-
-class ModelSelector:
-    """
-    Utility class for selecting the appropriate OCR model based on document characteristics.
-    
-    This class provides methods for determining which OCR model type is most appropriate
-    for a given document based on its characteristics and processing requirements.
-    """
-    
-    @staticmethod
-    def select_model_type(criteria: ModelSelectionCriteria) -> OCRModelType:
-        """
-        Select the appropriate OCR model type based on selection criteria.
+    @classmethod
+    def from_string(cls, model_type: str) -> 'OCRModelType':
+        """Convert a string to OCRModelType.
         
         Args:
-            criteria: Model selection criteria
+            model_type: String representation of model type
             
         Returns:
-            The selected OCR model type
-        """
-        # Check if handwriting is explicitly specified
-        if criteria.get('has_handwriting') is not None:
-            if criteria['has_handwriting']:
-                return OCRModelType.HANDWRITTEN
-            else:
-                return OCRModelType.TYPED
-        
-        # Check document type
-        document_type = criteria.get('document_type')
-        if document_type:
-            # Documents that typically contain handwriting
-            handwritten_doc_types = ['application', 'id_document']
-            if document_type.lower() in handwritten_doc_types:
-                return OCRModelType.HYBRID
-        
-        # Default to hybrid model for maximum coverage
-        return OCRModelType.HYBRID
-    
-    @staticmethod
-    def get_default_parameters(model_type: OCRModelType) -> ModelParameters:
-        """
-        Get default parameters for the specified model type.
-        
-        Args:
-            model_type: The OCR model type
-            
-        Returns:
-            Default parameters for the specified model type
+            OCRModelType enum value
             
         Raises:
-            ValueError: If the model type is not supported
+            ValueError: If the string doesn't match any model type
         """
-        if model_type == OCRModelType.TYPED:
-            return DEFAULT_TYPED_MODEL_PARAMS
-        elif model_type == OCRModelType.HANDWRITTEN:
-            return DEFAULT_HANDWRITTEN_MODEL_PARAMS
-        elif model_type == OCRModelType.HYBRID:
-            return DEFAULT_HYBRID_MODEL_PARAMS
+        try:
+            return cls(model_type.lower())
+        except ValueError:
+            valid_types = [t.value for t in cls]
+            raise ValueError(f"Invalid model type: {model_type}. Valid types are: {valid_types}")
+
+
+@dataclass
+class ModelParameters:
+    """Parameters for configuring OCR models.
+    
+    This class represents the configuration parameters for OCR models,
+    including hyperparameters, preprocessing options, and hardware acceleration settings.
+    
+    Attributes:
+        model_type: Type of OCR model (typed, handwritten, hybrid)
+        model_id: Unique identifier for the model
+        model_version: Version of the model
+        batch_size: Batch size for inference
+        image_height: Input image height for the model
+        image_width: Input image width for the model
+        channels: Number of image channels (1 for grayscale, 3 for RGB)
+        use_gpu: Whether to use GPU acceleration
+        gpu_memory_limit: GPU memory limit in MB (None for no limit)
+        precision: Numerical precision for model inference (float32, float16, int8)
+        confidence_threshold: Minimum confidence threshold for valid predictions
+        preprocessing_steps: List of preprocessing steps to apply
+        postprocessing_steps: List of postprocessing steps to apply
+        language: Primary language for the model
+        additional_languages: Additional supported languages
+        timeout_ms: Timeout for model inference in milliseconds
+        max_retry_attempts: Maximum number of retry attempts for failed inference
+    """
+    
+    model_type: OCRModelType
+    model_id: str
+    model_version: str
+    batch_size: int = 1
+    image_height: int = 1024
+    image_width: int = 1024
+    channels: int = 3
+    use_gpu: bool = True
+    gpu_memory_limit: Optional[int] = None  # in MB
+    precision: str = "float32"  # float32, float16, int8
+    confidence_threshold: float = 0.7
+    preprocessing_steps: List[str] = field(default_factory=list)
+    postprocessing_steps: List[str] = field(default_factory=list)
+    language: str = "en"
+    additional_languages: List[str] = field(default_factory=list)
+    timeout_ms: int = 30000  # 30 seconds
+    max_retry_attempts: int = 3
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert parameters to dictionary.
+        
+        Returns:
+            Dictionary representation of parameters
+        """
+        return {
+            "model_type": self.model_type.value,
+            "model_id": self.model_id,
+            "model_version": self.model_version,
+            "batch_size": self.batch_size,
+            "image_height": self.image_height,
+            "image_width": self.image_width,
+            "channels": self.channels,
+            "use_gpu": self.use_gpu,
+            "gpu_memory_limit": self.gpu_memory_limit,
+            "precision": self.precision,
+            "confidence_threshold": self.confidence_threshold,
+            "preprocessing_steps": self.preprocessing_steps,
+            "postprocessing_steps": self.postprocessing_steps,
+            "language": self.language,
+            "additional_languages": self.additional_languages,
+            "timeout_ms": self.timeout_ms,
+            "max_retry_attempts": self.max_retry_attempts
+        }
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'ModelParameters':
+        """Create parameters from dictionary.
+        
+        Args:
+            data: Dictionary representation of parameters
+            
+        Returns:
+            ModelParameters instance
+        """
+        # Convert string model_type to enum
+        if "model_type" in data and isinstance(data["model_type"], str):
+            data["model_type"] = OCRModelType.from_string(data["model_type"])
+            
+        return cls(**data)
+    
+    @classmethod
+    def from_json_file(cls, file_path: Union[str, Path]) -> 'ModelParameters':
+        """Load parameters from JSON file.
+        
+        Args:
+            file_path: Path to JSON file
+            
+        Returns:
+            ModelParameters instance
+            
+        Raises:
+            FileNotFoundError: If the file doesn't exist
+            json.JSONDecodeError: If the file contains invalid JSON
+        """
+        file_path = Path(file_path)
+        with open(file_path, 'r') as f:
+            data = json.load(f)
+        return cls.from_dict(data)
+
+
+@dataclass
+class ModelMetrics:
+    """Performance metrics for OCR models.
+    
+    This class represents performance metrics for OCR models,
+    including accuracy, processing time, and resource usage.
+    
+    Attributes:
+        character_accuracy: Character-level accuracy (0.0-1.0)
+        word_accuracy: Word-level accuracy (0.0-1.0)
+        line_accuracy: Line-level accuracy (0.0-1.0)
+        average_confidence: Average confidence score across predictions
+        processing_time_ms: Average processing time per image in milliseconds
+        memory_usage_mb: Peak memory usage in megabytes
+        gpu_memory_usage_mb: Peak GPU memory usage in megabytes
+        throughput_images_per_second: Processing throughput in images per second
+        error_rate: Error rate (1.0 - accuracy)
+        confusion_matrix: Character confusion matrix
+        timestamp: When these metrics were collected
+    """
+    
+    character_accuracy: float
+    word_accuracy: float
+    line_accuracy: float
+    average_confidence: float
+    processing_time_ms: float
+    memory_usage_mb: float
+    gpu_memory_usage_mb: Optional[float] = None
+    throughput_images_per_second: float = 0.0
+    error_rate: float = 0.0
+    confusion_matrix: Dict[str, Dict[str, int]] = field(default_factory=dict)
+    timestamp: datetime = field(default_factory=datetime.now)
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert metrics to dictionary.
+        
+        Returns:
+            Dictionary representation of metrics
+        """
+        return {
+            "character_accuracy": self.character_accuracy,
+            "word_accuracy": self.word_accuracy,
+            "line_accuracy": self.line_accuracy,
+            "average_confidence": self.average_confidence,
+            "processing_time_ms": self.processing_time_ms,
+            "memory_usage_mb": self.memory_usage_mb,
+            "gpu_memory_usage_mb": self.gpu_memory_usage_mb,
+            "throughput_images_per_second": self.throughput_images_per_second,
+            "error_rate": self.error_rate,
+            "confusion_matrix": self.confusion_matrix,
+            "timestamp": self.timestamp.isoformat()
+        }
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'ModelMetrics':
+        """Create metrics from dictionary.
+        
+        Args:
+            data: Dictionary representation of metrics
+            
+        Returns:
+            ModelMetrics instance
+        """
+        # Convert ISO timestamp string to datetime
+        if "timestamp" in data and isinstance(data["timestamp"], str):
+            data["timestamp"] = datetime.fromisoformat(data["timestamp"])
+            
+        return cls(**data)
+    
+    def get_top_confusions(self, limit: int = 10) -> List[Tuple[str, str, int]]:
+        """Get the top character confusions.
+        
+        Args:
+            limit: Maximum number of confusions to return
+            
+        Returns:
+            List of (expected, predicted, count) tuples
+        """
+        confusions = []
+        for expected, predictions in self.confusion_matrix.items():
+            for predicted, count in predictions.items():
+                if expected != predicted:  # Only include actual confusions
+                    confusions.append((expected, predicted, count))
+        
+        # Sort by count in descending order
+        confusions.sort(key=lambda x: x[2], reverse=True)
+        
+        return confusions[:limit]
+
+
+@dataclass
+class ModelResult:
+    """Result of running an OCR model on input data.
+    
+    This class represents the result of running an OCR model on input data,
+    including the extracted text, confidence scores, and processing metadata.
+    
+    Attributes:
+        model_id: ID of the model used
+        model_type: Type of model used
+        text: Extracted text
+        confidence: Overall confidence score
+        word_confidences: Confidence scores for individual words
+        processing_time_ms: Time taken to process the input in milliseconds
+        timestamp: When the processing was completed
+        page_number: Page number in multi-page document (0-based)
+        total_pages: Total number of pages in the document
+        image_dimensions: Dimensions of the input image (width, height)
+        warnings: Warnings generated during processing
+        error: Error message if processing failed
+    """
+    
+    model_id: str
+    model_type: OCRModelType
+    text: str
+    confidence: float
+    word_confidences: Dict[str, float] = field(default_factory=dict)
+    processing_time_ms: float = 0.0
+    timestamp: datetime = field(default_factory=datetime.now)
+    page_number: int = 0
+    total_pages: int = 1
+    image_dimensions: Tuple[int, int] = (0, 0)  # (width, height)
+    warnings: List[str] = field(default_factory=list)
+    error: Optional[str] = None
+    
+    @property
+    def is_success(self) -> bool:
+        """Check if the model processing was successful.
+        
+        Returns:
+            True if processing was successful, False otherwise
+        """
+        return self.error is None
+    
+    @property
+    def is_low_confidence(self) -> bool:
+        """Check if the result has low confidence.
+        
+        Returns:
+            True if confidence is below 0.7, False otherwise
+        """
+        return self.confidence < 0.7
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert result to dictionary.
+        
+        Returns:
+            Dictionary representation of result
+        """
+        return {
+            "model_id": self.model_id,
+            "model_type": self.model_type.value,
+            "text": self.text,
+            "confidence": self.confidence,
+            "word_confidences": self.word_confidences,
+            "processing_time_ms": self.processing_time_ms,
+            "timestamp": self.timestamp.isoformat(),
+            "page_number": self.page_number,
+            "total_pages": self.total_pages,
+            "image_dimensions": self.image_dimensions,
+            "warnings": self.warnings,
+            "error": self.error
+        }
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'ModelResult':
+        """Create result from dictionary.
+        
+        Args:
+            data: Dictionary representation of result
+            
+        Returns:
+            ModelResult instance
+        """
+        # Convert string model_type to enum
+        if "model_type" in data and isinstance(data["model_type"], str):
+            data["model_type"] = OCRModelType.from_string(data["model_type"])
+            
+        # Convert ISO timestamp string to datetime
+        if "timestamp" in data and isinstance(data["timestamp"], str):
+            data["timestamp"] = datetime.fromisoformat(data["timestamp"])
+            
+        return cls(**data)
+    
+    @classmethod
+    def error_result(cls, model_id: str, model_type: OCRModelType, error_message: str) -> 'ModelResult':
+        """Create an error result.
+        
+        Args:
+            model_id: ID of the model
+            model_type: Type of model
+            error_message: Error message
+            
+        Returns:
+            ModelResult instance representing an error
+        """
+        return cls(
+            model_id=model_id,
+            model_type=model_type,
+            text="",
+            confidence=0.0,
+            error=error_message
+        )
+
+
+class ModelSelection:
+    """Utility class for selecting appropriate OCR models based on document type.
+    
+    This class provides methods for selecting the appropriate OCR model
+    based on document type and content characteristics.
+    """
+    
+    # Default model mappings by document type
+    # Each document type has mappings for typed, handwritten, and hybrid models,
+    # as well as a default model to use if content type is unknown
+    _MODEL_MAPPINGS: ClassVar[Dict[str, Dict[str, str]]] = {
+        "application_form": {
+            "typed_model_id": "typed_text_default",
+            "handwritten_model_id": "handwritten_text_default",
+            "hybrid_model_id": "hybrid_text_default",
+            "default_model_id": "hybrid_text_default"
+        },
+        "tax_return": {
+            "typed_model_id": "typed_text_default",
+            "handwritten_model_id": "handwritten_text_default",
+            "hybrid_model_id": "hybrid_text_default",
+            "default_model_id": "typed_text_default"
+        },
+        "bank_statement": {
+            "typed_model_id": "typed_text_default",
+            "handwritten_model_id": "handwritten_text_default",
+            "hybrid_model_id": "hybrid_text_default",
+            "default_model_id": "typed_text_default"
+        },
+        "identity_document": {
+            "typed_model_id": "typed_text_default",
+            "handwritten_model_id": "handwritten_text_default",
+            "hybrid_model_id": "hybrid_text_default",
+            "default_model_id": "hybrid_text_default"
+        }
+    }
+    
+    @classmethod
+    def get_model_id(cls, document_type: str, content_type: Optional[OCRModelType] = None) -> str:
+        """Get the appropriate model ID for a document type and content type.
+        
+        Args:
+            document_type: Type of document
+            content_type: Type of content (typed, handwritten, hybrid)
+            
+        Returns:
+            Model ID to use
+            
+        Raises:
+            ValueError: If the document type is unknown
+        """
+        # Get model mapping for document type, or use application_form as fallback
+        model_mapping = cls._MODEL_MAPPINGS.get(document_type)
+        if not model_mapping:
+            # If document type is unknown, use a generic mapping
+            model_mapping = cls._MODEL_MAPPINGS.get("application_form")
+            if not model_mapping:
+                raise ValueError(f"Unknown document type: {document_type}")
+        
+        # Select model ID based on content type
+        if content_type is None:
+            return model_mapping["default_model_id"]
+        
+        if content_type == OCRModelType.TYPED:
+            return model_mapping["typed_model_id"]
+        elif content_type == OCRModelType.HANDWRITTEN:
+            return model_mapping["handwritten_model_id"]
+        elif content_type == OCRModelType.HYBRID:
+            return model_mapping["hybrid_model_id"]
         else:
-            raise ValueError(f"Unsupported model type: {model_type}")
+            return model_mapping["default_model_id"]
+    
+    @classmethod
+    def detect_content_type(cls, image: Any) -> OCRModelType:
+        """Detect the content type of an image (typed, handwritten, hybrid).
+        
+        This is a placeholder for a more sophisticated content type detection algorithm.
+        In a real implementation, this would use a classifier to determine the content type.
+        
+        Args:
+            image: Image data to analyze
+            
+        Returns:
+            Detected content type
+        """
+        # This is a placeholder implementation
+        # In a real implementation, this would use a classifier to determine the content type
+        return OCRModelType.HYBRID
+    
+    @classmethod
+    def register_model_mapping(cls, document_type: str, mapping: Dict[str, str]) -> None:
+        """Register a new model mapping for a document type.
+        
+        Args:
+            document_type: Type of document
+            mapping: Model mapping dictionary
+            
+        Raises:
+            ValueError: If the mapping is invalid
+        """
+        required_keys = ["typed_model_id", "handwritten_model_id", "hybrid_model_id", "default_model_id"]
+        for key in required_keys:
+            if key not in mapping:
+                raise ValueError(f"Invalid model mapping: missing required key '{key}'")
+        
+        cls._MODEL_MAPPINGS[document_type] = mapping
 
 
 class TensorFlowModel:
-    """
-    Wrapper class for TensorFlow models used in OCR processing.
+    """Wrapper for TensorFlow models used in OCR processing.
     
-    This class provides a consistent interface for working with TensorFlow models,
-    handling model loading, preprocessing, inference, and result formatting.
+    This class provides a consistent interface for loading, using, and managing
+    TensorFlow models for OCR processing, with support for GPU acceleration.
+    
+    Attributes:
+        model_id: Unique identifier for the model
+        model_type: Type of OCR model
+        model_path: Path to the model files
+        parameters: Model parameters
+        is_loaded: Whether the model is currently loaded
+        model: The underlying TensorFlow model (if loaded)
     """
     
-    def __init__(self, parameters: ModelParameters):
-        """
-        Initialize a TensorFlow model with the specified parameters.
+    def __init__(self, model_id: str, model_type: OCRModelType, model_path: Union[str, Path], 
+                parameters: ModelParameters):
+        """Initialize a TensorFlow model wrapper.
         
         Args:
+            model_id: Unique identifier for the model
+            model_type: Type of OCR model
+            model_path: Path to the model files
             parameters: Model parameters
         """
+        self.model_id = model_id
+        self.model_type = model_type
+        self.model_path = Path(model_path)
         self.parameters = parameters
+        self.is_loaded = False
         self.model = None
-        self.metrics = None
     
     def load(self) -> bool:
-        """
-        Load the TensorFlow model from the specified path.
+        """Load the TensorFlow model.
         
         Returns:
             True if the model was loaded successfully, False otherwise
         """
-        if not self.parameters.get('model_path'):
-            raise ValueError("Model path not specified")
+        if self.is_loaded:
+            return True
         
         try:
-            # Configure GPU memory growth to avoid OOM errors
-            gpus = tf.config.experimental.list_physical_devices('GPU')
-            if gpus and self.parameters.get('use_gpu', True):
-                for gpu in gpus:
-                    tf.config.experimental.set_memory_growth(gpu, True)
-                
-                # Set memory limit if specified
-                if self.parameters.get('gpu_memory_limit'):
-                    tf.config.experimental.set_virtual_device_configuration(
-                        gpus[0],
-                        [tf.config.experimental.VirtualDeviceConfiguration(
-                            memory_limit=self.parameters['gpu_memory_limit']
-                        )]
-                    )
-                
-                # Use mixed precision for better performance
-                tf.keras.mixed_precision.set_global_policy('mixed_float16')
+            # Import TensorFlow here to avoid dependency at module level
+            import tensorflow as tf
+            
+            # Configure GPU memory growth to avoid allocating all memory at once
+            if self.parameters.use_gpu:
+                gpus = tf.config.experimental.list_physical_devices('GPU')
+                if gpus:
+                    for gpu in gpus:
+                        tf.config.experimental.set_memory_growth(gpu, True)
+                    
+                    # Set memory limit if specified
+                    if self.parameters.gpu_memory_limit is not None:
+                        tf.config.experimental.set_virtual_device_configuration(
+                            gpus[0],
+                            [tf.config.experimental.VirtualDeviceConfiguration(
+                                memory_limit=self.parameters.gpu_memory_limit
+                            )]
+                        )
+            else:
+                # Disable GPU if not requested
+                tf.config.set_visible_devices([], 'GPU')
             
             # Load the model
-            self.model = tf.keras.models.load_model(self.parameters['model_path'])
+            self.model = tf.keras.models.load_model(str(self.model_path))
+            self.is_loaded = True
             return True
         except Exception as e:
-            raise RuntimeError(f"Error loading model: {e}")
+            # Log the error
+            print(f"Failed to load TensorFlow model: {str(e)}")
+            return False
     
-    def preprocess(self, image: Any) -> TensorType:
-        """
-        Preprocess an image for OCR.
-        
-        Args:
-            image: Input image as a numpy array
-            
-        Returns:
-            Preprocessed image as a TensorFlow tensor
-        """
-        # Convert to tensor
-        tensor = tf.convert_to_tensor(image)
-        
-        # Resize if needed
-        if self.parameters.get('input_shape'):
-            height, width, channels = self.parameters['input_shape']
-            tensor = tf.image.resize(tensor, [height, width])
-        
-        # Convert to grayscale if needed
-        if self.parameters.get('grayscale', False) and tensor.shape[-1] == 3:
-            tensor = tf.image.rgb_to_grayscale(tensor)
-        
-        # Normalize if needed
-        if self.parameters.get('normalize_input', True):
-            tensor = tensor / 255.0
-        
-        # Expand dimensions for batch
-        tensor = tf.expand_dims(tensor, 0)
-        
-        return tensor
-    
-    def predict(self, input_tensor: TensorType) -> Dict[str, Any]:
-        """
-        Run inference on the preprocessed input.
-        
-        Args:
-            input_tensor: Preprocessed input tensor
-            
-        Returns:
-            Dictionary of prediction results
-        """
-        if self.model is None:
-            raise RuntimeError("Model not loaded")
+    def unload(self) -> None:
+        """Unload the TensorFlow model to free resources."""
+        if not self.is_loaded:
+            return
         
         try:
-            # Record start time for performance measurement
-            start_time = datetime.now()
+            # Import TensorFlow here to avoid dependency at module level
+            import tensorflow as tf
+            
+            # Clear the model
+            self.model = None
+            self.is_loaded = False
+            
+            # Clear TensorFlow session
+            tf.keras.backend.clear_session()
+        except Exception as e:
+            # Log the error
+            print(f"Failed to unload TensorFlow model: {str(e)}")
+    
+    def predict(self, image: Any) -> ModelResult:
+        """Run inference on an image.
+        
+        Args:
+            image: Image data to process
+            
+        Returns:
+            ModelResult containing the extracted text and metadata
+        """
+        if not self.is_loaded:
+            if not self.load():
+                return ModelResult.error_result(
+                    model_id=self.model_id,
+                    model_type=self.model_type,
+                    error_message="Failed to load model"
+                )
+        
+        try:
+            # Import TensorFlow here to avoid dependency at module level
+            import tensorflow as tf
+            import numpy as np
+            
+            # Record start time
+            start_time = time.time()
+            
+            # Preprocess image (implementation depends on model requirements)
+            # This is a simplified example
+            if isinstance(image, np.ndarray):
+                # Resize image to model input dimensions
+                image = tf.image.resize(
+                    image, 
+                    [self.parameters.image_height, self.parameters.image_width]
+                )
+                
+                # Normalize pixel values to [0, 1]
+                image = image / 255.0
+                
+                # Add batch dimension if needed
+                if len(image.shape) == 3:
+                    image = tf.expand_dims(image, axis=0)
             
             # Run inference
-            # The exact call depends on the model's signature
-            if hasattr(self.model, 'signatures'):
-                # SavedModel with signatures
-                infer = self.model.signatures['serving_default']
-                result = infer(input_tensor)
-            else:
-                # Regular Keras model
-                result = self.model(input_tensor)
+            prediction = self.model(image, training=False)
+            
+            # Postprocess prediction (implementation depends on model architecture)
+            # This is a simplified example
+            text = "Sample extracted text"  # Replace with actual text extraction
             
             # Calculate processing time
-            processing_time = (datetime.now() - start_time).total_seconds()
+            time_ms = (time.time() - start_time) * 1000
             
-            # Post-process the results
-            # This is a simplified example - actual implementation would depend on the model
-            if isinstance(result, dict):
-                predictions = result
-            else:
-                # Convert tensor output to dictionary
-                predictions = {"output": result}
+            # Calculate confidence (implementation depends on model architecture)
+            # This is a simplified example
+            confidence = 0.95  # Replace with actual confidence calculation
             
-            # Add processing time to results
-            predictions["processing_time"] = processing_time
+            # Create word confidences (implementation depends on model architecture)
+            # This is a simplified example
+            word_confidences = {"sample": 0.95, "extracted": 0.92, "text": 0.98}
             
-            return predictions
+            return ModelResult(
+                model_id=self.model_id,
+                model_type=self.model_type,
+                text=text,
+                confidence=confidence,
+                word_confidences=word_confidences,
+                processing_time_ms=time_ms,
+                image_dimensions=(self.parameters.image_width, self.parameters.image_height)
+            )
         except Exception as e:
-            raise RuntimeError(f"Prediction error: {e}")
-
-
-# Default model parameters for different OCR model types
-
-# Default parameters for typed text OCR
-DEFAULT_TYPED_MODEL_PARAMS: ModelParameters = {
-    'model_name': 'typed_text_ocr',
-    'model_version': '1.0.0',
-    'model_type': OCRModelType.TYPED.value,
-    'model_path': '/models/typed_text_ocr',
-    'vocab_path': '/models/typed_text_ocr/vocab.txt',
-    'input_shape': (768, 768, 3),
-    'input_dtype': 'float32',
-    'max_text_length': 512,
-    'grayscale': False,
-    'normalize_input': True,
-    'batch_size': 1,
-    'use_gpu': True,
-    'gpu_memory_limit': 4096,  # 4GB
-    'num_threads': 4,
-    'beam_width': 5,
-    'language': 'en',
-    'confidence_threshold': 0.7,
-}
-
-# Default parameters for handwritten text OCR
-DEFAULT_HANDWRITTEN_MODEL_PARAMS: ModelParameters = {
-    'model_name': 'handwritten_text_ocr',
-    'model_version': '1.0.0',
-    'model_type': OCRModelType.HANDWRITTEN.value,
-    'model_path': '/models/handwritten_text_ocr',
-    'vocab_path': '/models/handwritten_text_ocr/vocab.txt',
-    'input_shape': (1024, 1024, 3),
-    'input_dtype': 'float32',
-    'max_text_length': 512,
-    'grayscale': True,
-    'normalize_input': True,
-    'batch_size': 1,
-    'use_gpu': True,
-    'gpu_memory_limit': 6144,  # 6GB
-    'num_threads': 4,
-    'beam_width': 10,
-    'language': 'en',
-    'confidence_threshold': 0.6,
-}
-
-# Default parameters for hybrid text OCR
-DEFAULT_HYBRID_MODEL_PARAMS: ModelParameters = {
-    'model_name': 'hybrid_text_ocr',
-    'model_version': '1.0.0',
-    'model_type': OCRModelType.HYBRID.value,
-    'model_path': '/models/hybrid_text_ocr',
-    'vocab_path': '/models/hybrid_text_ocr/vocab.txt',
-    'input_shape': (1280, 1280, 3),
-    'input_dtype': 'float32',
-    'max_text_length': 768,
-    'grayscale': False,
-    'normalize_input': True,
-    'batch_size': 1,
-    'use_gpu': True,
-    'gpu_memory_limit': 8192,  # 8GB
-    'num_threads': 8,
-    'beam_width': 15,
-    'language': 'en',
-    'confidence_threshold': 0.65,
-}
+            return ModelResult.error_result(
+                model_id=self.model_id,
+                model_type=self.model_type,
+                error_message=f"Prediction error: {str(e)}"
+            )
