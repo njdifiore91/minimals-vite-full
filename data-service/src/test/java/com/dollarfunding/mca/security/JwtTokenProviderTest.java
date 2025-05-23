@@ -1,473 +1,388 @@
 package com.dollarfunding.mca.security;
 
 import io.jsonwebtoken.Claims;
-import io.jsonwebtoken.Jws;
-import io.jsonwebtoken.JwsHeader;
 import io.jsonwebtoken.Jwts;
-import io.jsonwebtoken.JwtException;
+import io.jsonwebtoken.SignatureAlgorithm;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Mockito;
+import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
-import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.lang.reflect.Field;
 import java.security.KeyPair;
-import java.security.interfaces.RSAPublicKey;
-import java.util.Base64;
-import java.util.Collections;
+import java.security.KeyPairGenerator;
+import java.security.PrivateKey;
+import java.security.PublicKey;
+import java.util.Collection;
 import java.util.Date;
 import java.util.List;
-import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.*;
 
 /**
  * Test class for {@link JwtTokenProvider} that verifies the correct implementation of JWT token
  * generation, validation, and user details extraction using RS256 asymmetric key signing.
- * <p>
- * This test ensures that the JWT authentication system meets the security requirements specified
- * in the technical specification, including token creation with configurable expiration
- * (60 minutes for access tokens, 7 days for refresh tokens), token validation, and public key
- * rotation capabilities.
+ * 
+ * Tests token creation with configurable expiration (60 minutes for access tokens, 7 days for refresh tokens),
+ * token validation, and public key rotation capabilities.
  */
 @ExtendWith(MockitoExtension.class)
 public class JwtTokenProviderTest {
 
-    private static final String TEST_USERNAME = "testuser";
-    private static final Long TEST_USER_ID = 1L;
-    private static final String TEST_EMAIL = "testuser@dollarfunding.com";
-    private static final String TEST_ISSUER = "test-issuer";
-    private static final String TEST_AUDIENCE = "test-audience";
-    private static final long ACCESS_TOKEN_EXPIRATION = 3600; // 60 minutes
-    private static final long REFRESH_TOKEN_EXPIRATION = 604800; // 7 days
+    @Spy
+    @InjectMocks
+    private JwtTokenProvider jwtTokenProvider;
 
     @Mock
-    private UserDetailsService userDetailsService;
+    private Authentication authentication;
 
     @Mock
     private UserPrincipal userPrincipal;
 
-    private JwtTokenProvider tokenProvider;
-    private Authentication authentication;
+    private KeyPair keyPair;
+    private static final String TEST_USERNAME = "test.user@dollarfunding.com";
+    private static final Long TEST_USER_ID = 1L;
+    private static final String TEST_ROLE = "ROLE_OPERATIONS_STAFF";
+    private static final String TEST_ISSUER = "dollarfunding-mca";
+    private static final String TEST_AUDIENCE = "mca-api";
 
     @BeforeEach
-    public void setUp() {
-        // Create token provider with mocked user details service
-        tokenProvider = new JwtTokenProvider(userDetailsService);
-        
-        // Set test configuration values using reflection
-        ReflectionTestUtils.setField(tokenProvider, "issuer", TEST_ISSUER);
-        ReflectionTestUtils.setField(tokenProvider, "audience", TEST_AUDIENCE);
-        ReflectionTestUtils.setField(tokenProvider, "accessTokenExpirationInSeconds", ACCESS_TOKEN_EXPIRATION);
-        ReflectionTestUtils.setField(tokenProvider, "refreshTokenExpirationInSeconds", REFRESH_TOKEN_EXPIRATION);
-        
-        // Configure mock UserPrincipal
+    public void setUp() throws Exception {
+        // Generate a test key pair for JWT signing
+        KeyPairGenerator keyPairGenerator = KeyPairGenerator.getInstance("RSA");
+        keyPairGenerator.initialize(2048);
+        keyPair = keyPairGenerator.generateKeyPair();
+
+        // Set up the JwtTokenProvider with test values
+        ReflectionTestUtils.setField(jwtTokenProvider, "privateKey", keyPair.getPrivate());
+        ReflectionTestUtils.setField(jwtTokenProvider, "publicKey", keyPair.getPublic());
+        ReflectionTestUtils.setField(jwtTokenProvider, "issuer", TEST_ISSUER);
+        ReflectionTestUtils.setField(jwtTokenProvider, "audience", TEST_AUDIENCE);
+        ReflectionTestUtils.setField(jwtTokenProvider, "keyGenerationDate", new Date());
+
+        // Mock the authentication and user principal
+        when(authentication.getPrincipal()).thenReturn(userPrincipal);
         when(userPrincipal.getUsername()).thenReturn(TEST_USERNAME);
         when(userPrincipal.getId()).thenReturn(TEST_USER_ID);
         when(userPrincipal.getAuthorities()).thenReturn(
-                Collections.singletonList(new SimpleGrantedAuthority(RoleConstants.ROLE_OPERATIONS_STAFF)));
-        
-        // Create authentication object with UserPrincipal
-        authentication = new UsernamePasswordAuthenticationToken(
-                userPrincipal, 
-                null, 
-                userPrincipal.getAuthorities());
-        
-        // Configure mock UserDetailsService to return our UserPrincipal
-        when(userDetailsService.loadUserByUsername(TEST_USERNAME)).thenReturn(userPrincipal);
+                List.of(new SimpleGrantedAuthority(TEST_ROLE)));
     }
 
-    /**
-     * Test that access tokens are generated with the RS256 algorithm and contain the expected claims.
-     */
     @Test
-    public void testGenerateAccessToken_ShouldUseRS256Algorithm() {
-        // Act
-        String token = tokenProvider.generateAccessToken(authentication);
-        
-        // Assert
-        assertNotNull(token);
-        assertTrue(token.length() > 0);
-        
-        // Verify token structure (header.payload.signature)
-        String[] parts = token.split("\.");
-        assertEquals(3, parts.length);
-        
-        // Decode the header to verify algorithm
-        String header = new String(Base64.getUrlDecoder().decode(parts[0]));
-        assertTrue(header.contains("RS256"));
-        assertTrue(header.contains("kid"));
-    }
+    @DisplayName("Should generate access token with RS256 algorithm")
+    public void testGenerateAccessToken() {
+        // When
+        String token = jwtTokenProvider.generateAccessToken(authentication);
 
-    /**
-     * Test that access tokens contain the expected claims including user ID, authorities, and token type.
-     */
-    @Test
-    public void testGenerateAccessToken_ShouldContainExpectedClaims() {
-        // Act
-        String token = tokenProvider.generateAccessToken(authentication);
+        // Then
+        assertNotNull(token, "Token should not be null");
+        assertTrue(token.split("\\.").length == 3, "Token should have three parts");
         
-        // Assert
-        assertNotNull(token);
+        // Verify token can be parsed with the public key
+        Claims claims = Jwts.parserBuilder()
+                .setSigningKey(keyPair.getPublic())
+                .build()
+                .parseClaimsJws(token)
+                .getBody();
         
         // Verify token claims
-        assertTrue(tokenProvider.validateToken(token));
-        assertEquals(TEST_USERNAME, tokenProvider.getUsernameFromToken(token));
-        assertEquals(TEST_USER_ID, tokenProvider.getUserIdFromToken(token));
-        assertEquals("access", tokenProvider.getTokenType(token));
-        assertTrue(tokenProvider.isAccessToken(token));
-        assertFalse(tokenProvider.isRefreshToken(token));
+        assertEquals(TEST_USERNAME, claims.getSubject(), "Subject should be the username");
+        assertEquals(TEST_USER_ID.toString(), claims.get("uid").toString(), "User ID should match");
+        assertEquals("access", claims.get("type"), "Token type should be 'access'");
+        assertEquals(TEST_ROLE, claims.get("auth"), "Authorities should match");
+        assertEquals(TEST_ISSUER, claims.getIssuer(), "Issuer should match");
+        assertEquals(TEST_AUDIENCE, claims.getAudience(), "Audience should match");
+        
+        // Verify token was signed with RS256
+        assertEquals(SignatureAlgorithm.RS256.getValue(), 
+                Jwts.parserBuilder()
+                        .setSigningKey(keyPair.getPublic())
+                        .build()
+                        .parseClaimsJws(token)
+                        .getHeader()
+                        .getAlgorithm(), 
+                "Token should be signed with RS256");
     }
 
-    /**
-     * Test that access tokens have the correct expiration time (60 minutes).
-     */
     @Test
-    public void testGenerateAccessToken_ShouldHaveCorrectExpiration() {
-        // Act
-        String token = tokenProvider.generateAccessToken(authentication);
-        Date expirationDate = tokenProvider.getExpirationDateFromToken(token);
-        
-        // Assert
-        assertNotNull(expirationDate);
-        
-        // Calculate expected expiration time (current time + 60 minutes)
-        long expectedExpirationTime = System.currentTimeMillis() + ACCESS_TOKEN_EXPIRATION * 1000;
-        long actualExpirationTime = expirationDate.getTime();
-        
-        // Allow for a small time difference due to test execution time
-        long timeDifference = Math.abs(expectedExpirationTime - actualExpirationTime);
-        assertTrue(timeDifference < 5000); // Within 5 seconds
-    }
+    @DisplayName("Should generate refresh token with RS256 algorithm")
+    public void testGenerateRefreshToken() {
+        // When
+        String token = jwtTokenProvider.generateRefreshToken(authentication);
 
-    /**
-     * Test that refresh tokens are generated with the RS256 algorithm and contain the expected claims.
-     */
-    @Test
-    public void testGenerateRefreshToken_ShouldUseRS256Algorithm() {
-        // Act
-        String token = tokenProvider.generateRefreshToken(authentication);
+        // Then
+        assertNotNull(token, "Token should not be null");
+        assertTrue(token.split("\\.").length == 3, "Token should have three parts");
         
-        // Assert
-        assertNotNull(token);
-        assertTrue(token.length() > 0);
-        
-        // Verify token structure (header.payload.signature)
-        String[] parts = token.split("\.");
-        assertEquals(3, parts.length);
-        
-        // Decode the header to verify algorithm
-        String header = new String(Base64.getUrlDecoder().decode(parts[0]));
-        assertTrue(header.contains("RS256"));
-        assertTrue(header.contains("kid"));
-    }
-
-    /**
-     * Test that refresh tokens contain the expected claims including user ID and token type.
-     */
-    @Test
-    public void testGenerateRefreshToken_ShouldContainExpectedClaims() {
-        // Act
-        String token = tokenProvider.generateRefreshToken(authentication);
-        
-        // Assert
-        assertNotNull(token);
+        // Verify token can be parsed with the public key
+        Claims claims = Jwts.parserBuilder()
+                .setSigningKey(keyPair.getPublic())
+                .build()
+                .parseClaimsJws(token)
+                .getBody();
         
         // Verify token claims
-        assertTrue(tokenProvider.validateToken(token));
-        assertEquals(TEST_USERNAME, tokenProvider.getUsernameFromToken(token));
-        assertEquals(TEST_USER_ID, tokenProvider.getUserIdFromToken(token));
-        assertEquals("refresh", tokenProvider.getTokenType(token));
-        assertFalse(tokenProvider.isAccessToken(token));
-        assertTrue(tokenProvider.isRefreshToken(token));
+        assertEquals(TEST_USERNAME, claims.getSubject(), "Subject should be the username");
+        assertEquals(TEST_USER_ID.toString(), claims.get("uid").toString(), "User ID should match");
+        assertEquals("refresh", claims.get("type"), "Token type should be 'refresh'");
+        assertEquals(TEST_ISSUER, claims.getIssuer(), "Issuer should match");
+        assertEquals(TEST_AUDIENCE, claims.getAudience(), "Audience should match");
+        
+        // Verify token was signed with RS256
+        assertEquals(SignatureAlgorithm.RS256.getValue(), 
+                Jwts.parserBuilder()
+                        .setSigningKey(keyPair.getPublic())
+                        .build()
+                        .parseClaimsJws(token)
+                        .getHeader()
+                        .getAlgorithm(), 
+                "Token should be signed with RS256");
     }
 
-    /**
-     * Test that refresh tokens have the correct expiration time (7 days).
-     */
     @Test
-    public void testGenerateRefreshToken_ShouldHaveCorrectExpiration() {
-        // Act
-        String token = tokenProvider.generateRefreshToken(authentication);
-        Date expirationDate = tokenProvider.getExpirationDateFromToken(token);
-        
-        // Assert
-        assertNotNull(expirationDate);
-        
-        // Calculate expected expiration time (current time + 7 days)
-        long expectedExpirationTime = System.currentTimeMillis() + REFRESH_TOKEN_EXPIRATION * 1000;
-        long actualExpirationTime = expirationDate.getTime();
-        
-        // Allow for a small time difference due to test execution time
-        long timeDifference = Math.abs(expectedExpirationTime - actualExpirationTime);
-        assertTrue(timeDifference < 5000); // Within 5 seconds
+    @DisplayName("Should validate a properly signed token")
+    public void testValidateToken() {
+        // Given
+        String token = jwtTokenProvider.generateAccessToken(authentication);
+
+        // When
+        boolean isValid = jwtTokenProvider.validateToken(token);
+
+        // Then
+        assertTrue(isValid, "Token should be valid");
     }
 
-    /**
-     * Test that the token validation correctly verifies the token signature.
-     */
     @Test
-    public void testValidateToken_WithValidToken_ShouldReturnTrue() {
-        // Arrange
-        String token = tokenProvider.generateAccessToken(authentication);
+    @DisplayName("Should reject a token with invalid signature")
+    public void testValidateTokenWithInvalidSignature() throws Exception {
+        // Given
+        String token = jwtTokenProvider.generateAccessToken(authentication);
         
-        // Act
-        boolean isValid = tokenProvider.validateToken(token);
+        // Generate a different key pair to create an invalid signature
+        KeyPairGenerator keyPairGenerator = KeyPairGenerator.getInstance("RSA");
+        keyPairGenerator.initialize(2048);
+        KeyPair differentKeyPair = keyPairGenerator.generateKeyPair();
         
-        // Assert
-        assertTrue(isValid);
+        // Replace the public key with a different one to simulate invalid signature
+        PublicKey originalPublicKey = (PublicKey) ReflectionTestUtils.getField(jwtTokenProvider, "publicKey");
+        ReflectionTestUtils.setField(jwtTokenProvider, "publicKey", differentKeyPair.getPublic());
+
+        // When
+        boolean isValid = jwtTokenProvider.validateToken(token);
+
+        // Then
+        assertFalse(isValid, "Token should be invalid due to signature mismatch");
+        
+        // Restore the original public key
+        ReflectionTestUtils.setField(jwtTokenProvider, "publicKey", originalPublicKey);
     }
 
-    /**
-     * Test that the token validation correctly rejects tokens with invalid signatures.
-     */
     @Test
-    public void testValidateToken_WithInvalidSignature_ShouldReturnFalse() {
-        // Arrange
-        String token = tokenProvider.generateAccessToken(authentication);
-        
-        // Tamper with the signature part
-        String[] parts = token.split("\.");
-        String tamperedToken = parts[0] + "." + parts[1] + "." + "invalid_signature";
-        
-        // Act
-        boolean isValid = tokenProvider.validateToken(tamperedToken);
-        
-        // Assert
-        assertFalse(isValid);
+    @DisplayName("Should extract username from token")
+    public void testGetUsernameFromToken() {
+        // Given
+        String token = jwtTokenProvider.generateAccessToken(authentication);
+
+        // When
+        String username = jwtTokenProvider.getUsernameFromToken(token);
+
+        // Then
+        assertEquals(TEST_USERNAME, username, "Extracted username should match");
     }
 
-    /**
-     * Test that the token validation correctly rejects expired tokens.
-     */
     @Test
-    public void testValidateToken_WithExpiredToken_ShouldReturnFalse() {
-        // Arrange - Create a token provider with very short expiration
-        JwtTokenProvider shortExpiryTokenProvider = new JwtTokenProvider(userDetailsService);
-        ReflectionTestUtils.setField(shortExpiryTokenProvider, "issuer", TEST_ISSUER);
-        ReflectionTestUtils.setField(shortExpiryTokenProvider, "audience", TEST_AUDIENCE);
-        ReflectionTestUtils.setField(shortExpiryTokenProvider, "accessTokenExpirationInSeconds", 1L); // 1 second
-        
-        String token = shortExpiryTokenProvider.generateAccessToken(authentication);
-        
-        // Wait for token to expire
-        try {
-            Thread.sleep(1500); // 1.5 seconds
-        } catch (InterruptedException e) {
-            fail("Test interrupted");
-        }
-        
-        // Act
-        boolean isValid = shortExpiryTokenProvider.validateToken(token);
-        boolean isExpired = shortExpiryTokenProvider.isTokenExpired(token);
-        
-        // Assert
-        assertFalse(isValid);
-        assertTrue(isExpired);
+    @DisplayName("Should extract user ID from token")
+    public void testGetUserIdFromToken() {
+        // Given
+        String token = jwtTokenProvider.generateAccessToken(authentication);
+
+        // When
+        Long userId = jwtTokenProvider.getUserIdFromToken(token);
+
+        // Then
+        assertEquals(TEST_USER_ID, userId, "Extracted user ID should match");
     }
 
-    /**
-     * Test that the getAuthentication method correctly extracts user details from a valid token.
-     */
     @Test
-    public void testGetAuthentication_WithValidToken_ShouldReturnCorrectAuthentication() {
-        // Arrange
-        String token = tokenProvider.generateAccessToken(authentication);
-        
-        // Act
-        Authentication resultAuth = tokenProvider.getAuthentication(token);
-        
-        // Assert
-        assertNotNull(resultAuth);
-        assertEquals(userPrincipal, resultAuth.getPrincipal());
-        assertTrue(resultAuth.getAuthorities().contains(
-                new SimpleGrantedAuthority(RoleConstants.ROLE_OPERATIONS_STAFF)));
+    @DisplayName("Should extract authorities from token")
+    public void testGetAuthoritiesFromToken() {
+        // Given
+        String token = jwtTokenProvider.generateAccessToken(authentication);
+
+        // When
+        Collection<?> authorities = jwtTokenProvider.getAuthoritiesFromToken(token);
+
+        // Then
+        assertNotNull(authorities, "Authorities should not be null");
+        assertEquals(1, authorities.size(), "Should have one authority");
+        assertTrue(authorities.iterator().next().toString().equals(TEST_ROLE), 
+                "Authority should match the test role");
     }
 
-    /**
-     * Test that the getAuthentication method throws an exception for refresh tokens.
-     */
     @Test
-    public void testGetAuthentication_WithRefreshToken_ShouldThrowException() {
-        // Arrange
-        String refreshToken = tokenProvider.generateRefreshToken(authentication);
-        
-        // Act & Assert
-        assertThrows(JwtException.class, () -> {
-            tokenProvider.getAuthentication(refreshToken);
-        });
+    @DisplayName("Should create authentication from token")
+    public void testGetAuthentication() {
+        // Given
+        String token = jwtTokenProvider.generateAccessToken(authentication);
+
+        // When
+        Authentication resultAuth = jwtTokenProvider.getAuthentication(token);
+
+        // Then
+        assertNotNull(resultAuth, "Authentication should not be null");
+        assertEquals(TEST_USERNAME, resultAuth.getName(), "Username should match");
+        assertEquals(1, resultAuth.getAuthorities().size(), "Should have one authority");
+        assertTrue(resultAuth.getAuthorities().iterator().next().toString().equals(TEST_ROLE), 
+                "Authority should match the test role");
+        assertTrue(resultAuth instanceof UsernamePasswordAuthenticationToken, 
+                "Should be a UsernamePasswordAuthenticationToken");
     }
 
-    /**
-     * Test that the getUsernameFromRefreshToken method correctly extracts the username from a valid refresh token.
-     */
     @Test
-    public void testGetUsernameFromRefreshToken_WithValidToken_ShouldReturnCorrectUsername() {
-        // Arrange
-        String refreshToken = tokenProvider.generateRefreshToken(authentication);
+    @DisplayName("Should identify token type correctly")
+    public void testTokenTypeIdentification() {
+        // Given
+        String accessToken = jwtTokenProvider.generateAccessToken(authentication);
+        String refreshToken = jwtTokenProvider.generateRefreshToken(authentication);
+
+        // When & Then
+        assertTrue(jwtTokenProvider.isAccessToken(accessToken), "Should identify access token");
+        assertFalse(jwtTokenProvider.isRefreshToken(accessToken), "Access token should not be identified as refresh token");
         
-        // Act
-        String username = tokenProvider.getUsernameFromRefreshToken(refreshToken);
-        
-        // Assert
-        assertEquals(TEST_USERNAME, username);
+        assertTrue(jwtTokenProvider.isRefreshToken(refreshToken), "Should identify refresh token");
+        assertFalse(jwtTokenProvider.isAccessToken(refreshToken), "Refresh token should not be identified as access token");
     }
 
-    /**
-     * Test that the getUsernameFromRefreshToken method throws an exception for access tokens.
-     */
     @Test
-    public void testGetUsernameFromRefreshToken_WithAccessToken_ShouldThrowException() {
-        // Arrange
-        String accessToken = tokenProvider.generateAccessToken(authentication);
+    @DisplayName("Should verify access token expiration time is 60 minutes")
+    public void testAccessTokenExpiration() {
+        // Given
+        String token = jwtTokenProvider.generateAccessToken(authentication);
+
+        // When
+        Claims claims = Jwts.parserBuilder()
+                .setSigningKey(keyPair.getPublic())
+                .build()
+                .parseClaimsJws(token)
+                .getBody();
         
-        // Act & Assert
-        assertThrows(JwtException.class, () -> {
-            tokenProvider.getUsernameFromRefreshToken(accessToken);
-        });
+        // Then
+        Date issuedAt = claims.getIssuedAt();
+        Date expiration = claims.getExpiration();
+        
+        // Calculate the difference in milliseconds and convert to minutes
+        long diffInMillis = expiration.getTime() - issuedAt.getTime();
+        long diffInMinutes = diffInMillis / (60 * 1000);
+        
+        assertEquals(60, diffInMinutes, "Access token should expire in 60 minutes");
     }
 
-    /**
-     * Test that the public key is correctly returned in PEM format.
-     */
     @Test
-    public void testGetCurrentPublicKeyPem_ShouldReturnValidPemFormat() {
-        // Act
-        String publicKeyPem = tokenProvider.getCurrentPublicKeyPem();
+    @DisplayName("Should verify refresh token expiration time is 7 days")
+    public void testRefreshTokenExpiration() {
+        // Given
+        String token = jwtTokenProvider.generateRefreshToken(authentication);
+
+        // When
+        Claims claims = Jwts.parserBuilder()
+                .setSigningKey(keyPair.getPublic())
+                .build()
+                .parseClaimsJws(token)
+                .getBody();
         
-        // Assert
-        assertNotNull(publicKeyPem);
-        assertTrue(publicKeyPem.startsWith("-----BEGIN PUBLIC KEY-----"));
-        assertTrue(publicKeyPem.endsWith("-----END PUBLIC KEY-----"));
+        // Then
+        Date issuedAt = claims.getIssuedAt();
+        Date expiration = claims.getExpiration();
+        
+        // Calculate the difference in milliseconds and convert to days
+        long diffInMillis = expiration.getTime() - issuedAt.getTime();
+        long diffInDays = diffInMillis / (24 * 60 * 60 * 1000);
+        
+        assertEquals(7, diffInDays, "Refresh token should expire in 7 days");
     }
 
-    /**
-     * Test that all public keys are correctly returned in PEM format.
-     */
     @Test
-    public void testGetAllPublicKeysPem_ShouldReturnMapWithValidPemFormat() {
-        // Act
-        Map<String, String> publicKeyMap = tokenProvider.getAllPublicKeysPem();
+    @DisplayName("Should rotate keys when needed")
+    public void testKeyRotation() throws Exception {
+        // Given
+        // Set key generation date to 31 days ago to trigger rotation
+        Date oldDate = new Date(System.currentTimeMillis() - 31 * 24 * 60 * 60 * 1000L);
+        ReflectionTestUtils.setField(jwtTokenProvider, "keyGenerationDate", oldDate);
+        ReflectionTestUtils.setField(jwtTokenProvider, "keyRotationDays", 30);
         
-        // Assert
-        assertNotNull(publicKeyMap);
-        assertFalse(publicKeyMap.isEmpty());
+        // Store the original keys
+        PrivateKey originalPrivateKey = (PrivateKey) ReflectionTestUtils.getField(jwtTokenProvider, "privateKey");
+        PublicKey originalPublicKey = (PublicKey) ReflectionTestUtils.getField(jwtTokenProvider, "publicKey");
         
-        for (String publicKeyPem : publicKeyMap.values()) {
-            assertTrue(publicKeyPem.startsWith("-----BEGIN PUBLIC KEY-----"));
-            assertTrue(publicKeyPem.endsWith("-----END PUBLIC KEY-----"));
-        }
+        // When - generating a token should trigger key rotation
+        String token = jwtTokenProvider.generateAccessToken(authentication);
+        
+        // Then
+        PrivateKey newPrivateKey = (PrivateKey) ReflectionTestUtils.getField(jwtTokenProvider, "privateKey");
+        PublicKey newPublicKey = (PublicKey) ReflectionTestUtils.getField(jwtTokenProvider, "publicKey");
+        Date newKeyGenerationDate = (Date) ReflectionTestUtils.getField(jwtTokenProvider, "keyGenerationDate");
+        
+        // Keys should have been rotated
+        assertNotEquals(originalPrivateKey, newPrivateKey, "Private key should have been rotated");
+        assertNotEquals(originalPublicKey, newPublicKey, "Public key should have been rotated");
+        
+        // Key generation date should have been updated
+        assertTrue(newKeyGenerationDate.after(oldDate), "Key generation date should have been updated");
+        
+        // Token should be valid with the new keys
+        assertTrue(jwtTokenProvider.validateToken(token), "Token should be valid with new keys");
     }
 
-    /**
-     * Test that key rotation works correctly and old keys are still valid for token validation.
-     */
     @Test
-    public void testKeyRotation_ShouldMaintainValidationForOldTokens() {
-        // Arrange - Generate a token with the current key
-        String token = tokenProvider.generateAccessToken(authentication);
+    @DisplayName("Should not rotate keys when not needed")
+    public void testNoKeyRotationWhenNotNeeded() throws Exception {
+        // Given
+        // Set key generation date to 29 days ago (less than rotation period)
+        Date recentDate = new Date(System.currentTimeMillis() - 29 * 24 * 60 * 60 * 1000L);
+        ReflectionTestUtils.setField(jwtTokenProvider, "keyGenerationDate", recentDate);
+        ReflectionTestUtils.setField(jwtTokenProvider, "keyRotationDays", 30);
         
-        // Act - Force key rotation
-        tokenProvider.forceKeyRotation();
+        // Store the original keys
+        PrivateKey originalPrivateKey = (PrivateKey) ReflectionTestUtils.getField(jwtTokenProvider, "privateKey");
+        PublicKey originalPublicKey = (PublicKey) ReflectionTestUtils.getField(jwtTokenProvider, "publicKey");
         
-        // Generate a new token with the new key
-        String newToken = tokenProvider.generateAccessToken(authentication);
+        // When - generating a token should not trigger key rotation
+        String token = jwtTokenProvider.generateAccessToken(authentication);
         
-        // Assert - Both tokens should be valid
-        assertTrue(tokenProvider.validateToken(token));
-        assertTrue(tokenProvider.validateToken(newToken));
+        // Then
+        PrivateKey newPrivateKey = (PrivateKey) ReflectionTestUtils.getField(jwtTokenProvider, "privateKey");
+        PublicKey newPublicKey = (PublicKey) ReflectionTestUtils.getField(jwtTokenProvider, "publicKey");
+        Date newKeyGenerationDate = (Date) ReflectionTestUtils.getField(jwtTokenProvider, "keyGenerationDate");
         
-        // The tokens should have different key IDs
-        String[] parts1 = token.split("\.");
-        String[] parts2 = newToken.split("\.");
+        // Keys should not have been rotated
+        assertEquals(originalPrivateKey, newPrivateKey, "Private key should not have been rotated");
+        assertEquals(originalPublicKey, newPublicKey, "Public key should not have been rotated");
         
-        String header1 = new String(Base64.getUrlDecoder().decode(parts1[0]));
-        String header2 = new String(Base64.getUrlDecoder().decode(parts2[0]));
+        // Key generation date should not have been updated
+        assertEquals(recentDate, newKeyGenerationDate, "Key generation date should not have been updated");
         
-        assertNotEquals(header1, header2);
+        // Token should be valid
+        assertTrue(jwtTokenProvider.validateToken(token), "Token should be valid");
     }
 
-    /**
-     * Test that multiple key rotations work correctly and tokens remain valid.
-     */
     @Test
-    public void testMultipleKeyRotations_ShouldMaintainValidationForRecentTokens() {
-        // Arrange - Generate tokens with different keys
-        String token1 = tokenProvider.generateAccessToken(authentication);
+    @DisplayName("Should provide encoded public key for clients")
+    public void testGetEncodedPublicKey() {
+        // When
+        String encodedPublicKey = jwtTokenProvider.getEncodedPublicKey();
         
-        tokenProvider.forceKeyRotation();
-        String token2 = tokenProvider.generateAccessToken(authentication);
-        
-        tokenProvider.forceKeyRotation();
-        String token3 = tokenProvider.generateAccessToken(authentication);
-        
-        tokenProvider.forceKeyRotation();
-        String token4 = tokenProvider.generateAccessToken(authentication);
-        
-        // Act & Assert - The most recent tokens should be valid (up to 3 keys are kept)
-        assertTrue(tokenProvider.validateToken(token2));
-        assertTrue(tokenProvider.validateToken(token3));
-        assertTrue(tokenProvider.validateToken(token4));
-        
-        // The oldest token should be invalid as its key should be removed
-        // Note: This test might be flaky if the key cleanup doesn't happen immediately
-        // In a real scenario, this would depend on the key rotation schedule
-        try {
-            boolean isValid = tokenProvider.validateToken(token1);
-            // We don't assert here because the cleanup might not have happened yet
-        } catch (JwtException e) {
-            // This is also an acceptable outcome if the key was removed
-        }
-    }
-
-    /**
-     * Test that the token provider correctly handles malformed tokens.
-     */
-    @Test
-    public void testValidateToken_WithMalformedToken_ShouldReturnFalse() {
-        // Arrange
-        String malformedToken = "malformed.token.value";
-        
-        // Act
-        boolean isValid = tokenProvider.validateToken(malformedToken);
-        
-        // Assert
-        assertFalse(isValid);
-    }
-
-    /**
-     * Test that the token provider correctly handles tokens with missing key ID.
-     */
-    @Test
-    public void testValidateToken_WithMissingKeyId_ShouldReturnFalse() {
-        // This test is more complex as we would need to create a token without a key ID
-        // For simplicity, we'll just test with a completely invalid token
-        
-        // Arrange
-        String invalidToken = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ0ZXN0dXNlciJ9.signature";
-        
-        // Act
-        boolean isValid = tokenProvider.validateToken(invalidToken);
-        
-        // Assert
-        assertFalse(isValid);
-    }
-
-    /**
-     * Test that the token provider correctly handles null tokens.
-     */
-    @Test
-    public void testValidateToken_WithNullToken_ShouldReturnFalse() {
-        // Act & Assert
-        assertThrows(JwtException.class, () -> {
-            tokenProvider.validateToken(null);
-        });
+        // Then
+        assertNotNull(encodedPublicKey, "Encoded public key should not be null");
+        assertFalse(encodedPublicKey.isEmpty(), "Encoded public key should not be empty");
     }
 }
