@@ -1,250 +1,160 @@
 package com.dollarfunding.mca.cache;
 
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.DisplayName;
-
-import java.lang.reflect.Constructor;
-import java.lang.reflect.Field;
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Modifier;
-
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Unit tests for {@link CacheConstants} class.
- * <p>
- * These tests verify that all cache-related constants have the expected values
- * and that the documentation for each constant is clear and accurate.
- * </p>
+ * Unit tests for the {@link CacheConstants} class.
+ * 
+ * These tests verify that the cache constants are correctly defined and documented,
+ * ensuring consistency across the application for Redis caching configuration.
  */
-@DisplayName("Cache Constants Tests")
 public class CacheConstantsTest {
 
     /**
-     * Tests that the CacheConstants class cannot be instantiated.
-     * This is a utility class with only static constants, so it should not be instantiable.
+     * Test that TTL constants for application data and session data are correctly defined.
+     * 
+     * Application data should have a TTL of 15 minutes (900 seconds).
+     * Session data should have a TTL of 24 hours (86400 seconds).
      */
     @Test
-    @DisplayName("CacheConstants should not be instantiable")
-    public void testConstructorIsPrivate() {
-        Constructor<?>[] constructors = CacheConstants.class.getDeclaredConstructors();
-        assertEquals(1, constructors.length, "There should be exactly one constructor");
-        Constructor<?> constructor = constructors[0];
-        assertTrue(Modifier.isPrivate(constructor.getModifiers()), "Constructor should be private");
-        
-        constructor.setAccessible(true);
-        AssertionError exception = assertThrows(InvocationTargetException.class, constructor::newInstance)
-                .getCause() instanceof AssertionError ? 
-                (AssertionError) assertThrows(InvocationTargetException.class, constructor::newInstance).getCause() : null;
-        
-        assertNotNull(exception, "Constructor should throw AssertionError when called");
-        assertEquals("CacheConstants is a utility class and should not be instantiated", 
-                exception.getMessage(), "Exception message should match expected message");
-    }
-
-    /**
-     * Tests the TTL constants for application data and session data.
-     * Verifies that the TTL values match the requirements specified in the technical specification.
-     */
-    @Test
-    @DisplayName("TTL constants should have correct values")
-    public void testTTLConstants() {
+    public void testTtlConstants() {
         // Application data TTL should be 15 minutes (900 seconds)
-        assertEquals(900L, CacheConstants.TTL.APPLICATION_DATA_SECONDS, 
-                "APPLICATION_DATA_SECONDS should be 900 seconds (15 minutes)");
+        assertEquals(15 * 60, CacheConstants.APPLICATION_DATA_TTL_SECONDS, 
+                "Application data TTL should be 15 minutes (900 seconds)");
         
         // Session data TTL should be 24 hours (86400 seconds)
-        assertEquals(86400L, CacheConstants.TTL.SESSION_DATA_SECONDS, 
-                "SESSION_DATA_SECONDS should be 86400 seconds (24 hours)");
-        
-        // Merchant data TTL should be same as application data TTL
-        assertEquals(CacheConstants.TTL.APPLICATION_DATA_SECONDS, CacheConstants.TTL.MERCHANT_DATA_SECONDS, 
-                "MERCHANT_DATA_SECONDS should be equal to APPLICATION_DATA_SECONDS");
-        
-        // Document metadata TTL should be same as application data TTL
-        assertEquals(CacheConstants.TTL.APPLICATION_DATA_SECONDS, CacheConstants.TTL.DOCUMENT_METADATA_SECONDS, 
-                "DOCUMENT_METADATA_SECONDS should be equal to APPLICATION_DATA_SECONDS");
-        
-        // Lookup data TTL should be 1 hour (3600 seconds)
-        assertEquals(3600L, CacheConstants.TTL.LOOKUP_DATA_SECONDS, 
-                "LOOKUP_DATA_SECONDS should be 3600 seconds (1 hour)");
-        
-        // NO_EXPIRATION should be -1
-        assertEquals(-1L, CacheConstants.TTL.NO_EXPIRATION, 
-                "NO_EXPIRATION should be -1L");
+        assertEquals(24 * 60 * 60, CacheConstants.SESSION_DATA_TTL_SECONDS, 
+                "Session data TTL should be 24 hours (86400 seconds)");
     }
 
     /**
-     * Tests the cache name constants for different entity types.
-     * Verifies that the cache names are correctly defined for applications, documents, merchants, etc.
-     */
-    @Test
-    @DisplayName("Cache name constants should have correct values")
-    public void testCacheNameConstants() {
-        assertEquals("applications", CacheConstants.CacheName.APPLICATIONS, 
-                "APPLICATIONS cache name should be 'applications'");
-        
-        assertEquals("documents", CacheConstants.CacheName.DOCUMENTS, 
-                "DOCUMENTS cache name should be 'documents'");
-        
-        assertEquals("merchants", CacheConstants.CacheName.MERCHANTS, 
-                "MERCHANTS cache name should be 'merchants'");
-        
-        assertEquals("sessions", CacheConstants.CacheName.SESSIONS, 
-                "SESSIONS cache name should be 'sessions'");
-        
-        assertEquals("lookups", CacheConstants.CacheName.LOOKUPS, 
-                "LOOKUPS cache name should be 'lookups'");
-    }
-
-    /**
-     * Tests the key prefix constants for different cache operations.
-     * Verifies that the key prefixes are correctly defined for applications, documents, merchants, etc.
-     */
-    @Test
-    @DisplayName("Key prefix constants should have correct values")
-    public void testKeyPrefixConstants() {
-        assertEquals("app:", CacheConstants.KeyPrefix.APPLICATION, 
-                "APPLICATION key prefix should be 'app:'");
-        
-        assertEquals("doc:", CacheConstants.KeyPrefix.DOCUMENT, 
-                "DOCUMENT key prefix should be 'doc:'");
-        
-        assertEquals("merch:", CacheConstants.KeyPrefix.MERCHANT, 
-                "MERCHANT key prefix should be 'merch:'");
-        
-        assertEquals("sess:", CacheConstants.KeyPrefix.SESSION, 
-                "SESSION key prefix should be 'sess:'");
-        
-        assertEquals("lookup:", CacheConstants.KeyPrefix.LOOKUP, 
-                "LOOKUP key prefix should be 'lookup:'");
-        
-        assertEquals("col:", CacheConstants.KeyPrefix.COLLECTION, 
-                "COLLECTION key prefix should be 'col:'");
-        
-        assertEquals("count:", CacheConstants.KeyPrefix.COUNT, 
-                "COUNT key prefix should be 'count:'");
-        
-        assertEquals("meta:", CacheConstants.KeyPrefix.METADATA, 
-                "METADATA key prefix should be 'meta:'");
-    }
-
-    /**
-     * Tests the region name constants for different cache regions.
-     * Verifies that the region names are correctly defined for applications, sessions, merchants, etc.
-     */
-    @Test
-    @DisplayName("Region constants should have correct values")
-    public void testRegionConstants() {
-        assertEquals("applicationRegion", CacheConstants.Region.APPLICATION_REGION, 
-                "APPLICATION_REGION should be 'applicationRegion'");
-        
-        assertEquals("sessionRegion", CacheConstants.Region.SESSION_REGION, 
-                "SESSION_REGION should be 'sessionRegion'");
-        
-        assertEquals("merchantRegion", CacheConstants.Region.MERCHANT_REGION, 
-                "MERCHANT_REGION should be 'merchantRegion'");
-        
-        assertEquals("documentRegion", CacheConstants.Region.DOCUMENT_REGION, 
-                "DOCUMENT_REGION should be 'documentRegion'");
-        
-        assertEquals("lookupRegion", CacheConstants.Region.LOOKUP_REGION, 
-                "LOOKUP_REGION should be 'lookupRegion'");
-    }
-
-    /**
-     * Tests the delimiter constants for cache key construction.
-     * Verifies that the delimiter values are correctly defined.
-     */
-    @Test
-    @DisplayName("Delimiter constants should have correct values")
-    public void testDelimiterConstants() {
-        assertEquals(":", CacheConstants.Delimiter.KEY_DELIMITER, 
-                "KEY_DELIMITER should be ':'");
-        
-        assertEquals(",", CacheConstants.Delimiter.LIST_DELIMITER, 
-                "LIST_DELIMITER should be ','");
-        
-        assertEquals("=", CacheConstants.Delimiter.PAIR_DELIMITER, 
-                "PAIR_DELIMITER should be '='");
-    }
-
-    /**
-     * Tests that all constants in the CacheConstants class have proper documentation.
-     * This ensures that the purpose of each constant is clearly documented.
-     */
-    @Test
-    @DisplayName("All constants should have proper documentation")
-    public void testConstantsDocumentation() throws Exception {
-        // Test TTL class constants documentation
-        assertFieldHasJavadoc(CacheConstants.TTL.class, "APPLICATION_DATA_SECONDS");
-        assertFieldHasJavadoc(CacheConstants.TTL.class, "SESSION_DATA_SECONDS");
-        assertFieldHasJavadoc(CacheConstants.TTL.class, "MERCHANT_DATA_SECONDS");
-        assertFieldHasJavadoc(CacheConstants.TTL.class, "DOCUMENT_METADATA_SECONDS");
-        assertFieldHasJavadoc(CacheConstants.TTL.class, "LOOKUP_DATA_SECONDS");
-        assertFieldHasJavadoc(CacheConstants.TTL.class, "NO_EXPIRATION");
-        
-        // Test CacheName class constants documentation
-        assertFieldHasJavadoc(CacheConstants.CacheName.class, "APPLICATIONS");
-        assertFieldHasJavadoc(CacheConstants.CacheName.class, "DOCUMENTS");
-        assertFieldHasJavadoc(CacheConstants.CacheName.class, "MERCHANTS");
-        assertFieldHasJavadoc(CacheConstants.CacheName.class, "SESSIONS");
-        assertFieldHasJavadoc(CacheConstants.CacheName.class, "LOOKUPS");
-        
-        // Test KeyPrefix class constants documentation
-        assertFieldHasJavadoc(CacheConstants.KeyPrefix.class, "APPLICATION");
-        assertFieldHasJavadoc(CacheConstants.KeyPrefix.class, "DOCUMENT");
-        assertFieldHasJavadoc(CacheConstants.KeyPrefix.class, "MERCHANT");
-        assertFieldHasJavadoc(CacheConstants.KeyPrefix.class, "SESSION");
-        assertFieldHasJavadoc(CacheConstants.KeyPrefix.class, "LOOKUP");
-        assertFieldHasJavadoc(CacheConstants.KeyPrefix.class, "COLLECTION");
-        assertFieldHasJavadoc(CacheConstants.KeyPrefix.class, "COUNT");
-        assertFieldHasJavadoc(CacheConstants.KeyPrefix.class, "METADATA");
-        
-        // Test Region class constants documentation
-        assertFieldHasJavadoc(CacheConstants.Region.class, "APPLICATION_REGION");
-        assertFieldHasJavadoc(CacheConstants.Region.class, "SESSION_REGION");
-        assertFieldHasJavadoc(CacheConstants.Region.class, "MERCHANT_REGION");
-        assertFieldHasJavadoc(CacheConstants.Region.class, "DOCUMENT_REGION");
-        assertFieldHasJavadoc(CacheConstants.Region.class, "LOOKUP_REGION");
-        
-        // Test Delimiter class constants documentation
-        assertFieldHasJavadoc(CacheConstants.Delimiter.class, "KEY_DELIMITER");
-        assertFieldHasJavadoc(CacheConstants.Delimiter.class, "LIST_DELIMITER");
-        assertFieldHasJavadoc(CacheConstants.Delimiter.class, "PAIR_DELIMITER");
-    }
-    
-    /**
-     * Helper method to assert that a field has Javadoc documentation.
+     * Test that cache name constants for different entity types are correctly defined.
      * 
-     * @param clazz The class containing the field
-     * @param fieldName The name of the field to check
-     * @throws NoSuchFieldException If the field does not exist
-     */
-    private void assertFieldHasJavadoc(Class<?> clazz, String fieldName) throws NoSuchFieldException {
-        Field field = clazz.getDeclaredField(fieldName);
-        assertNotNull(field, "Field " + fieldName + " should exist");
-        
-        // This is a simple check that assumes if the field exists, it has documentation
-        // In a real environment, you might use a tool like Doclet API to actually check the Javadoc
-        assertTrue(true, "Field " + fieldName + " should have Javadoc documentation");
-    }
-    
-    /**
-     * Tests that the TTL values align with the technical specification requirements.
-     * This ensures that the cache TTL values meet the performance and uptime requirements.
+     * This ensures that cache names are consistent across the application.
      */
     @Test
-    @DisplayName("TTL values should align with technical specification requirements")
-    public void testTTLValuesAlignWithRequirements() {
-        // Application processing time requirement: under 5 minutes
-        // The application data TTL (15 minutes) should be greater than the processing time
-        assertTrue(CacheConstants.TTL.APPLICATION_DATA_SECONDS > 300L, 
-                "APPLICATION_DATA_SECONDS should be greater than 5 minutes (300 seconds) to meet processing time requirements");
+    public void testCacheNameConstants() {
+        // Verify cache name constants
+        assertEquals("applications", CacheConstants.APPLICATIONS_CACHE, 
+                "Applications cache name should be 'applications'");
+        assertEquals("documents", CacheConstants.DOCUMENTS_CACHE, 
+                "Documents cache name should be 'documents'");
+        assertEquals("merchants", CacheConstants.MERCHANTS_CACHE, 
+                "Merchants cache name should be 'merchants'");
+        assertEquals("sessions", CacheConstants.SESSIONS_CACHE, 
+                "Sessions cache name should be 'sessions'");
+    }
+
+    /**
+     * Test that key prefix constants for different cache operations are correctly defined.
+     * 
+     * This ensures that cache key prefixes are consistent across the application.
+     */
+    @Test
+    public void testKeyPrefixConstants() {
+        // Verify key prefix constants
+        assertEquals("app:", CacheConstants.APPLICATION_KEY_PREFIX, 
+                "Application key prefix should be 'app:'");
+        assertEquals("doc:", CacheConstants.DOCUMENT_KEY_PREFIX, 
+                "Document key prefix should be 'doc:'");
+        assertEquals("merchant:", CacheConstants.MERCHANT_KEY_PREFIX, 
+                "Merchant key prefix should be 'merchant:'");
+        assertEquals("session:", CacheConstants.SESSION_KEY_PREFIX, 
+                "Session key prefix should be 'session:'");
+        assertEquals("list:", CacheConstants.LIST_KEY_PREFIX, 
+                "List key prefix should be 'list:'");
+    }
+
+    /**
+     * Test that cache region constants are correctly defined.
+     * 
+     * This ensures that cache regions are consistent across the application.
+     */
+    @Test
+    public void testCacheRegionConstants() {
+        // Verify cache region constants
+        assertEquals("entity", CacheConstants.ENTITY_CACHE_REGION, 
+                "Entity cache region should be 'entity'");
+        assertEquals("session", CacheConstants.SESSION_CACHE_REGION, 
+                "Session cache region should be 'session'");
+        assertEquals("query", CacheConstants.QUERY_CACHE_REGION, 
+                "Query cache region should be 'query'");
+    }
+
+    /**
+     * Test that cache operation constants are correctly defined.
+     * 
+     * This ensures that cache operation parameters are consistent across the application.
+     */
+    @Test
+    public void testCacheOperationConstants() {
+        // Verify cache operation constants
+        assertEquals(3, CacheConstants.MAX_CACHE_RETRY_ATTEMPTS, 
+                "Max cache retry attempts should be 3");
+        assertEquals(100, CacheConstants.CACHE_RETRY_DELAY_MS, 
+                "Cache retry delay should be 100ms");
+        assertEquals(100, CacheConstants.DEFAULT_CACHE_BATCH_SIZE, 
+                "Default cache batch size should be 100");
+    }
+
+    /**
+     * Test that the CacheConstants class cannot be instantiated.
+     * 
+     * This ensures that the utility class is properly designed to prevent instantiation.
+     */
+    @Test
+    public void testCannotInstantiate() {
+        // Verify that the class cannot be instantiated
+        assertThrows(AssertionError.class, () -> {
+            // Use reflection to call the private constructor
+            java.lang.reflect.Constructor<CacheConstants> constructor = 
+                    CacheConstants.class.getDeclaredConstructor();
+            constructor.setAccessible(true);
+            constructor.newInstance();
+        }, "CacheConstants should not be instantiable");
+    }
+
+    /**
+     * Test that the TTL values align with the requirements specified in the technical specification.
+     * 
+     * The technical specification requires:
+     * - 15 minutes TTL for application data
+     * - 24 hours TTL for session data
+     */
+    @Test
+    public void testTtlValuesAlignWithRequirements() {
+        // Verify that TTL values align with requirements
+        assertEquals(900, CacheConstants.APPLICATION_DATA_TTL_SECONDS, 
+                "Application data TTL should be 900 seconds (15 minutes) as per requirements");
+        assertEquals(86400, CacheConstants.SESSION_DATA_TTL_SECONDS, 
+                "Session data TTL should be 86400 seconds (24 hours) as per requirements");
+    }
+
+    /**
+     * Test that all constants have proper documentation.
+     * 
+     * This is a placeholder test to remind developers that all constants should be properly
+     * documented with Javadoc comments. Since Javadoc comments are not retained in the
+     * compiled class files, we cannot programmatically verify their presence at runtime.
+     * 
+     * The actual verification of documentation should be done during code review or
+     * using static analysis tools like Checkstyle or PMD that can verify Javadoc presence.
+     */
+    @Test
+    public void testConstantsHaveDocumentation() {
+        // This test serves as documentation that constants should be well-documented
+        // We can verify that the constants exist and are accessible, which indirectly
+        // confirms they are properly defined in the class
         
-        // System uptime requirement: 99.9%
-        // Session TTL should be long enough to maintain user sessions during the required uptime
-        assertTrue(CacheConstants.TTL.SESSION_DATA_SECONDS >= 86400L, 
-                "SESSION_DATA_SECONDS should be at least 24 hours to support 99.9% system uptime");
+        // Verify a sample of constants from each category
+        assertNotNull(CacheConstants.APPLICATION_DATA_TTL_SECONDS, "APPLICATION_DATA_TTL_SECONDS should be defined");
+        assertNotNull(CacheConstants.APPLICATIONS_CACHE, "APPLICATIONS_CACHE should be defined");
+        assertNotNull(CacheConstants.APPLICATION_KEY_PREFIX, "APPLICATION_KEY_PREFIX should be defined");
+        assertNotNull(CacheConstants.ENTITY_CACHE_REGION, "ENTITY_CACHE_REGION should be defined");
+        assertNotNull(CacheConstants.MAX_CACHE_RETRY_ATTEMPTS, "MAX_CACHE_RETRY_ATTEMPTS should be defined");
+        
+        // Note: In a real project, static analysis tools like Checkstyle should be configured
+        // to enforce Javadoc presence for all public members during the build process
     }
 }
