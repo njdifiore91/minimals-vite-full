@@ -8,6 +8,20 @@ provider "aws" {
   # Additional provider settings would be configured here
 }
 
+# Kubernetes provider configuration for monitoring resources
+provider "kubernetes" {
+  config_path = var.kubernetes_config_path
+  config_context = var.kubernetes_config_context
+}
+
+# Helm provider configuration for Prometheus and Grafana
+provider "helm" {
+  kubernetes {
+    config_path = var.kubernetes_config_path
+    config_context = var.kubernetes_config_context
+  }
+}
+
 # Remote state configuration is in backend.tf
 
 # Tags common to all resources
@@ -226,5 +240,85 @@ module "storage" {
   metrics_enabled     = true
   request_metrics_enabled = true
   
+  tags = local.common_tags
+}
+
+# Monitoring Module
+# Deploys Prometheus and Grafana for monitoring the MCA Application Processing System
+module "monitoring" {
+  source = "../../modules/monitoring"
+
+  # Environment-specific settings
+  environment = "production"
+  cluster_name = var.cluster_name
+  namespace = "monitoring"
+  app_namespace = "mca"
+  
+  # Prometheus configuration
+  prometheus_storage_enabled = true
+  prometheus_storage_class = "gp2"
+  prometheus_storage_size = "50Gi"
+  prometheus_retention_period = "30d"
+  
+  # Grafana configuration
+  grafana_admin_password = var.grafana_admin_password
+  grafana_storage_enabled = true
+  grafana_storage_class = "gp2"
+  grafana_storage_size = "10Gi"
+  grafana_ingress_enabled = true
+  grafana_ingress_hosts = ["grafana.${var.domain_name}"]
+  grafana_ingress_annotations = {
+    "kubernetes.io/ingress.class" = "nginx"
+    "cert-manager.io/cluster-issuer" = "letsencrypt-prod"
+  }
+  grafana_ingress_tls = [
+    {
+      hosts = ["grafana.${var.domain_name}"]
+      secretName = "grafana-tls"
+    }
+  ]
+  grafana_root_url = "https://grafana.${var.domain_name}"
+  
+  # PostgreSQL exporter configuration
+  postgres_exporter_enabled = true
+  postgres_host = module.database.primary_endpoint
+  postgres_port = 5432
+  postgres_user = var.db_username
+  postgres_password = var.db_password
+  postgres_database = var.db_name
+  
+  # RabbitMQ exporter configuration
+  rabbitmq_exporter_enabled = true
+  rabbitmq_host = module.messaging.rabbitmq_endpoint
+  rabbitmq_port = 15672
+  rabbitmq_user = var.rabbitmq_username
+  rabbitmq_password = var.rabbitmq_password
+  
+  # Redis exporter configuration
+  redis_exporter_enabled = true
+  redis_host = module.cache.redis_endpoint
+  redis_port = 6379
+  redis_password = var.redis_auth_token
+  
+  # CloudWatch exporter for S3 metrics
+  cloudwatch_exporter_enabled = true
+  cloudwatch_exporter_role = "arn:aws:iam::${var.aws_account_id}:role/prometheus-cloudwatch-exporter"
+  aws_region = var.aws_region
+  
+  # Service monitors
+  email_service_monitor_enabled = true
+  document_service_monitor_enabled = true
+  ocr_service_monitor_enabled = true
+  data_service_monitor_enabled = true
+  notification_service_monitor_enabled = true
+  api_gateway_service_monitor_enabled = true
+  
+  # Alert thresholds
+  sla_processing_time_threshold = 300  # 5 minutes
+  ocr_accuracy_threshold = 99  # 99%
+  queue_depth_threshold = 1000
+  api_response_time_threshold = 1  # 1 second
+  
+  # Tags
   tags = local.common_tags
 }
