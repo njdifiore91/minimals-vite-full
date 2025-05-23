@@ -1,261 +1,147 @@
-# =============================================================================
-# Global Terraform Outputs for MCA Application Processing System
-# =============================================================================
-# This file exports output values from the global Terraform configuration that
-# are consumed by environment-specific Terraform configurations. It defines the
-# interface between global and environment-specific infrastructure, exposing
-# resource IDs, ARNs, and configuration values needed by downstream modules.
+# ---------------------------------------------------------------------------------------------------------------------
+# GLOBAL TERRAFORM OUTPUTS
+# This file exports output values from the global Terraform configuration that are consumed by
+# environment-specific Terraform configurations.
+# ---------------------------------------------------------------------------------------------------------------------
 
-# -----------------------------------------------------------------------------
-# Network Outputs
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------------------------------------------------
+# NETWORK OUTPUTS
+# Exports network-related resources for use in environment-specific configurations
+# ---------------------------------------------------------------------------------------------------------------------
 
-# VPC Outputs
+# Global VPC outputs
 output "global_vpc_id" {
-  description = "The ID of the global VPC"
+  description = "ID of the global VPC"
   value       = aws_vpc.global.id
 }
 
 output "global_vpc_cidr" {
-  description = "The CIDR block of the global VPC"
+  description = "CIDR block of the global VPC"
   value       = aws_vpc.global.cidr_block
 }
 
-# Subnet Outputs
-output "global_public_subnet_ids" {
-  description = "The IDs of the global public subnets"
-  value       = [for subnet in aws_subnet.global_public : subnet.id]
+output "global_subnet_ids" {
+  description = "IDs of the global VPC subnets"
+  value       = aws_subnet.global[*].id
 }
 
-output "global_private_subnet_ids" {
-  description = "The IDs of the global private subnets"
-  value       = [for subnet in aws_subnet.global_private : subnet.id]
-}
-
-output "global_public_subnet_cidrs" {
-  description = "The CIDR blocks of the global public subnets"
-  value       = [for subnet in aws_subnet.global_public : subnet.cidr_block]
-}
-
-output "global_private_subnet_cidrs" {
-  description = "The CIDR blocks of the global private subnets"
-  value       = [for subnet in aws_subnet.global_private : subnet.cidr_block]
-}
-
-# Transit Gateway Outputs
+# Transit Gateway outputs
 output "transit_gateway_id" {
-  description = "The ID of the transit gateway for inter-environment communication"
+  description = "ID of the transit gateway for inter-environment communication"
   value       = aws_ec2_transit_gateway.main.id
 }
 
 output "transit_gateway_route_table_id" {
-  description = "The ID of the default transit gateway route table"
-  value       = aws_ec2_transit_gateway.main.association_default_route_table_id
+  description = "ID of the transit gateway route table"
+  value       = aws_ec2_transit_gateway_route_table.main.id
 }
 
-# Network ACL Outputs
-output "global_public_nacl_id" {
-  description = "The ID of the network ACL for global public subnets"
-  value       = aws_network_acl.global_public.id
-}
-
-output "global_private_nacl_ids" {
-  description = "The IDs of the network ACLs for global private subnets"
-  value       = [for nacl in aws_network_acl.global_private : nacl.id]
-}
-
-# -----------------------------------------------------------------------------
-# IAM Role and Policy Outputs
-# -----------------------------------------------------------------------------
-
-# CI/CD Deployment Role
-output "cicd_deployment_role_arn" {
-  description = "ARN of the CI/CD deployment role"
-  value       = aws_iam_role.cicd_deployment_role.arn
-}
-
-# Service-Specific Policy ARNs
-output "email_service_policy_arn" {
-  description = "ARN of the Email Service policy"
-  value       = aws_iam_policy.email_service_policy.arn
-}
-
-output "document_service_policy_arn" {
-  description = "ARN of the Document Service policy"
-  value       = aws_iam_policy.document_service_policy.arn
-}
-
-output "ocr_service_policy_arn" {
-  description = "ARN of the OCR Service policy"
-  value       = aws_iam_policy.ocr_service_policy.arn
-}
-
-output "data_service_policy_arn" {
-  description = "ARN of the Data Service policy"
-  value       = aws_iam_policy.data_service_policy.arn
-}
-
-output "notification_service_policy_arn" {
-  description = "ARN of the Notification Service policy"
-  value       = aws_iam_policy.notification_service_policy.arn
-}
-
-# S3 Access Policies
-output "s3_document_read_policy_arn" {
-  description = "ARN of the S3 document read-only policy"
-  value       = aws_iam_policy.s3_document_read_policy.arn
-}
-
-output "s3_document_readwrite_policy_arn" {
-  description = "ARN of the S3 document read-write policy"
-  value       = aws_iam_policy.s3_document_readwrite_policy.arn
-}
-
-# OIDC Provider for EKS
-output "eks_oidc_provider_arn" {
-  description = "ARN of the EKS OIDC provider"
-  value       = aws_iam_openid_connect_provider.eks_oidc_provider.arn
-}
-
-# JWT Authentication
-output "jwt_signing_user_arn" {
-  description = "ARN of the JWT signing user"
-  value       = aws_iam_user.jwt_signing_user.arn
-}
-
-# -----------------------------------------------------------------------------
-# Storage Outputs
-# -----------------------------------------------------------------------------
-
-# Document Storage Buckets
-output "documents_production_bucket_name" {
-  description = "The name of the production documents bucket"
-  value       = aws_s3_bucket.documents_production.id
-}
-
-output "documents_production_bucket_arn" {
-  description = "The ARN of the production documents bucket"
-  value       = aws_s3_bucket.documents_production.arn
-}
-
-output "documents_staging_bucket_name" {
-  description = "The name of the staging documents bucket"
-  value       = aws_s3_bucket.documents_staging.id
-}
-
-output "documents_staging_bucket_arn" {
-  description = "The ARN of the staging documents bucket"
-  value       = aws_s3_bucket.documents_staging.arn
-}
-
-output "documents_development_bucket_name" {
-  description = "The name of the development documents bucket"
-  value       = aws_s3_bucket.documents_development.id
-}
-
-output "documents_development_bucket_arn" {
-  description = "The ARN of the development documents bucket"
-  value       = aws_s3_bucket.documents_development.arn
-}
-
-# Deployment Artifacts Bucket
-output "deployment_artifacts_bucket_name" {
-  description = "The name of the deployment artifacts bucket"
-  value       = aws_s3_bucket.deployment_artifacts.id
-}
-
-output "deployment_artifacts_bucket_arn" {
-  description = "The ARN of the deployment artifacts bucket"
-  value       = aws_s3_bucket.deployment_artifacts.arn
-}
-
-# Terraform State Bucket
-output "terraform_state_bucket_name" {
-  description = "The name of the Terraform state bucket"
-  value       = aws_s3_bucket.terraform_state.id
-}
-
-output "terraform_state_bucket_arn" {
-  description = "The ARN of the Terraform state bucket"
-  value       = aws_s3_bucket.terraform_state.arn
-}
-
-# -----------------------------------------------------------------------------
-# DNS Outputs
-# -----------------------------------------------------------------------------
-
-# DNS Zone IDs
-output "primary_zone_id" {
-  description = "The ID of the primary DNS zone (dollarfunding.com)"
-  value       = aws_route53_zone.primary.zone_id
-}
-
-output "development_zone_id" {
-  description = "The ID of the development DNS zone (dev.dollarfunding.com)"
-  value       = aws_route53_zone.development.zone_id
-}
-
-output "staging_zone_id" {
-  description = "The ID of the staging DNS zone (staging.dollarfunding.com)"
-  value       = aws_route53_zone.staging.zone_id
-}
-
-output "production_zone_id" {
-  description = "The ID of the production DNS zone (app.dollarfunding.com)"
-  value       = aws_route53_zone.production.zone_id
-}
-
-# DNS Health Check IDs
-output "primary_region_health_check_id" {
-  description = "The ID of the primary region health check for DNS failover"
-  value       = aws_route53_health_check.primary_region.id
-}
-
-output "secondary_region_health_check_id" {
-  description = "The ID of the secondary region health check for DNS failover"
-  value       = aws_route53_health_check.secondary_region.id
-}
-
-# -----------------------------------------------------------------------------
-# Security Outputs
-# -----------------------------------------------------------------------------
-
-# Security Group IDs (assuming these are defined in security.tf)
-output "global_security_group_ids" {
-  description = "The IDs of the global security groups"
+# VPC Peering Connection outputs
+output "vpc_peering_connection_ids" {
+  description = "IDs of the VPC peering connections between environments"
   value       = {
-    # These would be defined in security.tf
-    # Example: web = aws_security_group.web.id
-    # Example: database = aws_security_group.database.id
+    dev_staging        = aws_vpc_peering_connection.dev_staging.id
+    staging_production = aws_vpc_peering_connection.staging_production.id
+    dev_production     = aws_vpc_peering_connection.dev_production.id
   }
 }
 
-# KMS Key ARNs (assuming these are defined in security.tf)
-output "pii_encryption_key_arns" {
-  description = "The ARNs of the KMS keys used for PII encryption"
-  value       = var.pii_encryption_key_arns
+# Security Group outputs
+output "global_security_group_id" {
+  description = "ID of the global security group"
+  value       = aws_security_group.global.id
 }
 
-output "jwt_signing_key_arns" {
-  description = "The ARNs of the KMS keys used for JWT signing"
-  value       = var.jwt_signing_key_arns
+# ---------------------------------------------------------------------------------------------------------------------
+# IAM ROLE OUTPUTS
+# Exports IAM roles and policies for use in environment-specific configurations
+# ---------------------------------------------------------------------------------------------------------------------
+
+# Service-specific IAM role ARNs
+output "document_service_role_arns" {
+  description = "ARNs of the Document Service IAM roles for each environment"
+  value       = { for env, role in aws_iam_role.document_service_role : env => role.arn }
 }
 
-# -----------------------------------------------------------------------------
-# Environment CIDR Allocations
-# -----------------------------------------------------------------------------
-
-output "development_cidr" {
-  description = "The CIDR block allocated for the development environment"
-  value       = var.development_cidr
+output "ocr_service_role_arns" {
+  description = "ARNs of the OCR Service IAM roles for each environment"
+  value       = { for env, role in aws_iam_role.ocr_service_role : env => role.arn }
 }
 
-output "staging_cidr" {
-  description = "The CIDR block allocated for the staging environment"
-  value       = var.staging_cidr
+output "email_service_role_arns" {
+  description = "ARNs of the Email Service IAM roles for each environment"
+  value       = { for env, role in aws_iam_role.email_service_role : env => role.arn }
 }
 
-output "production_cidr" {
-  description = "The CIDR block allocated for the production environment"
-  value       = var.production_cidr
+output "data_service_role_arns" {
+  description = "ARNs of the Data Service IAM roles for each environment"
+  value       = { for env, role in aws_iam_role.data_service_role : env => role.arn }
+}
+
+output "notification_service_role_arns" {
+  description = "ARNs of the Notification Service IAM roles for each environment"
+  value       = { for env, role in aws_iam_role.notification_service_role : env => role.arn }
+}
+
+# Cross-account role ARNs
+output "cross_account_cicd_role_arns" {
+  description = "ARNs of the cross-account CI/CD roles for each environment"
+  value       = { for env, role in aws_iam_role.cross_account_cicd_role : env => role.arn }
+}
+
+# ---------------------------------------------------------------------------------------------------------------------
+# AUTHENTICATION OUTPUTS
+# Exports authentication-related resources for use in environment-specific configurations
+# ---------------------------------------------------------------------------------------------------------------------
+
+# JWT authentication resources
+output "jwt_signing_key_arn" {
+  description = "ARN of the KMS key used for JWT signing"
+  value       = aws_kms_key.jwt_signing_key.arn
+}
+
+output "jwt_config_parameter_name" {
+  description = "Name of the SSM parameter containing JWT configuration"
+  value       = aws_ssm_parameter.jwt_config.name
+}
+
+# ---------------------------------------------------------------------------------------------------------------------
+# STORAGE OUTPUTS
+# Exports storage-related resources for use in environment-specific configurations
+# ---------------------------------------------------------------------------------------------------------------------
+
+# S3 bucket outputs
+output "s3_bucket_names" {
+  description = "Names of the S3 buckets for document storage in each environment"
+  value       = var.s3_bucket_names
+}
+
+output "s3_bucket_arns" {
+  description = "ARNs of the S3 buckets for document storage in each environment"
+  value       = { for env, bucket_name in var.s3_bucket_names : env => "arn:aws:s3:::${bucket_name}" }
+}
+
+# ---------------------------------------------------------------------------------------------------------------------
+# ENVIRONMENT INFORMATION OUTPUTS
+# Exports environment-specific information for use in environment-specific configurations
+# ---------------------------------------------------------------------------------------------------------------------
+
+output "environment_account_ids" {
+  description = "AWS account IDs for each environment"
+  value       = var.environment_account_ids
+}
+
+output "aws_region" {
+  description = "AWS region where global resources are deployed"
+  value       = var.aws_region
+}
+
+# ---------------------------------------------------------------------------------------------------------------------
+# OIDC PROVIDER OUTPUTS
+# Exports OIDC provider ARNs for use in environment-specific configurations
+# ---------------------------------------------------------------------------------------------------------------------
+
+output "eks_oidc_provider_arns" {
+  description = "ARNs of the OIDC providers for EKS clusters in each environment"
+  value       = { for env, provider in aws_iam_openid_connect_provider.eks_oidc_provider : env => provider.arn }
 }
