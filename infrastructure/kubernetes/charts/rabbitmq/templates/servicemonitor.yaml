@@ -1,58 +1,125 @@
-{{- if .Values.metrics.enabled }}
+{{- if and .Values.metrics.enabled .Values.metrics.serviceMonitor.enabled }}
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
   name: {{ include "rabbitmq.fullname" . }}
-  namespace: {{ .Release.Namespace }}
+  namespace: {{ .Values.metrics.serviceMonitor.namespace | default .Release.Namespace }}
   labels:
     {{- include "rabbitmq.labels" . | nindent 4 }}
     {{- if .Values.metrics.serviceMonitor.additionalLabels }}
     {{- toYaml .Values.metrics.serviceMonitor.additionalLabels | nindent 4 }}
     {{- end }}
-  {{- if .Values.metrics.serviceMonitor.annotations }}
-  annotations:
-    {{- toYaml .Values.metrics.serviceMonitor.annotations | nindent 4 }}
-  {{- end }}
 spec:
-  endpoints:
-    - port: prometheus
-      path: /metrics
-      interval: 15s
-      scrapeTimeout: 14s
-      {{- if .Values.metrics.serviceMonitor.relabelings }}
-      relabelings:
-        {{- toYaml .Values.metrics.serviceMonitor.relabelings | nindent 8 }}
-      {{- end }}
-      {{- if .Values.metrics.serviceMonitor.metricRelabelings }}
-      metricRelabelings:
-        {{- toYaml .Values.metrics.serviceMonitor.metricRelabelings | nindent 8 }}
-      {{- end }}
-    - port: prometheus
-      path: /metrics/detailed
-      interval: 15s
-      scrapeTimeout: 14s
-      params:
-        family:
-          - queue_coarse_metrics
-          - queue_metrics
-          - node_coarse_metrics
-          - node_metrics
-          - connection_metrics
-      {{- if .Values.metrics.serviceMonitor.relabelings }}
-      relabelings:
-        {{- toYaml .Values.metrics.serviceMonitor.relabelings | nindent 8 }}
-      {{- end }}
-      {{- if .Values.metrics.serviceMonitor.metricRelabelings }}
-      metricRelabelings:
-        {{- toYaml .Values.metrics.serviceMonitor.metricRelabelings | nindent 8 }}
-      {{- end }}
   selector:
     matchLabels:
       {{- include "rabbitmq.selectorLabels" . | nindent 6 }}
   namespaceSelector:
     matchNames:
       - {{ .Release.Namespace }}
-  {{- if .Values.metrics.serviceMonitor.honorLabels }}
-  honorLabels: true
-  {{- end }}
+  endpoints:
+    # Standard metrics endpoint
+    - port: prometheus
+      path: /metrics
+      interval: 15s
+      scrapeTimeout: 14s
+      {{- if .Values.metrics.serviceMonitor.honorLabels }}
+      honorLabels: true
+      {{- end }}
+      {{- if .Values.metrics.serviceMonitor.relabelings }}
+      relabelings:
+        {{- toYaml .Values.metrics.serviceMonitor.relabelings | nindent 8 }}
+      {{- end }}
+      {{- if .Values.metrics.serviceMonitor.metricRelabelings }}
+      metricRelabelings:
+        {{- toYaml .Values.metrics.serviceMonitor.metricRelabelings | nindent 8 }}
+      {{- end }}
+    
+    # Detailed metrics for queue monitoring
+    - port: prometheus
+      path: /metrics/detailed
+      params:
+        family:
+          - queue_coarse_metrics
+          - queue_metrics
+          - node_metrics
+      interval: 15s
+      scrapeTimeout: 14s
+      {{- if .Values.metrics.serviceMonitor.honorLabels }}
+      honorLabels: true
+      {{- end }}
+      {{- if .Values.metrics.serviceMonitor.relabelings }}
+      relabelings:
+        {{- toYaml .Values.metrics.serviceMonitor.relabelings | nindent 8 }}
+      {{- end }}
+      {{- if .Values.metrics.serviceMonitor.metricRelabelings }}
+      metricRelabelings:
+        {{- toYaml .Values.metrics.serviceMonitor.metricRelabelings | nindent 8 }}
+      {{- end }}
+    
+    # If TLS is enabled, also scrape the TLS endpoint
+    {{- if .Values.tls.enabled }}
+    - port: prometheus-tls
+      scheme: https
+      path: /metrics
+      interval: 15s
+      scrapeTimeout: 14s
+      tlsConfig:
+        {{- if .Values.tls.skipVerify }}
+        insecureSkipVerify: true
+        {{- else }}
+        insecureSkipVerify: false
+        {{- if .Values.tls.existingSecret }}
+        ca:
+          secret:
+            name: {{ .Values.tls.existingSecret }}
+            key: {{ .Values.tls.caFilename }}
+        {{- end }}
+        {{- end }}
+      {{- if .Values.metrics.serviceMonitor.honorLabels }}
+      honorLabels: true
+      {{- end }}
+      {{- if .Values.metrics.serviceMonitor.relabelings }}
+      relabelings:
+        {{- toYaml .Values.metrics.serviceMonitor.relabelings | nindent 8 }}
+      {{- end }}
+      {{- if .Values.metrics.serviceMonitor.metricRelabelings }}
+      metricRelabelings:
+        {{- toYaml .Values.metrics.serviceMonitor.metricRelabelings | nindent 8 }}
+      {{- end }}
+    
+    # Detailed metrics with TLS
+    - port: prometheus-tls
+      scheme: https
+      path: /metrics/detailed
+      params:
+        family:
+          - queue_coarse_metrics
+          - queue_metrics
+          - node_metrics
+      interval: 15s
+      scrapeTimeout: 14s
+      tlsConfig:
+        {{- if .Values.tls.skipVerify }}
+        insecureSkipVerify: true
+        {{- else }}
+        insecureSkipVerify: false
+        {{- if .Values.tls.existingSecret }}
+        ca:
+          secret:
+            name: {{ .Values.tls.existingSecret }}
+            key: {{ .Values.tls.caFilename }}
+        {{- end }}
+        {{- end }}
+      {{- if .Values.metrics.serviceMonitor.honorLabels }}
+      honorLabels: true
+      {{- end }}
+      {{- if .Values.metrics.serviceMonitor.relabelings }}
+      relabelings:
+        {{- toYaml .Values.metrics.serviceMonitor.relabelings | nindent 8 }}
+      {{- end }}
+      {{- if .Values.metrics.serviceMonitor.metricRelabelings }}
+      metricRelabelings:
+        {{- toYaml .Values.metrics.serviceMonitor.metricRelabelings | nindent 8 }}
+      {{- end }}
+    {{- end }}
 {{- end }}
