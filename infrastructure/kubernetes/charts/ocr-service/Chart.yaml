@@ -1,20 +1,27 @@
 apiVersion: v2
 name: ocr-service
-version: 0.1.0
-appVersion: "0.1.0"
-description: Helm chart for the MCA OCR Service - a Python/TensorFlow microservice that extracts data from documents using GPU-accelerated machine learning models
+description: GPU-accelerated OCR service for the MCA Application Processing System that extracts data from documents using Python/TensorFlow with 99% accuracy. Processes both typed and handwritten documents as part of the document processing pipeline.
 type: application
+version: 0.1.0
+appVersion: 0.1.0
+
+# Keywords for chart categorization and searchability
+keywords:
+  - ocr
+  - tensorflow
+  - gpu
+  - document-processing
+  - machine-learning
+  - data-extraction
+
+# Maintainer information
 maintainers:
   - name: Dollar Funding DevOps Team
     email: devops@dollarfunding.com
-keywords:
-  - mca
-  - ocr-service
-  - tensorflow
-  - python
-  - gpu
-  - machine-learning
+    url: https://dollarfunding.com
+
+# Dependencies
 dependencies:
   - name: common
-    version: "0.1.0"
-    repository: "file://../common"
+    version: 0.1.0
+    repository: file://../common
