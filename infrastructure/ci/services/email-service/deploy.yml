@@ -1,381 +1,376 @@
 # Email Service Deployment Workflow
 # This workflow handles the deployment of the Email Service to Kubernetes environments
-# It includes environment selection, Helm chart deployment, post-deployment validation, and rollback procedures
+# It supports development, staging, and production deployments with appropriate
+# approval gates, health checks, and rollback procedures.
 
-name: Deploy Email Service
+include:
+  - project: 'infrastructure/ci/templates'
+    file: 'security-scan.yml'
+  - project: 'infrastructure/ci/templates'
+    file: 'notification.yml'
 
-# Trigger on workflow_dispatch for manual deployments
-# Also trigger on successful build of the email-service
-on:
-  workflow_dispatch:
-    inputs:
-      environment:
-        description: 'Deployment Environment'
-        required: true
-        default: 'development'
-        type: choice
-        options:
-          - development
-          - staging
-          - production
-      version:
-        description: 'Service Version (leave empty for latest)'
-        required: false
-        type: string
-  
-  workflow_run:
-    workflows: ['Build Email Service']
-    types:
-      - completed
-    branches:
-      - development
-      - main
-      - 'release/**'
-
-# Environment variables used across jobs
-env:
+variables:
+  # Service-specific variables
   SERVICE_NAME: email-service
-  CHART_PATH: infrastructure/kubernetes/charts/email-service
-  REGISTRY: ${CONTAINER_REGISTRY_URL}
-  IMAGE_NAME: email-service
+  DOCKER_REGISTRY: ${CI_REGISTRY}
+  DOCKER_IMAGE: ${DOCKER_REGISTRY}/${CI_PROJECT_PATH}/${SERVICE_NAME}
+  CHART_PATH: infrastructure/kubernetes/charts/${SERVICE_NAME}
+  
+  # Helm deployment variables
+  HELM_RELEASE_NAME: ${SERVICE_NAME}
+  HELM_TIMEOUT: 5m
+  HELM_ATOMIC: 'true'
+  HELM_DEBUG: 'true'
+  
+  # Environment-specific variables
+  DEV_NAMESPACE: development
+  STAGING_NAMESPACE: staging
+  PROD_NAMESPACE: production
+  
+  # Health check variables
+  HEALTH_CHECK_ENDPOINT: /health
+  HEALTH_CHECK_RETRIES: 5
+  HEALTH_CHECK_DELAY: 10
+  
+  # Rollback variables
+  MAX_ROLLBACK_ATTEMPTS: 3
+  ROLLBACK_WAIT_TIME: 30s
 
-jobs:
-  # Determine deployment parameters based on trigger
-  prepare-deployment:
-    name: Prepare Deployment
-    runs-on: ubuntu-latest
-    outputs:
-      environment: ${{ steps.set-env.outputs.environment }}
-      version: ${{ steps.set-version.outputs.version }}
-      namespace: ${{ steps.set-env.outputs.namespace }}
-    
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
-        with:
-          fetch-depth: 0
+stages:
+  - validate
+  - deploy
+  - verify
+  - rollback
+  - notify
+
+# Reusable job templates
+.kubernetes_setup:
+  before_script:
+    - echo "Setting up Kubernetes connection"
+    - kubectl config use-context ${KUBE_CONTEXT}
+    - kubectl config set-context --current --namespace=${NAMESPACE}
+    - helm version
+    - kubectl version
+
+.helm_deploy:
+  extends: .kubernetes_setup
+  script:
+    - echo "Deploying ${SERVICE_NAME} to ${CI_ENVIRONMENT_NAME} environment"
+    - |
+      helm upgrade --install ${HELM_RELEASE_NAME} ${CHART_PATH} 
+        --namespace ${NAMESPACE} 
+        --set image.repository=${DOCKER_IMAGE} 
+        --set image.tag=${CI_COMMIT_TAG:-${CI_COMMIT_SHORT_SHA}} 
+        --set environment=${CI_ENVIRONMENT_NAME} 
+        --set replicaCount=${REPLICA_COUNT} 
+        --set resources.limits.cpu=${CPU_LIMIT} 
+        --set resources.limits.memory=${MEMORY_LIMIT} 
+        --set resources.requests.cpu=${CPU_REQUEST} 
+        --set resources.requests.memory=${MEMORY_REQUEST} 
+        --set serviceAccount.annotations."eks.amazonaws.com/role-arn"=${IAM_ROLE_ARN} 
+        --set rabbitmq.host=${RABBITMQ_HOST} 
+        --set rabbitmq.port=${RABBITMQ_PORT} 
+        --set rabbitmq.exchange=${RABBITMQ_EXCHANGE} 
+        --set rabbitmq.queue=${RABBITMQ_QUEUE} 
+        --set imap.host=${IMAP_HOST} 
+        --set imap.port=${IMAP_PORT} 
+        --set imap.useTLS=${IMAP_USE_TLS} 
+        --set s3.endpoint=${S3_ENDPOINT} 
+        --set s3.bucket=${S3_BUCKET} 
+        --set s3.region=${S3_REGION} 
+        --timeout ${HELM_TIMEOUT} 
+        --atomic=${HELM_ATOMIC} 
+        --debug=${HELM_DEBUG} 
+        --values ${CHART_PATH}/values.${CI_ENVIRONMENT_NAME}.yaml 
+        ${EXTRA_HELM_ARGS}
+    - echo "Deployment completed successfully"
+
+.health_check:
+  extends: .kubernetes_setup
+  script:
+    - echo "Performing health check for ${SERVICE_NAME}"
+    - |
+      ATTEMPTS=0
+      MAX_ATTEMPTS=${HEALTH_CHECK_RETRIES}
+      DELAY=${HEALTH_CHECK_DELAY}
       
-      - name: Set environment
-        id: set-env
-        run: |
-          # Set environment based on trigger
-          if [ '${{ github.event_name }}' == 'workflow_dispatch' ]; then
-            echo "environment=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
-          elif [ '${{ github.event_name }}' == 'workflow_run' ]; then
-            if [ '${{ github.ref }}' == 'refs/heads/development' ]; then
-              echo "environment=development" >> $GITHUB_OUTPUT
-            elif [ '${{ github.ref }}' == 'refs/heads/main' ]; then
-              echo "environment=staging" >> $GITHUB_OUTPUT
-            elif [[ '${{ github.ref }}' == refs/heads/release/* ]]; then
-              echo "environment=production" >> $GITHUB_OUTPUT
-            else
-              echo "environment=development" >> $GITHUB_OUTPUT
-            fi
-          else
-            echo "environment=development" >> $GITHUB_OUTPUT
-          fi
-          
-          # Set namespace based on environment
-          if [ "$(echo "environment=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT)" == "production" ]; then
-            echo "namespace=mca-production" >> $GITHUB_OUTPUT
-          elif [ "$(echo "environment=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT)" == "staging" ]; then
-            echo "namespace=mca-staging" >> $GITHUB_OUTPUT
-          else
-            echo "namespace=mca-development" >> $GITHUB_OUTPUT
-          fi
-      
-      - name: Set version
-        id: set-version
-        run: |
-          # Set version based on input or latest tag
-          if [ '${{ github.event_name }}' == 'workflow_dispatch' ] && [ -n '${{ github.event.inputs.version }}' ]; then
-            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
-          else
-            # Get latest version from container registry or git tags
-            LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.1.0")
-            echo "version=${LATEST_TAG#v}" >> $GITHUB_OUTPUT
-          fi
-
-  # Deploy to the selected environment
-  deploy:
-    name: Deploy to ${{ needs.prepare-deployment.outputs.environment }}
-    needs: prepare-deployment
-    runs-on: ubuntu-latest
-    environment: ${{ needs.prepare-deployment.outputs.environment }}
-    # Add approval gate for production deployments
-    concurrency:
-      group: deploy-${{ needs.prepare-deployment.outputs.environment }}-${{ env.SERVICE_NAME }}
-      cancel-in-progress: false
-    
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
-
-      - name: Set up Helm
-        uses: azure/setup-helm@v3
-        with:
-          version: 'v3.11.1'
-
-      - name: Set up kubectl
-        uses: azure/setup-kubectl@v3
-        with:
-          version: 'v1.26.0'
-
-      - name: Configure Kubernetes context
-        uses: azure/k8s-set-context@v3
-        with:
-          method: kubeconfig
-          kubeconfig: ${{ secrets.KUBECONFIG }}
-          context: ${{ needs.prepare-deployment.outputs.environment }}
-
-      - name: Login to container registry
-        uses: docker/login-action@v2
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ secrets.REGISTRY_USERNAME }}
-          password: ${{ secrets.REGISTRY_PASSWORD }}
-
-      - name: Get deployment history
-        id: history
-        run: |
-          # Get current release revision for potential rollback
-          REVISION=$(helm history ${{ env.SERVICE_NAME }} -n ${{ needs.prepare-deployment.outputs.namespace }} | tail -1 | awk '{print $1}')
-          echo "revision=$REVISION" >> $GITHUB_OUTPUT
-        continue-on-error: true
-
-      - name: Deploy with Helm
-        id: deploy
-        run: |
-          # Set image tag for the deployment
-          IMAGE_TAG=${{ needs.prepare-deployment.outputs.version }}
-          
-          # Deploy using Helm with environment-specific values
-          helm upgrade --install ${{ env.SERVICE_NAME }} ${{ env.CHART_PATH }} \
-            --namespace ${{ needs.prepare-deployment.outputs.namespace }} \
-            --create-namespace \
-            --set image.repository=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }} \
-            --set image.tag=$IMAGE_TAG \
-            --set environment=${{ needs.prepare-deployment.outputs.environment }} \
-            --set replicaCount=$([ "${{ needs.prepare-deployment.outputs.environment }}" == "production" ] && echo "3" || echo "1") \
-            --set imap.host=${{ secrets.IMAP_HOST }} \
-            --set imap.port=${{ secrets.IMAP_PORT }} \
-            --set imap.username=${{ secrets.IMAP_USERNAME }} \
-            --set imap.password=${{ secrets.IMAP_PASSWORD }} \
-            --set imap.tls=$([ "${{ needs.prepare-deployment.outputs.environment }}" == "production" ] && echo "true" || echo "false") \
-            --set rabbitmq.host=${{ secrets.RABBITMQ_HOST }} \
-            --set rabbitmq.username=${{ secrets.RABBITMQ_USERNAME }} \
-            --set rabbitmq.password=${{ secrets.RABBITMQ_PASSWORD }} \
-            --set rabbitmq.vhost=${{ needs.prepare-deployment.outputs.environment }} \
-            --set s3.endpoint=${{ secrets.S3_ENDPOINT }} \
-            --set s3.bucket=$([ "${{ needs.prepare-deployment.outputs.environment }}" == "production" ] && echo "mca-documents-production" || echo "mca-documents-${{ needs.prepare-deployment.outputs.environment }}") \
-            --set s3.accessKey=${{ secrets.S3_ACCESS_KEY }} \
-            --set s3.secretKey=${{ secrets.S3_SECRET_KEY }} \
-            --set serviceAccount.annotations."eks\.amazonaws\.com/role-arn"=${{ secrets.AWS_ROLE_ARN }} \
-            --atomic \
-            --timeout 5m
-          
-          echo "deployed=true" >> $GITHUB_OUTPUT
-
-      # Send deployment notification
-      - name: Send deployment notification
-        uses: ./.github/actions/notification
-        with:
-          event: deployment
-          service: ${{ env.SERVICE_NAME }}
-          environment: ${{ needs.prepare-deployment.outputs.environment }}
-          status: ${{ steps.deploy.outcome }}
-          version: ${{ needs.prepare-deployment.outputs.version }}
-        if: always()
-
-  # Validate the deployment
-  validate:
-    name: Validate Deployment
-    needs: [prepare-deployment, deploy]
-    runs-on: ubuntu-latest
-    environment: ${{ needs.prepare-deployment.outputs.environment }}
-    
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
-
-      - name: Set up kubectl
-        uses: azure/setup-kubectl@v3
-        with:
-          version: 'v1.26.0'
-
-      - name: Configure Kubernetes context
-        uses: azure/k8s-set-context@v3
-        with:
-          method: kubeconfig
-          kubeconfig: ${{ secrets.KUBECONFIG }}
-          context: ${{ needs.prepare-deployment.outputs.environment }}
-
-      - name: Wait for deployment to be ready
-        run: |
-          kubectl rollout status deployment/${{ env.SERVICE_NAME }} -n ${{ needs.prepare-deployment.outputs.namespace }} --timeout=3m
-
-      - name: Verify service health
-        id: health-check
-        run: |
-          # Get service endpoint
-          SERVICE_IP=$(kubectl get svc ${{ env.SERVICE_NAME }} -n ${{ needs.prepare-deployment.outputs.namespace }} -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-          SERVICE_PORT=$(kubectl get svc ${{ env.SERVICE_NAME }} -n ${{ needs.prepare-deployment.outputs.namespace }} -o jsonpath='{.spec.ports[0].port}')
-          
+      while [ $ATTEMPTS -lt $MAX_ATTEMPTS ]; do
+        ATTEMPTS=$((ATTEMPTS+1))
+        echo "Health check attempt $ATTEMPTS of $MAX_ATTEMPTS"
+        
+        # Get service endpoint
+        SERVICE_IP=$(kubectl get svc ${SERVICE_NAME} -n ${NAMESPACE} -o jsonpath='{.status.loadBalancer.ingress[0].ip}' || echo "")
+        if [ -z "$SERVICE_IP" ]; then
+          SERVICE_IP=$(kubectl get svc ${SERVICE_NAME} -n ${NAMESPACE} -o jsonpath='{.spec.clusterIP}')
+        fi
+        
+        # Check if pods are ready
+        READY_PODS=$(kubectl get pods -n ${NAMESPACE} -l app.kubernetes.io/name=${SERVICE_NAME} -o jsonpath='{.items[*].status.containerStatuses[0].ready}' | tr ' ' '\n' | grep -c true || echo "0")
+        TOTAL_PODS=$(kubectl get pods -n ${NAMESPACE} -l app.kubernetes.io/name=${SERVICE_NAME} --no-headers | wc -l)
+        
+        if [ "$READY_PODS" -eq "$TOTAL_PODS" ] && [ "$TOTAL_PODS" -gt 0 ]; then
           # Check health endpoint
-          HEALTH_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://${SERVICE_IP}:${SERVICE_PORT}/health)
-          
-          if [ "$HEALTH_STATUS" == "200" ]; then
-            echo "Health check passed"
-            echo "health_status=passed" >> $GITHUB_OUTPUT
+          if kubectl run curl-${CI_JOB_ID} --image=curlimages/curl:7.80.0 -n ${NAMESPACE} --rm --restart=Never -i --timeout=30 -- curl -s -o /dev/null -w "%{http_code}" http://${SERVICE_IP}:3000${HEALTH_CHECK_ENDPOINT} | grep -q 200; then
+            echo "Health check passed!"
+            exit 0
           else
-            echo "Health check failed with status $HEALTH_STATUS"
-            echo "health_status=failed" >> $GITHUB_OUTPUT
-            exit 1
+            echo "Health endpoint check failed, will retry in ${DELAY} seconds"
           fi
+        else
+          echo "Pods not ready (${READY_PODS}/${TOTAL_PODS}), will retry in ${DELAY} seconds"
+        fi
+        
+        sleep ${DELAY}
+      done
+      
+      echo "Health check failed after ${MAX_ATTEMPTS} attempts"
+      exit 1
 
-      - name: Verify IMAP connection
-        id: imap-test
-        run: |
-          # Get pod name
-          POD_NAME=$(kubectl get pods -n ${{ needs.prepare-deployment.outputs.namespace }} -l app=${{ env.SERVICE_NAME }} -o jsonpath='{.items[0].metadata.name}')
-          
-          # Execute test command in the pod
-          TEST_RESULT=$(kubectl exec $POD_NAME -n ${{ needs.prepare-deployment.outputs.namespace }} -- node /app/dist/test/imap-test.js)
-          
-          if [[ $TEST_RESULT == *"IMAP connection successful"* ]]; then
-            echo "IMAP connection verified"
-            echo "imap_status=passed" >> $GITHUB_OUTPUT
-          else
-            echo "IMAP connection test failed"
-            echo "imap_status=failed" >> $GITHUB_OUTPUT
-            exit 1
-          fi
+.rollback_deployment:
+  extends: .kubernetes_setup
+  stage: rollback
+  when: on_failure
+  script:
+    - echo "Rolling back ${SERVICE_NAME} deployment in ${CI_ENVIRONMENT_NAME} environment"
+    - |
+      ATTEMPTS=0
+      MAX_ATTEMPTS=${MAX_ROLLBACK_ATTEMPTS}
+      WAIT_TIME=${ROLLBACK_WAIT_TIME}
+      
+      while [ $ATTEMPTS -lt $MAX_ATTEMPTS ]; do
+        ATTEMPTS=$((ATTEMPTS+1))
+        echo "Rollback attempt $ATTEMPTS of $MAX_ATTEMPTS"
+        
+        if helm rollback ${HELM_RELEASE_NAME} -n ${NAMESPACE}; then
+          echo "Rollback successful!"
+          exit 0
+        else
+          echo "Rollback failed, will retry in ${WAIT_TIME}"
+          sleep ${WAIT_TIME}
+        fi
+      done
+      
+      echo "Rollback failed after ${MAX_ATTEMPTS} attempts"
+      exit 1
 
-      - name: Verify RabbitMQ connection
-        id: rabbitmq-test
-        run: |
-          # Get pod name
-          POD_NAME=$(kubectl get pods -n ${{ needs.prepare-deployment.outputs.namespace }} -l app=${{ env.SERVICE_NAME }} -o jsonpath='{.items[0].metadata.name}')
-          
-          # Execute test command in the pod
-          TEST_RESULT=$(kubectl exec $POD_NAME -n ${{ needs.prepare-deployment.outputs.namespace }} -- node /app/dist/test/rabbitmq-test.js)
-          
-          if [[ $TEST_RESULT == *"RabbitMQ connection successful"* ]]; then
-            echo "RabbitMQ connection verified"
-            echo "rabbitmq_status=passed" >> $GITHUB_OUTPUT
-          else
-            echo "RabbitMQ connection test failed"
-            echo "rabbitmq_status=failed" >> $GITHUB_OUTPUT
-            exit 1
-          fi
-          
-      # Send validation notification
-      - name: Send validation notification
-        uses: ./.github/actions/notification
-        with:
-          event: validation
-          service: ${{ env.SERVICE_NAME }}
-          environment: ${{ needs.prepare-deployment.outputs.environment }}
-          status: ${{ steps.health-check.outcome == 'success' && steps.imap-test.outcome == 'success' && steps.rabbitmq-test.outcome == 'success' }}
-          version: ${{ needs.prepare-deployment.outputs.version }}
-        if: always()
+# Validation jobs
+validate_helm_chart:
+  stage: validate
+  script:
+    - echo "Validating Helm chart for ${SERVICE_NAME}"
+    - helm lint ${CHART_PATH}
+    - helm template ${CHART_PATH} --debug
 
-  # Rollback if validation fails
-  rollback:
-    name: Rollback Deployment
-    needs: [prepare-deployment, deploy, validate]
-    runs-on: ubuntu-latest
-    environment: ${{ needs.prepare-deployment.outputs.environment }}
-    if: needs.validate.result == 'failure' && needs.deploy.outputs.deployed == 'true'
-    
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
+scan_helm_chart:
+  extends: config_scan
+  stage: validate
+  variables:
+    SCAN_TARGET: ${CHART_PATH}
+    FORMAT: "sarif"
+    OUTPUT_FILE: "helm-scan-results.sarif"
+    SEVERITY_THRESHOLD: "HIGH,CRITICAL"
+    EXIT_CODE: "1"
 
-      - name: Set up Helm
-        uses: azure/setup-helm@v3
-        with:
-          version: 'v3.11.1'
+# Deployment jobs
+deploy_to_development:
+  extends: .helm_deploy
+  stage: deploy
+  variables:
+    KUBE_CONTEXT: ${DEV_KUBE_CONTEXT}
+    NAMESPACE: ${DEV_NAMESPACE}
+    REPLICA_COUNT: 1
+    CPU_LIMIT: "500m"
+    MEMORY_LIMIT: "512Mi"
+    CPU_REQUEST: "100m"
+    MEMORY_REQUEST: "256Mi"
+    IAM_ROLE_ARN: ${DEV_IAM_ROLE_ARN}
+    RABBITMQ_HOST: ${DEV_RABBITMQ_HOST}
+    RABBITMQ_PORT: ${DEV_RABBITMQ_PORT}
+    RABBITMQ_EXCHANGE: "mca.documents"
+    RABBITMQ_QUEUE: "document-processing"
+    IMAP_HOST: ${DEV_IMAP_HOST}
+    IMAP_PORT: ${DEV_IMAP_PORT}
+    IMAP_USE_TLS: "true"
+    S3_ENDPOINT: ${DEV_S3_ENDPOINT}
+    S3_BUCKET: "mca-documents-development"
+    S3_REGION: ${DEV_S3_REGION}
+  environment:
+    name: development
+    url: https://dev-api.dollarfunding.com/email-service
+  rules:
+    - if: $CI_COMMIT_BRANCH == "development"
+    - if: $CI_COMMIT_BRANCH =~ /^feature\/.*$/
 
-      - name: Configure Kubernetes context
-        uses: azure/k8s-set-context@v3
-        with:
-          method: kubeconfig
-          kubeconfig: ${{ secrets.KUBECONFIG }}
-          context: ${{ needs.prepare-deployment.outputs.environment }}
+deploy_to_staging:
+  extends: .helm_deploy
+  stage: deploy
+  variables:
+    KUBE_CONTEXT: ${STAGING_KUBE_CONTEXT}
+    NAMESPACE: ${STAGING_NAMESPACE}
+    REPLICA_COUNT: 2
+    CPU_LIMIT: "1000m"
+    MEMORY_LIMIT: "1Gi"
+    CPU_REQUEST: "250m"
+    MEMORY_REQUEST: "512Mi"
+    IAM_ROLE_ARN: ${STAGING_IAM_ROLE_ARN}
+    RABBITMQ_HOST: ${STAGING_RABBITMQ_HOST}
+    RABBITMQ_PORT: ${STAGING_RABBITMQ_PORT}
+    RABBITMQ_EXCHANGE: "mca.documents"
+    RABBITMQ_QUEUE: "document-processing"
+    IMAP_HOST: ${STAGING_IMAP_HOST}
+    IMAP_PORT: ${STAGING_IMAP_PORT}
+    IMAP_USE_TLS: "true"
+    S3_ENDPOINT: ${STAGING_S3_ENDPOINT}
+    S3_BUCKET: "mca-documents-staging"
+    S3_REGION: ${STAGING_S3_REGION}
+  environment:
+    name: staging
+    url: https://staging-api.dollarfunding.com/email-service
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
 
-      - name: Rollback deployment
-        id: rollback
-        run: |
-          # Rollback to previous revision
-          if [ -n "${{ needs.deploy.outputs.revision }}" ]; then
-            helm rollback ${{ env.SERVICE_NAME }} ${{ needs.deploy.outputs.revision }} -n ${{ needs.prepare-deployment.outputs.namespace }}
-            echo "Rolled back to revision ${{ needs.deploy.outputs.revision }}"
-          else
-            # If no previous revision, uninstall the release
-            helm uninstall ${{ env.SERVICE_NAME }} -n ${{ needs.prepare-deployment.outputs.namespace }}
-            echo "No previous revision found, uninstalled the release"
-          fi
+deploy_to_production:
+  extends: .helm_deploy
+  stage: deploy
+  variables:
+    KUBE_CONTEXT: ${PROD_KUBE_CONTEXT}
+    NAMESPACE: ${PROD_NAMESPACE}
+    REPLICA_COUNT: 3
+    CPU_LIMIT: "2000m"
+    MEMORY_LIMIT: "2Gi"
+    CPU_REQUEST: "500m"
+    MEMORY_REQUEST: "1Gi"
+    IAM_ROLE_ARN: ${PROD_IAM_ROLE_ARN}
+    RABBITMQ_HOST: ${PROD_RABBITMQ_HOST}
+    RABBITMQ_PORT: ${PROD_RABBITMQ_PORT}
+    RABBITMQ_EXCHANGE: "mca.documents"
+    RABBITMQ_QUEUE: "document-processing"
+    IMAP_HOST: ${PROD_IMAP_HOST}
+    IMAP_PORT: ${PROD_IMAP_PORT}
+    IMAP_USE_TLS: "true"
+    S3_ENDPOINT: ${PROD_S3_ENDPOINT}
+    S3_BUCKET: "mca-documents-production"
+    S3_REGION: ${PROD_S3_REGION}
+  environment:
+    name: production
+    url: https://api.dollarfunding.com/email-service
+  when: manual
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+  needs:
+    - job: deploy_to_staging
+      artifacts: false
 
-      # Send rollback notification
-      - name: Send rollback notification
-        uses: ./.github/actions/notification
-        with:
-          event: rollback
-          service: ${{ env.SERVICE_NAME }}
-          environment: ${{ needs.prepare-deployment.outputs.environment }}
-          status: ${{ steps.rollback.outcome }}
-          version: ${{ needs.prepare-deployment.outputs.version }}
-        if: always()
+# Verification jobs
+verify_development_deployment:
+  extends: .health_check
+  stage: verify
+  variables:
+    KUBE_CONTEXT: ${DEV_KUBE_CONTEXT}
+    NAMESPACE: ${DEV_NAMESPACE}
+  environment:
+    name: development
+  needs:
+    - job: deploy_to_development
+      artifacts: false
+  rules:
+    - if: $CI_COMMIT_BRANCH == "development"
+    - if: $CI_COMMIT_BRANCH =~ /^feature\/.*$/
 
-  # Update monitoring and documentation
-  update-monitoring:
-    name: Update Monitoring
-    needs: [prepare-deployment, deploy, validate]
-    runs-on: ubuntu-latest
-    if: |
-      always() && 
-      needs.deploy.result == 'success' && 
-      (needs.validate.result == 'success' || needs.validate.result == 'skipped')
-    
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
+verify_staging_deployment:
+  extends: .health_check
+  stage: verify
+  variables:
+    KUBE_CONTEXT: ${STAGING_KUBE_CONTEXT}
+    NAMESPACE: ${STAGING_NAMESPACE}
+  environment:
+    name: staging
+  needs:
+    - job: deploy_to_staging
+      artifacts: false
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v2
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
+verify_production_deployment:
+  extends: .health_check
+  stage: verify
+  variables:
+    KUBE_CONTEXT: ${PROD_KUBE_CONTEXT}
+    NAMESPACE: ${PROD_NAMESPACE}
+  environment:
+    name: production
+  needs:
+    - job: deploy_to_production
+      artifacts: false
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
 
-      - name: Update Datadog dashboard
-        run: |
-          # Update Datadog dashboard with new version information
-          # This updates the Datadog dashboard with email processing metrics
-          echo "Updating Datadog dashboard for ${{ env.SERVICE_NAME }} version ${{ needs.prepare-deployment.outputs.version }}"
-          
-          # Example: Use AWS SSM to store the current version for monitoring
-          aws ssm put-parameter \
-            --name "/mca/${{ needs.prepare-deployment.outputs.environment }}/${{ env.SERVICE_NAME }}/version" \
-            --value "${{ needs.prepare-deployment.outputs.version }}" \
-            --type "String" \
-            --overwrite
+# Rollback jobs
+rollback_development:
+  extends: .rollback_deployment
+  variables:
+    KUBE_CONTEXT: ${DEV_KUBE_CONTEXT}
+    NAMESPACE: ${DEV_NAMESPACE}
+  environment:
+    name: development
+  needs:
+    - job: verify_development_deployment
+      artifacts: false
+  rules:
+    - if: $CI_COMMIT_BRANCH == "development"
+    - if: $CI_COMMIT_BRANCH =~ /^feature\/.*$/
 
-      - name: Update deployment history
-        run: |
-          # Record deployment in deployment history database
-          # This tracks all deployments for audit and rollback purposes
-          echo "Recording deployment of ${{ env.SERVICE_NAME }} version ${{ needs.prepare-deployment.outputs.version }} to ${{ needs.prepare-deployment.outputs.environment }}"
-          
-          # Example: Use AWS DynamoDB to store deployment history
-          aws dynamodb put-item \
-            --table-name "mca-deployments" \
-            --item "{
-              \"service\": {\"S\": \"${{ env.SERVICE_NAME }}\"},
-              \"version\": {\"S\": \"${{ needs.prepare-deployment.outputs.version }}\"},
-              \"environment\": {\"S\": \"${{ needs.prepare-deployment.outputs.environment }}\"},
-              \"timestamp\": {\"S\": \"$(date -u +\"%Y-%m-%dT%H:%M:%SZ\")\"},
-              \"status\": {\"S\": \"${{ needs.validate.result == 'success' && 'success' || 'failed' }}\"},
-              \"deployer\": {\"S\": \"${{ github.actor }}\"}
-            }"
+rollback_staging:
+  extends: .rollback_deployment
+  variables:
+    KUBE_CONTEXT: ${STAGING_KUBE_CONTEXT}
+    NAMESPACE: ${STAGING_NAMESPACE}
+  environment:
+    name: staging
+  needs:
+    - job: verify_staging_deployment
+      artifacts: false
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+
+rollback_production:
+  extends: .rollback_deployment
+  variables:
+    KUBE_CONTEXT: ${PROD_KUBE_CONTEXT}
+    NAMESPACE: ${PROD_NAMESPACE}
+  environment:
+    name: production
+  needs:
+    - job: verify_production_deployment
+      artifacts: false
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+
+# Notification jobs
+notify_deployment_success:
+  extends: .notification_template
+  stage: notify
+  variables:
+    NOTIFICATION_TYPE: "deployment_success"
+    NOTIFICATION_SERVICE: ${SERVICE_NAME}
+    NOTIFICATION_ENVIRONMENT: ${CI_ENVIRONMENT_NAME}
+    NOTIFICATION_VERSION: ${CI_COMMIT_TAG:-${CI_COMMIT_SHORT_SHA}}
+    NOTIFICATION_DETAILS: "Deployment of ${SERVICE_NAME} to ${CI_ENVIRONMENT_NAME} completed successfully"
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH
+    - if: $CI_PIPELINE_SOURCE == "tag" && $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+
+notify_deployment_failure:
+  extends: .notification_template
+  stage: notify
+  when: on_failure
+  variables:
+    NOTIFICATION_TYPE: "deployment_failure"
+    NOTIFICATION_SERVICE: ${SERVICE_NAME}
+    NOTIFICATION_ENVIRONMENT: ${CI_ENVIRONMENT_NAME}
+    NOTIFICATION_VERSION: ${CI_COMMIT_TAG:-${CI_COMMIT_SHORT_SHA}}
+    NOTIFICATION_DETAILS: "Deployment of ${SERVICE_NAME} to ${CI_ENVIRONMENT_NAME} failed"
+    NOTIFICATION_SEVERITY: "high"
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH
+    - if: $CI_PIPELINE_SOURCE == "tag" && $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
