@@ -1,180 +1,257 @@
 # RabbitMQ Messaging Module Outputs
 #
-# This file exports essential RabbitMQ information as module outputs, including
-# connection endpoints, port numbers, virtual hosts, and resource identifiers.
-# These outputs are consumed by other Terraform modules and application configuration.
+# This file exports essential RabbitMQ information as module outputs, including connection endpoints,
+# port numbers, virtual hosts, and resource identifiers. These outputs are consumed by other Terraform
+# modules and application configuration.
+#
+# Key output categories:
+# 1. Connection information for microservices integration
+# 2. Management interface access for administration
+# 3. Integration with monitoring and logging systems
+# 4. Support for amqplib 0.10.3 client library
+# 5. Secure connection string handling
 
-# Basic cluster information
-output "cluster_id" {
+# -----------------------------------------------------------------------------
+# Connection Information
+# -----------------------------------------------------------------------------
+
+output "rabbitmq_endpoints" {
+  description = "The AMQP endpoints of the RabbitMQ cluster"
+  value       = aws_mq_broker.rabbitmq_cluster.instances.*.endpoints
+}
+
+output "rabbitmq_ssl_endpoints" {
+  description = "The AMQPS (SSL) endpoints of the RabbitMQ cluster"
+  value = [for instance in aws_mq_broker.rabbitmq_cluster.instances : {
+    host = split(":", instance.endpoints[0])[1]
+    port = 5671
+  }]
+}
+
+output "rabbitmq_host" {
+  description = "The primary host of the RabbitMQ cluster"
+  value       = split(":", aws_mq_broker.rabbitmq_cluster.instances[0].endpoints[0])[1]
+}
+
+output "rabbitmq_port" {
+  description = "The AMQP port of the RabbitMQ cluster"
+  value       = 5672
+}
+
+output "rabbitmq_ssl_port" {
+  description = "The AMQPS (SSL) port of the RabbitMQ cluster"
+  value       = 5671
+}
+
+output "rabbitmq_vhosts" {
+  description = "The virtual hosts configured in the RabbitMQ cluster"
+  value = {
+    default            = "/"
+    document_processing = "document-processing"
+    data_extraction    = "data-extraction"
+    notification       = "notification"
+  }
+}
+
+# -----------------------------------------------------------------------------
+# Management Interface
+# -----------------------------------------------------------------------------
+
+output "rabbitmq_management_endpoint" {
+  description = "The management UI endpoint of the RabbitMQ cluster"
+  value       = "https://${aws_mq_broker.rabbitmq_cluster.instances[0].console_url}"
+}
+
+output "rabbitmq_management_port" {
+  description = "The management UI port of the RabbitMQ cluster"
+  value       = 15671
+}
+
+output "rabbitmq_admin_secret_arn" {
+  description = "The ARN of the secret containing RabbitMQ admin credentials"
+  value       = aws_secretsmanager_secret.rabbitmq_admin.arn
+}
+
+# -----------------------------------------------------------------------------
+# Resource Identifiers
+# -----------------------------------------------------------------------------
+
+output "rabbitmq_id" {
   description = "The ID of the RabbitMQ cluster"
   value       = aws_mq_broker.rabbitmq_cluster.id
 }
 
-output "cluster_arn" {
+output "rabbitmq_arn" {
   description = "The ARN of the RabbitMQ cluster"
   value       = aws_mq_broker.rabbitmq_cluster.arn
 }
 
-output "cluster_name" {
-  description = "The name of the RabbitMQ cluster"
-  value       = aws_mq_broker.rabbitmq_cluster.broker_name
+output "rabbitmq_security_group_id" {
+  description = "The ID of the security group for the RabbitMQ cluster"
+  value       = aws_security_group.rabbitmq_cluster.id
 }
 
-# Connection endpoints
-output "amqp_endpoints" {
-  description = "AMQP TLS endpoints for the RabbitMQ cluster"
-  value       = [for instance in aws_mq_broker.rabbitmq_cluster.instances : instance.endpoints[0]]
+output "rabbitmq_kms_key_arn" {
+  description = "The ARN of the KMS key used for RabbitMQ encryption"
+  value       = aws_kms_key.rabbitmq_encryption.arn
 }
 
-output "primary_amqp_endpoint" {
-  description = "Primary AMQP TLS endpoint for the RabbitMQ cluster"
-  value       = aws_mq_broker.rabbitmq_cluster.instances[0].endpoints[0]
+output "rabbitmq_certificates_bucket" {
+  description = "The name of the S3 bucket containing RabbitMQ certificates"
+  value       = aws_s3_bucket.rabbitmq_certificates.id
 }
 
-# Management UI endpoints
-output "management_endpoints" {
-  description = "Management UI TLS endpoints for the RabbitMQ cluster"
-  value       = [for instance in aws_mq_broker.rabbitmq_cluster.instances : instance.endpoints[1]]
+# -----------------------------------------------------------------------------
+# Connection Strings
+# -----------------------------------------------------------------------------
+
+output "rabbitmq_connection_string" {
+  description = "The connection string for RabbitMQ (without credentials)"
+  value       = "amqp://${aws_mq_broker.rabbitmq_cluster.instances[0].endpoints[0]}"
 }
 
-output "primary_management_endpoint" {
-  description = "Primary Management UI TLS endpoint for the RabbitMQ cluster"
-  value       = aws_mq_broker.rabbitmq_cluster.instances[0].endpoints[1]
+output "rabbitmq_ssl_connection_string" {
+  description = "The SSL connection string for RabbitMQ (without credentials)"
+  value       = "amqps://${aws_mq_broker.rabbitmq_cluster.instances[0].endpoints[0]}"
 }
 
-# Connection details
-output "rabbitmq_vhost" {
-  description = "RabbitMQ virtual host"
-  value       = var.rabbitmq_vhost
+output "rabbitmq_connection_string_template" {
+  description = "Template for RabbitMQ connection string (replace USERNAME and PASSWORD)"
+  value       = "amqp://USERNAME:PASSWORD@${split(":", aws_mq_broker.rabbitmq_cluster.instances[0].endpoints[0])[1]}:5672"
 }
 
-output "rabbitmq_port" {
-  description = "RabbitMQ AMQP TLS port"
-  value       = 5671
+output "rabbitmq_ssl_connection_string_template" {
+  description = "Template for RabbitMQ SSL connection string (replace USERNAME and PASSWORD)"
+  value       = "amqps://USERNAME:PASSWORD@${split(":", aws_mq_broker.rabbitmq_cluster.instances[0].endpoints[0])[1]}:5671"
 }
 
-output "rabbitmq_management_port" {
-  description = "RabbitMQ Management UI TLS port"
-  value       = 15671
+# -----------------------------------------------------------------------------
+# Service-Specific Connection Options
+# -----------------------------------------------------------------------------
+
+output "rabbitmq_amqplib_options" {
+  description = "Connection options for amqplib 0.10.3 client library"
+  value = {
+    protocol    = var.enable_tls ? "amqps" : "amqp"
+    hostname    = split(":", aws_mq_broker.rabbitmq_cluster.instances[0].endpoints[0])[1]
+    port        = var.enable_tls ? 5671 : 5672
+    vhost       = "/"
+    heartbeat   = 60
+    frameMax    = 0
+    channelMax  = 2048
+    ssl         = var.enable_tls
+    sslOptions  = var.enable_tls ? {
+      ca          = "${aws_s3_bucket.rabbitmq_certificates.bucket_regional_domain_name}/certs/ca_certificate.pem"
+      cert        = "${aws_s3_bucket.rabbitmq_certificates.bucket_regional_domain_name}/certs/client_certificate.pem"
+      key         = "${aws_s3_bucket.rabbitmq_certificates.bucket_regional_domain_name}/certs/client_key.pem"
+      passphrase  = ""
+      rejectUnauthorized = true
+    } : null
+  }
 }
 
-# DNS information (if created)
-output "dns_record" {
-  description = "DNS record for the RabbitMQ cluster (if created)"
-  value       = var.create_dns_record ? "rabbitmq.${var.dns_domain}" : null
-}
-
-# Connection string templates for different service types
-output "connection_string_template" {
-  description = "Generic connection string template for RabbitMQ (replace USERNAME and PASSWORD with actual credentials)"
-  value       = "amqps://USERNAME:PASSWORD@${aws_mq_broker.rabbitmq_cluster.instances[0].endpoints[0]}:5671/${urlencode(var.rabbitmq_vhost)}"
-  sensitive   = true
-}
-
-output "nodejs_amqplib_connection_config" {
-  description = "Connection configuration object for Node.js amqplib 0.10.3"
-  value       = jsonencode({
-    protocol: "amqps",
-    hostname: split(":", split("/", aws_mq_broker.rabbitmq_cluster.instances[0].endpoints[0])[2])[0],
-    port: 5671,
-    vhost: var.rabbitmq_vhost,
-    username: "USERNAME", # Replace with actual username
-    password: "PASSWORD", # Replace with actual password
-    connectionOptions: {
-      heartbeat: 60,
-      timeout: 30000
+output "rabbitmq_service_connection_params" {
+  description = "Service-specific connection parameters for RabbitMQ"
+  value = {
+    email_service = {
+      vhost       = "/"
+      exchange    = "mca.documents"
+      queue       = null
+      routing_key = null
     }
-  })
-  sensitive   = true
+    document_service = {
+      vhost       = "document-processing"
+      exchange    = null
+      queue       = "document-processing"
+      routing_key = "document.classification"
+    }
+    ocr_service = {
+      vhost       = "data-extraction"
+      exchange    = null
+      queue       = "data-extraction"
+      routing_key = "document.extraction"
+    }
+    data_service = {
+      vhost       = "/"
+      exchange    = "mca.direct"
+      queue       = null
+      routing_key = null
+    }
+    notification_service = {
+      vhost       = "notification"
+      exchange    = null
+      queue       = "notification"
+      routing_key = "document.notification"
+    }
+  }
 }
 
-output "python_pika_connection_params" {
-  description = "Connection parameters for Python Pika library"
-  value       = jsonencode({
-    host: split(":", split("/", aws_mq_broker.rabbitmq_cluster.instances[0].endpoints[0])[2])[0],
-    port: 5671,
-    virtual_host: var.rabbitmq_vhost,
-    credentials: {
-      username: "USERNAME", # Replace with actual username
-      password: "PASSWORD"  # Replace with actual password
-    },
-    ssl: true,
-    heartbeat: 60
-  })
-  sensitive   = true
-}
+# -----------------------------------------------------------------------------
+# Monitoring and Logging
+# -----------------------------------------------------------------------------
 
-output "java_spring_amqp_connection_properties" {
-  description = "Connection properties for Java Spring AMQP"
-  value       = jsonencode({
-    "spring.rabbitmq.host": split(":", split("/", aws_mq_broker.rabbitmq_cluster.instances[0].endpoints[0])[2])[0],
-    "spring.rabbitmq.port": 5671,
-    "spring.rabbitmq.username": "USERNAME", # Replace with actual username
-    "spring.rabbitmq.password": "PASSWORD", # Replace with actual password
-    "spring.rabbitmq.virtual-host": var.rabbitmq_vhost,
-    "spring.rabbitmq.ssl.enabled": true,
-    "spring.rabbitmq.connection-timeout": 30000,
-    "spring.rabbitmq.requested-heartbeat": 60
-  })
-  sensitive   = true
-}
-
-# Exchange and queue information
-output "document_exchange" {
-  description = "Name of the document exchange"
-  value       = "mca.documents"
-}
-
-output "critical_queues" {
-  description = "List of critical queue names"
-  value       = var.critical_queues
-}
-
-# Monitoring and logging information
-output "cloudwatch_log_group" {
-  description = "CloudWatch log group for RabbitMQ logs"
+output "rabbitmq_cloudwatch_log_group" {
+  description = "The CloudWatch log group for RabbitMQ logs"
   value       = aws_cloudwatch_log_group.rabbitmq_logs.name
 }
 
-output "cloudwatch_dashboard" {
-  description = "CloudWatch dashboard for RabbitMQ monitoring"
-  value       = aws_cloudwatch_dashboard.rabbitmq.dashboard_name
+output "rabbitmq_cloudwatch_log_group_arn" {
+  description = "The ARN of the CloudWatch log group for RabbitMQ logs"
+  value       = aws_cloudwatch_log_group.rabbitmq_logs.arn
 }
 
-output "health_alarm_arn" {
-  description = "ARN of the CloudWatch alarm for RabbitMQ cluster health"
-  value       = aws_cloudwatch_metric_alarm.rabbitmq_health.arn
+output "rabbitmq_cloudwatch_dashboard" {
+  description = "The CloudWatch dashboard for RabbitMQ monitoring"
+  value       = var.enable_monitoring && var.enable_dashboard ? aws_cloudwatch_dashboard.rabbitmq[0].dashboard_name : null
 }
 
-output "queue_depth_alarm_arns" {
-  description = "ARNs of the CloudWatch alarms for queue depths"
-  value       = [for alarm in aws_cloudwatch_metric_alarm.queue_depth : alarm.arn]
+output "rabbitmq_cloudwatch_alarms" {
+  description = "The CloudWatch alarms for RabbitMQ monitoring"
+  value = {
+    cpu_utilization = var.enable_monitoring ? aws_cloudwatch_metric_alarm.rabbitmq_cpu_utilization.arn : null
+    memory_usage    = var.enable_monitoring ? aws_cloudwatch_metric_alarm.rabbitmq_memory_usage.arn : null
+    queue_depth     = var.enable_monitoring ? aws_cloudwatch_metric_alarm.rabbitmq_queue_depth.arn : null
+  }
 }
 
-# Security information
-output "security_group_id" {
-  description = "ID of the security group for the RabbitMQ cluster"
-  value       = var.security_group_id
+# -----------------------------------------------------------------------------
+# Queue and Exchange Information
+# -----------------------------------------------------------------------------
+
+output "rabbitmq_exchanges" {
+  description = "The exchanges configured in the RabbitMQ cluster"
+  value = var.create_default_resources ? {
+    documents   = rabbitmq_exchange.mca_documents[0].name
+    direct      = rabbitmq_exchange.mca_direct[0].name
+    topic       = rabbitmq_exchange.mca_topic[0].name
+    dead_letter = rabbitmq_exchange.mca_dead_letter[0].name
+  } : null
 }
 
-output "kms_key_id" {
-  description = "ID of the KMS key used for RabbitMQ encryption"
-  value       = aws_kms_key.rabbitmq.key_id
+output "rabbitmq_queues" {
+  description = "The queues configured in the RabbitMQ cluster"
+  value = var.create_default_resources ? {
+    document_processing = rabbitmq_queue.document_processing[0].name
+    data_extraction     = rabbitmq_queue.data_extraction[0].name
+    notification        = rabbitmq_queue.notification[0].name
+    dead_letter         = rabbitmq_queue.dead_letter[0].name
+  } : null
 }
 
-output "kms_key_arn" {
-  description = "ARN of the KMS key used for RabbitMQ encryption"
-  value       = aws_kms_key.rabbitmq.arn
-}
+# -----------------------------------------------------------------------------
+# Feature Flags
+# -----------------------------------------------------------------------------
 
-# Recovery information
-output "recovery_lambda_arn" {
-  description = "ARN of the Lambda function for RabbitMQ recovery"
-  value       = aws_lambda_function.rabbitmq_recovery.arn
-}
-
-# Environment information
-output "environment" {
-  description = "Environment name for the RabbitMQ cluster"
-  value       = var.environment
+output "rabbitmq_features" {
+  description = "Feature flags for RabbitMQ configuration"
+  value = {
+    tls_enabled           = var.enable_tls
+    monitoring_enabled    = var.enable_monitoring
+    dashboard_enabled     = var.enable_dashboard && var.enable_monitoring
+    mirrored_queues       = var.enable_mirrored_queues && !local.use_quorum_queues
+    quorum_queues         = local.use_quorum_queues
+    default_resources     = var.create_default_resources
+    multi_az              = local.is_multi_az
+    cluster_size          = local.actual_cluster_size
+  }
 }
