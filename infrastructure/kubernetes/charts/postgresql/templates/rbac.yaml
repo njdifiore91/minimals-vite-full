@@ -1,5 +1,7 @@
 {{- if .Values.rbac.create -}}
 # Role for PostgreSQL pods
+# This Role defines the permissions required for PostgreSQL pods to operate within their namespace
+# Following the principle of least privilege, only necessary permissions are granted
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -10,51 +12,51 @@ metadata:
     {{- toYaml . | nindent 4 }}
     {{- end }}
   annotations:
+    # Helm hooks ensure Role is created before other resources that depend on it
     "helm.sh/hook": pre-install,pre-upgrade
     "helm.sh/hook-weight": "-5"
     {{- with .Values.global.annotations }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
 rules:
-  # Allow PostgreSQL pods to manage pods and execute commands in pods
-  # This is needed for replica management and failover operations
-  - apiGroups: [""] 
-    resources: ["pods", "pods/exec"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  
-  # Allow PostgreSQL pods to access ConfigMaps for configuration
-  # This is needed to read configuration data and update status
+  # Allow access to ConfigMaps for configuration
   - apiGroups: [""] 
     resources: ["configmaps"]
     verbs: ["get", "list", "watch"]
+    # Optionally restrict to specific ConfigMaps if needed
+    # resourceNames: ["{{ include "postgresql.fullname" . }}-config"]
   
-  # Allow PostgreSQL pods to access Secrets for credentials
-  # This is needed for authentication and secure operations
+  # Allow access to Secrets for credentials
   - apiGroups: [""] 
     resources: ["secrets"]
     verbs: ["get", "list", "watch"]
+    # Optionally restrict to specific Secrets if needed
+    # resourceNames: ["{{ include "postgresql.fullname" . }}", "{{ include "postgresql.fullname" . }}-replication"]
   
-  # Allow PostgreSQL pods to manage endpoints for service discovery
-  # This is needed for primary-replica coordination
-  - apiGroups: [""] 
-    resources: ["endpoints"]
-    verbs: ["get", "list", "watch", "create", "update", "patch"]
-  
-  # Allow PostgreSQL pods to manage persistent volume claims
-  # This is needed for storage operations
+  # Allow access to PersistentVolumeClaims for data storage
   - apiGroups: [""] 
     resources: ["persistentvolumeclaims"]
     verbs: ["get", "list", "watch"]
   
-  {{- if .Values.backup.enabled }}
-  # Allow PostgreSQL pods to create and manage jobs for backups
-  # This is needed for backup operations
-  - apiGroups: ["batch"] 
-    resources: ["jobs", "cronjobs"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  {{- end }}
+  # Allow pod management within the StatefulSet
+  - apiGroups: [""] 
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  
+  # Allow endpoint access for service discovery
+  - apiGroups: [""] 
+    resources: ["endpoints"]
+    verbs: ["get", "list", "watch"]
+  
+  # Allow service access for network connectivity
+  - apiGroups: [""] 
+    resources: ["services"]
+    verbs: ["get", "list", "watch"]
+
 ---
 # RoleBinding for PostgreSQL pods
+# This RoleBinding associates the Role with the PostgreSQL ServiceAccount
+# It grants the permissions defined in the Role to the ServiceAccount
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
@@ -65,8 +67,9 @@ metadata:
     {{- toYaml . | nindent 4 }}
     {{- end }}
   annotations:
+    # Helm hooks ensure RoleBinding is created after Role but before other resources
     "helm.sh/hook": pre-install,pre-upgrade
-    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-weight": "0"
     {{- with .Values.global.annotations }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
@@ -75,7 +78,7 @@ roleRef:
   kind: Role
   name: {{ include "postgresql.fullname" . }}
 subjects:
-- kind: ServiceAccount
-  name: {{ .Values.rbac.serviceAccountName | default (include "postgresql.fullname" .) }}
-  namespace: {{ .Release.Namespace }}
+  - kind: ServiceAccount
+    name: {{ .Values.rbac.serviceAccountName | default (include "postgresql.fullname" .) }}
+    namespace: {{ .Release.Namespace }}
 {{- end }}
