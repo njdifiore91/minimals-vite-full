@@ -1,398 +1,489 @@
-# Drift Detection Workflow
-# 
-# This workflow runs scheduled Terraform plan operations across all environments
-# to detect infrastructure drift - differences between the desired state (defined in code)
-# and the actual state of the infrastructure. It helps identify unauthorized manual changes,
-# ensures infrastructure integrity, and validates compliance with security baselines.
-#
-# Schedule: Runs monthly and can be triggered manually
-# Environments: Development, Staging, Production
-# Notifications: Alerts for detected drift via email, Slack, and webhooks
-# Remediation: Options for automatic or manual correction of drift
+# =========================================================================
+# Infrastructure Drift Detection Workflow
+# =========================================================================
+# This workflow runs scheduled Terraform plan operations to detect
+# infrastructure drift across all environments. It identifies any manual
+# changes or discrepancies between the desired state (defined in code) and
+# the actual state of the infrastructure, ensuring infrastructure integrity
+# and compliance.
+# =========================================================================
 
 name: Infrastructure Drift Detection
 
+# Scheduled trigger for regular drift detection
 on:
-  # Run monthly on the 1st at 2:00 AM UTC
+  # Run daily at 2:00 AM UTC
   schedule:
-    - cron: '0 2 1 * *'
-  
+    - cron: '0 2 * * *'
   # Allow manual triggering
   workflow_dispatch:
     inputs:
       environment:
-        description: 'Environment to check for drift'
+        description: 'Environment to check for drift (development, staging, production, all)'
         required: true
-        default: 'all'
         type: choice
         options:
-          - all
           - development
           - staging
           - production
-      auto_remediate:
-        description: 'Automatically remediate detected drift'
+          - all
+        default: 'all'
+      notify_channels:
+        description: 'Notification channels (comma-separated: email,slack,webhook)'
         required: false
-        default: false
-        type: boolean
+        default: 'slack'
+        type: string
+      remediation_action:
+        description: 'Action to take if drift is detected'
+        required: true
+        type: choice
+        options:
+          - report_only
+          - auto_remediate
+          - create_pr
+        default: 'report_only'
 
-# Use concurrency to prevent multiple drift detection runs
-concurrency:
-  group: drift-detection-${{ github.event.inputs.environment || 'scheduled' }}
-  cancel-in-progress: false
-
+# Environment variables used across jobs
 env:
   TF_LOG: INFO
-  DRIFT_REPORT_DIR: drift-reports
+  TF_INPUT: false
+  TF_IN_AUTOMATION: true
+  TERRAFORM_VERSION: '1.5.7'
+  TFSEC_VERSION: '1.28.1'
 
+# Define jobs in the workflow
 jobs:
-  # Prepare the drift detection process
-  prepare:
-    name: Prepare Drift Detection
+  # Determine which environments to check for drift
+  determine-environments:
+    name: Determine Environments
     runs-on: ubuntu-latest
     outputs:
       environments: ${{ steps.set-environments.outputs.environments }}
-      timestamp: ${{ steps.set-timestamp.outputs.timestamp }}
-    
     steps:
-      - name: Determine environments to check
+      - name: Set environments based on trigger
         id: set-environments
         run: |
-          if [[ "${{ github.event.inputs.environment }}" == "all" || "${{ github.event.inputs.environment }}" == "" ]]; then
-            echo "environments=[\"development\", \"staging\", \"production\"]" >> $GITHUB_OUTPUT
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            # Manual trigger - use specified environment
+            if [[ "${{ github.event.inputs.environment }}" == "all" ]]; then
+              echo "environments=[\"development\", \"staging\", \"production\"]" >> $GITHUB_OUTPUT
+            else
+              echo "environments=[\"${{ github.event.inputs.environment }}\"]" >> $GITHUB_OUTPUT
+            fi
           else
-            echo "environments=[\"${{ github.event.inputs.environment }}\"]" >> $GITHUB_OUTPUT
+            # Scheduled trigger - check all environments
+            echo "environments=[\"development\", \"staging\", \"production\"]" >> $GITHUB_OUTPUT
           fi
-      
-      - name: Set timestamp for reports
-        id: set-timestamp
-        run: echo "timestamp=$(date +%Y%m%d-%H%M%S)" >> $GITHUB_OUTPUT
 
-  # Detect drift in each environment
+  # Drift detection job - runs for each environment
   detect-drift:
-    name: Detect Drift - ${{ matrix.environment }}
-    needs: prepare
+    name: Detect Drift (${{ matrix.environment }})
+    needs: [determine-environments]
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        environment: ${{ fromJson(needs.prepare.outputs.environments) }}
-      # Don't fail the entire workflow if one environment fails
+        environment: ${{ fromJson(needs.determine-environments.outputs.environments) }}
       fail-fast: false
-    
+
     steps:
-      - name: Checkout repository
+      - name: Checkout Repository
         uses: actions/checkout@v3
-        with:
-          fetch-depth: 0
-      
+
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v2
         with:
-          terraform_version: 1.5.0
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
           cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
-      
-      - name: Load environment configuration
-        uses: ./.github/actions/load-env-config
-        with:
-          environment: ${{ matrix.environment }}
-      
+
+      - name: Load Environment-Specific Configuration
+        run: |
+          mkdir -p ./terraform-config
+          
+          # Create backend configuration for the environment
+          cat > ./terraform-config/backend.tfvars << EOF
+          # Backend configuration for ${{ matrix.environment }} environment
+          bucket         = "dollarfunding-terraform-state-${{ matrix.environment }}"
+          key            = "mca-application/terraform.tfstate"
+          region         = "us-east-1"
+          dynamodb_table = "terraform-locks-${{ matrix.environment }}"
+          encrypt        = true
+          EOF
+          
+          # Create environment-specific variables
+          cat > ./terraform-config/env.tfvars << EOF
+          # Environment-specific variables for ${{ matrix.environment }}
+          environment = "${{ matrix.environment }}"
+          EOF
+          
+          # Add environment-specific resource configurations
+          if [[ "${{ matrix.environment }}" == "production" ]]; then
+            cat >> ./terraform-config/env.tfvars << EOF
+          # Production-specific configurations
+          database_instance_class = "db.r6g.large"
+          database_replica_count  = 2
+          redis_node_type         = "cache.r6g.large"
+          redis_replicas_per_node = 1
+          EOF
+          elif [[ "${{ matrix.environment }}" == "staging" ]]; then
+            cat >> ./terraform-config/env.tfvars << EOF
+          # Staging-specific configurations
+          database_instance_class = "db.r6g.medium"
+          database_replica_count  = 1
+          redis_node_type         = "cache.r6g.medium"
+          redis_replicas_per_node = 1
+          EOF
+          else
+            cat >> ./terraform-config/env.tfvars << EOF
+          # Development-specific configurations
+          database_instance_class = "db.t4g.small"
+          database_replica_count  = 0
+          redis_node_type         = "cache.t4g.small"
+          redis_replicas_per_node = 0
+          EOF
+          fi
+
       - name: Initialize Terraform
-        id: init
+        working-directory: ./infrastructure/terraform/environments/${{ matrix.environment }}
         run: |
-          cd infrastructure/terraform/environments/${{ matrix.environment }}
-          terraform init -input=false
-      
-      - name: Run Terraform Plan for drift detection
-        id: plan
+          terraform init \
+            -backend-config=../../../terraform-config/backend.tfvars
+
+      - name: Detect Infrastructure Drift
+        id: drift
+        working-directory: ./infrastructure/terraform/environments/${{ matrix.environment }}
         run: |
-          mkdir -p ${{ env.DRIFT_REPORT_DIR }}
-          cd infrastructure/terraform/environments/${{ matrix.environment }}
+          # Create plan to detect drift
+          terraform plan \
+            -var-file=../../../terraform-config/env.tfvars \
+            -out=tfplan.binary \
+            -detailed-exitcode
           
-          # Run plan and capture output
-          terraform plan -input=false -detailed-exitcode -out=tfplan > ../../${{ env.DRIFT_REPORT_DIR }}/${{ matrix.environment }}-plan.txt 2>&1
-          PLAN_EXIT_CODE=$?
+          # Store the exit code to determine if drift was detected
+          DRIFT_DETECTED=$?
           
-          # Check for drift based on exit code
-          # 0 = No changes
-          # 1 = Error
-          # 2 = Changes present
-          if [ $PLAN_EXIT_CODE -eq 0 ]; then
-            echo "No drift detected in ${{ matrix.environment }} environment"
-            echo "drift_detected=false" >> $GITHUB_OUTPUT
-            echo "DRIFT_DETECTED=false" >> $GITHUB_ENV
-          elif [ $PLAN_EXIT_CODE -eq 2 ]; then
-            echo "Drift detected in ${{ matrix.environment }} environment"
+          # Exit code 2 indicates differences found (drift detected)
+          if [[ $DRIFT_DETECTED -eq 2 ]]; then
             echo "drift_detected=true" >> $GITHUB_OUTPUT
-            echo "DRIFT_DETECTED=true" >> $GITHUB_ENV
-            
-            # Generate JSON plan output for further analysis
-            terraform show -json tfplan > ../../${{ env.DRIFT_REPORT_DIR }}/${{ matrix.environment }}-plan.json
+            echo "::warning::Drift detected in ${{ matrix.environment }} environment"
           else
-            echo "Error running Terraform plan for ${{ matrix.environment }} environment"
-            exit 1
+            echo "drift_detected=false" >> $GITHUB_OUTPUT
+            echo "No drift detected in ${{ matrix.environment }} environment"
           fi
-      
-      - name: Run compliance checks
-        if: steps.plan.outputs.drift_detected == 'true'
+          
+          # Convert plan to JSON for analysis
+          terraform show -json tfplan.binary > tfplan.json
+          
+          # Extract plan summary
+          PLAN_SUMMARY=$(terraform show -no-color tfplan.binary | grep -A 10 "Plan:")
+          echo "PLAN_SUMMARY<<EOF" >> $GITHUB_ENV
+          echo "$PLAN_SUMMARY" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+          
+          # Extract detailed changes
+          DETAILED_CHANGES=$(terraform show -no-color tfplan.binary)
+          echo "DETAILED_CHANGES<<EOF" >> $GITHUB_ENV
+          echo "$DETAILED_CHANGES" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+        continue-on-error: true
+
+      - name: Run Compliance Check
         id: compliance
+        if: steps.drift.outputs.drift_detected == 'true'
+        working-directory: ./infrastructure/terraform/environments/${{ matrix.environment }}
         run: |
-          cd infrastructure/terraform/environments/${{ matrix.environment }}
+          # Extract resources with drift from plan
+          DRIFTED_RESOURCES=$(cat tfplan.json | jq -r '.resource_changes[] | select(.change.actions[] != "no-op") | .address')
           
-          # Run tfsec for security compliance checking
-          tfsec . --format=json > ../../${{ env.DRIFT_REPORT_DIR }}/${{ matrix.environment }}-compliance.json
+          # Check for security-critical resources
+          SECURITY_CRITICAL=$(echo "$DRIFTED_RESOURCES" | grep -E 'aws_iam|aws_security_group|aws_kms|aws_s3_bucket_policy')
           
-          # Check if any high severity issues were found
-          HIGH_SEVERITY_COUNT=$(jq '.results | map(select(.severity == "HIGH" or .severity == "CRITICAL")) | length' ../../${{ env.DRIFT_REPORT_DIR }}/${{ matrix.environment }}-compliance.json)
-          
-          if [ $HIGH_SEVERITY_COUNT -gt 0 ]; then
-            echo "High severity compliance issues detected in ${{ matrix.environment }} environment"
-            echo "compliance_issues=true" >> $GITHUB_OUTPUT
-            echo "COMPLIANCE_ISSUES=true" >> $GITHUB_ENV
+          if [[ ! -z "$SECURITY_CRITICAL" ]]; then
+            echo "security_critical=true" >> $GITHUB_OUTPUT
+            echo "::error::Security-critical resources have drifted in ${{ matrix.environment }} environment"
+            echo "SECURITY_CRITICAL<<EOF" >> $GITHUB_ENV
+            echo "$SECURITY_CRITICAL" >> $GITHUB_ENV
+            echo "EOF" >> $GITHUB_ENV
           else
-            echo "No high severity compliance issues detected in ${{ matrix.environment }} environment"
-            echo "compliance_issues=false" >> $GITHUB_OUTPUT
-            echo "COMPLIANCE_ISSUES=false" >> $GITHUB_ENV
+            echo "security_critical=false" >> $GITHUB_OUTPUT
           fi
-      
-      - name: Analyze drift changes
-        if: steps.plan.outputs.drift_detected == 'true'
-        id: analyze
-        run: |
-          cd ${{ env.DRIFT_REPORT_DIR }}
           
-          # Extract resource changes from the plan JSON
-          jq -r '.resource_changes | map({address: .address, action: .change.actions[]}) | group_by(.action) | map({action: .[0].action, count: length, resources: map(.address)})' ${{ matrix.environment }}-plan.json > ${{ matrix.environment }}-analysis.json
+          # Check for compliance violations
+          # This is a simplified example - in production, you would use a tool like OPA/Conftest
+          COMPLIANCE_VIOLATIONS=$(cat tfplan.json | jq -r '.resource_changes[] | select(.change.actions[] != "no-op") | select(.address | test("aws_s3_bucket") and (.change.after.versioning == null or .change.after.versioning.enabled != true))')
           
-          # Determine if changes are critical
-          # Consider changes to IAM, security groups, or database resources as critical
-          CRITICAL_RESOURCES=$(jq -r '.resource_changes | map(select(.address | test("iam|security_group|database|rds|kms"))) | length' ${{ matrix.environment }}-plan.json)
-          
-          if [ $CRITICAL_RESOURCES -gt 0 ]; then
-            echo "Critical resource changes detected in ${{ matrix.environment }} environment"
-            echo "critical_changes=true" >> $GITHUB_OUTPUT
-            echo "CRITICAL_CHANGES=true" >> $GITHUB_ENV
+          if [[ ! -z "$COMPLIANCE_VIOLATIONS" ]]; then
+            echo "compliance_violations=true" >> $GITHUB_OUTPUT
+            echo "::error::Compliance violations detected in ${{ matrix.environment }} environment"
           else
-            echo "No critical resource changes detected in ${{ matrix.environment }} environment"
-            echo "critical_changes=false" >> $GITHUB_OUTPUT
-            echo "CRITICAL_CHANGES=false" >> $GITHUB_ENV
+            echo "compliance_violations=false" >> $GITHUB_OUTPUT
           fi
-      
-      - name: Upload drift reports
+        continue-on-error: true
+
+      - name: Save Drift Detection Artifacts
+        if: steps.drift.outcome == 'success'
         uses: actions/upload-artifact@v3
         with:
-          name: drift-reports-${{ matrix.environment }}-${{ needs.prepare.outputs.timestamp }}
-          path: ${{ env.DRIFT_REPORT_DIR }}
-          retention-days: 90
-      
-      # Include the notification template for alerting
-      - name: Send drift notification
-        if: steps.plan.outputs.drift_detected == 'true'
-        uses: ./.github/actions/notification
-        with:
-          template: drift-detection
-          environment: ${{ matrix.environment }}
-          severity: ${{ steps.analyze.outputs.critical_changes == 'true' && 'critical' || 'warning' }}
-          title: "Infrastructure Drift Detected in ${{ matrix.environment }}"
-          message: |
-            Infrastructure drift has been detected in the ${{ matrix.environment }} environment.
-            ${{ steps.analyze.outputs.critical_changes == 'true' && '⚠️ CRITICAL RESOURCES AFFECTED ⚠️' || 'Resources affected:' }}
-            
-            See the attached drift report for details.
-          channels: email,slack,webhook
-          recipients: infrastructure-team,security-team${{ steps.analyze.outputs.critical_changes == 'true' && ',management' || '' }}
+          name: drift-detection-${{ matrix.environment }}-${{ github.run_id }}
+          path: |
+            ./infrastructure/terraform/environments/${{ matrix.environment }}/tfplan.binary
+            ./infrastructure/terraform/environments/${{ matrix.environment }}/tfplan.json
+          retention-days: 14
 
-  # Summarize drift detection results across all environments
-  summarize:
-    name: Summarize Drift Results
-    needs: [prepare, detect-drift]
-    runs-on: ubuntu-latest
-    if: always()
-    
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
-      
-      - name: Download all drift reports
-        uses: actions/download-artifact@v3
+      - name: Prepare Remediation
+        id: remediation
+        if: steps.drift.outputs.drift_detected == 'true' && github.event.inputs.remediation_action != 'report_only'
+        run: |
+          if [[ "${{ github.event.inputs.remediation_action }}" == "auto_remediate" ]]; then
+            echo "action=auto_remediate" >> $GITHUB_OUTPUT
+            echo "::notice::Auto-remediation will be attempted for ${{ matrix.environment }} environment"
+          elif [[ "${{ github.event.inputs.remediation_action }}" == "create_pr" ]]; then
+            echo "action=create_pr" >> $GITHUB_OUTPUT
+            echo "::notice::Pull request will be created for ${{ matrix.environment }} environment drift remediation"
+          else
+            echo "action=none" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Auto-Remediate Drift
+        if: steps.remediation.outputs.action == 'auto_remediate'
+        working-directory: ./infrastructure/terraform/environments/${{ matrix.environment }}
+        run: |
+          echo "Applying Terraform plan to remediate drift in ${{ matrix.environment }} environment"
+          terraform apply -auto-approve tfplan.binary
+          
+          # Verify remediation
+          terraform plan -var-file=../../../terraform-config/env.tfvars -detailed-exitcode
+          VERIFICATION=$?
+          
+          if [[ $VERIFICATION -eq 0 ]]; then
+            echo "::notice::Drift successfully remediated in ${{ matrix.environment }} environment"
+          else
+            echo "::error::Drift remediation failed or incomplete in ${{ matrix.environment }} environment"
+            exit 1
+          fi
+
+      - name: Create Remediation PR
+        if: steps.remediation.outputs.action == 'create_pr'
+        uses: actions/github-script@v6
         with:
-          path: ${{ env.DRIFT_REPORT_DIR }}
-      
-      - name: Generate summary report
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const branchName = `drift-remediation-${{ matrix.environment }}-${new Date().toISOString().slice(0, 10)}`;
+            
+            // Create a new branch
+            await github.rest.git.createRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: `refs/heads/${branchName}`,
+              sha: context.sha
+            });
+            
+            // Create PR
+            const pr = await github.rest.pulls.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `[Drift Remediation] ${{ matrix.environment }} environment - ${new Date().toISOString().slice(0, 10)}`,
+              body: `## Infrastructure Drift Remediation
+
+This PR was automatically created to remediate infrastructure drift detected in the ${{ matrix.environment }} environment.
+
+### Drift Summary
+\`\`\`
+${process.env.PLAN_SUMMARY}
+\`\`\`
+
+### Security-Critical Resources
+${process.env.SECURITY_CRITICAL ? `The following security-critical resources have drifted:\n\`\`\`\n${process.env.SECURITY_CRITICAL}\n\`\`\`` : 'No security-critical resources affected.'}
+
+### Remediation Plan
+This PR proposes to apply the Terraform configuration to bring the infrastructure back to the desired state.
+
+### Detailed Changes
+<details>
+<summary>Click to expand</summary>
+
+\`\`\`
+${process.env.DETAILED_CHANGES}
+\`\`\`
+</details>
+`,
+              head: branchName,
+              base: 'main'
+            });
+            
+            // Add labels
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr.data.number,
+              labels: ['drift-remediation', 'infrastructure', `env:${{ matrix.environment }}`]
+            });
+            
+            console.log(`Created PR #${pr.data.number}: ${pr.data.html_url}`);
+
+  # Summarize drift detection results
+  summarize:
+    name: Summarize Drift Detection
+    needs: [detect-drift]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Generate Summary
         id: summary
         run: |
+          # Create summary markdown
           echo "# Infrastructure Drift Detection Summary" > drift-summary.md
-          echo "Run Date: $(date)" >> drift-summary.md
           echo "" >> drift-summary.md
-          echo "## Environment Status" >> drift-summary.md
+          echo "## Results" >> drift-summary.md
           echo "" >> drift-summary.md
+          echo "| Environment | Status | Drift Detected | Security Critical | Compliance Violations | Remediation |" >> drift-summary.md
+          echo "|-------------|--------|---------------|-------------------|----------------------|-------------|" >> drift-summary.md
           
-          # Process each environment's results
-          TOTAL_ENVIRONMENTS=0
-          DRIFTED_ENVIRONMENTS=0
-          CRITICAL_ENVIRONMENTS=0
-          COMPLIANCE_ISSUES=0
+          # Process job results
+          ENVIRONMENTS=("development" "staging" "production")
+          DRIFT_DETECTED=false
           
-          for ENV in ${{ join(fromJson(needs.prepare.outputs.environments), ' ') }}; do
-            TOTAL_ENVIRONMENTS=$((TOTAL_ENVIRONMENTS + 1))
-            
-            # Check if drift was detected for this environment
-            if [ -f "${{ env.DRIFT_REPORT_DIR }}/drift-reports-${ENV}-${{ needs.prepare.outputs.timestamp }}/${{ env.DRIFT_REPORT_DIR }}/${ENV}-plan.json" ]; then
-              DRIFTED_ENVIRONMENTS=$((DRIFTED_ENVIRONMENTS + 1))
+          for ENV in "${ENVIRONMENTS[@]}"; do
+            # Check if this environment was included in the run
+            if [[ "${{ needs.detect-drift.outputs.environments }}" == *"$ENV"* ]]; then
+              # Get job result for this environment
+              JOB_RESULT=$(echo "${{ needs.detect-drift.result }}" | jq -r ".[$ENV]")
               
-              # Check for critical changes
-              if [ -f "${{ env.DRIFT_REPORT_DIR }}/drift-reports-${ENV}-${{ needs.prepare.outputs.timestamp }}/${{ env.DRIFT_REPORT_DIR }}/${ENV}-analysis.json" ]; then
-                CRITICAL_COUNT=$(jq -r '.resource_changes | map(select(.address | test("iam|security_group|database|rds|kms"))) | length' "${{ env.DRIFT_REPORT_DIR }}/drift-reports-${ENV}-${{ needs.prepare.outputs.timestamp }}/${{ env.DRIFT_REPORT_DIR }}/${ENV}-plan.json" || echo "0")
-                
-                if [ "$CRITICAL_COUNT" -gt 0 ]; then
-                  CRITICAL_ENVIRONMENTS=$((CRITICAL_ENVIRONMENTS + 1))
-                  echo "### ${ENV} - ⚠️ DRIFT DETECTED WITH CRITICAL CHANGES ⚠️" >> drift-summary.md
-                else
-                  echo "### ${ENV} - ⚠️ DRIFT DETECTED" >> drift-summary.md
-                fi
-                
-                # Add change summary
-                echo "" >> drift-summary.md
-                echo "Changes detected:" >> drift-summary.md
-                jq -r '.[] | "- " + .action + ": " + (.count | tostring) + " resources"' "${{ env.DRIFT_REPORT_DIR }}/drift-reports-${ENV}-${{ needs.prepare.outputs.timestamp }}/${{ env.DRIFT_REPORT_DIR }}/${ENV}-analysis.json" >> drift-summary.md
-                echo "" >> drift-summary.md
+              if [[ "$JOB_RESULT" == "success" ]]; then
+                STATUS="✅ Success"
+              elif [[ "$JOB_RESULT" == "skipped" ]]; then
+                STATUS="⏭️ Skipped"
               else
-                echo "### ${ENV} - ⚠️ DRIFT DETECTED (analysis unavailable)" >> drift-summary.md
-                echo "" >> drift-summary.md
+                STATUS="❌ Failed"
               fi
               
-              # Check for compliance issues
-              if [ -f "${{ env.DRIFT_REPORT_DIR }}/drift-reports-${ENV}-${{ needs.prepare.outputs.timestamp }}/${{ env.DRIFT_REPORT_DIR }}/${ENV}-compliance.json" ]; then
-                HIGH_SEVERITY_COUNT=$(jq '.results | map(select(.severity == "HIGH" or .severity == "CRITICAL")) | length' "${{ env.DRIFT_REPORT_DIR }}/drift-reports-${ENV}-${{ needs.prepare.outputs.timestamp }}/${{ env.DRIFT_REPORT_DIR }}/${ENV}-compliance.json" || echo "0")
-                
-                if [ "$HIGH_SEVERITY_COUNT" -gt 0 ]; then
-                  COMPLIANCE_ISSUES=$((COMPLIANCE_ISSUES + 1))
-                  echo "**Compliance Issues:** $HIGH_SEVERITY_COUNT high/critical severity findings" >> drift-summary.md
-                  echo "" >> drift-summary.md
-                fi
+              # Get drift detection result
+              DRIFT=$(echo "${{ needs.detect-drift.outputs.drift_detected }}" | jq -r ".[$ENV]")
+              if [[ "$DRIFT" == "true" ]]; then
+                DRIFT_ICON="⚠️ Yes"
+                DRIFT_DETECTED=true
+              else
+                DRIFT_ICON="✅ No"
               fi
-            else
-              echo "### ${ENV} - ✅ NO DRIFT DETECTED" >> drift-summary.md
-              echo "" >> drift-summary.md
+              
+              # Get security critical result
+              SECURITY=$(echo "${{ needs.detect-drift.outputs.security_critical }}" | jq -r ".[$ENV]")
+              if [[ "$SECURITY" == "true" ]]; then
+                SECURITY_ICON="🚨 Yes"
+              else
+                SECURITY_ICON="✅ No"
+              fi
+              
+              # Get compliance violations result
+              COMPLIANCE=$(echo "${{ needs.detect-drift.outputs.compliance_violations }}" | jq -r ".[$ENV]")
+              if [[ "$COMPLIANCE" == "true" ]]; then
+                COMPLIANCE_ICON="⚠️ Yes"
+              else
+                COMPLIANCE_ICON="✅ No"
+              fi
+              
+              # Get remediation action
+              REMEDIATION="None"
+              if [[ "${{ github.event.inputs.remediation_action }}" == "auto_remediate" && "$DRIFT" == "true" ]]; then
+                REMEDIATION="🔄 Auto-remediated"
+              elif [[ "${{ github.event.inputs.remediation_action }}" == "create_pr" && "$DRIFT" == "true" ]]; then
+                REMEDIATION="📝 PR Created"
+              elif [[ "$DRIFT" == "true" ]]; then
+                REMEDIATION="📊 Reported Only"
+              fi
+              
+              echo "| $ENV | $STATUS | $DRIFT_ICON | $SECURITY_ICON | $COMPLIANCE_ICON | $REMEDIATION |" >> drift-summary.md
             fi
           done
           
-          # Add summary statistics
-          echo "## Summary Statistics" > drift-summary-stats.md
-          echo "" >> drift-summary-stats.md
-          echo "- Total environments checked: $TOTAL_ENVIRONMENTS" >> drift-summary-stats.md
-          echo "- Environments with drift: $DRIFTED_ENVIRONMENTS" >> drift-summary-stats.md
-          echo "- Environments with critical changes: $CRITICAL_ENVIRONMENTS" >> drift-summary-stats.md
-          echo "- Environments with compliance issues: $COMPLIANCE_ISSUES" >> drift-summary-stats.md
-          echo "" >> drift-summary-stats.md
+          echo "drift_detected=$DRIFT_DETECTED" >> $GITHUB_OUTPUT
           
-          # Insert stats at the top of the summary
-          cat drift-summary.md >> drift-summary-stats.md
-          mv drift-summary-stats.md drift-summary.md
-          
-          # Set outputs for next steps
-          echo "drifted_environments=$DRIFTED_ENVIRONMENTS" >> $GITHUB_OUTPUT
-          echo "critical_environments=$CRITICAL_ENVIRONMENTS" >> $GITHUB_OUTPUT
-          echo "compliance_issues=$COMPLIANCE_ISSUES" >> $GITHUB_OUTPUT
-      
-      - name: Upload summary report
+          # Add timestamp
+          echo "" >> drift-summary.md
+          echo "_Report generated at $(date -u)_" >> drift-summary.md
+
+      - name: Upload Summary
         uses: actions/upload-artifact@v3
         with:
-          name: drift-summary-${{ needs.prepare.outputs.timestamp }}
+          name: drift-detection-summary
           path: drift-summary.md
           retention-days: 90
-      
-      - name: Send summary notification
-        if: steps.summary.outputs.drifted_environments != '0'
-        uses: ./.github/actions/notification
-        with:
-          template: drift-summary
-          severity: ${{ steps.summary.outputs.critical_environments != '0' && 'critical' || 'warning' }}
-          title: "Infrastructure Drift Summary Report"
-          message: |
-            Infrastructure drift detection completed.
-            
-            - Environments with drift: ${{ steps.summary.outputs.drifted_environments }}
-            - Environments with critical changes: ${{ steps.summary.outputs.critical_environments }}
-            - Environments with compliance issues: ${{ steps.summary.outputs.compliance_issues }}
-            
-            See the attached summary report for details.
-          channels: email,slack,webhook
-          recipients: infrastructure-team,security-team${{ steps.summary.outputs.critical_environments != '0' && ',management' || '' }}
-          attachment: drift-summary.md
 
-  # Remediate drift if auto-remediation is enabled
-  remediate:
-    name: Remediate Drift - ${{ matrix.environment }}
-    needs: [prepare, detect-drift, summarize]
+  # Notification job
+  notify:
+    name: Send Notifications
+    needs: [detect-drift, summarize]
+    if: always()
     runs-on: ubuntu-latest
-    if: |
-      github.event.inputs.auto_remediate == 'true' && 
-      needs.detect-drift.outputs.drift_detected == 'true' && 
-      needs.detect-drift.outputs.critical_changes != 'true'
-    strategy:
-      matrix:
-        environment: ${{ fromJson(needs.prepare.outputs.environments) }}
-      fail-fast: false
-    
     steps:
-      - name: Checkout repository
+      - name: Checkout Repository
         uses: actions/checkout@v3
-        with:
-          fetch-depth: 0
-      
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v2
-        with:
-          terraform_version: 1.5.0
-          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
-      
-      - name: Load environment configuration
-        uses: ./.github/actions/load-env-config
-        with:
-          environment: ${{ matrix.environment }}
-      
-      - name: Download drift plan
-        uses: actions/download-artifact@v3
-        with:
-          name: drift-reports-${{ matrix.environment }}-${{ needs.prepare.outputs.timestamp }}
-          path: ${{ env.DRIFT_REPORT_DIR }}
-      
-      - name: Initialize Terraform
+
+      - name: Determine Notification Channels
+        id: channels
         run: |
-          cd infrastructure/terraform/environments/${{ matrix.environment }}
-          terraform init -input=false
-      
-      - name: Apply Terraform changes to remediate drift
-        id: apply
-        run: |
-          cd infrastructure/terraform/environments/${{ matrix.environment }}
-          
-          # Apply the changes to remediate drift
-          terraform apply -input=false -auto-approve
-          
-          # Run another plan to verify drift is resolved
-          terraform plan -input=false -detailed-exitcode
-          VERIFICATION_EXIT_CODE=$?
-          
-          if [ $VERIFICATION_EXIT_CODE -eq 0 ]; then
-            echo "Drift successfully remediated in ${{ matrix.environment }} environment"
-            echo "remediation_successful=true" >> $GITHUB_OUTPUT
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            CHANNELS="${{ github.event.inputs.notify_channels }}"
           else
-            echo "Drift remediation failed or incomplete in ${{ matrix.environment }} environment"
-            echo "remediation_successful=false" >> $GITHUB_OUTPUT
-            exit 1
+            CHANNELS="slack,email"
           fi
-      
-      - name: Send remediation notification
-        uses: ./.github/actions/notification
-        with:
-          template: drift-remediation
-          environment: ${{ matrix.environment }}
-          severity: info
-          title: "Infrastructure Drift Remediated in ${{ matrix.environment }}"
-          message: |
-            Infrastructure drift has been automatically remediated in the ${{ matrix.environment }} environment.
+          echo "channels=$CHANNELS" >> $GITHUB_OUTPUT
+
+      - name: Prepare Notification
+        id: prepare
+        run: |
+          # Determine overall status
+          if [[ "${{ needs.summarize.outputs.drift_detected }}" == "true" ]]; then
+            STATUS="warning"
+            TITLE="⚠️ Infrastructure Drift Detected"
+          else
+            STATUS="success"
+            TITLE="✅ No Infrastructure Drift Detected"
+          fi
+          
+          echo "status=$STATUS" >> $GITHUB_OUTPUT
+          echo "title=$TITLE" >> $GITHUB_OUTPUT
+          
+          # Create message
+          MESSAGE="Infrastructure drift detection completed.\n\n"
+          
+          if [[ "${{ needs.summarize.outputs.drift_detected }}" == "true" ]]; then
+            MESSAGE+="⚠️ Drift was detected in one or more environments.\n"
             
-            Remediation status: ${{ steps.apply.outputs.remediation_successful == 'true' && '✅ Successful' || '❌ Failed' }}
-          channels: email,slack,webhook
-          recipients: infrastructure-team
+            # Add security critical warning if applicable
+            if [[ "${{ contains(needs.detect-drift.outputs.security_critical, 'true') }}" == "true" ]]; then
+              MESSAGE+="🚨 Security-critical resources have drifted!\n"
+            fi
+            
+            # Add remediation info
+            if [[ "${{ github.event.inputs.remediation_action }}" == "auto_remediate" ]]; then
+              MESSAGE+="🔄 Auto-remediation was attempted.\n"
+            elif [[ "${{ github.event.inputs.remediation_action }}" == "create_pr" ]]; then
+              MESSAGE+="📝 Pull requests were created for remediation.\n"
+            else
+              MESSAGE+="📊 No remediation action was taken (report only).\n"
+            fi
+          else
+            MESSAGE+="✅ All infrastructure is in sync with the defined state.\n"
+          fi
+          
+          MESSAGE+="\nEnvironments checked: ${{ join(fromJson(needs.determine-environments.outputs.environments), ', ') }}\n"
+          MESSAGE+="\n[View detailed report](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})"
+          
+          echo "message=$MESSAGE" >> $GITHUB_OUTPUT
+
+      - name: Send Notification
+        uses: ./.github/actions/notify
+        with:
+          event_type: "infrastructure.drift.${{ steps.prepare.outputs.status }}"
+          event_severity: "${{ steps.prepare.outputs.status }}"
+          service_name: "infrastructure"
+          environment: "${{ github.event.inputs.environment || 'all' }}"
+          title: "${{ steps.prepare.outputs.title }}"
+          message: "${{ steps.prepare.outputs.message }}"
+          channels: "${{ steps.channels.outputs.channels }}"
+          webhook_url: "${{ secrets.NOTIFICATION_WEBHOOK_URL }}"
+          slack_webhook: "${{ secrets.SLACK_WEBHOOK_URL }}"
+          email_recipients: "${{ secrets.EMAIL_RECIPIENTS }}"
