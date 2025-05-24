@@ -26,14 +26,14 @@ module "database" {
 
   # Environment-specific settings
   environment            = "staging"
-  instance_class         = "db.r6g.large"   # Smaller instance for staging
-  multi_az               = true             # High availability across AZs
-  storage_type           = "gp3"            # General purpose SSD
-  allocated_storage      = 50               # GB of storage (smaller for staging)
-  iops                   = 1000             # Standard IOPS for staging
-  replica_count          = 1                # One read replica for staging
-  backup_retention_days  = 14               # 14-day backup retention for staging
-  deletion_protection    = false            # Allow deletion in staging
+  instance_class         = "db.r6g.xlarge"   # Smaller instance for staging
+  multi_az               = true              # High availability across AZs
+  storage_type           = "gp3"             # General purpose SSD
+  allocated_storage      = 100               # GB of storage (smaller for staging)
+  iops                   = 2000              # Lower IOPS for staging workloads
+  replica_count          = 1                 # One read replica for staging
+  backup_retention_days  = 14                # 14-day backup retention for staging
+  deletion_protection    = true              # Prevent accidental deletion in staging
   
   # Connection pooling settings
   connection_pooling_enabled = true
@@ -43,11 +43,11 @@ module "database" {
   # Security settings
   encryption_at_rest_enabled = true
   encryption_algorithm       = "AES-256"
-  key_rotation_days          = 90
+  key_rotation_days          = 60            # Less frequent key rotation in staging
   
   # Performance settings
   performance_insights_enabled = true
-  monitoring_interval_seconds  = 15
+  monitoring_interval_seconds  = 15          # Less frequent monitoring in staging
   
   # High availability settings
   failover_target_auto       = true
@@ -63,9 +63,9 @@ module "messaging" {
 
   # Environment-specific settings
   environment        = "staging"
-  instance_type      = "mq.m5.large"  # Same instance type as production for testing
-  cluster_node_count = 3              # 3-node cluster for high availability
-  multi_az           = true           # Deploy across AZs
+  instance_type      = "mq.m5.xlarge"     # Smaller instance for staging
+  cluster_node_count = 3                  # 3-node cluster for high availability
+  multi_az           = true               # Deploy across AZs
   
   # Queue and exchange configuration
   exchanges = [
@@ -136,33 +136,33 @@ module "cache" {
 
   # Environment-specific settings
   environment      = "staging"
-  node_type        = "cache.r6g.large"  # Same instance type for testing
-  shard_count      = 2                  # 2 shards for staging (vs 3 for production)
-  replicas_per_shard = 1                # 1 replica per shard for HA
-  multi_az         = true               # Deploy across AZs
+  node_type        = "cache.r6g.xlarge"   # Smaller instance for staging
+  shard_count      = 2                    # 2 shards for staging
+  replicas_per_shard = 1                  # 1 replica per shard for staging
+  multi_az         = true                 # Deploy across AZs
   
   # Cache instances configuration
   cache_instances = [
     {
       name           = "application-data"
-      ttl_seconds    = 900              # 15 minutes TTL for application data
-      eviction_policy = "allkeys-lru"   # Least recently used eviction
+      ttl_seconds    = 900               # 15 minutes TTL for application data
+      eviction_policy = "allkeys-lru"    # Least recently used eviction
     },
     {
       name           = "user-sessions"
-      ttl_seconds    = 86400            # 24 hours TTL for user sessions
-      eviction_policy = "noeviction"    # No eviction for sessions
+      ttl_seconds    = 86400             # 24 hours TTL for user sessions
+      eviction_policy = "noeviction"     # No eviction for sessions
     }
   ]
   
   # Persistence settings
   rdb_snapshot_enabled = true
-  rdb_snapshot_frequency_minutes = 60   # Snapshot every 60 minutes
-  aof_enabled = true                    # Append-only file for durability
+  rdb_snapshot_frequency_minutes = 60    # Snapshot every 60 minutes (less frequent than production)
+  aof_enabled = true                     # Append-only file for durability
   
   # High availability settings
   auto_failover_enabled = true
-  failover_timeout_seconds = 15         # 15-second failover time
+  failover_timeout_seconds = 15          # 15-second failover time (slower than production)
   
   # Security settings
   encryption_in_transit = true
@@ -185,7 +185,7 @@ module "storage" {
       name          = "mca-documents-staging"
       versioning    = true
       encryption    = "AES256"
-      force_destroy = true  # Allow force destroy in staging
+      force_destroy = false  # Prevent accidental destruction in staging
     }
   ]
   
@@ -204,18 +204,21 @@ module "storage" {
         {
           days          = 90
           storage_class = "GLACIER"
+        },
+        {
+          days          = 365
+          storage_class = "DEEP_ARCHIVE"
         }
       ]
       
       expiration = {
-        days = 365  # 1 year retention for staging (vs 7 years for production)
+        days = 1825  # 5-year retention for staging (shorter than production)
       }
     }
   ]
   
-  # Replication configuration for disaster recovery
-  replication_enabled = false  # Disable replication for staging to save costs
-  replica_region      = var.replica_region
+  # Replication configuration - disabled for staging
+  replication_enabled = false
   
   # Security settings
   block_public_access = true
@@ -225,6 +228,7 @@ module "storage" {
   # Monitoring settings
   metrics_enabled     = true
   request_metrics_enabled = true
+  object_level_logging_enabled = false    # Disable object-level logging for staging
   
   tags = local.common_tags
 }
