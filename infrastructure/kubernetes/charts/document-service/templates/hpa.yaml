@@ -2,84 +2,159 @@
 HorizontalPodAutoscaler template for Document Service.
 
 This template extends the common HPA template with Document Service specific configurations.
-It configures automatic scaling based on CPU and memory utilization metrics with appropriate
-scaling behavior to handle document processing load spikes efficiently.
+It configures CPU and memory-based scaling metrics appropriate for document processing workloads,
+sets minimum and maximum replicas based on environment, and implements proper scaling behavior
+to handle document processing spikes while maintaining stability.
 
-The Document Service requires specific scaling configurations to handle varying document
-processing workloads while maintaining high availability and performance.
-*/}}
+Key features:
+- CPU and memory-based scaling metrics optimized for document processing
+- Environment-specific replica configurations (dev/staging/prod)
+- Custom scaling behavior for document processing workloads
+- Support for custom metrics related to document processing queue depth
+- Proper stabilization windows to prevent scaling flapping
 
-{{- $values := .Values -}}
-{{- $_ := set $values.autoscaling "scaleTargetRef" (dict "kind" "Deployment" "name" (include "common.fullname" .)) -}}
+This HPA ensures that the Document Service can automatically scale based on processing load
+while maintaining high availability and performance.
+*/ -}}
 
-{{- if .Values.global -}}
-  {{- if .Values.global.environment -}}
-    {{- if eq .Values.global.environment "production" -}}
-      {{- $_ := set $values.autoscaling "minReplicas" (default 3 .Values.autoscaling.minReplicas) -}}
-      {{- $_ := set $values.autoscaling "maxReplicas" (default 15 .Values.autoscaling.maxReplicas) -}}
-    {{- else if eq .Values.global.environment "staging" -}}
-      {{- $_ := set $values.autoscaling "minReplicas" (default 2 .Values.autoscaling.minReplicas) -}}
-      {{- $_ := set $values.autoscaling "maxReplicas" (default 10 .Values.autoscaling.maxReplicas) -}}
-    {{- else -}}
-      {{- $_ := set $values.autoscaling "minReplicas" (default 1 .Values.autoscaling.minReplicas) -}}
-      {{- $_ := set $values.autoscaling "maxReplicas" (default 5 .Values.autoscaling.maxReplicas) -}}
-    {{- end -}}
-  {{- end -}}
-{{- end -}}
-
-{{- $_ := set $values.autoscaling "targetCPUUtilizationPercentage" (default 80 .Values.autoscaling.targetCPUUtilizationPercentage) -}}
-{{- $_ := set $values.autoscaling "targetMemoryUtilizationPercentage" (default 80 .Values.autoscaling.targetMemoryUtilizationPercentage) -}}
-
-{{- if not .Values.autoscaling.behavior -}}
-  {{- $_ := set $values.autoscaling "behavior" (dict 
-    "scaleUp" (dict 
-      "stabilizationWindowSeconds" 0 
-      "policies" (list 
-        (dict "type" "Percent" "value" 100 "periodSeconds" 60) 
-        (dict "type" "Pods" "value" 4 "periodSeconds" 60)
-      )
-      "selectPolicy" "Max"
-    )
-    "scaleDown" (dict 
-      "stabilizationWindowSeconds" 300 
-      "policies" (list 
-        (dict "type" "Percent" "value" 10 "periodSeconds" 60) 
-        (dict "type" "Pods" "value" 2 "periodSeconds" 60)
-      )
-      "selectPolicy" "Min"
-    )
-  ) -}}
-{{- end -}}
-
-{{- if not .Values.autoscaling.metrics -}}
-  {{- $_ := set $values.autoscaling "metrics" (list) -}}
-  
-  {{- /* Add custom metrics for document processing if needed */ -}}
-  {{- if .Values.autoscaling.enableQueueSizeMetric -}}
-    {{- $queueMetric := dict 
-      "type" "External" 
-      "external" (dict 
-        "metric" (dict 
-          "name" "rabbitmq_queue_messages" 
-          "selector" (dict "matchLabels" (dict "queue" "document-processing"))
-        )
-        "target" (dict 
-          "type" "AverageValue" 
-          "averageValue" (default "50" .Values.autoscaling.queueSizeThreshold)
-        )
-      ) 
-    -}}
-    {{- $_ := set $values.autoscaling "metrics" (append $values.autoscaling.metrics $queueMetric) -}}
-  {{- end -}}
-{{- end -}}
-
-{{- /* Add document service specific annotations */ -}}
-{{- if not .Values.autoscaling.annotations -}}
-  {{- $_ := set $values.autoscaling "annotations" (dict 
-    "autoscaling.kubernetes.io/behavior" "optimize-document-processing"
-    "metric-config.pods.monitor.kubernetes.io/document-service" "true"
-  ) -}}
-{{- end -}}
-
-{{- /* Include the common HPA template with our customized values */ -}}
-{{- include "common.hpa" . -}}
+{{- if and .Values.autoscaling.enabled (not (empty .Values.autoscaling)) }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "common.names.fullname" . }}
+  labels:
+    {{- include "common.labels.standard" . | nindent 4 }}
+    {{- if .Values.autoscaling.labels }}
+    {{- include "common.tplvalues.render" (dict "value" .Values.autoscaling.labels "context" $) | nindent 4 }}
+    {{- end }}
+    app.kubernetes.io/component: document-service
+    app.kubernetes.io/part-of: mca-application-processing
+  annotations:
+    {{- if .Values.autoscaling.annotations }}
+    {{- include "common.tplvalues.render" (dict "value" .Values.autoscaling.annotations "context" $) | nindent 4 }}
+    {{- end }}
+    {{- if .Values.commonAnnotations }}
+    {{- include "common.tplvalues.render" (dict "value" .Values.commonAnnotations "context" $) | nindent 4 }}
+    {{- end }}
+    kubernetes.io/description: "HPA for Document Service - handles document classification with scikit-learn"
+    {{- if eq .Release.Namespace "production" }}
+    monitoring.dollarfunding.com/priority: "high"
+    {{- end }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: {{ .Values.autoscaling.scaleTargetRef.kind | default "Deployment" }}
+    name: {{ .Values.autoscaling.scaleTargetRef.name | default (include "common.names.fullname" .) }}
+  # Environment-specific replica configurations
+  {{- if eq .Release.Namespace "production" }}
+  minReplicas: {{ .Values.autoscaling.production.minReplicas | default 3 }}
+  maxReplicas: {{ .Values.autoscaling.production.maxReplicas | default 10 }}
+  {{- else if eq .Release.Namespace "staging" }}
+  minReplicas: {{ .Values.autoscaling.staging.minReplicas | default 2 }}
+  maxReplicas: {{ .Values.autoscaling.staging.maxReplicas | default 5 }}
+  {{- else }}
+  minReplicas: {{ .Values.autoscaling.minReplicas | default 1 }}
+  maxReplicas: {{ .Values.autoscaling.maxReplicas | default 3 }}
+  {{- end }}
+  metrics:
+    # CPU utilization metric - primary scaling metric for document processing
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          # Document classification is CPU-intensive, so we scale at a lower threshold
+          # to ensure we have capacity for processing spikes
+          {{- if eq .Release.Namespace "production" }}
+          averageUtilization: {{ .Values.autoscaling.production.targetCPUUtilizationPercentage | default 70 }}
+          {{- else if eq .Release.Namespace "staging" }}
+          averageUtilization: {{ .Values.autoscaling.staging.targetCPUUtilizationPercentage | default 75 }}
+          {{- else }}
+          averageUtilization: {{ .Values.autoscaling.targetCPUUtilizationPercentage | default 80 }}
+          {{- end }}
+    # Memory utilization metric - document classification requires significant memory
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          {{- if eq .Release.Namespace "production" }}
+          averageUtilization: {{ .Values.autoscaling.production.targetMemoryUtilizationPercentage | default 75 }}
+          {{- else if eq .Release.Namespace "staging" }}
+          averageUtilization: {{ .Values.autoscaling.staging.targetMemoryUtilizationPercentage | default 80 }}
+          {{- else }}
+          averageUtilization: {{ .Values.autoscaling.targetMemoryUtilizationPercentage | default 85 }}
+          {{- end }}
+    {{- if .Values.autoscaling.customMetrics }}
+    # Custom metrics - document processing queue metrics
+    {{- include "common.tplvalues.render" (dict "value" .Values.autoscaling.customMetrics "context" $) | nindent 4 }}
+    {{- else if eq .Release.Namespace "production" }}
+    # Default RabbitMQ queue depth metric for production
+    - type: External
+      external:
+        metric:
+          name: rabbitmq_queue_messages
+          selector:
+            matchLabels:
+              queue: document-processing
+              vhost: mca
+        target:
+          type: AverageValue
+          # Scale up when there are more than 50 documents waiting to be processed
+          averageValue: 50
+    {{- end }}
+  # Scaling behavior optimized for document processing workloads
+  behavior:
+    scaleDown:
+      # Longer stabilization window for scale down to prevent flapping
+      # during intermittent document processing loads
+      {{- if eq .Release.Namespace "production" }}
+      stabilizationWindowSeconds: {{ .Values.autoscaling.production.scaleDownStabilizationWindowSeconds | default 300 }}
+      {{- else if eq .Release.Namespace "staging" }}
+      stabilizationWindowSeconds: {{ .Values.autoscaling.staging.scaleDownStabilizationWindowSeconds | default 180 }}
+      {{- else }}
+      stabilizationWindowSeconds: {{ .Values.autoscaling.scaleDownStabilizationWindowSeconds | default 120 }}
+      {{- end }}
+      policies:
+      # Scale down conservatively to maintain processing capacity
+      - type: Percent
+        {{- if eq .Release.Namespace "production" }}
+        value: {{ .Values.autoscaling.production.scaleDownPercentage | default 10 }}
+        {{- else }}
+        value: {{ .Values.autoscaling.scaleDownPercentage | default 20 }}
+        {{- end }}
+        periodSeconds: 60
+      # Limit the number of pods that can be scaled down at once
+      - type: Pods
+        {{- if eq .Release.Namespace "production" }}
+        value: {{ .Values.autoscaling.production.scaleDownPods | default 1 }}
+        {{- else }}
+        value: {{ .Values.autoscaling.scaleDownPods | default 2 }}
+        {{- end }}
+        periodSeconds: 60
+      # Use the policy that scales down the least
+      selectPolicy: Min
+    scaleUp:
+      # Short stabilization window for scaling up to ensure quick response to document processing load
+      # This helps maintain the 5-minute processing SLA mentioned in section 0.2.6
+      stabilizationWindowSeconds: {{ .Values.autoscaling.scaleUpStabilizationWindowSeconds | default 0 }}
+      policies:
+      # Scale up aggressively to handle document processing spikes
+      - type: Percent
+        {{- if eq .Release.Namespace "production" }}
+        value: {{ .Values.autoscaling.production.scaleUpPercentage | default 100 }}
+        {{- else }}
+        value: {{ .Values.autoscaling.scaleUpPercentage | default 200 }}
+        {{- end }}
+        periodSeconds: 60
+      # But limit the absolute number of pods that can be added at once
+      - type: Pods
+        {{- if eq .Release.Namespace "production" }}
+        value: {{ .Values.autoscaling.production.scaleUpPods | default 3 }}
+        {{- else }}
+        value: {{ .Values.autoscaling.scaleUpPods | default 2 }}
+        {{- end }}
+        periodSeconds: 60
+      # Use the policy that scales up the most
+      selectPolicy: Max
+{{- end }}
