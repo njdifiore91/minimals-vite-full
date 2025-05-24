@@ -1,18 +1,13 @@
 apiVersion: v2
 name: document-service
-description: Document classification service for the MCA Application Processing System that classifies incoming documents with AI using Python/scikit-learn with 99% accuracy
-type: application
+description: Document Service for the MCA Application Processing System that classifies incoming documents with AI using scikit-learn
 version: 0.1.0
-appVersion: 0.1.0
-
-# Maintainer information
+appVersion: "1.0.0"
+type: application
 maintainers:
-  - name: Dollar Funding DevOps Team
+  - name: Dollar Funding MCA Team
     email: devops@dollarfunding.com
-    url: https://dollarfunding.com
-
-# Dependencies
 dependencies:
   - name: common
-    version: 0.1.0
-    repository: file://../common
+    version: "^1.0.0"
+    repository: "file://../common"
