@@ -1,533 +1,524 @@
 #!/bin/bash
+# Make script executable with: chmod +x deploy-service.sh
 
 # deploy-service.sh
 # 
-# This script deploys MCA Application Processing System microservices to Kubernetes
-# using Helm with environment-specific configurations and validation.
+# This script deploys microservices to Kubernetes using Helm with environment-specific
+# configurations and validation. It standardizes the deployment process across all services
+# and environments, ensuring consistent application of configuration values and deployment strategies.
 #
-# It selects the appropriate Helm chart, applies environment-specific values,
-# and handles the distinction between upgrades and installations.
+# Usage: ./deploy-service.sh --service <service-name> --environment <environment> [options]
 #
-# Usage: ./deploy-service.sh --service <service-name> --env <environment> [options]
+# Required arguments:
+#   --service        Name of the service to deploy (e.g., email-service, document-service)
+#   --environment    Target environment (development, staging, production)
+#
+# Optional arguments:
+#   --namespace      Kubernetes namespace (defaults to <environment>)
+#   --version        Service version to deploy (defaults to latest)
+#   --timeout        Deployment timeout in seconds (defaults to 300)
+#   --wait           Wait for deployment to complete (true/false, defaults to true)
+#   --debug          Enable debug output (true/false, defaults to false)
+#   --dry-run        Perform a dry run without actual deployment (true/false, defaults to false)
+#   --force          Force deployment even if validation fails (true/false, defaults to false)
+#   --values         Additional values file to include (can be specified multiple times)
+#   --set            Additional values to set (can be specified multiple times)
 
-set -eo pipefail
+# Exit on error
+set -e
 
 # Default values
-DRY_RUN="false"
-WAIT="true"
-TIMEOUT="300s"
-DEBUG="false"
-FORCE="false"
 NAMESPACE=""
-VALUES_FILES=()
-SET_VALUES=()
-CHART_VERSION=""
+VERSION="latest"
+TIMEOUT=300
+WAIT=true
+DEBUG=false
+DRY_RUN=false
+FORCE=false
+ADDITIONAL_VALUES=()
+ADDITIONAL_SETS=()
 
-# Script directory for relative paths
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+  key="$1"
+  case $key in
+    --service)
+      SERVICE="$2"
+      shift
+      shift
+      ;;
+    --environment)
+      ENVIRONMENT="$2"
+      shift
+      shift
+      ;;
+    --namespace)
+      NAMESPACE="$2"
+      shift
+      shift
+      ;;
+    --version)
+      VERSION="$2"
+      shift
+      shift
+      ;;
+    --timeout)
+      TIMEOUT="$2"
+      shift
+      shift
+      ;;
+    --wait)
+      WAIT="$2"
+      shift
+      shift
+      ;;
+    --debug)
+      DEBUG="$2"
+      shift
+      shift
+      ;;
+    --dry-run)
+      DRY_RUN="$2"
+      shift
+      shift
+      ;;
+    --force)
+      FORCE="$2"
+      shift
+      shift
+      ;;
+    --values)
+      ADDITIONAL_VALUES+=("$2")
+      shift
+      shift
+      ;;
+    --set)
+      ADDITIONAL_SETS+=("$2")
+      shift
+      shift
+      ;;
+    *)
+      echo "Unknown option: $1"
+      exit 1
+      ;;
+  esac
+done
+
+# Validate required arguments
+if [ -z "$SERVICE" ]; then
+  echo "Error: --service is required"
+  exit 1
+fi
+
+if [ -z "$ENVIRONMENT" ]; then
+  echo "Error: --environment is required"
+  exit 1
+fi
+
+# Validate environment
+if [[ ! "$ENVIRONMENT" =~ ^(development|staging|production)$ ]]; then
+  echo "Error: environment must be one of: development, staging, production"
+  exit 1
+fi
+
+# Set namespace if not provided
+if [ -z "$NAMESPACE" ]; then
+  NAMESPACE="$ENVIRONMENT"
+fi
+
+# Set script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 
-# Color codes for output
-RED="\033[0;31m"
-GREEN="\033[0;32m"
-YELLOW="\033[0;33m"
-BLUE="\033[0;34m"
-NC="\033[0m" # No Color
+# Enable debug output if requested
+if [ "$DEBUG" = "true" ]; then
+  set -x
+fi
 
-# Log functions
+# Function to log messages
+log() {
+  local level=$1
+  local message=$2
+  local timestamp=$(date +"%Y-%m-%d %H:%M:%S")
+  echo "[$timestamp] [$level] $message"
+}
+
+# Function to log info messages
 log_info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
+  log "INFO" "$1"
 }
 
-log_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1"
-}
-
-log_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
-}
-
+# Function to log error messages
 log_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
+  log "ERROR" "$1"
 }
 
+# Function to log debug messages
 log_debug() {
-    if [[ "${DEBUG}" == "true" ]]; then
-        echo -e "${YELLOW}[DEBUG]${NC} $1"
-    fi
+  if [ "$DEBUG" = "true" ]; then
+    log "DEBUG" "$1"
+  fi
 }
 
-# Display usage information
-usage() {
-    cat << EOF
-Usage: $(basename "$0") --service <service-name> --env <environment> [options]
+log_info "Starting deployment of $SERVICE to $ENVIRONMENT environment"
 
-Deploys a service to Kubernetes using Helm with environment-specific configurations.
-
-Required arguments:
-  --service, -s       Service name to deploy (e.g., email-service, document-service)
-  --env, -e           Target environment (development, staging, production)
-
-Optional arguments:
-  --namespace, -n     Kubernetes namespace (defaults to <environment>-mca)
-  --values, -f        Additional values file(s) to use (can be specified multiple times)
-  --set               Set values on the command line (can be specified multiple times)
-  --version, -v       Chart version to deploy
-  --timeout, -t       Timeout for deployment (default: 300s)
-  --dry-run           Perform a dry-run deployment
-  --no-wait           Don't wait for deployment to complete
-  --debug             Enable debug output
-  --force             Force deployment even if validation fails
-  --help, -h          Display this help message
-
-Examples:
-  $(basename "$0") --service email-service --env development
-  $(basename "$0") --service data-service --env production --timeout 600s
-  $(basename "$0") --service ocr-service --env staging --set resources.limits.gpu=1
-  $(basename "$0") --service document-service --env development --dry-run
-
-Supported services:
-  - email-service
-  - document-service
-  - ocr-service
-  - data-service
-  - notification-service
-  - api-gateway
-  - frontend
-  - postgresql
-  - rabbitmq
-  - redis
-EOF
+# Determine service type and chart path
+DETERMINE_SERVICE_TYPE() {
+  if [[ "$SERVICE" == "email-service" || "$SERVICE" == "notification-service" ]]; then
+    SERVICE_TYPE="nodejs"
+  elif [[ "$SERVICE" == "document-service" || "$SERVICE" == "ocr-service" ]]; then
+    SERVICE_TYPE="python"
+  elif [[ "$SERVICE" == "data-service" ]]; then
+    SERVICE_TYPE="java"
+  elif [[ "$SERVICE" == "api-gateway" ]]; then
+    SERVICE_TYPE="kong"
+  else
+    log_error "Unknown service type for $SERVICE"
+    exit 1
+  fi
+  
+  log_debug "Service type determined as: $SERVICE_TYPE"
 }
 
-# Parse command line arguments
-parse_args() {
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            --service|-s)
-                SERVICE_NAME="$2"
-                shift 2
-                ;;
-            --env|-e)
-                ENVIRONMENT="$2"
-                shift 2
-                ;;
-            --namespace|-n)
-                NAMESPACE="$2"
-                shift 2
-                ;;
-            --values|-f)
-                VALUES_FILES+=("$2")
-                shift 2
-                ;;
-            --set)
-                SET_VALUES+=("$2")
-                shift 2
-                ;;
-            --version|-v)
-                CHART_VERSION="$2"
-                shift 2
-                ;;
-            --timeout|-t)
-                TIMEOUT="$2"
-                shift 2
-                ;;
-            --dry-run)
-                DRY_RUN="true"
-                shift
-                ;;
-            --no-wait)
-                WAIT="false"
-                shift
-                ;;
-            --debug)
-                DEBUG="true"
-                shift
-                ;;
-            --force)
-                FORCE="true"
-                shift
-                ;;
-            --help|-h)
-                usage
-                exit 0
-                ;;
-            *)
-                log_error "Unknown option: $1"
-                usage
-                exit 1
-                ;;
-        esac
-    done
-
-    # Validate required arguments
-    if [[ -z "${SERVICE_NAME}" ]]; then
-        log_error "Service name is required"
-        usage
-        exit 1
-    fi
-
-    if [[ -z "${ENVIRONMENT}" ]]; then
-        log_error "Environment is required"
-        usage
-        exit 1
-    fi
-
-    # Validate environment
-    if [[ "${ENVIRONMENT}" != "development" && "${ENVIRONMENT}" != "staging" && "${ENVIRONMENT}" != "production" ]]; then
-        log_error "Invalid environment: ${ENVIRONMENT}. Must be one of: development, staging, production"
-        exit 1
-    fi
-
-    # Set default namespace if not provided
-    if [[ -z "${NAMESPACE}" ]]; then
-        NAMESPACE="${ENVIRONMENT}-mca"
-    fi
+# Set chart path based on service
+SET_CHART_PATH() {
+  CHART_PATH="$ROOT_DIR/infrastructure/kubernetes/charts/$SERVICE"
+  
+  # Check if chart exists
+  if [ ! -d "$CHART_PATH" ]; then
+    log_error "Chart not found at $CHART_PATH"
+    exit 1
+  fi
+  
+  log_debug "Chart path set to: $CHART_PATH"
 }
 
-# Validate service name and determine service type
-validate_service() {
-    # List of supported services
-    local supported_services=("email-service" "document-service" "ocr-service" "data-service" "notification-service" "api-gateway" "frontend" "postgresql" "rabbitmq" "redis")
-    
-    # Check if service is supported
-    local service_supported=false
-    for supported_service in "${supported_services[@]}"; do
-        if [[ "${SERVICE_NAME}" == "${supported_service}" ]]; then
-            service_supported=true
-            break
-        fi
-    done
-
-    if [[ "${service_supported}" == "false" ]]; then
-        log_error "Unsupported service: ${SERVICE_NAME}"
-        log_error "Supported services: ${supported_services[*]}"
-        exit 1
-    fi
-
-    # Determine service type for specific configurations
-    case "${SERVICE_NAME}" in
-        email-service|notification-service)
-            SERVICE_TYPE="nodejs"
-            ;;
-        document-service|ocr-service)
-            SERVICE_TYPE="python"
-            ;;
-        data-service)
-            SERVICE_TYPE="java"
-            ;;
-        api-gateway)
-            SERVICE_TYPE="kong"
-            ;;
-        frontend)
-            SERVICE_TYPE="static"
-            ;;
-        postgresql|rabbitmq|redis)
-            SERVICE_TYPE="infrastructure"
-            ;;
-        *)
-            SERVICE_TYPE="unknown"
-            ;;
-    esac
-
-    log_debug "Service type: ${SERVICE_TYPE}"
-}
-
-# Check if Kubernetes namespace exists, create if it doesn't
-ensure_namespace() {
-    if ! kubectl get namespace "${NAMESPACE}" &> /dev/null; then
-        log_info "Namespace ${NAMESPACE} does not exist, creating..."
-        kubectl create namespace "${NAMESPACE}"
-        log_success "Namespace ${NAMESPACE} created"
+# Collect values files
+COLLECT_VALUES_FILES() {
+  VALUES_FILES=()
+  
+  # Common values file
+  COMMON_VALUES="$CHART_PATH/values.yaml"
+  if [ -f "$COMMON_VALUES" ]; then
+    VALUES_FILES+=("--values" "$COMMON_VALUES")
+    log_debug "Added common values file: $COMMON_VALUES"
+  fi
+  
+  # Environment-specific values file
+  ENV_VALUES="$CHART_PATH/values-$ENVIRONMENT.yaml"
+  if [ -f "$ENV_VALUES" ]; then
+    VALUES_FILES+=("--values" "$ENV_VALUES")
+    log_debug "Added environment values file: $ENV_VALUES"
+  fi
+  
+  # Service type specific values
+  TYPE_VALUES="$ROOT_DIR/infrastructure/kubernetes/charts/common/values-$SERVICE_TYPE.yaml"
+  if [ -f "$TYPE_VALUES" ]; then
+    VALUES_FILES+=("--values" "$TYPE_VALUES")
+    log_debug "Added service type values file: $TYPE_VALUES"
+  fi
+  
+  # Add additional values files
+  for value_file in "${ADDITIONAL_VALUES[@]}"; do
+    if [ -f "$value_file" ]; then
+      VALUES_FILES+=("--values" "$value_file")
+      log_debug "Added additional values file: $value_file"
     else
-        log_debug "Namespace ${NAMESPACE} already exists"
+      log_error "Additional values file not found: $value_file"
+      exit 1
     fi
+  done
 }
 
-# Check if Helm release already exists
-check_release_exists() {
-    if helm status "${SERVICE_NAME}" -n "${NAMESPACE}" &> /dev/null; then
-        RELEASE_EXISTS=true
-        log_debug "Helm release ${SERVICE_NAME} already exists in namespace ${NAMESPACE}"
+# Prepare set values
+PREPARE_SET_VALUES() {
+  SET_VALUES=()
+  
+  # Add version
+  SET_VALUES+=("--set" "image.tag=$VERSION")
+  
+  # Add deployment annotations for tracking
+  DEPLOY_TIMESTAMP=$(date +"%Y-%m-%d-%H-%M-%S")
+  SET_VALUES+=("--set" "deploymentAnnotations.timestamp=$DEPLOY_TIMESTAMP")
+  SET_VALUES+=("--set" "deploymentAnnotations.deployer=$USER")
+  SET_VALUES+=("--set" "deploymentAnnotations.environment=$ENVIRONMENT")
+  SET_VALUES+=("--set" "deploymentAnnotations.version=$VERSION")
+  
+  # Add additional set values
+  for set_value in "${ADDITIONAL_SETS[@]}"; do
+    SET_VALUES+=("--set" "$set_value")
+    log_debug "Added set value: $set_value"
+  done
+}
+
+# Check if release exists
+CHECK_RELEASE_EXISTS() {
+  if helm status "$SERVICE" -n "$NAMESPACE" &> /dev/null; then
+    RELEASE_EXISTS=true
+    log_debug "Release $SERVICE exists in namespace $NAMESPACE"
+  else
+    RELEASE_EXISTS=false
+    log_debug "Release $SERVICE does not exist in namespace $NAMESPACE"
+  fi
+}
+
+# Configure deployment strategy based on service type
+CONFIGURE_DEPLOYMENT_STRATEGY() {
+  case $SERVICE_TYPE in
+    nodejs)
+      # Node.js services use rolling update with 25% max unavailable
+      SET_VALUES+=("--set" "deploymentStrategy.type=RollingUpdate")
+      SET_VALUES+=("--set" "deploymentStrategy.rollingUpdate.maxUnavailable=25%")
+      SET_VALUES+=("--set" "deploymentStrategy.rollingUpdate.maxSurge=25%")
+      ;;
+    python)
+      # Python services use rolling update with 50% max unavailable due to higher resource needs
+      SET_VALUES+=("--set" "deploymentStrategy.type=RollingUpdate")
+      SET_VALUES+=("--set" "deploymentStrategy.rollingUpdate.maxUnavailable=50%")
+      SET_VALUES+=("--set" "deploymentStrategy.rollingUpdate.maxSurge=50%")
+      ;;
+    java)
+      # Java services use rolling update with 25% max unavailable and longer startup probe
+      SET_VALUES+=("--set" "deploymentStrategy.type=RollingUpdate")
+      SET_VALUES+=("--set" "deploymentStrategy.rollingUpdate.maxUnavailable=25%")
+      SET_VALUES+=("--set" "deploymentStrategy.rollingUpdate.maxSurge=25%")
+      SET_VALUES+=("--set" "startupProbe.initialDelaySeconds=30")
+      ;;
+    kong)
+      # API Gateway uses blue-green deployment for zero downtime
+      SET_VALUES+=("--set" "deploymentStrategy.type=Recreate")
+      ;;
+    *)
+      log_error "Unknown service type: $SERVICE_TYPE"
+      exit 1
+      ;;
+  esac
+  
+  log_debug "Configured deployment strategy for service type: $SERVICE_TYPE"
+}
+
+# Configure environment-specific settings
+CONFIGURE_ENVIRONMENT_SETTINGS() {
+  case $ENVIRONMENT in
+    development)
+      # Development environment has minimal resources
+      SET_VALUES+=("--set" "resources.requests.cpu=100m")
+      SET_VALUES+=("--set" "resources.requests.memory=256Mi")
+      SET_VALUES+=("--set" "resources.limits.cpu=500m")
+      SET_VALUES+=("--set" "resources.limits.memory=512Mi")
+      SET_VALUES+=("--set" "replicaCount=1")
+      ;;
+    staging)
+      # Staging environment has moderate resources
+      SET_VALUES+=("--set" "resources.requests.cpu=250m")
+      SET_VALUES+=("--set" "resources.requests.memory=512Mi")
+      SET_VALUES+=("--set" "resources.limits.cpu=1000m")
+      SET_VALUES+=("--set" "resources.limits.memory=1Gi")
+      SET_VALUES+=("--set" "replicaCount=2")
+      ;;
+    production)
+      # Production environment has higher resources and more replicas
+      SET_VALUES+=("--set" "resources.requests.cpu=500m")
+      SET_VALUES+=("--set" "resources.requests.memory=1Gi")
+      SET_VALUES+=("--set" "resources.limits.cpu=2000m")
+      SET_VALUES+=("--set" "resources.limits.memory=2Gi")
+      SET_VALUES+=("--set" "replicaCount=3")
+      ;;
+    *)
+      log_error "Unknown environment: $ENVIRONMENT"
+      exit 1
+      ;;
+  esac
+  
+  # Special case for Python services in production (need more memory for ML models)
+  if [[ "$SERVICE_TYPE" == "python" && "$ENVIRONMENT" == "production" ]]; then
+    SET_VALUES+=("--set" "resources.requests.memory=2Gi")
+    SET_VALUES+=("--set" "resources.limits.memory=4Gi")
+  fi
+  
+  log_debug "Configured environment-specific settings for: $ENVIRONMENT"
+}
+
+# Configure service-specific post-deployment hooks
+CONFIGURE_POST_DEPLOYMENT_HOOKS() {
+  case $SERVICE in
+    document-service)
+      # Document service needs to download ML models after deployment
+      SET_VALUES+=("--set" "postDeployment.enabled=true")
+      SET_VALUES+=("--set" "postDeployment.command=python,/app/scripts/download_models.py")
+      ;;
+    ocr-service)
+      # OCR service needs to download ML models after deployment
+      SET_VALUES+=("--set" "postDeployment.enabled=true")
+      SET_VALUES+=("--set" "postDeployment.command=python,/app/scripts/download_models.py")
+      ;;
+    data-service)
+      # Data service needs to run database migrations
+      SET_VALUES+=("--set" "postDeployment.enabled=true")
+      SET_VALUES+=("--set" "postDeployment.command=java,-jar,/app/app.jar,--migrate")
+      ;;
+    *)
+      # No post-deployment hooks for other services
+      SET_VALUES+=("--set" "postDeployment.enabled=false")
+      ;;
+  esac
+  
+  log_debug "Configured post-deployment hooks for service: $SERVICE"
+}
+
+# Validate deployment configuration
+VALIDATE_DEPLOYMENT() {
+  log_info "Validating deployment configuration"
+  
+  # Validate chart
+  if ! helm lint "$CHART_PATH" "${VALUES_FILES[@]}" "${SET_VALUES[@]}" &> /dev/null; then
+    log_error "Helm chart validation failed"
+    if [ "$FORCE" != "true" ]; then
+      exit 1
     else
-        RELEASE_EXISTS=false
-        log_debug "Helm release ${SERVICE_NAME} does not exist in namespace ${NAMESPACE}"
+      log_info "Proceeding with deployment despite validation errors (--force=true)"
     fi
+  fi
+  
+  # Validate namespace exists
+  if ! kubectl get namespace "$NAMESPACE" &> /dev/null; then
+    log_info "Namespace $NAMESPACE does not exist, creating it"
+    kubectl create namespace "$NAMESPACE"
+  fi
+  
+  log_info "Deployment validation successful"
 }
 
-# Get chart path based on service name
-get_chart_path() {
-    # Infrastructure services use their own charts
-    if [[ "${SERVICE_TYPE}" == "infrastructure" ]]; then
-        CHART_PATH="${REPO_ROOT}/infrastructure/kubernetes/charts/${SERVICE_NAME}"
+# Deploy the service
+DEPLOY_SERVICE() {
+  log_info "Deploying $SERVICE to $NAMESPACE namespace in $ENVIRONMENT environment"
+  
+  # Build helm command
+  HELM_CMD=(helm)
+  
+  if [ "$RELEASE_EXISTS" = "true" ]; then
+    HELM_CMD+=(upgrade)
+    log_info "Performing upgrade of existing release"
+  else
+    HELM_CMD+=(install)
+    log_info "Performing new installation"
+  fi
+  
+  HELM_CMD+=("$SERVICE" "$CHART_PATH")
+  HELM_CMD+=(--namespace "$NAMESPACE")
+  
+  # Add values files
+  for value in "${VALUES_FILES[@]}"; do
+    HELM_CMD+=("$value")
+  done
+  
+  # Add set values
+  for value in "${SET_VALUES[@]}"; do
+    HELM_CMD+=("$value")
+  done
+  
+  # Add timeout
+  HELM_CMD+=(--timeout "${TIMEOUT}s")
+  
+  # Add wait flag if specified
+  if [ "$WAIT" = "true" ]; then
+    HELM_CMD+=(--wait)
+  fi
+  
+  # Add dry-run flag if specified
+  if [ "$DRY_RUN" = "true" ]; then
+    HELM_CMD+=(--dry-run)
+  fi
+  
+  # Execute helm command
+  log_debug "Executing: ${HELM_CMD[*]}"
+  "${HELM_CMD[@]}"
+  
+  DEPLOY_STATUS=$?
+  
+  if [ $DEPLOY_STATUS -eq 0 ]; then
+    log_info "Deployment of $SERVICE to $ENVIRONMENT environment completed successfully"
+  else
+    log_error "Deployment of $SERVICE to $ENVIRONMENT environment failed with status $DEPLOY_STATUS"
+    exit $DEPLOY_STATUS
+  fi
+}
+
+# Verify deployment
+VERIFY_DEPLOYMENT() {
+  if [ "$DRY_RUN" = "true" ]; then
+    log_info "Skipping deployment verification in dry-run mode"
+    return 0
+  fi
+  
+  log_info "Verifying deployment of $SERVICE"
+  
+  # Wait for pods to be ready
+  kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=$SERVICE -n $NAMESPACE --timeout=${TIMEOUT}s
+  
+  # Check deployment status
+  DEPLOYMENT_STATUS=$(kubectl get deployment -l app.kubernetes.io/name=$SERVICE -n $NAMESPACE -o jsonpath='{.items[0].status.conditions[?(@.type=="Available")].status}')
+  
+  if [ "$DEPLOYMENT_STATUS" = "True" ]; then
+    log_info "Deployment of $SERVICE is available and ready"
+  else
+    log_error "Deployment of $SERVICE is not available. Status: $DEPLOYMENT_STATUS"
+    exit 1
+  fi
+}
+
+# Run post-deployment tasks
+RUN_POST_DEPLOYMENT_TASKS() {
+  if [ "$DRY_RUN" = "true" ]; then
+    log_info "Skipping post-deployment tasks in dry-run mode"
+    return 0
+  fi
+  
+  # Check if post-deployment is enabled
+  POST_DEPLOYMENT_ENABLED=$(helm get values $SERVICE -n $NAMESPACE -o jsonpath='{.postDeployment.enabled}')
+  
+  if [ "$POST_DEPLOYMENT_ENABLED" = "true" ]; then
+    log_info "Running post-deployment tasks for $SERVICE"
+    
+    # Get post-deployment command
+    POST_DEPLOYMENT_COMMAND=$(helm get values $SERVICE -n $NAMESPACE -o jsonpath='{.postDeployment.command}')
+    
+    # Get pod name
+    POD_NAME=$(kubectl get pod -l app.kubernetes.io/name=$SERVICE -n $NAMESPACE -o jsonpath='{.items[0].metadata.name}')
+    
+    # Convert command string to array
+    IFS=',' read -ra CMD_ARRAY <<< "$POST_DEPLOYMENT_COMMAND"
+    
+    # Execute command in pod
+    log_debug "Executing post-deployment command in pod $POD_NAME: ${CMD_ARRAY[*]}"
+    kubectl exec -n $NAMESPACE $POD_NAME -- "${CMD_ARRAY[@]}"
+    
+    POST_DEPLOYMENT_STATUS=$?
+    
+    if [ $POST_DEPLOYMENT_STATUS -eq 0 ]; then
+      log_info "Post-deployment tasks completed successfully"
     else
-        # Application services use their own charts
-        CHART_PATH="${REPO_ROOT}/infrastructure/kubernetes/charts/${SERVICE_NAME}"
+      log_error "Post-deployment tasks failed with status $POST_DEPLOYMENT_STATUS"
+      exit $POST_DEPLOYMENT_STATUS
     fi
-
-    # Check if chart exists
-    if [[ ! -d "${CHART_PATH}" ]]; then
-        log_error "Chart not found at ${CHART_PATH}"
-        exit 1
-    fi
-
-    log_debug "Using chart at ${CHART_PATH}"
+  else
+    log_debug "No post-deployment tasks configured for $SERVICE"
+  fi
 }
 
-# Get values files for the deployment
-get_values_files() {
-    # Common values file
-    local common_values="${REPO_ROOT}/infrastructure/kubernetes/config/common.yaml"
-    if [[ -f "${common_values}" ]]; then
-        VALUES_ARGS+=("--values" "${common_values}")
-        log_debug "Added common values file: ${common_values}"
-    fi
+# Main execution flow
+DETERMINE_SERVICE_TYPE
+SET_CHART_PATH
+COLLECT_VALUES_FILES
+PREPARE_SET_VALUES
+CHECK_RELEASE_EXISTS
+CONFIGURE_DEPLOYMENT_STRATEGY
+CONFIGURE_ENVIRONMENT_SETTINGS
+CONFIGURE_POST_DEPLOYMENT_HOOKS
+VALIDATE_DEPLOYMENT
+DEPLOY_SERVICE
+VERIFY_DEPLOYMENT
+RUN_POST_DEPLOYMENT_TASKS
 
-    # Environment-specific common values
-    local env_common_values="${REPO_ROOT}/infrastructure/kubernetes/config/${ENVIRONMENT}/common.yaml"
-    if [[ -f "${env_common_values}" ]]; then
-        VALUES_ARGS+=("--values" "${env_common_values}")
-        log_debug "Added environment-specific common values file: ${env_common_values}"
-    fi
-
-    # Service-specific values
-    local service_values="${REPO_ROOT}/infrastructure/kubernetes/config/${SERVICE_NAME}.yaml"
-    if [[ -f "${service_values}" ]]; then
-        VALUES_ARGS+=("--values" "${service_values}")
-        log_debug "Added service-specific values file: ${service_values}"
-    fi
-
-    # Environment-specific service values
-    local env_service_values="${REPO_ROOT}/infrastructure/kubernetes/config/${ENVIRONMENT}/${SERVICE_NAME}.yaml"
-    if [[ -f "${env_service_values}" ]]; then
-        VALUES_ARGS+=("--values" "${env_service_values}")
-        log_debug "Added environment-specific service values file: ${env_service_values}"
-    fi
-
-    # Add any additional values files specified on the command line
-    for values_file in "${VALUES_FILES[@]}"; do
-        if [[ -f "${values_file}" ]]; then
-            VALUES_ARGS+=("--values" "${values_file}")
-            log_debug "Added additional values file: ${values_file}"
-        else
-            log_warning "Values file not found: ${values_file}"
-        fi
-    done
-}
-
-# Set deployment strategy based on service type
-set_deployment_strategy() {
-    # Default strategy is RollingUpdate
-    local strategy="--set deployment.strategy.type=RollingUpdate"
-    
-    # For stateful services, use Recreate to avoid conflicts
-    if [[ "${SERVICE_TYPE}" == "infrastructure" ]]; then
-        strategy="--set deployment.strategy.type=Recreate"
-    fi
-    
-    # For frontend, use BlueGreen if in production
-    if [[ "${SERVICE_TYPE}" == "static" && "${ENVIRONMENT}" == "production" ]]; then
-        strategy="--set deployment.strategy.type=BlueGreen"
-    fi
-    
-    # Add strategy to set values
-    SET_VALUES+=("${strategy#--set }")
-    log_debug "Set deployment strategy: ${strategy}"
-}
-
-# Add deployment annotations for tracking and auditing
-add_deployment_annotations() {
-    # Get current timestamp
-    local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-    
-    # Get Git commit information
-    local git_commit=""
-    if [[ -d "${REPO_ROOT}/.git" ]]; then
-        git_commit=$(git -C "${REPO_ROOT}" rev-parse HEAD)
-    fi
-    
-    # Add annotations
-    SET_VALUES+=("deployment.annotations.kubernetes\.io/change-cause=Deployed by $(whoami) at ${timestamp} from commit ${git_commit}")
-    SET_VALUES+=("deployment.annotations.app\.kubernetes\.io/deployed-by=$(whoami)")
-    SET_VALUES+=("deployment.annotations.app\.kubernetes\.io/deployed-at=${timestamp}")
-    if [[ -n "${git_commit}" ]]; then
-        SET_VALUES+=("deployment.annotations.app\.kubernetes\.io/git-commit=${git_commit}")
-    fi
-    
-    log_debug "Added deployment annotations for tracking and auditing"
-}
-
-# Prepare Helm command arguments
-prepare_helm_args() {
-    # Initialize arrays
-    HELM_ARGS=()
-    VALUES_ARGS=()
-    
-    # Get values files
-    get_values_files
-    
-    # Set deployment strategy
-    set_deployment_strategy
-    
-    # Add deployment annotations
-    add_deployment_annotations
-    
-    # Add set values
-    for set_value in "${SET_VALUES[@]}"; do
-        HELM_ARGS+=("--set" "${set_value}")
-    done
-    
-    # Add values files
-    HELM_ARGS+=("${VALUES_ARGS[@]}")
-    
-    # Add namespace
-    HELM_ARGS+=("--namespace" "${NAMESPACE}")
-    
-    # Add timeout
-    HELM_ARGS+=("--timeout" "${TIMEOUT}")
-    
-    # Add wait flag if specified
-    if [[ "${WAIT}" == "true" ]]; then
-        HELM_ARGS+=("--wait")
-    fi
-    
-    # Add dry-run flag if specified
-    if [[ "${DRY_RUN}" == "true" ]]; then
-        HELM_ARGS+=("--dry-run")
-    fi
-    
-    # Add debug flag if specified
-    if [[ "${DEBUG}" == "true" ]]; then
-        HELM_ARGS+=("--debug")
-    fi
-    
-    # Add chart version if specified
-    if [[ -n "${CHART_VERSION}" ]]; then
-        HELM_ARGS+=("--version" "${CHART_VERSION}")
-    fi
-    
-    # Add service type
-    HELM_ARGS+=("--set" "serviceType=${SERVICE_TYPE}")
-    
-    # Add environment
-    HELM_ARGS+=("--set" "env.ENVIRONMENT=${ENVIRONMENT}")
-    
-    log_debug "Helm arguments: ${HELM_ARGS[*]}"
-}
-
-# Deploy the service using Helm
-deploy_service() {
-    # Ensure namespace exists
-    ensure_namespace
-    
-    # Check if release already exists
-    check_release_exists
-    
-    # Get chart path
-    get_chart_path
-    
-    # Prepare Helm arguments
-    prepare_helm_args
-    
-    # Deploy the service
-    if [[ "${RELEASE_EXISTS}" == "true" ]]; then
-        log_info "Upgrading existing Helm release ${SERVICE_NAME} in namespace ${NAMESPACE}..."
-        helm upgrade "${SERVICE_NAME}" "${CHART_PATH}" "${HELM_ARGS[@]}"
-    else
-        log_info "Installing new Helm release ${SERVICE_NAME} in namespace ${NAMESPACE}..."
-        helm install "${SERVICE_NAME}" "${CHART_PATH}" "${HELM_ARGS[@]}"
-    fi
-    
-    # Check deployment status
-    if [[ "${WAIT}" == "true" && "${DRY_RUN}" == "false" ]]; then
-        check_deployment_status
-    fi
-}
-
-# Check deployment status
-check_deployment_status() {
-    log_info "Checking deployment status..."
-    
-    # Get deployment name
-    local deployment_name="${SERVICE_NAME}"
-    
-    # Wait for deployment to be ready
-    if kubectl rollout status deployment "${deployment_name}" -n "${NAMESPACE}" --timeout="${TIMEOUT}"; then
-        log_success "Deployment ${deployment_name} is ready"
-        
-        # Run post-deployment hooks if any
-        run_post_deployment_hooks
-    else
-        log_error "Deployment ${deployment_name} failed to become ready within timeout"
-        
-        # Show pod status for debugging
-        log_info "Pod status:"
-        kubectl get pods -n "${NAMESPACE}" -l "app.kubernetes.io/name=${SERVICE_NAME}" -o wide
-        
-        # Show recent events
-        log_info "Recent events:"
-        kubectl get events -n "${NAMESPACE}" --sort-by=.metadata.creationTimestamp | tail -n 20
-        
-        # Show logs from failed pods
-        log_info "Logs from failed pods:"
-        for pod in $(kubectl get pods -n "${NAMESPACE}" -l "app.kubernetes.io/name=${SERVICE_NAME}" -o jsonpath='{.items[?(@.status.phase!="Running")].metadata.name}'); do
-            log_info "Logs from pod ${pod}:"
-            kubectl logs "${pod}" -n "${NAMESPACE}" --tail=50 || true
-        done
-        
-        exit 1
-    fi
-}
-
-# Run post-deployment hooks
-run_post_deployment_hooks() {
-    log_info "Running post-deployment hooks..."
-    
-    # Service-specific initialization
-    case "${SERVICE_NAME}" in
-        # Database migrations for data-service
-        data-service)
-            log_info "Running database migrations..."
-            # Get the pod name
-            local pod_name=$(kubectl get pods -n "${NAMESPACE}" -l "app.kubernetes.io/name=${SERVICE_NAME}" -o jsonpath='{.items[0].metadata.name}')
-            # Run migrations
-            kubectl exec "${pod_name}" -n "${NAMESPACE}" -- java -jar app.jar --spring.profiles.active=${ENVIRONMENT} --migrate
-            log_success "Database migrations completed"
-            ;;
-        
-        # Initialize RabbitMQ exchanges and queues
-        rabbitmq)
-            log_info "Initializing RabbitMQ exchanges and queues..."
-            # Get the pod name
-            local pod_name=$(kubectl get pods -n "${NAMESPACE}" -l "app.kubernetes.io/name=${SERVICE_NAME}" -o jsonpath='{.items[0].metadata.name}')
-            # Apply RabbitMQ definitions
-            kubectl cp "${REPO_ROOT}/infrastructure/kubernetes/config/${ENVIRONMENT}/rabbitmq-definitions.json" "${NAMESPACE}/${pod_name}:/tmp/definitions.json"
-            kubectl exec "${pod_name}" -n "${NAMESPACE}" -- rabbitmqctl import_definitions /tmp/definitions.json
-            log_success "RabbitMQ initialization completed"
-            ;;
-        
-        # No post-deployment hooks for other services
-        *)
-            log_debug "No post-deployment hooks for ${SERVICE_NAME}"
-            ;;
-    esac
-}
-
-# Main function
-main() {
-    log_info "Starting deployment of ${SERVICE_NAME} to ${ENVIRONMENT} environment"
-    
-    # Parse command line arguments
-    parse_args "$@"
-    
-    # Validate service
-    validate_service
-    
-    # Deploy the service
-    deploy_service
-    
-    log_success "Deployment of ${SERVICE_NAME} to ${ENVIRONMENT} environment completed successfully"
-}
-
-# Run main function with all arguments
-main "$@"
+log_info "Deployment process completed successfully"
+exit 0
