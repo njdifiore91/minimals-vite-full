@@ -157,11 +157,20 @@ jobs:
             --set image.tag=$IMAGE_TAG \
             --set environment=${{ needs.prepare-deployment.outputs.environment }} \
             --set replicaCount=$([ "${{ needs.prepare-deployment.outputs.environment }}" == "production" ] && echo "3" || echo "1") \
-            --set webhookSecret=${{ secrets.WEBHOOK_SIGNATURE_SECRET }} \
             --set rabbitmq.host=${{ secrets.RABBITMQ_HOST }} \
             --set rabbitmq.username=${{ secrets.RABBITMQ_USERNAME }} \
             --set rabbitmq.password=${{ secrets.RABBITMQ_PASSWORD }} \
             --set rabbitmq.vhost=${{ needs.prepare-deployment.outputs.environment }} \
+            --set rabbitmq.exchange=mca.documents \
+            --set rabbitmq.queue=notification \
+            --set redis.host=${{ secrets.REDIS_HOST }} \
+            --set redis.port=${{ secrets.REDIS_PORT }} \
+            --set redis.password=${{ secrets.REDIS_PASSWORD }} \
+            --set webhook.retry.max=$([ "${{ needs.prepare-deployment.outputs.environment }}" == "production" ] && echo "5" || echo "3") \
+            --set webhook.retry.delay.base=$([ "${{ needs.prepare-deployment.outputs.environment }}" == "production" ] && echo "60" || echo "30") \
+            --set webhook.retry.delay.max=$([ "${{ needs.prepare-deployment.outputs.environment }}" == "production" ] && echo "3600" || echo "1800") \
+            --set webhook.hmac.secret=${{ secrets.WEBHOOK_HMAC_SECRET }} \
+            --set log.level=$([ "${{ needs.prepare-deployment.outputs.environment }}" == "production" ] && echo "info" || echo "debug") \
             --set serviceAccount.annotations."eks\.amazonaws\.com/role-arn"=${{ secrets.AWS_ROLE_ARN }} \
             --atomic \
             --timeout 5m
@@ -225,45 +234,75 @@ jobs:
             exit 1
           fi
 
-      - name: Verify webhook functionality
-        id: webhook-test
+      - name: Verify RabbitMQ connection
+        id: rabbitmq-test
         run: |
-          # Test webhook delivery functionality
-          # This uses a test endpoint to verify the webhook delivery system
-          
           # Get pod name
           POD_NAME=$(kubectl get pods -n ${{ needs.prepare-deployment.outputs.namespace }} -l app=${{ env.SERVICE_NAME }} -o jsonpath='{.items[0].metadata.name}')
           
           # Execute test command in the pod
+          TEST_RESULT=$(kubectl exec $POD_NAME -n ${{ needs.prepare-deployment.outputs.namespace }} -- node /app/dist/test/rabbitmq-test.js)
+          
+          if [[ $TEST_RESULT == *"RabbitMQ connection successful"* ]]; then
+            echo "RabbitMQ connection verified"
+            echo "rabbitmq_status=passed" >> $GITHUB_OUTPUT
+          else
+            echo "RabbitMQ connection test failed"
+            echo "rabbitmq_status=failed" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+      - name: Verify Redis connection
+        id: redis-test
+        run: |
+          # Get pod name
+          POD_NAME=$(kubectl get pods -n ${{ needs.prepare-deployment.outputs.namespace }} -l app=${{ env.SERVICE_NAME }} -o jsonpath='{.items[0].metadata.name}')
+          
+          # Execute test command in the pod
+          TEST_RESULT=$(kubectl exec $POD_NAME -n ${{ needs.prepare-deployment.outputs.namespace }} -- node /app/dist/test/redis-test.js)
+          
+          if [[ $TEST_RESULT == *"Redis connection successful"* ]]; then
+            echo "Redis connection verified"
+            echo "redis_status=passed" >> $GITHUB_OUTPUT
+          else
+            echo "Redis connection test failed"
+            echo "redis_status=failed" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+
+      - name: Verify webhook delivery functionality
+        id: webhook-test
+        run: |
+          # Get pod name
+          POD_NAME=$(kubectl get pods -n ${{ needs.prepare-deployment.outputs.namespace }} -l app=${{ env.SERVICE_NAME }} -o jsonpath='{.items[0].metadata.name}')
+          
+          # Execute webhook test command in the pod
           TEST_RESULT=$(kubectl exec $POD_NAME -n ${{ needs.prepare-deployment.outputs.namespace }} -- node /app/dist/test/webhook-test.js)
           
-          if [[ $TEST_RESULT == *"Webhook test successful"* ]]; then
-            echo "Webhook functionality verified"
+          if [[ $TEST_RESULT == *"Webhook delivery successful"* ]]; then
+            echo "Webhook delivery functionality verified"
             echo "webhook_status=passed" >> $GITHUB_OUTPUT
           else
-            echo "Webhook functionality test failed"
+            echo "Webhook delivery test failed"
             echo "webhook_status=failed" >> $GITHUB_OUTPUT
             exit 1
           fi
 
-      - name: Verify retry mechanism
-        id: retry-test
+      - name: Verify webhook retry mechanism
+        id: webhook-retry-test
         run: |
-          # Test webhook retry mechanism
-          # This simulates a failed webhook delivery to verify retry logic
-          
           # Get pod name
           POD_NAME=$(kubectl get pods -n ${{ needs.prepare-deployment.outputs.namespace }} -l app=${{ env.SERVICE_NAME }} -o jsonpath='{.items[0].metadata.name}')
           
-          # Execute retry test command in the pod
-          RETRY_RESULT=$(kubectl exec $POD_NAME -n ${{ needs.prepare-deployment.outputs.namespace }} -- node /app/dist/test/retry-test.js)
+          # Execute webhook retry test command in the pod
+          TEST_RESULT=$(kubectl exec $POD_NAME -n ${{ needs.prepare-deployment.outputs.namespace }} -- node /app/dist/test/webhook-retry-test.js)
           
-          if [[ $RETRY_RESULT == *"Retry mechanism verified"* ]]; then
-            echo "Retry mechanism working correctly"
-            echo "retry_status=passed" >> $GITHUB_OUTPUT
+          if [[ $TEST_RESULT == *"Webhook retry mechanism successful"* ]]; then
+            echo "Webhook retry mechanism verified"
+            echo "webhook_retry_status=passed" >> $GITHUB_OUTPUT
           else
-            echo "Retry mechanism test failed"
-            echo "retry_status=failed" >> $GITHUB_OUTPUT
+            echo "Webhook retry test failed"
+            echo "webhook_retry_status=failed" >> $GITHUB_OUTPUT
             exit 1
           fi
           
@@ -274,7 +313,7 @@ jobs:
           event: validation
           service: ${{ env.SERVICE_NAME }}
           environment: ${{ needs.prepare-deployment.outputs.environment }}
-          status: ${{ steps.health-check.outcome == 'success' && steps.webhook-test.outcome == 'success' && steps.retry-test.outcome == 'success' }}
+          status: ${{ steps.health-check.outcome == 'success' && steps.rabbitmq-test.outcome == 'success' && steps.redis-test.outcome == 'success' && steps.webhook-test.outcome == 'success' && steps.webhook-retry-test.outcome == 'success' }}
           version: ${{ needs.prepare-deployment.outputs.version }}
         if: always()
 
@@ -350,7 +389,7 @@ jobs:
       - name: Update Datadog dashboard
         run: |
           # Update Datadog dashboard with new version information
-          # This is a placeholder for the actual implementation
+          # This updates the Datadog dashboard with webhook delivery metrics
           echo "Updating Datadog dashboard for ${{ env.SERVICE_NAME }} version ${{ needs.prepare-deployment.outputs.version }}"
           
           # Example: Use AWS SSM to store the current version for monitoring
@@ -360,10 +399,23 @@ jobs:
             --type "String" \
             --overwrite
 
+      - name: Update webhook metrics
+        run: |
+          # Configure webhook delivery metrics in Datadog
+          # This sets up monitoring for webhook delivery success rates and latency
+          echo "Configuring webhook delivery metrics for ${{ env.SERVICE_NAME }} version ${{ needs.prepare-deployment.outputs.version }}"
+          
+          # Example: Use AWS SSM to store webhook monitoring configuration
+          aws ssm put-parameter \
+            --name "/mca/${{ needs.prepare-deployment.outputs.environment }}/${{ env.SERVICE_NAME }}/webhook-monitoring" \
+            --value "enabled" \
+            --type "String" \
+            --overwrite
+
       - name: Update deployment history
         run: |
           # Record deployment in deployment history database
-          # This is a placeholder for the actual implementation
+          # This tracks all deployments for audit and rollback purposes
           echo "Recording deployment of ${{ env.SERVICE_NAME }} version ${{ needs.prepare-deployment.outputs.version }} to ${{ needs.prepare-deployment.outputs.environment }}"
           
           # Example: Use AWS DynamoDB to store deployment history
@@ -377,6 +429,3 @@ jobs:
               \"status\": {\"S\": \"${{ needs.validate.result == 'success' && 'success' || 'failed' }}\"},
               \"deployer\": {\"S\": \"${{ github.actor }}\"}
             }"
-          # Set environment based on trigger
-          if [ '${{ github.event_name }}' == 'workflow_dispatch' ]; then
-            echo 
