@@ -1,11 +1,24 @@
-# Frontend UI Deployment Workflow
-# This workflow handles the deployment of the frontend UI component across development, staging, and production environments.
-# It supports both Vercel deployments and containerized deployments using NGINX.
+# Frontend UI Deployment Workflow for Merchant Cash Advance (MCA) Application
+# This workflow handles the deployment of the UI component across development, staging, and production environments
+# It supports both Vercel deployments for static hosting and containerized deployments with NGINX
 
 name: UI Deployment
 
 on:
-  # Trigger deployment on workflow_dispatch (manual trigger)
+  # Automatic deployment for development environment
+  push:
+    branches: [development]
+    paths:
+      - 'frontend/**'
+      - 'infrastructure/ci/ui/environments/development.yml'
+  
+  # Deployment to staging after successful integration tests
+  workflow_run:
+    workflows: ["UI Integration Tests"]
+    branches: [main]
+    types: [completed]
+    
+  # Manual trigger with environment selection
   workflow_dispatch:
     inputs:
       environment:
@@ -25,327 +38,549 @@ on:
         options:
           - vercel
           - container
-      version:
-        description: 'Version to deploy (leave empty for latest)'
-        required: false
-        type: string
 
-  # Trigger deployment automatically on successful build
-  workflow_run:
-    workflows: ['UI Build']
-    types:
-      - completed
-    branches:
-      - main      # Auto-deploy to development from main branch
-      - staging   # Auto-deploy to staging from staging branch
-      - production # Manual approval required for production
-
-# Global environment variables
+# Environment variables common to all jobs
 env:
+  NODE_VERSION: '20.x'
+  YARN_VERSION: '1.22.22'
   VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
   VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-  CONTAINER_REGISTRY: ${{ secrets.CONTAINER_REGISTRY }}
-  HEALTH_CHECK_RETRIES: 5
-  HEALTH_CHECK_DELAY: 10
+  CONTAINER_REGISTRY: 'ghcr.io'
+  APP_NAME: 'mca-frontend'
 
-# Define jobs
 jobs:
-  # Determine deployment environment and configuration
+  # Prepare deployment configuration
   prepare:
     name: Prepare Deployment
     runs-on: ubuntu-latest
     outputs:
       environment: ${{ steps.set-env.outputs.environment }}
       deployment_type: ${{ steps.set-env.outputs.deployment_type }}
-      artifact_name: ${{ steps.set-env.outputs.artifact_name }}
+    
     steps:
-      - name: Determine Environment
+      - name: Set Environment
         id: set-env
         run: |
-          # Set environment based on trigger type
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             echo "environment=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
             echo "deployment_type=${{ github.event.inputs.deployment_type }}" >> $GITHUB_OUTPUT
-          else
-            # Auto-determine environment based on branch
-            if [ "${{ github.ref }}" == "refs/heads/main" ]; then
-              echo "environment=development" >> $GITHUB_OUTPUT
-              echo "deployment_type=vercel" >> $GITHUB_OUTPUT
-            elif [ "${{ github.ref }}" == "refs/heads/staging" ]; then
+          elif [ "${{ github.event_name }}" == "workflow_run" ]; then
+            if [ "${{ github.event.workflow_run.conclusion }}" == "success" ]; then
               echo "environment=staging" >> $GITHUB_OUTPUT
               echo "deployment_type=vercel" >> $GITHUB_OUTPUT
-            elif [ "${{ github.ref }}" == "refs/heads/production" ]; then
-              echo "environment=production" >> $GITHUB_OUTPUT
-              echo "deployment_type=vercel" >> $GITHUB_OUTPUT
             else
-              echo "environment=development" >> $GITHUB_OUTPUT
-              echo "deployment_type=vercel" >> $GITHUB_OUTPUT
+              echo "Skipping deployment due to failed tests"
+              exit 1
             fi
+          else
+            echo "environment=development" >> $GITHUB_OUTPUT
+            echo "deployment_type=vercel" >> $GITHUB_OUTPUT
+          fi
+
+  # Deploy to Vercel (for static hosting)
+  deploy-vercel:
+    name: Deploy to Vercel
+    needs: prepare
+    if: needs.prepare.outputs.deployment_type == 'vercel'
+    runs-on: ubuntu-latest
+    environment: ${{ needs.prepare.outputs.environment }}
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+      
+      - name: Load Environment Config
+        uses: actions/github-script@v7
+        id: env-config
+        with:
+          script: |
+            const fs = require('fs');
+            const yaml = require('js-yaml');
+            const envFile = `./infrastructure/ci/ui/environments/${process.env.ENVIRONMENT}.yml`;
+            const envConfig = yaml.load(fs.readFileSync(envFile, 'utf8'));
+            return envConfig;
+        env:
+          ENVIRONMENT: ${{ needs.prepare.outputs.environment }}
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      
+      - name: Install Vercel CLI
+        run: npm install -g vercel@latest
+      
+      - name: Setup Yarn
+        run: |
+          corepack enable
+          corepack prepare yarn@${{ env.YARN_VERSION }} --activate
+      
+      - name: Get Yarn Cache Directory
+        id: yarn-cache-dir
+        run: echo "dir=$(yarn config get cacheFolder)" >> $GITHUB_OUTPUT
+      
+      - name: Cache Dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ steps.yarn-cache-dir.outputs.dir }}
+            frontend/node_modules
+          key: ${{ runner.os }}-yarn-${{ hashFiles('frontend/yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-yarn-
+      
+      - name: Install Dependencies
+        working-directory: ./frontend
+        run: yarn install --frozen-lockfile
+      
+      # Inject environment-specific configuration
+      - name: Create Environment Variables
+        working-directory: ./frontend
+        run: |
+          cat > .env.production << EOL
+          VITE_APP_NAME="Dollar Funding MCA"
+          VITE_API_URL=${{ fromJson(steps.env-config.outputs.result).api_url }}
+          VITE_AUTH_METHOD=jwt
+          VITE_JWT_EXPIRES_IN=${{ fromJson(steps.env-config.outputs.result).jwt_expires_in }}
+          VITE_FEATURE_OCR_VALIDATION=${{ fromJson(steps.env-config.outputs.result).features.ocr_validation }}
+          VITE_FEATURE_AUTO_APPROVAL=${{ fromJson(steps.env-config.outputs.result).features.auto_approval }}
+          VITE_FEATURE_WEBHOOK_CONFIG=${{ fromJson(steps.env-config.outputs.result).features.webhook_config }}
+          VITE_LOG_LEVEL=${{ fromJson(steps.env-config.outputs.result).log_level }}
+          EOL
+      
+      # Build the application
+      - name: Build Application
+        working-directory: ./frontend
+        run: yarn build
+      
+      # Deploy to Vercel
+      - name: Deploy to Vercel
+        id: deploy
+        working-directory: ./frontend
+        run: |
+          DEPLOYMENT_URL=$(vercel deploy --token=${{ secrets.VERCEL_TOKEN }} --prod=${{ needs.prepare.outputs.environment == 'production' }} --yes)
+          echo "deployment_url=$DEPLOYMENT_URL" >> $GITHUB_OUTPUT
+        env:
+          VERCEL_ORG_ID: ${{ env.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ env.VERCEL_PROJECT_ID }}
+      
+      # Run post-deployment validation
+      - name: Validate Deployment
+        run: |
+          echo "Validating deployment at ${{ steps.deploy.outputs.deployment_url }}"
+          # Check if the site is accessible
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" ${{ steps.deploy.outputs.deployment_url }})
+          if [ $HTTP_STATUS -ne 200 ]; then
+            echo "Deployment validation failed with HTTP status $HTTP_STATUS"
+            exit 1
           fi
           
-          # Set artifact name based on environment
-          echo "artifact_name=ui-build-${{ github.sha }}" >> $GITHUB_OUTPUT
-
-      - name: Checkout Repository
-        uses: actions/checkout@v3
-
-      # Include reusable notification template
-      - name: Send Deployment Start Notification
-        uses: ./.github/actions/notification
+          # Check for critical resources
+          curl -s ${{ steps.deploy.outputs.deployment_url }} | grep -q "<script" || (echo "No script tags found in HTML" && exit 1)
+          
+          echo "Deployment validation successful"
+      
+      # Create GitHub deployment
+      - name: Create GitHub Deployment
+        uses: actions/github-script@v7
         with:
-          event_type: 'deployment_start'
-          environment: ${{ steps.set-env.outputs.environment }}
-          status: 'in_progress'
-          details: 'Starting deployment of UI to ${{ steps.set-env.outputs.environment }} environment'
+          script: |
+            const deployment = await github.rest.repos.createDeployment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: context.sha,
+              environment: process.env.ENVIRONMENT,
+              auto_merge: false,
+              required_contexts: [],
+              description: `Vercel deployment to ${process.env.ENVIRONMENT}`,
+              production_environment: process.env.ENVIRONMENT === 'production'
+            });
+            
+            await github.rest.repos.createDeploymentStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              deployment_id: deployment.data.id,
+              state: 'success',
+              environment_url: process.env.DEPLOYMENT_URL,
+              log_url: process.env.DEPLOYMENT_URL,
+              description: `Deployed to ${process.env.ENVIRONMENT}`
+            });
+        env:
+          ENVIRONMENT: ${{ needs.prepare.outputs.environment }}
+          DEPLOYMENT_URL: ${{ steps.deploy.outputs.deployment_url }}
+      
+      # Send deployment notification
+      - name: Send Deployment Notification
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { repo, owner } = context.repo;
+            const environment = process.env.ENVIRONMENT;
+            const deploymentUrl = process.env.DEPLOYMENT_URL;
+            
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number: context.issue.number || (await github.rest.repos.listPullRequests({
+                owner,
+                repo,
+                state: 'open',
+                head: context.ref
+              })).data[0]?.number,
+              body: `🚀 UI deployed to ${environment} environment: [View Deployment](${deploymentUrl})`
+            });
+        env:
+          ENVIRONMENT: ${{ needs.prepare.outputs.environment }}
+          DEPLOYMENT_URL: ${{ steps.deploy.outputs.deployment_url }}
+        if: github.event_name == 'pull_request' || github.event_name == 'push'
 
-  # Deployment approval for production
-  approval:
-    name: Deployment Approval
+  # Deploy to container (for NGINX-based hosting)
+  deploy-container:
+    name: Deploy Container
     needs: prepare
+    if: needs.prepare.outputs.deployment_type == 'container'
     runs-on: ubuntu-latest
+    environment: ${{ needs.prepare.outputs.environment }}
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+      
+      - name: Load Environment Config
+        uses: actions/github-script@v7
+        id: env-config
+        with:
+          script: |
+            const fs = require('fs');
+            const yaml = require('js-yaml');
+            const envFile = `./infrastructure/ci/ui/environments/${process.env.ENVIRONMENT}.yml`;
+            const envConfig = yaml.load(fs.readFileSync(envFile, 'utf8'));
+            return envConfig;
+        env:
+          ENVIRONMENT: ${{ needs.prepare.outputs.environment }}
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      
+      - name: Setup Yarn
+        run: |
+          corepack enable
+          corepack prepare yarn@${{ env.YARN_VERSION }} --activate
+      
+      - name: Get Yarn Cache Directory
+        id: yarn-cache-dir
+        run: echo "dir=$(yarn config get cacheFolder)" >> $GITHUB_OUTPUT
+      
+      - name: Cache Dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ steps.yarn-cache-dir.outputs.dir }}
+            frontend/node_modules
+          key: ${{ runner.os }}-yarn-${{ hashFiles('frontend/yarn.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-yarn-
+      
+      - name: Install Dependencies
+        working-directory: ./frontend
+        run: yarn install --frozen-lockfile
+      
+      # Inject environment-specific configuration
+      - name: Create Environment Variables
+        working-directory: ./frontend
+        run: |
+          cat > .env.production << EOL
+          VITE_APP_NAME="Dollar Funding MCA"
+          VITE_API_URL=${{ fromJson(steps.env-config.outputs.result).api_url }}
+          VITE_AUTH_METHOD=jwt
+          VITE_JWT_EXPIRES_IN=${{ fromJson(steps.env-config.outputs.result).jwt_expires_in }}
+          VITE_FEATURE_OCR_VALIDATION=${{ fromJson(steps.env-config.outputs.result).features.ocr_validation }}
+          VITE_FEATURE_AUTO_APPROVAL=${{ fromJson(steps.env-config.outputs.result).features.auto_approval }}
+          VITE_FEATURE_WEBHOOK_CONFIG=${{ fromJson(steps.env-config.outputs.result).features.webhook_config }}
+          VITE_LOG_LEVEL=${{ fromJson(steps.env-config.outputs.result).log_level }}
+          EOL
+      
+      # Build the application
+      - name: Build Application
+        working-directory: ./frontend
+        run: yarn build
+      
+      # Set up Docker Buildx
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      # Login to GitHub Container Registry
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.CONTAINER_REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      
+      # Build and push Docker image
+      - name: Build and Push Docker Image
+        id: docker-build
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          push: true
+          tags: |
+            ${{ env.CONTAINER_REGISTRY }}/${{ github.repository_owner }}/${{ env.APP_NAME }}-${{ needs.prepare.outputs.environment }}:${{ github.sha }}
+            ${{ env.CONTAINER_REGISTRY }}/${{ github.repository_owner }}/${{ env.APP_NAME }}-${{ needs.prepare.outputs.environment }}:latest
+          build-args: |
+            ENVIRONMENT=${{ needs.prepare.outputs.environment }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      
+      # Deploy to Kubernetes using Helm
+      - name: Set up Kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'latest'
+      
+      - name: Set up Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: 'latest'
+      
+      - name: Deploy to Kubernetes
+        id: helm-deploy
+        run: |
+          # Create kubeconfig from secret
+          echo "${{ secrets.KUBECONFIG }}" > kubeconfig
+          export KUBECONFIG=./kubeconfig
+          
+          # Deploy using Helm
+          RELEASE_NAME="mca-frontend-${{ needs.prepare.outputs.environment }}"
+          NAMESPACE="${{ needs.prepare.outputs.environment }}"
+          
+          # Check if namespace exists, create if not
+          kubectl get namespace $NAMESPACE || kubectl create namespace $NAMESPACE
+          
+          # Deploy with Helm
+          helm upgrade --install $RELEASE_NAME ./infrastructure/kubernetes/charts/frontend 
+            --namespace $NAMESPACE 
+            --set image.repository=${{ env.CONTAINER_REGISTRY }}/${{ github.repository_owner }}/${{ env.APP_NAME }}-${{ needs.prepare.outputs.environment }} 
+            --set image.tag=${{ github.sha }} 
+            --set environment=${{ needs.prepare.outputs.environment }} 
+            --set ingress.host=${{ fromJson(steps.env-config.outputs.result).ingress_host }} 
+            --set replicaCount=${{ fromJson(steps.env-config.outputs.result).replica_count }} 
+            --set resources.limits.cpu=${{ fromJson(steps.env-config.outputs.result).resources.cpu_limit }} 
+            --set resources.limits.memory=${{ fromJson(steps.env-config.outputs.result).resources.memory_limit }} 
+            --wait --timeout 5m
+          
+          # Get service URL
+          SERVICE_URL=$(kubectl get ingress -n $NAMESPACE $RELEASE_NAME-frontend -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+          if [ -z "$SERVICE_URL" ]; then
+            SERVICE_URL=$(kubectl get ingress -n $NAMESPACE $RELEASE_NAME-frontend -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+          fi
+          
+          echo "deployment_url=https://${{ fromJson(steps.env-config.outputs.result).ingress_host }}" >> $GITHUB_OUTPUT
+          echo "release_name=$RELEASE_NAME" >> $GITHUB_OUTPUT
+          echo "namespace=$NAMESPACE" >> $GITHUB_OUTPUT
+      
+      # Run post-deployment validation
+      - name: Validate Deployment
+        run: |
+          echo "Validating deployment at ${{ steps.helm-deploy.outputs.deployment_url }}"
+          # Wait for ingress to be ready
+          sleep 30
+          
+          # Check if the site is accessible
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" ${{ steps.helm-deploy.outputs.deployment_url }})
+          if [ $HTTP_STATUS -ne 200 ]; then
+            echo "Deployment validation failed with HTTP status $HTTP_STATUS"
+            exit 1
+          fi
+          
+          echo "Deployment validation successful"
+      
+      # Configure rollback procedure
+      - name: Configure Rollback Procedure
+        if: failure()
+        run: |
+          echo "Deployment failed, rolling back..."
+          
+          # Create kubeconfig from secret
+          echo "${{ secrets.KUBECONFIG }}" > kubeconfig
+          export KUBECONFIG=./kubeconfig
+          
+          # Rollback Helm release
+          helm rollback ${{ steps.helm-deploy.outputs.release_name }} 0 --namespace ${{ steps.helm-deploy.outputs.namespace }}
+          
+          echo "Rollback completed"
+      
+      # Create GitHub deployment
+      - name: Create GitHub Deployment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const deployment = await github.rest.repos.createDeployment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: context.sha,
+              environment: process.env.ENVIRONMENT,
+              auto_merge: false,
+              required_contexts: [],
+              description: `Container deployment to ${process.env.ENVIRONMENT}`,
+              production_environment: process.env.ENVIRONMENT === 'production'
+            });
+            
+            await github.rest.repos.createDeploymentStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              deployment_id: deployment.data.id,
+              state: 'success',
+              environment_url: process.env.DEPLOYMENT_URL,
+              log_url: process.env.DEPLOYMENT_URL,
+              description: `Deployed to ${process.env.ENVIRONMENT}`
+            });
+        env:
+          ENVIRONMENT: ${{ needs.prepare.outputs.environment }}
+          DEPLOYMENT_URL: ${{ steps.helm-deploy.outputs.deployment_url }}
+      
+      # Send deployment notification
+      - name: Send Deployment Notification
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { repo, owner } = context.repo;
+            const environment = process.env.ENVIRONMENT;
+            const deploymentUrl = process.env.DEPLOYMENT_URL;
+            
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number: context.issue.number || (await github.rest.repos.listPullRequests({
+                owner,
+                repo,
+                state: 'open',
+                head: context.ref
+              })).data[0]?.number,
+              body: `🚀 UI deployed to ${environment} environment: [View Deployment](${deploymentUrl})`
+            });
+        env:
+          ENVIRONMENT: ${{ needs.prepare.outputs.environment }}
+          DEPLOYMENT_URL: ${{ steps.helm-deploy.outputs.deployment_url }}
+        if: github.event_name == 'pull_request' || github.event_name == 'push'
+
+  # Production approval gate
+  production-approval:
+    name: Production Approval
+    needs: prepare
     if: needs.prepare.outputs.environment == 'production'
+    runs-on: ubuntu-latest
     environment: production-approval
     steps:
       - name: Approval Gate
         run: echo "Production deployment approved"
 
-  # Deploy to Vercel
-  deploy-vercel:
-    name: Deploy to Vercel
-    needs: [prepare, approval]
-    if: needs.prepare.outputs.deployment_type == 'vercel' && (needs.prepare.outputs.environment != 'production' || success('approval'))
+  # Notify deployment status
+  notify:
+    name: Notify Deployment Status
+    needs: [prepare, deploy-vercel, deploy-container, production-approval]
+    if: always() && (needs.deploy-vercel.result != 'skipped' || needs.deploy-container.result != 'skipped')
     runs-on: ubuntu-latest
-    environment: ${{ needs.prepare.outputs.environment }}
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v3
-
-      - name: Download Build Artifact
-        uses: actions/download-artifact@v3
+        uses: actions/checkout@v4
+      
+      - name: Load Notification Template
+        uses: actions/github-script@v7
+        id: notification
         with:
-          name: ${{ needs.prepare.outputs.artifact_name }}
-          path: ./dist
-
-      - name: Load Environment Configuration
+          script: |
+            const fs = require('fs');
+            const template = fs.readFileSync('./infrastructure/ci/templates/notification.yml', 'utf8');
+            return { template };
+      
+      - name: Determine Deployment Status
+        id: status
         run: |
-          echo "Loading environment configuration for ${{ needs.prepare.outputs.environment }}"
-          cp infrastructure/ci/ui/environments/${{ needs.prepare.outputs.environment }}.yml .env.production
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: '20'
-          cache: 'npm'
-
-      - name: Install Vercel CLI
-        run: npm install -g vercel@latest
-
-      - name: Deploy to Vercel
-        id: deploy
-        run: |
-          if [ "${{ needs.prepare.outputs.environment }}" == "production" ]; then
-            vercel deploy ./dist --prod --token=${{ secrets.VERCEL_TOKEN }} --yes > deployment_url.txt
+          if [ "${{ needs.deploy-vercel.result }}" == "success" ] || [ "${{ needs.deploy-container.result }}" == "success" ]; then
+            echo "status=success" >> $GITHUB_OUTPUT
+            echo "message=✅ UI deployment to ${{ needs.prepare.outputs.environment }} completed successfully" >> $GITHUB_OUTPUT
           else
-            vercel deploy ./dist --token=${{ secrets.VERCEL_TOKEN }} --yes > deployment_url.txt
+            echo "status=failure" >> $GITHUB_OUTPUT
+            echo "message=❌ UI deployment to ${{ needs.prepare.outputs.environment }} failed" >> $GITHUB_OUTPUT
           fi
-          
-          DEPLOYMENT_URL=$(cat deployment_url.txt)
-          echo "deployment_url=$DEPLOYMENT_URL" >> $GITHUB_OUTPUT
-
-      - name: Verify Deployment
-        run: |
-          echo "Verifying deployment at ${{ steps.deploy.outputs.deployment_url }}"
-          
-          # Wait for deployment to be ready
-          for i in $(seq 1 ${{ env.HEALTH_CHECK_RETRIES }}); do
-            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" ${{ steps.deploy.outputs.deployment_url }})
-            if [ $HTTP_STATUS -eq 200 ]; then
-              echo "Deployment verified successfully!"
-              exit 0
-            fi
-            echo "Waiting for deployment to be ready... (Attempt $i/${{ env.HEALTH_CHECK_RETRIES }})"
-            sleep ${{ env.HEALTH_CHECK_DELAY }}
-          done
-          
-          echo "Deployment verification failed after ${{ env.HEALTH_CHECK_RETRIES }} attempts"
-          exit 1
-
-      - name: Rollback on Failure
-        if: failure()
-        run: |
-          echo "Deployment failed, initiating rollback"
-          vercel rollback --token=${{ secrets.VERCEL_TOKEN }} --yes
-
-      # Include reusable notification template
-      - name: Send Deployment Completion Notification
-        uses: ./.github/actions/notification
+      
+      # Send Slack notification
+      - name: Send Slack Notification
+        uses: slackapi/slack-github-action@v1.25.0
         with:
-          event_type: 'deployment_complete'
-          environment: ${{ needs.prepare.outputs.environment }}
-          status: ${{ job.status }}
-          details: 'UI deployment to ${{ needs.prepare.outputs.environment }} ${{ job.status }}'
-          url: ${{ steps.deploy.outputs.deployment_url }}
-
-  # Deploy as container
-  deploy-container:
-    name: Deploy Container
-    needs: [prepare, approval]
-    if: needs.prepare.outputs.deployment_type == 'container' && (needs.prepare.outputs.environment != 'production' || success('approval'))
-    runs-on: ubuntu-latest
-    environment: ${{ needs.prepare.outputs.environment }}
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v3
-
-      - name: Download Build Artifact
-        uses: actions/download-artifact@v3
+          payload: |
+            {
+              "text": "${{ steps.status.outputs.message }}",
+              "blocks": [
+                {
+                  "type": "header",
+                  "text": {
+                    "type": "plain_text",
+                    "text": "${{ steps.status.outputs.message }}"
+                  }
+                },
+                {
+                  "type": "section",
+                  "fields": [
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Environment:* ${{ needs.prepare.outputs.environment }}"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Deployment Type:* ${{ needs.prepare.outputs.deployment_type }}"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Triggered By:* ${{ github.actor }}"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Commit:* ${{ github.sha }}"
+                    }
+                  ]
+                },
+                {
+                  "type": "actions",
+                  "elements": [
+                    {
+                      "type": "button",
+                      "text": {
+                        "type": "plain_text",
+                        "text": "View Workflow"
+                      },
+                      "url": "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                    }
+                  ]
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+        if: ${{ secrets.SLACK_WEBHOOK_URL != '' }}
+      
+      # Send email notification for production deployments
+      - name: Send Email Notification
+        uses: dawidd6/action-send-mail@v3
         with:
-          name: ${{ needs.prepare.outputs.artifact_name }}
-          path: ./dist
-
-      - name: Load Environment Configuration
-        run: |
-          echo "Loading environment configuration for ${{ needs.prepare.outputs.environment }}"
-          cp infrastructure/ci/ui/environments/${{ needs.prepare.outputs.environment }}.yml .env.production
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
-
-      - name: Login to Container Registry
-        uses: docker/login-action@v2
-        with:
-          registry: ${{ env.CONTAINER_REGISTRY }}
-          username: ${{ secrets.REGISTRY_USERNAME }}
-          password: ${{ secrets.REGISTRY_PASSWORD }}
-
-      - name: Build and Push Container Image
-        id: docker_build
-        uses: docker/build-push-action@v4
-        with:
-          context: .
-          file: ./Dockerfile
-          push: true
-          tags: ${{ env.CONTAINER_REGISTRY }}/mca-ui:${{ github.sha }},${{ env.CONTAINER_REGISTRY }}/mca-ui:${{ needs.prepare.outputs.environment }}
-          cache-from: type=registry,ref=${{ env.CONTAINER_REGISTRY }}/mca-ui:${{ needs.prepare.outputs.environment }}
-          cache-to: type=inline
-          build-args: |
-            ENVIRONMENT=${{ needs.prepare.outputs.environment }}
-
-      # Include reusable security scanning template
-      - name: Scan Container Image
-        uses: ./.github/actions/security-scan
-        with:
-          image: ${{ env.CONTAINER_REGISTRY }}/mca-ui:${{ github.sha }}
-          severity: ${{ needs.prepare.outputs.environment == 'production' && 'CRITICAL,HIGH' || 'CRITICAL' }}
-
-      - name: Deploy to Kubernetes
-        id: deploy
-        run: |
-          # Set up kubectl
-          aws eks update-kubeconfig --name mca-cluster-${{ needs.prepare.outputs.environment }} --region us-east-1
-          
-          # Update Helm deployment
-          helm upgrade --install mca-ui ./infrastructure/kubernetes/charts/frontend 
-            --namespace mca-${{ needs.prepare.outputs.environment }} 
-            --set image.repository=${{ env.CONTAINER_REGISTRY }}/mca-ui 
-            --set image.tag=${{ github.sha }} 
-            --set environment=${{ needs.prepare.outputs.environment }} 
-            --values ./infrastructure/kubernetes/charts/frontend/values-${{ needs.prepare.outputs.environment }}.yaml
-          
-          # Get service URL
-          SERVICE_URL=$(kubectl get ingress -n mca-${{ needs.prepare.outputs.environment }} mca-ui-ingress -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
-          echo "service_url=https://$SERVICE_URL" >> $GITHUB_OUTPUT
-
-      - name: Verify Deployment
-        run: |
-          echo "Verifying deployment at ${{ steps.deploy.outputs.service_url }}"
-          
-          # Wait for deployment to be ready
-          for i in $(seq 1 ${{ env.HEALTH_CHECK_RETRIES }}); do
-            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" ${{ steps.deploy.outputs.service_url }})
-            if [ $HTTP_STATUS -eq 200 ]; then
-              echo "Deployment verified successfully!"
-              exit 0
-            fi
-            echo "Waiting for deployment to be ready... (Attempt $i/${{ env.HEALTH_CHECK_RETRIES }})"
-            sleep ${{ env.HEALTH_CHECK_DELAY }}
-          done
-          
-          echo "Deployment verification failed after ${{ env.HEALTH_CHECK_RETRIES }} attempts"
-          exit 1
-
-      - name: Rollback on Failure
-        if: failure()
-        run: |
-          echo "Deployment failed, initiating rollback"
-          helm rollback mca-ui -n mca-${{ needs.prepare.outputs.environment }}
-
-      # Include reusable notification template
-      - name: Send Deployment Completion Notification
-        uses: ./.github/actions/notification
-        with:
-          event_type: 'deployment_complete'
-          environment: ${{ needs.prepare.outputs.environment }}
-          status: ${{ job.status }}
-          details: 'UI container deployment to ${{ needs.prepare.outputs.environment }} ${{ job.status }}'
-          url: ${{ steps.deploy.outputs.service_url }}
-
-  # Post-deployment validation
-  validate:
-    name: Post-Deployment Validation
-    needs: [prepare, deploy-vercel, deploy-container]
-    if: |
-      always() && 
-      (needs.deploy-vercel.result == 'success' || needs.deploy-container.result == 'success')
-    runs-on: ubuntu-latest
-    environment: ${{ needs.prepare.outputs.environment }}
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v3
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: '20'
-          cache: 'npm'
-
-      - name: Install Dependencies
-        run: npm ci
-
-      - name: Determine Deployment URL
-        id: get_url
-        run: |
-          if [ "${{ needs.prepare.outputs.deployment_type }}" == "vercel" ]; then
-            echo "deployment_url=${{ needs.deploy-vercel.outputs.deployment_url }}" >> $GITHUB_OUTPUT
-          else
-            echo "deployment_url=${{ needs.deploy-container.outputs.service_url }}" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Run Smoke Tests
-        run: |
-          echo "Running smoke tests against ${{ steps.get_url.outputs.deployment_url }}"
-          # Run appropriate tests based on environment
-          if [ "${{ needs.prepare.outputs.environment }}" == "production" ]; then
-            npm run test:e2e:critical -- --base-url=${{ steps.get_url.outputs.deployment_url }}
-          else
-            npm run test:e2e -- --base-url=${{ steps.get_url.outputs.deployment_url }}
-          fi
-
-      - name: Verify Display Across Screen Sizes
-        run: |
-          echo "Verifying display across required screen sizes"
-          npm run test:responsive -- --base-url=${{ steps.get_url.outputs.deployment_url }} --sizes=1920x1080,1440x900,1024x768,768x1024,375x667,414x896
-
-      - name: Verify Feature Flags
-        run: |
-          echo "Verifying feature flags for ${{ needs.prepare.outputs.environment }} environment"
-          npm run test:features -- --base-url=${{ steps.get_url.outputs.deployment_url }} --environment=${{ needs.prepare.outputs.environment }}
-
-      # Include reusable notification template
-      - name: Send Validation Notification
-        uses: ./.github/actions/notification
-        with:
-          event_type: 'validation_complete'
-          environment: ${{ needs.prepare.outputs.environment }}
-          status: ${{ job.status }}
-          details: 'UI validation in ${{ needs.prepare.outputs.environment }} ${{ job.status }}'
+          server_address: ${{ secrets.MAIL_SERVER }}
+          server_port: ${{ secrets.MAIL_PORT }}
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          subject: ${{ steps.status.outputs.message }}
+          body: |
+            Deployment Status: ${{ steps.status.outputs.status }}
+            Environment: ${{ needs.prepare.outputs.environment }}
+            Deployment Type: ${{ needs.prepare.outputs.deployment_type }}
+            Triggered By: ${{ github.actor }}
+            Commit: ${{ github.sha }}
+            
+            View Workflow: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          to: ${{ secrets.NOTIFICATION_EMAIL }}
+          from: MCA Deployment <${{ secrets.MAIL_FROM }}>
+        if: needs.prepare.outputs.environment == 'production' && secrets.MAIL_SERVER != ''
