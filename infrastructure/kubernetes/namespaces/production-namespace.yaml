@@ -1,83 +1,73 @@
-# Production Namespace Definition for MCA Application Processing System
-# This namespace hosts all production microservices with strict resource controls and security settings
-# It ensures complete isolation from development and staging workloads
-# and implements production-grade configurations for high availability and security
+# Production Namespace for MCA Application Processing System
+# This file defines the Kubernetes namespace for the production environment
+# where all customer-facing microservices will be deployed.
+#
+# Key considerations:
+# - Production environment must maintain 99.9% system uptime
+# - Complete isolation from development and staging workloads
+# - Strict resource controls and security settings
+# - Production-grade configurations for high availability
+#
+# This namespace is part of the multi-environment deployment strategy:
+# - Development: Local development setup
+# - Staging: Pre-production validation
+# - Production: Live system with full redundancy
 
 apiVersion: v1
 kind: Namespace
 metadata:
   name: mca-production
   labels:
+    # Core labels for identification
     name: mca-production
     environment: production
-    app.kubernetes.io/part-of: mca-application-system
+    app.kubernetes.io/part-of: mca-application-processing
     app.kubernetes.io/managed-by: terraform
-    app.kubernetes.io/created-by: operations-team
-    # Service discovery labels
-    service-tier: production
-    network-zone: secure
-    data-classification: sensitive
-    # Infrastructure labels
-    infrastructure.mca.dollarfunding.com/high-availability: "true"
-    infrastructure.mca.dollarfunding.com/gpu-enabled: "true"
-    infrastructure.mca.dollarfunding.com/priority-class: "production-critical"
+    
+    # Labels for service discovery and filtering
+    tier: production
+    version: "1.0"
+    criticality: high
+    
+    # Network policy labels
+    network-policy: restricted
+    
+    # Monitoring and observability labels
+    monitoring: enabled
+    logging: enabled
+    tracing: enabled
+    
   annotations:
-    # Environment information
-    environment.mca.dollarfunding.com/type: "production"
-    environment.mca.dollarfunding.com/tier: "customer-facing"
+    # Description and documentation
+    description: "Production environment for MCA Application Processing System"
+    documentation: "https://dollarfunding.com/docs/mca-application-processing"
     
-    # Resource management
-    scheduler.alpha.kubernetes.io/node-selector: "environment=production,workload=application"
+    # Resource management annotations
+    scheduler.alpha.kubernetes.io/node-selector: "env=production,workload=mca"
     
-    # Monitoring and observability
-    monitoring.mca.dollarfunding.com/datadog-enabled: "true"
-    monitoring.mca.dollarfunding.com/prometheus-scrape: "true"
-    monitoring.mca.dollarfunding.com/log-collection: "true"
-    monitoring.mca.dollarfunding.com/sla-tier: "tier-1"
-    monitoring.mca.dollarfunding.com/uptime-target: "99.9"
-    monitoring.mca.dollarfunding.com/alert-priority: "p1"
-    monitoring.mca.dollarfunding.com/metrics-retention: "90d"
-    monitoring.mca.dollarfunding.com/performance-metrics: "application-processing-time,ocr-accuracy,queue-depth,api-response-time"
-    monitoring.mca.dollarfunding.com/log-level: "INFO"
+    # Compliance and security annotations
+    compliance.dollarfunding.com/data-classification: "sensitive"
+    compliance.dollarfunding.com/pci-dss: "in-scope"
+    security.dollarfunding.com/encryption: "required"
     
-    # Security and compliance
-    security.mca.dollarfunding.com/network-policy-enforced: "true"
-    security.mca.dollarfunding.com/pod-security-enforced: "true"
-    security.mca.dollarfunding.com/data-classification: "sensitive"
-    security.mca.dollarfunding.com/pii-handling: "true"
-    security.mca.dollarfunding.com/encryption-at-rest: "aes-256"
-    security.mca.dollarfunding.com/field-level-encryption: "enabled"
-    security.mca.dollarfunding.com/tls-version: "1.3"
-    security.mca.dollarfunding.com/jwt-auth-required: "true"
-    security.mca.dollarfunding.com/rate-limiting: "enabled"
-    security.mca.dollarfunding.com/security-scan-schedule: "daily"
+    # Backup and disaster recovery annotations
+    backup.dollarfunding.com/schedule: "daily"
+    backup.dollarfunding.com/retention: "7-years"
+    dr.dollarfunding.com/rpo: "15m"
+    dr.dollarfunding.com/rto: "30m"
     
-    # Cost allocation
-    cost.mca.dollarfunding.com/business-unit: "funding-operations"
-    cost.mca.dollarfunding.com/cost-center: "mca-application-processing"
+    # Monitoring and alerting annotations
+    monitoring.dollarfunding.com/priority: "p1"
+    monitoring.dollarfunding.com/sla: "99.9%"
+    monitoring.dollarfunding.com/pagerduty-integration: "enabled"
+    monitoring.dollarfunding.com/datadog-integration: "enabled"
     
-    # Documentation
-    documentation.mca.dollarfunding.com/runbook: "https://docs.dollarfunding.com/mca/runbooks/production"
-    documentation.mca.dollarfunding.com/owner: "operations-team@dollarfunding.com"
-    
-    # Backup and disaster recovery
-    backup.mca.dollarfunding.com/schedule: "daily"
-    backup.mca.dollarfunding.com/retention: "90d"
-    backup.mca.dollarfunding.com/disaster-recovery-tier: "tier-1"
-    
-    # Deployment information
-    deployment.mca.dollarfunding.com/strategy: "blue-green"
-    deployment.mca.dollarfunding.com/approval-required: "true"
-    deployment.mca.dollarfunding.com/maintenance-window: "sunday-01:00-05:00-UTC"
-    deployment.mca.dollarfunding.com/rollback-enabled: "true"
-    deployment.mca.dollarfunding.com/canary-deployment: "enabled"
-    deployment.mca.dollarfunding.com/feature-flags: "enabled"
-    deployment.mca.dollarfunding.com/min-replicas: "2"
-    deployment.mca.dollarfunding.com/max-unavailable: "25%"
-    
-    # Compliance
-    compliance.mca.dollarfunding.com/data-retention: "7-years"
-    compliance.mca.dollarfunding.com/audit-logging: "enabled"
-    compliance.mca.dollarfunding.com/last-review: "2025-05-01"
-    compliance.mca.dollarfunding.com/data-archival: "enabled"
-    compliance.mca.dollarfunding.com/access-control: "rbac-enforced"
+    # Cost management annotations
+    cost.dollarfunding.com/business-unit: "lending"
+    cost.dollarfunding.com/project: "mca-application-processing"
+    cost.dollarfunding.com/owner: "lending-operations"
+
+spec:
+  # Production namespace finalizers
+  finalizers:
+  - kubernetes
