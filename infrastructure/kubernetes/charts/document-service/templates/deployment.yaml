@@ -1,0 +1,100 @@
+{{- /*
+Document Service Deployment Template
+
+This template extends the common deployment template with Document Service specific configurations.
+It includes settings for Python/scikit-learn container image, environment variables, resource limits,
+probes, and security context.
+
+Key features:
+- Configures Python container with scikit-learn image and tag
+- Sets resource limits and requests based on Document Service requirements (minimum 16GB RAM)
+- Configures environment variables from ConfigMaps and Secrets
+- Sets up liveness and readiness probes for health monitoring
+- Implements security context with non-root user
+- Configures volume mounts for model data and temporary storage
+*/}}
+
+{{- /* Define Document Service specific values before including the common template */}}
+{{- $_ := set .Values "serviceType" "python" }}
+
+{{- /* Ensure proper memory allocation for scikit-learn (minimum 16GB RAM required as per section 3.2.3) */}}
+{{- if not .Values.resources.limits.memory }}
+  {{- $_ := set .Values.resources.limits "memory" "16Gi" }}
+{{- end }}
+{{- if not .Values.resources.requests.memory }}
+  {{- $_ := set .Values.resources.requests "memory" "8Gi" }}
+{{- end }}
+
+{{- /* Ensure proper CPU allocation for document processing */}}
+{{- if not .Values.resources.limits.cpu }}
+  {{- $_ := set .Values.resources.limits "cpu" "4" }}
+{{- end }}
+{{- if not .Values.resources.requests.cpu }}
+  {{- $_ := set .Values.resources.requests "cpu" "2" }}
+{{- end }}
+
+{{- /* Configure Python-specific environment variables if not already set */}}
+{{- if not .Values.env.PYTHONUNBUFFERED }}
+  {{- $_ := set .Values.env "PYTHONUNBUFFERED" "1" }}
+{{- end }}
+{{- if not .Values.env.PYTHONDONTWRITEBYTECODE }}
+  {{- $_ := set .Values.env "PYTHONDONTWRITEBYTECODE" "1" }}
+{{- end }}
+{{- if not .Values.env.ENVIRONMENT }}
+  {{- $_ := set .Values.env "ENVIRONMENT" "production" }}
+{{- end }}
+
+{{- /* Configure Document Service-specific probes with appropriate paths and timing */}}
+{{- if not .Values.livenessProbe }}
+  {{- $_ := set .Values "livenessProbe" (dict "enabled" true "path" "/health/live" "initialDelaySeconds" 30 "periodSeconds" 10 "timeoutSeconds" 5 "successThreshold" 1 "failureThreshold" 3) }}
+{{- end }}
+{{- if not .Values.readinessProbe }}
+  {{- $_ := set .Values "readinessProbe" (dict "enabled" true "path" "/health/ready" "initialDelaySeconds" 10 "periodSeconds" 10 "timeoutSeconds" 5 "successThreshold" 1 "failureThreshold" 3) }}
+{{- end }}
+{{- if not .Values.startupProbe }}
+  {{- $_ := set .Values "startupProbe" (dict "enabled" true "probe" (dict "httpGet" (dict "path" "/health/live" "port" "http") "initialDelaySeconds" 10 "periodSeconds" 10 "timeoutSeconds" 5 "failureThreshold" 6)) }}
+{{- end }}
+
+{{- /* Configure security context for non-root user */}}
+{{- if not .Values.securityContext }}
+  {{- $_ := set .Values "securityContext" (dict "runAsUser" 1000 "runAsGroup" 1000 "allowPrivilegeEscalation" false "capabilities" (dict "drop" (list "ALL")) "readOnlyRootFilesystem" true) }}
+{{- end }}
+
+{{- /* Configure pod security context */}}
+{{- if not .Values.podSecurityContext }}
+  {{- $_ := set .Values "podSecurityContext" (dict "runAsNonRoot" true "fsGroup" 1000) }}
+{{- end }}
+
+{{- /* Configure pod annotations for metrics monitoring */}}
+{{- if not .Values.podAnnotations }}
+  {{- $_ := set .Values "podAnnotations" (dict "prometheus.io/scrape" "true" "prometheus.io/port" "9090" "prometheus.io/path" "/metrics") }}
+{{- end }}
+
+{{- /* Configure deployment strategy for document processing workloads */}}
+{{- if not .Values.deployment.strategy }}
+  {{- $_ := set .Values.deployment "strategy" (dict "type" "RollingUpdate" "rollingUpdate" (dict "maxSurge" 1 "maxUnavailable" 0)) }}
+{{- end }}
+
+{{- /* Configure termination grace period to allow for proper shutdown */}}
+{{- if not .Values.terminationGracePeriodSeconds }}
+  {{- $_ := set .Values "terminationGracePeriodSeconds" 30 }}
+{{- end }}
+
+{{- /* Configure volume mounts if not already set */}}
+{{- if not .Values.volumeMounts }}
+  {{- $_ := set .Values "volumeMounts" (list 
+      (dict "name" "model-data" "mountPath" "/app/models" "readOnly" true)
+      (dict "name" "tmp" "mountPath" "/tmp")
+    ) }}
+{{- end }}
+
+{{- /* Configure volumes if not already set */}}
+{{- if not .Values.volumes }}
+  {{- $_ := set .Values "volumes" (list 
+      (dict "name" "model-data" "emptyDir" dict)
+      (dict "name" "tmp" "emptyDir" dict)
+    ) }}
+{{- end }}
+
+{{- /* Include the common deployment template with Document Service-specific values */}}
+{{- template "common.deployment" . }}
