@@ -1,13 +1,10 @@
 {{- /*
-service.yaml: Kubernetes Service template for the Email Service
+service.yaml: Kubernetes Service template for Email Service
 
-This template extends the common service template with Email Service specific configurations,
-including port definitions and selector labels. It ensures that the Email Service is accessible
-within the cluster and can be discovered by other services.
+This template creates a Kubernetes Service resource that exposes the Email Service within the cluster,
+making it accessible to other services for email monitoring and processing operations.
 
-The service exposes:
-- HTTP endpoint on port 3000 for API access and health checks
-- Metrics endpoint on port 9090 for Prometheus scraping
+It follows the pattern of the common service template but with Email Service specific configurations.
 */}}
 
 {{- if .Values.service.enabled | default true }}
@@ -17,21 +14,24 @@ metadata:
   name: {{ include "common.names.fullname" . }}
   labels:
     {{- include "common.labels.standard" . | nindent 4 }}
+    app.kubernetes.io/component: email-service
     {{- if .Values.service.labels }}
     {{- include "common.tplvalues.render" (dict "value" .Values.service.labels "context" $) | nindent 4 }}
     {{- end }}
-    app.kubernetes.io/component: email-service
-  {{- if or .Values.service.annotations .Values.commonAnnotations }}
   annotations:
+    # Email Service specific annotations for service discovery and monitoring
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "{{ .Values.service.metricsPort | default 9090 }}"
+    prometheus.io/path: "/metrics"
+    # Additional annotations for service identification
+    app.kubernetes.io/part-of: "mca-application-processing-system"
+    app.kubernetes.io/component: "email-service"
     {{- if .Values.service.annotations }}
     {{- include "common.tplvalues.render" (dict "value" .Values.service.annotations "context" $) | nindent 4 }}
     {{- end }}
     {{- if .Values.commonAnnotations }}
     {{- include "common.tplvalues.render" (dict "value" .Values.commonAnnotations "context" $) | nindent 4 }}
     {{- end }}
-    prometheus.io/scrape: "true"
-    prometheus.io/port: "9090"
-  {{- end }}
 spec:
   type: {{ .Values.service.type | default "ClusterIP" }}
   {{- if and (eq .Values.service.type "LoadBalancer") .Values.service.loadBalancerIP }}
@@ -55,18 +55,20 @@ spec:
   {{- end }}
   {{- end }}
   ports:
+    # HTTP API port for email service operations
     - name: http
       port: {{ .Values.service.port | default 3000 }}
-      targetPort: http
+      targetPort: {{ .Values.service.port | default 3000 }}
       protocol: TCP
+    # Metrics port for monitoring and observability
     - name: metrics
-      port: 9090
-      targetPort: metrics
+      port: {{ .Values.service.metricsPort | default 9090 }}
+      targetPort: {{ .Values.service.metricsPort | default 9090 }}
       protocol: TCP
   selector:
     {{- include "common.labels.matchLabels" . | nindent 4 }}
+    app.kubernetes.io/component: email-service
     {{- if .Values.service.selector }}
     {{- include "common.tplvalues.render" (dict "value" .Values.service.selector "context" $) | nindent 4 }}
     {{- end }}
-    app.kubernetes.io/component: email-service
 {{- end }}
