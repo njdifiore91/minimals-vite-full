@@ -2,35 +2,54 @@
 
 # validate-deployment.sh
 #
-# This script validates that a deployment was successful by checking pod status,
-# running smoke tests, and verifying endpoints. It performs a series of checks
-# to ensure that the deployed service is running correctly and accessible.
+# This script validates that a Kubernetes deployment was successful by performing
+# a series of progressive checks with increasing complexity:
+# 1. Basic pod status and readiness checks
+# 2. Service-specific health endpoint verification
+# 3. API endpoint validation with authentication
+# 4. Functional smoke tests for critical paths
+# 5. Integration tests for service interactions
 #
-# Usage: ./validate-deployment.sh --service <service-name> --namespace <namespace> --environment <env> [options]
+# The script is designed to work with the MCA Application Processing System microservices
+# and supports different service types (Node.js, Java, Python) with appropriate health checks.
+#
+# For the MCA Application Processing System, this script validates:
+# - Email Service (Node.js/Nodemailer)
+# - Document Service (Python/scikit-learn)
+# - OCR Service (Python/TensorFlow)
+# - Data Service (Java/Spring Boot)
+# - Notification Service (Node.js)
+# - API Gateway (Kong)
+#
+# Usage: ./validate-deployment.sh [options]
 #
 # Options:
-#   --service        Service name to validate (required)
-#   --namespace      Kubernetes namespace (required)
-#   --environment    Environment (development, staging, production) (required)
-#   --timeout        Timeout in seconds for validation checks (default: 300)
-#   --retries        Number of retries for validation checks (default: 5)
-#   --retry-delay    Delay between retries in seconds (default: 10)
-#   --skip-basic     Skip basic validation checks
-#   --skip-functional Skip functional validation checks
-#   --skip-integration Skip integration validation checks
-#   --verbose        Enable verbose logging
-#   --help           Display this help message
+#   -n, --namespace <namespace>       Kubernetes namespace (default: current namespace)
+#   -s, --service <service-name>      Service name to validate
+#   -t, --timeout <seconds>           Timeout for validation in seconds (default: 300)
+#   -r, --retries <count>             Number of retries for transient issues (default: 5)
+#   -l, --level <1-5>                 Validation level (default: 3)
+#                                     1: Basic pod status
+#                                     2: Health endpoints
+#                                     3: API verification
+#                                     4: Functional tests
+#                                     5: Integration tests
+#   -w, --wait <seconds>              Initial wait before validation (default: 10)
+#   -v, --verbose                     Enable verbose output
+#   -h, --help                        Show this help message
 
-set -e
+set -eo pipefail
 
 # Default values
+NAMESPACE=""
+SERVICE=""
 TIMEOUT=300
 RETRIES=5
-RETRY_DELAY=10
-SKIP_BASIC=false
-SKIP_FUNCTIONAL=false
-SKIP_INTEGRATION=false
+VALIDATION_LEVEL=3
+INITIAL_WAIT=10
 VERBOSE=false
+JWT_TOKEN=""
+API_GATEWAY_URL=""
 
 # Color codes for output
 RED="\033[0;31m"
@@ -41,220 +60,332 @@ NC="\033[0m" # No Color
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --service)
-      SERVICE="$2"
-      shift 2
-      ;;
-    --namespace)
+  case $1 in
+    -n|--namespace)
       NAMESPACE="$2"
       shift 2
       ;;
-    --environment)
-      ENVIRONMENT="$2"
+    -s|--service)
+      SERVICE="$2"
       shift 2
       ;;
-    --timeout)
+    -t|--timeout)
       TIMEOUT="$2"
       shift 2
       ;;
-    --retries)
+    -r|--retries)
       RETRIES="$2"
       shift 2
       ;;
-    --retry-delay)
-      RETRY_DELAY="$2"
+    -l|--level)
+      VALIDATION_LEVEL="$2"
       shift 2
       ;;
-    --skip-basic)
-      SKIP_BASIC=true
-      shift
+    -w|--wait)
+      INITIAL_WAIT="$2"
+      shift 2
       ;;
-    --skip-functional)
-      SKIP_FUNCTIONAL=true
-      shift
-      ;;
-    --skip-integration)
-      SKIP_INTEGRATION=true
-      shift
-      ;;
-    --verbose)
+    -v|--verbose)
       VERBOSE=true
       shift
       ;;
-    --help)
-      echo "Usage: ./validate-deployment.sh --service <service-name> --namespace <namespace> --environment <env> [options]"
+    -h|--help)
+      echo "Usage: $0 [options]"
       echo ""
       echo "Options:"
-      echo "  --service        Service name to validate (required)"
-      echo "  --namespace      Kubernetes namespace (required)"
-      echo "  --environment    Environment (development, staging, production) (required)"
-      echo "  --timeout        Timeout in seconds for validation checks (default: 300)"
-      echo "  --retries        Number of retries for validation checks (default: 5)"
-      echo "  --retry-delay    Delay between retries in seconds (default: 10)"
-      echo "  --skip-basic     Skip basic validation checks"
-      echo "  --skip-functional Skip functional validation checks"
-      echo "  --skip-integration Skip integration validation checks"
-      echo "  --verbose        Enable verbose logging"
-      echo "  --help           Display this help message"
+      echo "  -n, --namespace <namespace>       Kubernetes namespace (default: current namespace)"
+      echo "  -s, --service <service-name>      Service name to validate"
+      echo "  -t, --timeout <seconds>           Timeout for validation in seconds (default: 300)"
+      echo "  -r, --retries <count>             Number of retries for transient issues (default: 5)"
+      echo "  -l, --level <1-5>                 Validation level (default: 3)"
+      echo "                                    1: Basic pod status"
+      echo "                                    2: Health endpoints"
+      echo "                                    3: API verification"
+      echo "                                    4: Functional tests"
+      echo "                                    5: Integration tests"
+      echo "  -w, --wait <seconds>              Initial wait before validation (default: 10)"
+      echo "  -v, --verbose                     Enable verbose output"
+      echo "  -h, --help                        Show this help message"
       exit 0
       ;;
     *)
       echo "Unknown option: $1"
-      echo "Run './validate-deployment.sh --help' for usage information"
       exit 1
       ;;
   esac
 done
 
-# Validate required arguments
-if [ -z "$SERVICE" ] || [ -z "$NAMESPACE" ] || [ -z "$ENVIRONMENT" ]; then
-  echo -e "${RED}Error: Missing required arguments${NC}"
-  echo "Run './validate-deployment.sh --help' for usage information"
+# Determine namespace if not provided
+if [[ -z "$NAMESPACE" ]]; then
+  NAMESPACE=$(kubectl config view --minify --output 'jsonpath={..namespace}')
+  if [[ -z "$NAMESPACE" ]]; then
+    NAMESPACE="default"
+  fi
+fi
+
+# Validate required parameters
+if [[ -z "$SERVICE" ]]; then
+  echo -e "${RED}Error: Service name is required. Use -s or --service to specify.${NC}"
   exit 1
 fi
 
-# Validate environment
-if [[ "$ENVIRONMENT" != "development" && "$ENVIRONMENT" != "staging" && "$ENVIRONMENT" != "production" ]]; then
-  echo -e "${RED}Error: Environment must be one of: development, staging, production${NC}"
-  exit 1
-fi
-
-# Log function with timestamp
+# Log function with timestamp and service name
 log() {
   local level=$1
   local message=$2
   local timestamp=$(date +"%Y-%m-%d %H:%M:%S")
   
-  case "$level" in
+  case $level in
     "INFO")
-      echo -e "${BLUE}[INFO]${NC} $timestamp - $message"
+      echo -e "${BLUE}[$timestamp] [INFO] [$SERVICE] $message${NC}"
       ;;
     "SUCCESS")
-      echo -e "${GREEN}[SUCCESS]${NC} $timestamp - $message"
+      echo -e "${GREEN}[$timestamp] [SUCCESS] [$SERVICE] $message${NC}"
       ;;
     "WARN")
-      echo -e "${YELLOW}[WARN]${NC} $timestamp - $message"
+      echo -e "${YELLOW}[$timestamp] [WARN] [$SERVICE] $message${NC}"
       ;;
     "ERROR")
-      echo -e "${RED}[ERROR]${NC} $timestamp - $message"
+      echo -e "${RED}[$timestamp] [ERROR] [$SERVICE] $message${NC}"
       ;;
     *)
-      echo -e "$timestamp - $message"
+      if [[ "$VERBOSE" == "true" ]]; then
+        echo -e "[$timestamp] [DEBUG] [$SERVICE] $message"
+      fi
+      ;;
+  esac
+}
+
+# Function to check if a command exists
+command_exists() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+# Check for required tools
+for cmd in kubectl curl jq; do
+  if ! command_exists "$cmd"; then
+    log "ERROR" "Required command '$cmd' not found. Please install it and try again."
+    exit 1
+  fi
+done
+
+# Wait for initial delay before starting validation
+if [[ $INITIAL_WAIT -gt 0 ]]; then
+  log "INFO" "Waiting for $INITIAL_WAIT seconds before starting validation..."
+  sleep $INITIAL_WAIT
+fi
+
+# Determine service type (nodejs, java, python) based on labels or annotations
+determine_service_type() {
+  local service_type
+  
+  # Try to get service type from pod labels
+  service_type=$(kubectl get pods -n "$NAMESPACE" -l "app.kubernetes.io/name=$SERVICE" -o jsonpath='{.items[0].metadata.labels.serviceType}' 2>/dev/null)
+  
+  # If not found in labels, try to infer from the service name
+  if [[ -z "$service_type" ]]; then
+    if [[ "$SERVICE" == *-service ]]; then
+      case "$SERVICE" in
+        email-service|notification-service)
+          service_type="nodejs"
+          ;;
+        data-service)
+          service_type="java"
+          ;;
+        document-service|ocr-service)
+          service_type="python"
+          ;;
+        *)
+          service_type="unknown"
+          ;;
+      esac
+    else
+      service_type="unknown"
+    fi
+  fi
+  
+  echo "$service_type"
+}
+
+# Get health check endpoint based on service type
+get_health_endpoint() {
+  local service_type=$1
+  local endpoint
+  
+  case "$service_type" in
+    "nodejs")
+      endpoint="/health"
+      ;;
+    "java")
+      endpoint="/actuator/health"
+      ;;
+    "python")
+      endpoint="/health/live"
+      ;;
+    *)
+      endpoint="/health"
       ;;
   esac
   
-  # Log to file if needed
-  # echo "$timestamp - [$level] - $message" >> "$LOG_FILE"
+  echo "$endpoint"
 }
 
-# Verbose logging function
-log_verbose() {
-  if [ "$VERBOSE" = true ]; then
-    log "INFO" "$1"
-  fi
+# Get readiness check endpoint based on service type
+get_readiness_endpoint() {
+  local service_type=$1
+  local endpoint
+  
+  case "$service_type" in
+    "nodejs")
+      endpoint="/health"
+      ;;
+    "java")
+      endpoint="/actuator/health/readiness"
+      ;;
+    "python")
+      endpoint="/health/ready"
+      ;;
+    *)
+      endpoint="/health"
+      ;;
+  esac
+  
+  echo "$endpoint"
 }
 
-# Function to check if kubectl is available
-check_kubectl() {
-  if ! command -v kubectl &> /dev/null; then
-    log "ERROR" "kubectl is not installed or not in PATH"
-    return 1
-  fi
+# Function to retry a command with exponential backoff
+retry_with_backoff() {
+  local max_attempts=$1
+  local timeout=$2
+  local attempt=1
+  local exit_code=0
+  local wait_time=5
+  local command=${@:3}
   
-  # Check if we can access the cluster
-  if ! kubectl cluster-info &> /dev/null; then
-    log "ERROR" "Cannot connect to Kubernetes cluster"
-    return 1
-  fi
-  
-  return 0
-}
-
-# Function to retry a command
-retry() {
-  local cmd=$1
-  local description=$2
-  local n=1
-  local max=$RETRIES
-  local delay=$RETRY_DELAY
-  
-  log_verbose "Executing: $description"
-  
-  while true; do
-    log_verbose "Attempt $n/$max: $description"
+  while [[ $attempt -le $max_attempts ]]; do
+    log "DEBUG" "Attempt $attempt/$max_attempts: $command"
     
-    if eval "$cmd"; then
-      log_verbose "Command succeeded: $description"
+    # Execute the command with a timeout
+    timeout $timeout bash -c "$command"
+    exit_code=$?
+    
+    if [[ $exit_code -eq 0 ]]; then
       return 0
     fi
     
-    if [[ $n -lt $max ]]; then
-      log "WARN" "Command failed, retrying in $delay seconds: $description"
-      sleep $delay
-      ((n++))
-    else
-      log "ERROR" "Command failed after $max attempts: $description"
-      return 1
+    log "WARN" "Attempt $attempt failed with exit code $exit_code. Retrying in $wait_time seconds..."
+    sleep $wait_time
+    
+    # Exponential backoff with a cap
+    wait_time=$(( wait_time * 2 ))
+    if [[ $wait_time -gt 60 ]]; then
+      wait_time=60
     fi
+    
+    attempt=$(( attempt + 1 ))
   done
+  
+  log "ERROR" "All $max_attempts attempts failed!"
+  return $exit_code
 }
 
-# Function to wait for pods to be ready
-wait_for_pods_ready() {
-  local selector="app=$SERVICE"
-  local timeout=$TIMEOUT
+# Function to get a JWT token for authenticated API calls
+get_jwt_token() {
+  # This is a placeholder. In a real environment, you would implement
+  # proper authentication to get a valid JWT token.
+  # For example, calling an auth endpoint with service credentials.
   
-  log "INFO" "Waiting for pods with selector '$selector' to be ready (timeout: ${timeout}s)"
-  
-  local cmd="kubectl -n $NAMESPACE wait --for=condition=ready pods -l $selector --timeout=${timeout}s"
-  
-  if retry "$cmd" "Wait for pods to be ready"; then
-    log "SUCCESS" "All pods for service '$SERVICE' are ready"
+  # For now, we'll check if there's a token in the environment
+  if [[ -n "$MCA_AUTH_TOKEN" ]]; then
+    echo "$MCA_AUTH_TOKEN"
     return 0
-  else
-    log "ERROR" "Timed out waiting for pods to be ready"
-    return 1
   fi
+  
+  # If running in CI, try to get token from a predefined secret
+  if [[ -n "$CI" && -f "/var/run/secrets/kubernetes.io/serviceaccount/token" ]]; then
+    # Use the service account token for authentication
+    cat "/var/run/secrets/kubernetes.io/serviceaccount/token"
+    return 0
+  fi
+  
+  # If we can't get a token, return an empty string
+  echo ""
+  return 1
 }
 
-# Function to check pod status
-check_pod_status() {
-  local selector="app=$SERVICE"
+# Function to get API Gateway URL
+get_api_gateway_url() {
+  # Try to get the API Gateway service URL
+  local gateway_service="api-gateway"
+  local gateway_url
   
-  log "INFO" "Checking pod status for service '$SERVICE'"
+  # First try to get the ingress URL if available
+  gateway_url=$(kubectl get ingress -n "$NAMESPACE" "$gateway_service" -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null)
   
-  # Get pod count
-  local pod_count=$(kubectl -n "$NAMESPACE" get pods -l "$selector" -o name 2>/dev/null | wc -l)
+  if [[ -z "$gateway_url" ]]; then
+    # Try to get the hostname if IP is not available
+    gateway_url=$(kubectl get ingress -n "$NAMESPACE" "$gateway_service" -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null)
+  fi
   
-  if [ "$pod_count" -eq 0 ]; then
-    log "ERROR" "No pods found for service '$SERVICE'"
+  if [[ -z "$gateway_url" ]]; then
+    # If ingress is not available, try to get the service ClusterIP
+    gateway_url=$(kubectl get service -n "$NAMESPACE" "$gateway_service" -o jsonpath='{.spec.clusterIP}' 2>/dev/null)
+    
+    if [[ -n "$gateway_url" ]]; then
+      local port=$(kubectl get service -n "$NAMESPACE" "$gateway_service" -o jsonpath='{.spec.ports[0].port}' 2>/dev/null)
+      if [[ -n "$port" ]]; then
+        gateway_url="$gateway_url:$port"
+      fi
+    fi
+  fi
+  
+  # If we still don't have a URL, use a default for development
+  if [[ -z "$gateway_url" ]]; then
+    log "WARN" "Could not determine API Gateway URL. Using default for development."
+    gateway_url="api-gateway:8000"
+  fi
+  
+  # Ensure the URL has a protocol
+  if [[ "$gateway_url" != http* ]]; then
+    gateway_url="http://$gateway_url"
+  fi
+  
+  echo "$gateway_url"
+}
+
+# Validation Level 1: Check pod status and readiness
+validate_pod_status() {
+  log "INFO" "Starting pod status validation (Level 1)..."
+  
+  # Check if pods exist for the service
+  local pod_count=$(kubectl get pods -n "$NAMESPACE" -l "app.kubernetes.io/name=$SERVICE" --no-headers 2>/dev/null | wc -l)
+  
+  if [[ $pod_count -eq 0 ]]; then
+    log "ERROR" "No pods found for service '$SERVICE' in namespace '$NAMESPACE'"
     return 1
   fi
   
-  log_verbose "Found $pod_count pods for service '$SERVICE'"
+  log "INFO" "Found $pod_count pods for service '$SERVICE'"
   
-  # Check if any pods are in a failed state
-  local failed_pods=$(kubectl -n "$NAMESPACE" get pods -l "$selector" -o jsonpath='{.items[?(@.status.phase=="Failed")].metadata.name}' 2>/dev/null)
+  # Check if all pods are running and ready
+  local command=""
+  command+="kubectl get pods -n \"$NAMESPACE\" -l \"app.kubernetes.io/name=$SERVICE\" -o json | "
+  command+="jq -e '.items | map(select(.status.phase == \"Running\")) | length == (.items | length) and length > 0'"
   
-  if [ -n "$failed_pods" ]; then
-    log "ERROR" "Failed pods found: $failed_pods"
+  if ! retry_with_backoff $RETRIES $TIMEOUT "$command"; then
+    log "ERROR" "Not all pods are in Running state for service '$SERVICE'"
+    kubectl get pods -n "$NAMESPACE" -l "app.kubernetes.io/name=$SERVICE" -o wide
     return 1
   fi
   
-  # Check if any pods are in a pending state
-  local pending_pods=$(kubectl -n "$NAMESPACE" get pods -l "$selector" -o jsonpath='{.items[?(@.status.phase=="Pending")].metadata.name}' 2>/dev/null)
+  # Check if all containers in pods are ready
+  command=""
+  command+="kubectl get pods -n \"$NAMESPACE\" -l \"app.kubernetes.io/name=$SERVICE\" -o json | "
+  command+="jq -e '.items | map(.status.containerStatuses[] | select(.ready == true)) | length == (.items | map(.status.containerStatuses | length) | add)'"
   
-  if [ -n "$pending_pods" ]; then
-    log "WARN" "Pending pods found: $pending_pods"
-    # Don't fail for pending pods, they might still be starting
-  fi
-  
-  # Check if any containers are not ready
-  local not_ready_pods=$(kubectl -n "$NAMESPACE" get pods -l "$selector" -o jsonpath='{.items[?(@.status.containerStatuses[*].ready==false)].metadata.name}' 2>/dev/null)
-  
-  if [ -n "$not_ready_pods" ]; then
-    log "ERROR" "Pods with containers not ready: $not_ready_pods"
+  if ! retry_with_backoff $RETRIES $TIMEOUT "$command"; then
+    log "ERROR" "Not all containers are ready for service '$SERVICE'"
+    kubectl get pods -n "$NAMESPACE" -l "app.kubernetes.io/name=$SERVICE" -o wide
     return 1
   fi
   
@@ -262,597 +393,572 @@ check_pod_status() {
   return 0
 }
 
-# Function to check service endpoints
-check_service_endpoints() {
-  log "INFO" "Checking service endpoints for '$SERVICE'"
+# Validation Level 2: Check health endpoints
+validate_health_endpoints() {
+  log "INFO" "Starting health endpoint validation (Level 2)..."
   
-  # Check if service exists
-  if ! kubectl -n "$NAMESPACE" get service "$SERVICE" &> /dev/null; then
-    log "ERROR" "Service '$SERVICE' not found in namespace '$NAMESPACE'"
+  # Determine service type
+  local service_type=$(determine_service_type)
+  log "INFO" "Detected service type: $service_type"
+  
+  # Get health and readiness endpoints
+  local health_endpoint=$(get_health_endpoint "$service_type")
+  local readiness_endpoint=$(get_readiness_endpoint "$service_type")
+  
+  # Get service URL
+  local service_url
+  service_url=$(kubectl get service -n "$NAMESPACE" "$SERVICE" -o jsonpath='{.spec.clusterIP}' 2>/dev/null)
+  
+  if [[ -z "$service_url" ]]; then
+    log "ERROR" "Could not determine service URL for '$SERVICE'"
     return 1
   fi
   
-  # Check if endpoints exist
-  local endpoints=$(kubectl -n "$NAMESPACE" get endpoints "$SERVICE" -o jsonpath='{.subsets[*].addresses}' 2>/dev/null)
+  # Get service port
+  local service_port
+  service_port=$(kubectl get service -n "$NAMESPACE" "$SERVICE" -o jsonpath='{.spec.ports[0].port}' 2>/dev/null)
   
-  if [ -z "$endpoints" ]; then
-    log "ERROR" "No endpoints found for service '$SERVICE'"
+  if [[ -z "$service_port" ]]; then
+    log "WARN" "Could not determine service port for '$SERVICE', using default port 8080"
+    service_port=8080
+  fi
+  
+  # Check health endpoint
+  log "INFO" "Checking health endpoint: http://$service_url:$service_port$health_endpoint"
+  
+  local command="curl -s -o /dev/null -w '%{http_code}' http://$service_url:$service_port$health_endpoint | grep -q '200'"
+  
+  if ! retry_with_backoff $RETRIES $TIMEOUT "$command"; then
+    log "ERROR" "Health check failed for service '$SERVICE' at endpoint '$health_endpoint'"
     return 1
   fi
   
-  log "SUCCESS" "Service endpoints for '$SERVICE' are available"
-  return 0
-}
-
-# Function to run basic health checks
-run_basic_health_checks() {
-  log "INFO" "Running basic health checks for service '$SERVICE'"
+  log "SUCCESS" "Health check passed for service '$SERVICE'"
   
-  # Check pod status
-  if ! check_pod_status; then
-    return 1
-  fi
-  
-  # Check service endpoints
-  if ! check_service_endpoints; then
-    return 1
-  fi
-  
-  # Check readiness probe
-  local readiness_failures=$(kubectl -n "$NAMESPACE" get pods -l "app=$SERVICE" -o jsonpath='{.items[?(@.status.conditions[?(@.type=="Ready")].status=="False")].metadata.name}' 2>/dev/null)
-  
-  if [ -n "$readiness_failures" ]; then
-    log "ERROR" "Readiness probe failures in pods: $readiness_failures"
-    return 1
-  fi
-  
-  log "SUCCESS" "Basic health checks passed for service '$SERVICE'"
-  return 0
-}
-
-# Function to run service-specific health checks
-run_service_specific_health_checks() {
-  log "INFO" "Running service-specific health checks for '$SERVICE'"
-  
-  # Service-specific health checks based on service type
-  case "$SERVICE" in
-    "email-service")
-      check_email_service_health
-      ;;
-    "document-service")
-      check_document_service_health
-      ;;
-    "ocr-service")
-      check_ocr_service_health
-      ;;
-    "data-service")
-      check_data_service_health
-      ;;
-    "notification-service")
-      check_notification_service_health
-      ;;
-    "api-gateway")
-      check_api_gateway_health
-      ;;
-    *)
-      log "WARN" "No service-specific health checks defined for '$SERVICE', using generic health check"
-      check_generic_service_health
-      ;;
-  esac
-}
-
-# Generic health check for services without specific checks
-check_generic_service_health() {
-  log_verbose "Running generic health check for '$SERVICE'"
-  
-  # Try to access health endpoint if it exists
-  local service_port=$(kubectl -n "$NAMESPACE" get service "$SERVICE" -o jsonpath='{.spec.ports[0].port}' 2>/dev/null)
-  
-  if [ -z "$service_port" ]; then
-    log "WARN" "Could not determine service port for '$SERVICE'"
-    return 0  # Don't fail if we can't determine the port
-  fi
-  
-  # Use kubectl port-forward to access the service
-  local pod_name=$(kubectl -n "$NAMESPACE" get pods -l "app=$SERVICE" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
-  
-  if [ -z "$pod_name" ]; then
-    log "ERROR" "Could not find pod for service '$SERVICE'"
-    return 1
-  fi
-  
-  log_verbose "Using pod '$pod_name' for health check"
-  
-  # Try common health endpoints
-  local health_endpoints=("/health" "/healthz" "/status" "/actuator/health")
-  local health_check_success=false
-  
-  for endpoint in "${health_endpoints[@]}"; do
-    log_verbose "Checking health endpoint: $endpoint"
+  # Check readiness endpoint if different from health endpoint
+  if [[ "$readiness_endpoint" != "$health_endpoint" ]]; then
+    log "INFO" "Checking readiness endpoint: http://$service_url:$service_port$readiness_endpoint"
     
-    # Start port-forward in background
-    kubectl -n "$NAMESPACE" port-forward "$pod_name" 8080:"$service_port" &> /dev/null &
-    local port_forward_pid=$!
+    command="curl -s -o /dev/null -w '%{http_code}' http://$service_url:$service_port$readiness_endpoint | grep -q '200'"
     
-    # Wait for port-forward to establish
-    sleep 2
-    
-    # Try to access health endpoint
-    if curl -s -o /dev/null -w "%{http_code}" http://localhost:8080"$endpoint" | grep -q -E "200|204|301|302"; then
-      log "SUCCESS" "Health check passed for endpoint: $endpoint"
-      health_check_success=true
-      kill $port_forward_pid 2> /dev/null || true
-      wait $port_forward_pid 2> /dev/null || true
-      break
+    if ! retry_with_backoff $RETRIES $TIMEOUT "$command"; then
+      log "ERROR" "Readiness check failed for service '$SERVICE' at endpoint '$readiness_endpoint'"
+      return 1
     fi
     
-    # Kill port-forward
-    kill $port_forward_pid 2> /dev/null || true
-    wait $port_forward_pid 2> /dev/null || true
+    log "SUCCESS" "Readiness check passed for service '$SERVICE'"
+  fi
+  
+  return 0
+}
+
+# Validation Level 3: Verify API endpoints through API Gateway
+validate_api_endpoints() {
+  log "INFO" "Starting API endpoint validation (Level 3)..."
+  
+  # Get API Gateway URL
+  if [[ -z "$API_GATEWAY_URL" ]]; then
+    API_GATEWAY_URL=$(get_api_gateway_url)
+  fi
+  
+  log "INFO" "Using API Gateway URL: $API_GATEWAY_URL"
+  
+  # Get JWT token for authenticated requests if needed
+  if [[ -z "$JWT_TOKEN" ]]; then
+    JWT_TOKEN=$(get_jwt_token)
+    if [[ -z "$JWT_TOKEN" ]]; then
+      log "WARN" "Could not obtain JWT token. Some API validations may fail if authentication is required."
+    else
+      log "INFO" "Successfully obtained JWT token for API validation"
+    fi
+  fi
+  
+  # Define service-specific API endpoints to check
+  local endpoints=()
+  
+  case "$SERVICE" in
+    "email-service")
+      endpoints=("/api/v1/email/status")
+      ;;
+    "document-service")
+      endpoints=("/api/v1/documents/types")
+      ;;
+    "ocr-service")
+      endpoints=("/api/v1/ocr/status")
+      ;;
+    "data-service")
+      endpoints=("/api/v1/applications")
+      ;;
+    "notification-service")
+      endpoints=("/api/v1/webhooks")
+      ;;
+    "api-gateway")
+      endpoints=("/api/v1/status")
+      ;;
+    *)
+      log "WARN" "No predefined API endpoints for service '$SERVICE'. Skipping API validation."
+      return 0
+      ;;
+  esac
+  
+  # Check each endpoint
+  for endpoint in "${endpoints[@]}"; do
+    log "INFO" "Validating API endpoint: $API_GATEWAY_URL$endpoint"
+    
+    local curl_command="curl -s -o /dev/null -w '%{http_code}'"
+    
+    # Add authentication header if token is available
+    if [[ -n "$JWT_TOKEN" ]]; then
+      curl_command+="  -H 'Authorization: Bearer $JWT_TOKEN'"
+    fi
+    
+    curl_command+=" $API_GATEWAY_URL$endpoint | grep -q '2[0-9][0-9]'"
+    
+    if ! retry_with_backoff $RETRIES $TIMEOUT "$curl_command"; then
+      log "ERROR" "API validation failed for endpoint '$endpoint'"
+      return 1
+    fi
+    
+    log "SUCCESS" "API validation passed for endpoint '$endpoint'"
   done
   
-  if [ "$health_check_success" = false ]; then
-    log "WARN" "Could not verify health endpoints for '$SERVICE', but continuing as pods are running"
-    return 0  # Don't fail if we can't verify health endpoints
-  fi
+  return 0
+}
+
+# Validation Level 4: Run functional smoke tests
+validate_functional_tests() {
+  log "INFO" "Starting functional smoke tests (Level 4)..."
+  
+  # Define service-specific functional tests
+  case "$SERVICE" in
+    "email-service")
+      # Test email monitoring status
+      log "INFO" "Testing email monitoring functionality"
+      
+      if [[ -z "$API_GATEWAY_URL" ]]; then
+        API_GATEWAY_URL=$(get_api_gateway_url)
+      fi
+      
+      if [[ -z "$JWT_TOKEN" ]]; then
+        JWT_TOKEN=$(get_jwt_token)
+      fi
+      
+      local curl_command="curl -s"
+      if [[ -n "$JWT_TOKEN" ]]; then
+        curl_command+=" -H 'Authorization: Bearer $JWT_TOKEN'"
+      fi
+      
+      curl_command+=" $API_GATEWAY_URL/api/v1/email/status | jq -e '.status == \"active\"'"
+      
+      if ! retry_with_backoff $RETRIES $TIMEOUT "$curl_command"; then
+        log "ERROR" "Email service functional test failed: monitoring not active"
+        return 1
+      fi
+      
+      log "SUCCESS" "Email service functional test passed"
+      ;;
+      
+    "document-service")
+      # Test document classification capability
+      log "INFO" "Testing document classification functionality"
+      
+      if [[ -z "$API_GATEWAY_URL" ]]; then
+        API_GATEWAY_URL=$(get_api_gateway_url)
+      fi
+      
+      if [[ -z "$JWT_TOKEN" ]]; then
+        JWT_TOKEN=$(get_jwt_token)
+      fi
+      
+      local curl_command="curl -s"
+      if [[ -n "$JWT_TOKEN" ]]; then
+        curl_command+=" -H 'Authorization: Bearer $JWT_TOKEN'"
+      fi
+      
+      curl_command+=" $API_GATEWAY_URL/api/v1/documents/types | jq -e 'length > 0'"
+      
+      if ! retry_with_backoff $RETRIES $TIMEOUT "$curl_command"; then
+        log "ERROR" "Document service functional test failed: could not retrieve document types"
+        return 1
+      fi
+      
+      log "SUCCESS" "Document service functional test passed"
+      ;;
+      
+    "ocr-service")
+      # Test OCR service status
+      log "INFO" "Testing OCR service functionality"
+      
+      if [[ -z "$API_GATEWAY_URL" ]]; then
+        API_GATEWAY_URL=$(get_api_gateway_url)
+      fi
+      
+      if [[ -z "$JWT_TOKEN" ]]; then
+        JWT_TOKEN=$(get_jwt_token)
+      fi
+      
+      local curl_command="curl -s"
+      if [[ -n "$JWT_TOKEN" ]]; then
+        curl_command+=" -H 'Authorization: Bearer $JWT_TOKEN'"
+      fi
+      
+      curl_command+=" $API_GATEWAY_URL/api/v1/ocr/status | jq -e '.status == \"ready\"'"
+      
+      if ! retry_with_backoff $RETRIES $TIMEOUT "$curl_command"; then
+        log "ERROR" "OCR service functional test failed: service not ready"
+        return 1
+      fi
+      
+      log "SUCCESS" "OCR service functional test passed"
+      ;;
+      
+    "data-service")
+      # Test data service API
+      log "INFO" "Testing data service functionality"
+      
+      if [[ -z "$API_GATEWAY_URL" ]]; then
+        API_GATEWAY_URL=$(get_api_gateway_url)
+      fi
+      
+      if [[ -z "$JWT_TOKEN" ]]; then
+        JWT_TOKEN=$(get_jwt_token)
+      fi
+      
+      local curl_command="curl -s"
+      if [[ -n "$JWT_TOKEN" ]]; then
+        curl_command+=" -H 'Authorization: Bearer $JWT_TOKEN'"
+      fi
+      
+      # Check if we can retrieve applications (even if empty)
+      curl_command+=" $API_GATEWAY_URL/api/v1/applications?limit=1 | jq -e 'has(\"data\")'"
+      
+      if ! retry_with_backoff $RETRIES $TIMEOUT "$curl_command"; then
+        log "ERROR" "Data service functional test failed: could not retrieve applications"
+        return 1
+      fi
+      
+      log "SUCCESS" "Data service functional test passed"
+      ;;
+      
+    "notification-service")
+      # Test notification service webhook configuration
+      log "INFO" "Testing notification service functionality"
+      
+      if [[ -z "$API_GATEWAY_URL" ]]; then
+        API_GATEWAY_URL=$(get_api_gateway_url)
+      fi
+      
+      if [[ -z "$JWT_TOKEN" ]]; then
+        JWT_TOKEN=$(get_jwt_token)
+      fi
+      
+      local curl_command="curl -s"
+      if [[ -n "$JWT_TOKEN" ]]; then
+        curl_command+=" -H 'Authorization: Bearer $JWT_TOKEN'"
+      fi
+      
+      curl_command+=" $API_GATEWAY_URL/api/v1/webhooks | jq -e 'has(\"webhooks\")'"
+      
+      if ! retry_with_backoff $RETRIES $TIMEOUT "$curl_command"; then
+        log "ERROR" "Notification service functional test failed: could not retrieve webhooks"
+        return 1
+      fi
+      
+      log "SUCCESS" "Notification service functional test passed"
+      ;;
+      
+    "api-gateway")
+      # Test API Gateway routes
+      log "INFO" "Testing API Gateway functionality"
+      
+      if [[ -z "$API_GATEWAY_URL" ]]; then
+        API_GATEWAY_URL=$(get_api_gateway_url)
+      fi
+      
+      local curl_command="curl -s $API_GATEWAY_URL/api/v1/status | jq -e '.status == \"ok\"'"
+      
+      if ! retry_with_backoff $RETRIES $TIMEOUT "$curl_command"; then
+        log "ERROR" "API Gateway functional test failed: status check failed"
+        return 1
+      fi
+      
+      log "SUCCESS" "API Gateway functional test passed"
+      ;;
+      
+    *)
+      log "WARN" "No functional tests defined for service '$SERVICE'. Skipping functional validation."
+      return 0
+      ;;
+  esac
   
   return 0
 }
 
-# Email service specific health check
-check_email_service_health() {
-  log_verbose "Running email service health check"
+# Validation Level 5: Run integration tests
+validate_integration_tests() {
+  log "INFO" "Starting integration tests (Level 5)..."
   
-  # Check if the service can connect to the email server
-  local pod_name=$(kubectl -n "$NAMESPACE" get pods -l "app=email-service" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
-  
-  if [ -z "$pod_name" ]; then
-    log "ERROR" "Could not find pod for email-service"
-    return 1
-  fi
-  
-  # Check logs for successful connection to email server
-  if kubectl -n "$NAMESPACE" logs "$pod_name" --tail=50 | grep -q "Successfully connected to email server"; then
-    log "SUCCESS" "Email service successfully connected to email server"
-  else
-    log "WARN" "Could not verify email server connection in logs"
-  fi
-  
-  # Check if the service is listening on its port
-  check_generic_service_health
-  return $?
-}
-
-# Document service specific health check
-check_document_service_health() {
-  log_verbose "Running document service health check"
-  
-  # Check if the service can access the document storage
-  local pod_name=$(kubectl -n "$NAMESPACE" get pods -l "app=document-service" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
-  
-  if [ -z "$pod_name" ]; then
-    log "ERROR" "Could not find pod for document-service"
-    return 1
-  fi
-  
-  # Check logs for successful connection to storage
-  if kubectl -n "$NAMESPACE" logs "$pod_name" --tail=50 | grep -q "Connected to document storage"; then
-    log "SUCCESS" "Document service successfully connected to storage"
-  else
-    log "WARN" "Could not verify document storage connection in logs"
-  fi
-  
-  # Check if the service is listening on its port
-  check_generic_service_health
-  return $?
-}
-
-# OCR service specific health check
-check_ocr_service_health() {
-  log_verbose "Running OCR service health check"
-  
-  # Check if the service has loaded its ML models
-  local pod_name=$(kubectl -n "$NAMESPACE" get pods -l "app=ocr-service" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
-  
-  if [ -z "$pod_name" ]; then
-    log "ERROR" "Could not find pod for ocr-service"
-    return 1
-  fi
-  
-  # Check logs for successful model loading
-  if kubectl -n "$NAMESPACE" logs "$pod_name" --tail=50 | grep -q "ML models loaded successfully"; then
-    log "SUCCESS" "OCR service successfully loaded ML models"
-  else
-    log "WARN" "Could not verify ML model loading in logs"
-  fi
-  
-  # Check if the service is listening on its port
-  check_generic_service_health
-  return $?
-}
-
-# Data service specific health check
-check_data_service_health() {
-  log_verbose "Running data service health check"
-  
-  # Check if the service can connect to the database
-  local pod_name=$(kubectl -n "$NAMESPACE" get pods -l "app=data-service" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
-  
-  if [ -z "$pod_name" ]; then
-    log "ERROR" "Could not find pod for data-service"
-    return 1
-  fi
-  
-  # Use Spring Boot actuator health endpoint
-  kubectl -n "$NAMESPACE" port-forward "$pod_name" 8080:8080 &> /dev/null &
-  local port_forward_pid=$!
-  
-  # Wait for port-forward to establish
-  sleep 2
-  
-  # Check actuator health endpoint
-  local health_status=$(curl -s http://localhost:8080/actuator/health)
-  
-  # Kill port-forward
-  kill $port_forward_pid 2> /dev/null || true
-  wait $port_forward_pid 2> /dev/null || true
-  
-  if echo "$health_status" | grep -q '"status":"UP"'; then
-    log "SUCCESS" "Data service health check passed"
-    return 0
-  else
-    log "ERROR" "Data service health check failed"
-    log_verbose "Health status: $health_status"
-    return 1
-  fi
-}
-
-# Notification service specific health check
-check_notification_service_health() {
-  log_verbose "Running notification service health check"
-  
-  # Check if the service can connect to the message queue
-  local pod_name=$(kubectl -n "$NAMESPACE" get pods -l "app=notification-service" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
-  
-  if [ -z "$pod_name" ]; then
-    log "ERROR" "Could not find pod for notification-service"
-    return 1
-  fi
-  
-  # Check logs for successful connection to RabbitMQ
-  if kubectl -n "$NAMESPACE" logs "$pod_name" --tail=50 | grep -q "Connected to RabbitMQ"; then
-    log "SUCCESS" "Notification service successfully connected to RabbitMQ"
-  else
-    log "WARN" "Could not verify RabbitMQ connection in logs"
-  fi
-  
-  # Check if the service is listening on its port
-  check_generic_service_health
-  return $?
-}
-
-# API Gateway specific health check
-check_api_gateway_health() {
-  log_verbose "Running API Gateway health check"
-  
-  # Check if the gateway is routing requests
-  local pod_name=$(kubectl -n "$NAMESPACE" get pods -l "app=api-gateway" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
-  
-  if [ -z "$pod_name" ]; then
-    log "ERROR" "Could not find pod for api-gateway"
-    return 1
-  fi
-  
-  # Check if Kong is running
-  if kubectl -n "$NAMESPACE" exec "$pod_name" -- kong health | grep -q "Kong is healthy"; then
-    log "SUCCESS" "API Gateway (Kong) is healthy"
-    return 0
-  else
-    log "ERROR" "API Gateway (Kong) health check failed"
-    return 1
-  fi
-}
-
-# Function to run functional tests
-run_functional_tests() {
-  log "INFO" "Running functional tests for service '$SERVICE'"
-  
-  # Service-specific functional tests
+  # Define service-specific integration tests that verify interactions with other services
   case "$SERVICE" in
     "email-service")
-      test_email_service_functionality
+      # Test email to document service integration
+      log "INFO" "Testing email to document service integration"
+      
+      # This would typically involve a more complex test that simulates an email being processed
+      # For now, we'll just check if the service can communicate with RabbitMQ
+      
+      if [[ -z "$API_GATEWAY_URL" ]]; then
+        API_GATEWAY_URL=$(get_api_gateway_url)
+      fi
+      
+      if [[ -z "$JWT_TOKEN" ]]; then
+        JWT_TOKEN=$(get_jwt_token)
+      fi
+      
+      local curl_command="curl -s"
+      if [[ -n "$JWT_TOKEN" ]]; then
+        curl_command+=" -H 'Authorization: Bearer $JWT_TOKEN'"
+      fi
+      
+      curl_command+=" $API_GATEWAY_URL/api/v1/email/queue-status | jq -e '.connected == true'"
+      
+      if ! retry_with_backoff $RETRIES $TIMEOUT "$curl_command"; then
+        log "ERROR" "Email service integration test failed: not connected to message queue"
+        return 1
+      fi
+      
+      log "SUCCESS" "Email service integration test passed"
       ;;
+      
     "document-service")
-      test_document_service_functionality
+      # Test document to OCR service integration
+      log "INFO" "Testing document to OCR service integration"
+      
+      if [[ -z "$API_GATEWAY_URL" ]]; then
+        API_GATEWAY_URL=$(get_api_gateway_url)
+      fi
+      
+      if [[ -z "$JWT_TOKEN" ]]; then
+        JWT_TOKEN=$(get_jwt_token)
+      fi
+      
+      local curl_command="curl -s"
+      if [[ -n "$JWT_TOKEN" ]]; then
+        curl_command+=" -H 'Authorization: Bearer $JWT_TOKEN'"
+      fi
+      
+      curl_command+=" $API_GATEWAY_URL/api/v1/documents/ocr-status | jq -e '.connected == true'"
+      
+      if ! retry_with_backoff $RETRIES $TIMEOUT "$curl_command"; then
+        log "ERROR" "Document service integration test failed: OCR service connection issue"
+        return 1
+      fi
+      
+      log "SUCCESS" "Document service integration test passed"
       ;;
+      
     "ocr-service")
-      test_ocr_service_functionality
+      # Test OCR to data service integration
+      log "INFO" "Testing OCR to data service integration"
+      
+      if [[ -z "$API_GATEWAY_URL" ]]; then
+        API_GATEWAY_URL=$(get_api_gateway_url)
+      fi
+      
+      if [[ -z "$JWT_TOKEN" ]]; then
+        JWT_TOKEN=$(get_jwt_token)
+      fi
+      
+      local curl_command="curl -s"
+      if [[ -n "$JWT_TOKEN" ]]; then
+        curl_command+=" -H 'Authorization: Bearer $JWT_TOKEN'"
+      fi
+      
+      curl_command+=" $API_GATEWAY_URL/api/v1/ocr/data-service-status | jq -e '.connected == true'"
+      
+      if ! retry_with_backoff $RETRIES $TIMEOUT "$curl_command"; then
+        log "ERROR" "OCR service integration test failed: data service connection issue"
+        return 1
+      fi
+      
+      log "SUCCESS" "OCR service integration test passed"
       ;;
+      
     "data-service")
-      test_data_service_functionality
+      # Test data service to notification service integration
+      log "INFO" "Testing data service to notification service integration"
+      
+      if [[ -z "$API_GATEWAY_URL" ]]; then
+        API_GATEWAY_URL=$(get_api_gateway_url)
+      fi
+      
+      if [[ -z "$JWT_TOKEN" ]]; then
+        JWT_TOKEN=$(get_jwt_token)
+      fi
+      
+      local curl_command="curl -s"
+      if [[ -n "$JWT_TOKEN" ]]; then
+        curl_command+=" -H 'Authorization: Bearer $JWT_TOKEN'"
+      fi
+      
+      curl_command+=" $API_GATEWAY_URL/api/v1/applications/notification-status | jq -e '.connected == true'"
+      
+      if ! retry_with_backoff $RETRIES $TIMEOUT "$curl_command"; then
+        log "ERROR" "Data service integration test failed: notification service connection issue"
+        return 1
+      fi
+      
+      log "SUCCESS" "Data service integration test passed"
       ;;
+      
     "notification-service")
-      test_notification_service_functionality
+      # Test notification service webhook delivery
+      log "INFO" "Testing notification service webhook delivery"
+      
+      if [[ -z "$API_GATEWAY_URL" ]]; then
+        API_GATEWAY_URL=$(get_api_gateway_url)
+      fi
+      
+      if [[ -z "$JWT_TOKEN" ]]; then
+        JWT_TOKEN=$(get_jwt_token)
+      fi
+      
+      local curl_command="curl -s"
+      if [[ -n "$JWT_TOKEN" ]]; then
+        curl_command+=" -H 'Authorization: Bearer $JWT_TOKEN'"
+      fi
+      
+      # Test webhook ping functionality
+      curl_command+=" -X POST $API_GATEWAY_URL/api/v1/webhooks/test-ping | jq -e '.success == true'"
+      
+      if ! retry_with_backoff $RETRIES $TIMEOUT "$curl_command"; then
+        log "ERROR" "Notification service integration test failed: webhook ping failed"
+        return 1
+      fi
+      
+      log "SUCCESS" "Notification service integration test passed"
       ;;
+      
     "api-gateway")
-      test_api_gateway_functionality
+      # Test API Gateway service routing
+      log "INFO" "Testing API Gateway service routing"
+      
+      if [[ -z "$API_GATEWAY_URL" ]]; then
+        API_GATEWAY_URL=$(get_api_gateway_url)
+      fi
+      
+      if [[ -z "$JWT_TOKEN" ]]; then
+        JWT_TOKEN=$(get_jwt_token)
+      fi
+      
+      # Test routing to multiple services
+      local services_to_check=("email" "documents" "applications" "webhooks")
+      local all_passed=true
+      
+      for svc in "${services_to_check[@]}"; do
+        log "INFO" "Checking routing to $svc service"
+        
+        local curl_command="curl -s -o /dev/null -w '%{http_code}'"
+        if [[ -n "$JWT_TOKEN" ]]; then
+          curl_command+=" -H 'Authorization: Bearer $JWT_TOKEN'"
+        fi
+        
+        curl_command+=" $API_GATEWAY_URL/api/v1/$svc | grep -q '2[0-9][0-9]'"
+        
+        if ! retry_with_backoff 2 $TIMEOUT "$curl_command"; then
+          log "WARN" "API Gateway routing test to $svc service failed"
+          all_passed=false
+        else
+          log "SUCCESS" "API Gateway routing to $svc service works"
+        fi
+      done
+      
+      if [[ "$all_passed" != "true" ]]; then
+        log "ERROR" "API Gateway integration test failed: some service routes are not working"
+        return 1
+      fi
+      
+      log "SUCCESS" "API Gateway integration test passed"
       ;;
+      
     *)
-      log "WARN" "No functional tests defined for '$SERVICE', skipping"
+      log "WARN" "No integration tests defined for service '$SERVICE'. Skipping integration validation."
       return 0
       ;;
   esac
+  
+  return 0
 }
 
-# Email service functional test
-test_email_service_functionality() {
-  log_verbose "Testing email service functionality"
+# Main validation function that runs checks based on the validation level
+run_validation() {
+  log "INFO" "Starting deployment validation for service '$SERVICE' in namespace '$NAMESPACE'"
+  log "INFO" "Validation level: $VALIDATION_LEVEL, Timeout: ${TIMEOUT}s, Retries: $RETRIES"
   
-  # For now, we'll just check if the service is running
-  # In a real implementation, we would send a test email and verify receipt
-  log "WARN" "Email service functional test not fully implemented, checking service status only"
-  
-  # Check if the service is running
-  if kubectl -n "$NAMESPACE" get pods -l "app=email-service" | grep -q "Running"; then
-    log "SUCCESS" "Email service is running"
-    return 0
-  else
-    log "ERROR" "Email service is not running"
-    return 1
-  fi
-}
-
-# Document service functional test
-test_document_service_functionality() {
-  log_verbose "Testing document service functionality"
-  
-  # For now, we'll just check if the service is running
-  # In a real implementation, we would upload a test document and verify classification
-  log "WARN" "Document service functional test not fully implemented, checking service status only"
-  
-  # Check if the service is running
-  if kubectl -n "$NAMESPACE" get pods -l "app=document-service" | grep -q "Running"; then
-    log "SUCCESS" "Document service is running"
-    return 0
-  else
-    log "ERROR" "Document service is not running"
-    return 1
-  fi
-}
-
-# OCR service functional test
-test_ocr_service_functionality() {
-  log_verbose "Testing OCR service functionality"
-  
-  # For now, we'll just check if the service is running
-  # In a real implementation, we would send a test image and verify OCR extraction
-  log "WARN" "OCR service functional test not fully implemented, checking service status only"
-  
-  # Check if the service is running
-  if kubectl -n "$NAMESPACE" get pods -l "app=ocr-service" | grep -q "Running"; then
-    log "SUCCESS" "OCR service is running"
-    return 0
-  else
-    log "ERROR" "OCR service is not running"
-    return 1
-  fi
-}
-
-# Data service functional test
-test_data_service_functionality() {
-  log_verbose "Testing data service functionality"
-  
-  # For now, we'll just check if the service is running and can handle a simple API request
-  log "WARN" "Data service functional test not fully implemented, checking basic API functionality"
-  
-  local pod_name=$(kubectl -n "$NAMESPACE" get pods -l "app=data-service" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
-  
-  if [ -z "$pod_name" ]; then
-    log "ERROR" "Could not find pod for data-service"
+  # Level 1: Basic pod status
+  if ! validate_pod_status; then
+    log "ERROR" "Pod status validation failed. Deployment is not successful."
     return 1
   fi
   
-  # Use port-forward to access the API
-  kubectl -n "$NAMESPACE" port-forward "$pod_name" 8080:8080 &> /dev/null &
-  local port_forward_pid=$!
-  
-  # Wait for port-forward to establish
-  sleep 2
-  
-  # Try to access a simple API endpoint
-  local api_response=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/api/v1/health)
-  
-  # Kill port-forward
-  kill $port_forward_pid 2> /dev/null || true
-  wait $port_forward_pid 2> /dev/null || true
-  
-  if [ "$api_response" = "200" ]; then
-    log "SUCCESS" "Data service API is responding correctly"
-    return 0
-  else
-    log "ERROR" "Data service API returned unexpected status code: $api_response"
-    return 1
-  fi
-}
-
-# Notification service functional test
-test_notification_service_functionality() {
-  log_verbose "Testing notification service functionality"
-  
-  # For now, we'll just check if the service is running
-  # In a real implementation, we would send a test notification and verify delivery
-  log "WARN" "Notification service functional test not fully implemented, checking service status only"
-  
-  # Check if the service is running
-  if kubectl -n "$NAMESPACE" get pods -l "app=notification-service" | grep -q "Running"; then
-    log "SUCCESS" "Notification service is running"
-    return 0
-  else
-    log "ERROR" "Notification service is not running"
-    return 1
-  fi
-}
-
-# API Gateway functional test
-test_api_gateway_functionality() {
-  log_verbose "Testing API Gateway functionality"
-  
-  # For now, we'll just check if the gateway is running and responding to requests
-  log "WARN" "API Gateway functional test not fully implemented, checking basic routing"
-  
-  local pod_name=$(kubectl -n "$NAMESPACE" get pods -l "app=api-gateway" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
-  
-  if [ -z "$pod_name" ]; then
-    log "ERROR" "Could not find pod for api-gateway"
-    return 1
-  fi
-  
-  # Use port-forward to access the gateway
-  kubectl -n "$NAMESPACE" port-forward "$pod_name" 8000:8000 &> /dev/null &
-  local port_forward_pid=$!
-  
-  # Wait for port-forward to establish
-  sleep 2
-  
-  # Try to access the gateway status endpoint
-  local gateway_response=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/status)
-  
-  # Kill port-forward
-  kill $port_forward_pid 2> /dev/null || true
-  wait $port_forward_pid 2> /dev/null || true
-  
-  if [ "$gateway_response" = "200" ]; then
-    log "SUCCESS" "API Gateway is responding correctly"
-    return 0
-  else
-    log "ERROR" "API Gateway returned unexpected status code: $gateway_response"
-    return 1
-  fi
-}
-
-# Function to run integration tests
-run_integration_tests() {
-  log "INFO" "Running integration tests for service '$SERVICE'"
-  
-  # In a real implementation, we would run more comprehensive integration tests
-  # For now, we'll just check if the service can communicate with its dependencies
-  
-  case "$SERVICE" in
-    "email-service")
-      # Check if email service can communicate with RabbitMQ
-      check_service_dependency "email-service" "rabbitmq"
-      ;;
-    "document-service")
-      # Check if document service can communicate with RabbitMQ and S3
-      check_service_dependency "document-service" "rabbitmq"
-      check_service_dependency "document-service" "s3"
-      ;;
-    "ocr-service")
-      # Check if OCR service can communicate with RabbitMQ and S3
-      check_service_dependency "ocr-service" "rabbitmq"
-      check_service_dependency "ocr-service" "s3"
-      ;;
-    "data-service")
-      # Check if data service can communicate with PostgreSQL and RabbitMQ
-      check_service_dependency "data-service" "postgresql"
-      check_service_dependency "data-service" "rabbitmq"
-      ;;
-    "notification-service")
-      # Check if notification service can communicate with RabbitMQ
-      check_service_dependency "notification-service" "rabbitmq"
-      ;;
-    "api-gateway")
-      # Check if API gateway can communicate with backend services
-      check_service_dependency "api-gateway" "data-service"
-      ;;
-    *)
-      log "WARN" "No integration tests defined for '$SERVICE', skipping"
-      return 0
-      ;;
-  esac
-}
-
-# Function to check service dependencies
-check_service_dependency() {
-  local service=$1
-  local dependency=$2
-  
-  log_verbose "Checking if $service can communicate with $dependency"
-  
-  # Get a pod from the service
-  local pod_name=$(kubectl -n "$NAMESPACE" get pods -l "app=$service" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
-  
-  if [ -z "$pod_name" ]; then
-    log "ERROR" "Could not find pod for $service"
-    return 1
-  fi
-  
-  # Check logs for successful connection to dependency
-  if kubectl -n "$NAMESPACE" logs "$pod_name" --tail=100 | grep -q -i "connected.*$dependency"; then
-    log "SUCCESS" "$service successfully connected to $dependency"
-    return 0
-  else
-    log "WARN" "Could not verify connection between $service and $dependency in logs"
-    # Don't fail the test, as the log message might be different or not present
+  # If validation level is 1, we're done
+  if [[ $VALIDATION_LEVEL -eq 1 ]]; then
+    log "SUCCESS" "Validation level 1 passed for service '$SERVICE'"
     return 0
   fi
+  
+  # Level 2: Health endpoints
+  if ! validate_health_endpoints; then
+    log "ERROR" "Health endpoint validation failed. Deployment is not successful."
+    return 1
+  fi
+  
+  # If validation level is 2, we're done
+  if [[ $VALIDATION_LEVEL -eq 2 ]]; then
+    log "SUCCESS" "Validation level 2 passed for service '$SERVICE'"
+    return 0
+  fi
+  
+  # Level 3: API endpoints
+  if ! validate_api_endpoints; then
+    log "ERROR" "API endpoint validation failed. Deployment is not successful."
+    return 1
+  fi
+  
+  # If validation level is 3, we're done
+  if [[ $VALIDATION_LEVEL -eq 3 ]]; then
+    log "SUCCESS" "Validation level 3 passed for service '$SERVICE'"
+    return 0
+  fi
+  
+  # Level 4: Functional tests
+  if ! validate_functional_tests; then
+    log "ERROR" "Functional test validation failed. Deployment is not successful."
+    return 1
+  fi
+  
+  # If validation level is 4, we're done
+  if [[ $VALIDATION_LEVEL -eq 4 ]]; then
+    log "SUCCESS" "Validation level 4 passed for service '$SERVICE'"
+    return 0
+  fi
+  
+  # Level 5: Integration tests
+  if ! validate_integration_tests; then
+    log "ERROR" "Integration test validation failed. Deployment is not successful."
+    return 1
+  fi
+  
+  # All validation levels passed
+  log "SUCCESS" "All validation levels passed for service '$SERVICE'"
+  return 0
 }
 
-# Main function
-main() {
-  log "INFO" "Starting deployment validation for service '$SERVICE' in namespace '$NAMESPACE' ($ENVIRONMENT environment)"
-  
-  # Check if kubectl is available
-  if ! check_kubectl; then
-    log "ERROR" "kubectl is not available, cannot proceed with validation"
-    exit 1
-  fi
-  
-  # Wait for pods to be ready
-  if ! wait_for_pods_ready; then
-    log "ERROR" "Pods for service '$SERVICE' are not ready, validation failed"
-    exit 1
-  fi
-  
-  # Run basic health checks
-  if [ "$SKIP_BASIC" != "true" ]; then
-    if ! run_basic_health_checks; then
-      log "ERROR" "Basic health checks failed for service '$SERVICE'"
-      exit 1
-    fi
-    
-    # Run service-specific health checks
-    if ! run_service_specific_health_checks; then
-      log "ERROR" "Service-specific health checks failed for '$SERVICE'"
-      exit 1
-    fi
-  else
-    log "INFO" "Skipping basic health checks as requested"
-  fi
-  
-  # Run functional tests
-  if [ "$SKIP_FUNCTIONAL" != "true" ]; then
-    if ! run_functional_tests; then
-      log "ERROR" "Functional tests failed for service '$SERVICE'"
-      exit 1
-    fi
-  else
-    log "INFO" "Skipping functional tests as requested"
-  fi
-  
-  # Run integration tests
-  if [ "$SKIP_INTEGRATION" != "true" ]; then
-    if ! run_integration_tests; then
-      log "ERROR" "Integration tests failed for service '$SERVICE'"
-      exit 1
-    fi
-  else
-    log "INFO" "Skipping integration tests as requested"
-  fi
-  
-  log "SUCCESS" "All validation checks passed for service '$SERVICE' in namespace '$NAMESPACE' ($ENVIRONMENT environment)"
+# Run the validation
+if run_validation; then
+  log "SUCCESS" "Deployment validation successful for service '$SERVICE'"
   exit 0
-}
-
-# Run the main function
-main
+else
+  log "ERROR" "Deployment validation failed for service '$SERVICE'"
+  exit 1
+fi
