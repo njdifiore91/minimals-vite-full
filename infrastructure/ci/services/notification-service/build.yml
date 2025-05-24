@@ -1,171 +1,284 @@
 # Notification Service Build Pipeline
-# This workflow handles the build process for the Notification Service including:
-# - Dependency installation with npm
-# - Code quality checks with ESLint
-# - Unit testing with Jest and coverage reporting
-# - TypeScript compilation with strict type checking
-# - Docker image creation using multi-stage builds
-# - Security scanning with Trivy
-# - Container registry publishing with versioning
+# This workflow builds, tests, and publishes the Notification Service container image
+# It includes dependency installation, code quality checks, unit testing, TypeScript compilation,
+# Docker image creation, security scanning, and image publishing to the container registry.
+#
+# The Notification Service is a Node.js microservice that handles alerts and webhooks
+# with support for HMAC signature verification, webhook retry logic, and delivery confirmation.
+#
+# Key features of this build pipeline:
+# - Uses Node.js v22.x LTS as specified in the technical requirements
+# - Implements standardized build processes with npm scripts
+# - Enforces code quality through ESLint and TypeScript type checking
+# - Creates optimized container images using multi-stage Docker builds
+# - Scans container images for vulnerabilities using Trivy
+# - Includes specific tests for webhook security components
 
-name: Build Notification Service
+name: Notification Service Build
 
 on:
   push:
-    branches: [ main, development ]
+    branches: [main, development]
     paths:
       - 'notification-service/**'
       - 'infrastructure/ci/services/notification-service/**'
   pull_request:
-    branches: [ main, development ]
+    branches: [main, development]
     paths:
       - 'notification-service/**'
       - 'infrastructure/ci/services/notification-service/**'
   workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to build for'
+        required: true
+        default: 'development'
+        type: choice
+        options:
+          - development
+          - staging
+          - production
 
 env:
-  NODE_VERSION: '22.x'
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}/notification-service
+  SERVICE_NAME: notification-service
+  DOCKER_REGISTRY: ${{ secrets.DOCKER_REGISTRY }}
+  NODE_VERSION: 22.x
 
 jobs:
+  # Build job: Installs dependencies, runs linting, type checking, tests, and builds the TypeScript code
+  # This job ensures code quality and correctness before proceeding to container creation
   build:
     name: Build and Test
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-      security-events: write
+    strategy:
+      matrix:
+        # Matrix strategy allows testing across multiple Node.js versions if needed
+        # Currently using Node.js v22.x LTS as specified in technical requirements
+        node-version: [22.x]
+      fail-fast: true
 
     steps:
+      # Checkout the repository with full history for proper versioning
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Set up Node.js environment with caching for faster builds
+      - name: Set up Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+          cache-dependency-path: 'notification-service/package-lock.json'
+
+      # Install dependencies using clean install to ensure reproducible builds
+      - name: Install dependencies
+        working-directory: notification-service
+        run: npm ci
+
+      # Run ESLint to enforce code quality standards
+      - name: Lint code
+        working-directory: notification-service
+        run: npm run lint
+        
+      # Run TypeScript compiler in type-check mode to verify type safety
+      - name: Type check
+        working-directory: notification-service
+        run: npm run type-check
+
+      # Run Jest tests with coverage reporting
+      # Includes specific tests for webhook security components (HMAC signature verification)
+      - name: Run unit tests
+        working-directory: notification-service
+        run: npm run test:coverage
+        env:
+          # Environment variables needed for webhook security tests
+          NODE_ENV: test
+          WEBHOOK_SECRET_KEY: ${{ secrets.TEST_WEBHOOK_SECRET }}
+
+      # Verify test coverage meets minimum requirements
+      # Ensures webhook security components have adequate test coverage
+      - name: Verify test coverage
+        working-directory: notification-service
+        run: |
+          WEBHOOK_COVERAGE=$(npx istanbul report --include coverage/coverage-final.json text | grep -A 5 "src/services/webhook" | grep Statements | awk '{print $3}')
+          if [[ ${WEBHOOK_COVERAGE%\%} -lt 90 ]]; then
+            echo "Webhook service test coverage is below 90%: $WEBHOOK_COVERAGE"
+            exit 1
+          fi
+          echo "Webhook service test coverage: $WEBHOOK_COVERAGE"
+
+      # Upload test coverage reports as artifacts for later analysis
+      - name: Upload test coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: notification-service/coverage
+          retention-days: 7
+
+      # Build TypeScript code into JavaScript for production
+      - name: Build TypeScript
+        working-directory: notification-service
+        run: npm run build
+
+  # Docker job: Builds the container image, scans it for vulnerabilities, and publishes it to the registry
+  # This job creates a production-ready container image using multi-stage builds to minimize size
+  # It also performs security scanning with Trivy to detect vulnerabilities before deployment
+  docker:
+    name: Build and Publish Docker Image
+    needs: build
+    runs-on: ubuntu-latest
+    # Only run on pushes to main/development branches, not on pull requests
+    if: github.event_name != 'pull_request'
+    
+    steps:
+      # Checkout the repository for Docker build context
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js ${{ env.NODE_VERSION }}
+      # Set up Docker Buildx for efficient multi-platform builds
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Authenticate with the container registry
+      - name: Login to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.DOCKER_REGISTRY }}
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      # Extract metadata for Docker image tagging
+      # This creates tags based on branch name, PR number, and commit SHA
+      - name: Extract metadata for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKER_REGISTRY }}/${{ env.SERVICE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,format=short
+            type=semver,pattern={{version}}
+
+      # Build Docker image but don't push yet (for vulnerability scanning)
+      - name: Build Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./notification-service
+          push: false
+          load: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            NODE_VERSION=${{ env.NODE_VERSION }}
+            NODE_ENV=production
+
+      # Scan the built image for security vulnerabilities using Trivy
+      # Fails the build if critical or high severity issues are found
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ steps.meta.outputs.tags }}
+          format: 'table'
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH'
+
+      # Push the Docker image to the registry if vulnerability scan passes
+      - name: Push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./notification-service
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            NODE_VERSION=${{ env.NODE_VERSION }}
+            NODE_ENV=production
+
+      # Send notification about successful image build and push
+      - name: Notify build completion
+        uses: ./.github/actions/notify
+        with:
+          status: success
+          service: ${{ env.SERVICE_NAME }}
+          message: 'Docker image built and published successfully'
+          webhook-url: ${{ secrets.NOTIFICATION_WEBHOOK }}
+
+  # Security job: Performs additional security checks specific to the Notification Service
+  # This job focuses on webhook security components and HMAC signature verification
+  security:
+    name: Security Checks
+    needs: build
+    runs-on: ubuntu-latest
+    
+    steps:
+      # Checkout the repository for security scanning
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Set up Node.js environment
+      - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
           cache-dependency-path: 'notification-service/package-lock.json'
 
+      # Install dependencies
       - name: Install dependencies
         working-directory: notification-service
         run: npm ci
 
-      - name: Lint code
+      # Run security-focused tests for webhook components
+      # These tests specifically verify HMAC signature verification functionality
+      - name: Run webhook security tests
         working-directory: notification-service
-        run: npm run lint
-        continue-on-error: false
+        run: npm run test:security
+        env:
+          NODE_ENV: test
+          WEBHOOK_SECRET_KEY: ${{ secrets.TEST_WEBHOOK_SECRET }}
 
-      - name: Type check
+      # Run npm audit to check for package vulnerabilities
+      - name: Check for npm vulnerabilities
         working-directory: notification-service
-        run: npm run type-check
-        continue-on-error: false
+        run: npm audit --production --audit-level=high
+        continue-on-error: true # Don't fail the build, but report vulnerabilities
 
-      - name: Run tests
-        working-directory: notification-service
-        run: npm test -- --coverage
-        continue-on-error: false
-
-      # Verify webhook security tests specifically for HMAC signature verification
-      # This ensures the security requirements from section 3.8.5 are properly tested
-      - name: Verify webhook security tests
-        working-directory: notification-service
+  # Notify job: Sends notifications about build status to configured channels
+  # This job runs regardless of whether previous jobs succeeded or failed
+  # It uses the notification templates defined in infrastructure/ci/templates
+  notify:
+    name: Notify Build Status
+    needs: [build, docker, security]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Check build status
+        id: status
         run: |
-          # Ensure HMAC signature verification tests exist and pass
-          TEST_COUNT=$(find . -name "*.test.ts" -o -name "*.spec.ts" | xargs grep -l "HMAC" | wc -l)
-          if [ "$TEST_COUNT" -lt 1 ]; then
-            echo "Error: No tests found for HMAC signature verification"
-            exit 1
+          if [[ "${{ needs.build.result }}" == "failure" || "${{ needs.docker.result }}" == "failure" || "${{ needs.security.result }}" == "failure" ]]; then
+            echo "status=failure" >> $GITHUB_OUTPUT
+          else
+            echo "status=success" >> $GITHUB_OUTPUT
           fi
-          
-          # Check test coverage for webhook security components
-          WEBHOOK_COVERAGE=$(npm test -- --coverage --coverageReporters="json-summary" --testPathPattern="webhook|hmac" && \
-            cat coverage/coverage-summary.json | jq '.total.statements.pct')
-          
-          if (( $(echo "$WEBHOOK_COVERAGE < 90" | bc -l) )); then
-            echo "Error: Webhook security test coverage is below 90%"
-            exit 1
-          fi
-        continue-on-error: false
 
-      - name: Build TypeScript
-        working-directory: notification-service
-        run: npm run build
-        continue-on-error: false
-
-      # Set up Docker Buildx for multi-platform builds
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      # Login to container registry
-      - name: Log in to the Container registry
-        uses: docker/login-action@v3
+      - name: Checkout repository for notification templates
+        uses: actions/checkout@v4
         with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          sparse-checkout: infrastructure/ci/templates
 
-      # Extract metadata for Docker
-      - name: Extract Docker metadata
-        id: meta
-        uses: docker/metadata-action@v5
+      - name: Send notification
+        uses: ./.github/actions/notify
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=sha,format=long
-            type=ref,event=branch
-            type=ref,event=pr
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-
-      # Build and push Docker image using multi-stage build
-      # This creates an optimized container image separating build dependencies from runtime
-      - name: Build and push Docker image
-        id: build-and-push
-        uses: docker/build-push-action@v5
-        with:
-          context: notification-service
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          # Ensure Dockerfile uses multi-stage build pattern
-          file: notification-service/Dockerfile
-
-      # Scan the Docker image for vulnerabilities
-      # This step ensures container security by detecting vulnerabilities before deployment
-      - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
-          format: 'sarif'
-          output: 'trivy-results.sarif'
-          severity: 'CRITICAL,HIGH'
-          timeout: '10m0s'
-          # Fail the build on critical vulnerabilities in production
-          exit-code: ${{ github.ref == 'refs/heads/main' && 1 || 0 }}
-
-      # Upload Trivy scan results to GitHub Security tab
-      - name: Upload Trivy scan results to GitHub Security tab
-        uses: github/codeql-action/upload-sarif@v2
-        if: always()
-        with:
-          sarif_file: 'trivy-results.sarif'
-
-      # Notify on build completion
-      - name: Notify on build completion
-        if: always()
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const buildStatus = '${{ job.status }}' === 'success' ? '✅ succeeded' : '❌ failed';
-            const message = `Notification Service build ${buildStatus}`;
-            
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: message
-            });
+          status: ${{ steps.status.outputs.status }}
+          service: ${{ env.SERVICE_NAME }}
+          message: 'Notification Service build ${{ steps.status.outputs.status == "success" && "completed successfully" || "failed" }}'
+          webhook-url: ${{ secrets.NOTIFICATION_WEBHOOK }}
