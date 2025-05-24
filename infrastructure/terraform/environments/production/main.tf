@@ -8,20 +8,6 @@ provider "aws" {
   # Additional provider settings would be configured here
 }
 
-# Kubernetes provider configuration for monitoring resources
-provider "kubernetes" {
-  config_path = var.kubernetes_config_path
-  config_context = var.kubernetes_config_context
-}
-
-# Helm provider configuration for Prometheus and Grafana
-provider "helm" {
-  kubernetes {
-    config_path = var.kubernetes_config_path
-    config_context = var.kubernetes_config_context
-  }
-}
-
 # Remote state configuration is in backend.tf
 
 # Tags common to all resources
@@ -40,28 +26,28 @@ module "database" {
 
   # Environment-specific settings
   environment            = "production"
-  instance_class         = "db.r6g.xlarge"  # Production-grade instance
-  multi_az               = true             # High availability across AZs
-  storage_type           = "gp3"            # General purpose SSD
-  allocated_storage      = 100              # GB of storage
-  iops                   = 3000             # Higher IOPS for production
-  replica_count          = 2                # Two read replicas for production
-  backup_retention_days  = 30               # 30-day backup retention
-  deletion_protection    = true             # Prevent accidental deletion
+  instance_class         = "db.r6g.2xlarge"  # Larger instance for production
+  multi_az               = true              # High availability across AZs
+  storage_type           = "gp3"             # General purpose SSD
+  allocated_storage      = 200               # GB of storage (larger for production)
+  iops                   = 3000              # Higher IOPS for production workloads
+  replica_count          = 2                 # Two read replicas for production
+  backup_retention_days  = 30                # 30-day backup retention for production
+  deletion_protection    = true              # Prevent accidental deletion in production
   
   # Connection pooling settings
   connection_pooling_enabled = true
-  connection_pool_min_size   = 10
-  connection_pool_max_size   = 50
+  connection_pool_min_size   = 20
+  connection_pool_max_size   = 100
   
   # Security settings
   encryption_at_rest_enabled = true
   encryption_algorithm       = "AES-256"
-  key_rotation_days          = 90
+  key_rotation_days          = 30            # More frequent key rotation in production
   
   # Performance settings
   performance_insights_enabled = true
-  monitoring_interval_seconds  = 15
+  monitoring_interval_seconds  = 5           # More frequent monitoring in production
   
   # High availability settings
   failover_target_auto       = true
@@ -77,9 +63,9 @@ module "messaging" {
 
   # Environment-specific settings
   environment        = "production"
-  instance_type      = "mq.m5.large"  # Production-grade instance
-  cluster_node_count = 3              # 3-node cluster for high availability
-  multi_az           = true           # Deploy across AZs
+  instance_type      = "mq.m5.2xlarge"    # Larger instance for production
+  cluster_node_count = 3                  # 3-node cluster for high availability
+  multi_az           = true               # Deploy across AZs
   
   # Queue and exchange configuration
   exchanges = [
@@ -150,33 +136,33 @@ module "cache" {
 
   # Environment-specific settings
   environment      = "production"
-  node_type        = "cache.r6g.large"  # Production-grade instance
-  shard_count      = 3                  # 3 shards for horizontal scaling
-  replicas_per_shard = 1                # 1 replica per shard for HA
-  multi_az         = true               # Deploy across AZs
+  node_type        = "cache.r6g.2xlarge"  # Larger instance for production
+  shard_count      = 3                   # 3 shards for production
+  replicas_per_shard = 2                 # 2 replicas per shard for higher HA
+  multi_az         = true                # Deploy across AZs
   
   # Cache instances configuration
   cache_instances = [
     {
       name           = "application-data"
-      ttl_seconds    = 900              # 15 minutes TTL for application data
-      eviction_policy = "allkeys-lru"   # Least recently used eviction
+      ttl_seconds    = 900               # 15 minutes TTL for application data
+      eviction_policy = "allkeys-lru"    # Least recently used eviction
     },
     {
       name           = "user-sessions"
-      ttl_seconds    = 86400            # 24 hours TTL for user sessions
-      eviction_policy = "noeviction"    # No eviction for sessions
+      ttl_seconds    = 86400             # 24 hours TTL for user sessions
+      eviction_policy = "noeviction"     # No eviction for sessions
     }
   ]
   
   # Persistence settings
   rdb_snapshot_enabled = true
-  rdb_snapshot_frequency_minutes = 60   # Snapshot every 60 minutes
-  aof_enabled = true                    # Append-only file for durability
+  rdb_snapshot_frequency_minutes = 30    # Snapshot every 30 minutes (more frequent than staging)
+  aof_enabled = true                     # Append-only file for durability
   
   # High availability settings
   auto_failover_enabled = true
-  failover_timeout_seconds = 15         # 15-second failover time
+  failover_timeout_seconds = 10          # 10-second failover time (faster than staging)
   
   # Security settings
   encryption_in_transit = true
@@ -199,7 +185,7 @@ module "storage" {
       name          = "mca-documents-production"
       versioning    = true
       encryption    = "AES256"
-      force_destroy = false
+      force_destroy = false  # Prevent accidental destruction in production
     }
   ]
   
@@ -218,17 +204,21 @@ module "storage" {
         {
           days          = 90
           storage_class = "GLACIER"
+        },
+        {
+          days          = 365
+          storage_class = "DEEP_ARCHIVE"
         }
       ]
       
       expiration = {
-        days = 2555  # 7 years retention
+        days = 2555  # 7-year retention for production (regulatory requirement)
       }
     }
   ]
   
   # Replication configuration for disaster recovery
-  replication_enabled = true
+  replication_enabled = true             # Enable replication for production
   replica_region      = var.replica_region
   
   # Security settings
@@ -239,86 +229,7 @@ module "storage" {
   # Monitoring settings
   metrics_enabled     = true
   request_metrics_enabled = true
+  object_level_logging_enabled = true    # Enable object-level logging for compliance
   
-  tags = local.common_tags
-}
-
-# Monitoring Module
-# Deploys Prometheus and Grafana for monitoring the MCA Application Processing System
-module "monitoring" {
-  source = "../../modules/monitoring"
-
-  # Environment-specific settings
-  environment = "production"
-  cluster_name = var.cluster_name
-  namespace = "monitoring"
-  app_namespace = "mca"
-  
-  # Prometheus configuration
-  prometheus_storage_enabled = true
-  prometheus_storage_class = "gp2"
-  prometheus_storage_size = "50Gi"
-  prometheus_retention_period = "30d"
-  
-  # Grafana configuration
-  grafana_admin_password = var.grafana_admin_password
-  grafana_storage_enabled = true
-  grafana_storage_class = "gp2"
-  grafana_storage_size = "10Gi"
-  grafana_ingress_enabled = true
-  grafana_ingress_hosts = ["grafana.${var.domain_name}"]
-  grafana_ingress_annotations = {
-    "kubernetes.io/ingress.class" = "nginx"
-    "cert-manager.io/cluster-issuer" = "letsencrypt-prod"
-  }
-  grafana_ingress_tls = [
-    {
-      hosts = ["grafana.${var.domain_name}"]
-      secretName = "grafana-tls"
-    }
-  ]
-  grafana_root_url = "https://grafana.${var.domain_name}"
-  
-  # PostgreSQL exporter configuration
-  postgres_exporter_enabled = true
-  postgres_host = module.database.primary_endpoint
-  postgres_port = 5432
-  postgres_user = var.db_username
-  postgres_password = var.db_password
-  postgres_database = var.db_name
-  
-  # RabbitMQ exporter configuration
-  rabbitmq_exporter_enabled = true
-  rabbitmq_host = module.messaging.rabbitmq_endpoint
-  rabbitmq_port = 15672
-  rabbitmq_user = var.rabbitmq_username
-  rabbitmq_password = var.rabbitmq_password
-  
-  # Redis exporter configuration
-  redis_exporter_enabled = true
-  redis_host = module.cache.redis_endpoint
-  redis_port = 6379
-  redis_password = var.redis_auth_token
-  
-  # CloudWatch exporter for S3 metrics
-  cloudwatch_exporter_enabled = true
-  cloudwatch_exporter_role = "arn:aws:iam::${var.aws_account_id}:role/prometheus-cloudwatch-exporter"
-  aws_region = var.aws_region
-  
-  # Service monitors
-  email_service_monitor_enabled = true
-  document_service_monitor_enabled = true
-  ocr_service_monitor_enabled = true
-  data_service_monitor_enabled = true
-  notification_service_monitor_enabled = true
-  api_gateway_service_monitor_enabled = true
-  
-  # Alert thresholds
-  sla_processing_time_threshold = 300  # 5 minutes
-  ocr_accuracy_threshold = 99  # 99%
-  queue_depth_threshold = 1000
-  api_response_time_threshold = 1  # 1 second
-  
-  # Tags
   tags = local.common_tags
 }
