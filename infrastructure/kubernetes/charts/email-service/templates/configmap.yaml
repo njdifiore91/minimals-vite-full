@@ -1,9 +1,15 @@
 {{- /*
-ConfigMap template for Email Service
+Email Service ConfigMap Template
 
 This template creates a Kubernetes ConfigMap for the Email Service, extending the common
-configmap template with Email Service specific configuration. It includes IMAP server settings,
-RabbitMQ connection details, S3 storage configuration, and application parameters.
+configmap template with Email Service specific configuration data. It includes settings for
+IMAP server connection, RabbitMQ messaging, S3 storage, and application parameters.
+
+The Email Service monitors submissions inbox using IMAP protocol, processes incoming emails,
+extracts attachments, and publishes them to RabbitMQ for further processing by the Document Service.
+
+IMPORTANT: This ConfigMap should only contain non-sensitive configuration data.
+For sensitive data such as credentials, use Kubernetes Secrets instead.
 */}}
 
 {{- template "common.configmap" . -}}
@@ -12,83 +18,106 @@ RabbitMQ connection details, S3 storage configuration, and application parameter
 config:
   data:
     # Application settings
-    NODE_ENV: {{ .Values.global.environment | default .Values.environment | default "development" | quote }}
     APP_NAME: "mca-email-service"
-    APP_PORT: {{ .Values.service.port | default 3000 | quote }}
-    LOG_LEVEL: {{ .Values.logLevel | default "info" | quote }}
-    POLLING_INTERVAL_MS: {{ .Values.pollingInterval | default 300000 | quote }}
-
-    # IMAP server settings
-    IMAP_HOST: {{ .Values.imap.host | quote }}
-    IMAP_PORT: {{ .Values.imap.port | default 993 | quote }}
-    IMAP_TLS_ENABLED: {{ .Values.imap.tlsEnabled | default true | quote }}
-    IMAP_REJECT_UNAUTHORIZED: {{ .Values.imap.rejectUnauthorized | default true | quote }}
-    IMAP_MAILBOX: {{ .Values.imap.mailbox | default "INBOX" | quote }}
-    IMAP_SEARCH_FILTER: {{ .Values.imap.searchFilter | default "UNSEEN" | quote }}
-    IMAP_MAX_CONNECTIONS: {{ .Values.imap.maxConnections | default 5 | quote }}
-    IMAP_CONNECTION_TIMEOUT_MS: {{ .Values.imap.connectionTimeout | default 30000 | quote }}
-
-    # RabbitMQ connection settings
-    RABBITMQ_HOST: {{ .Values.rabbitmq.host | quote }}
-    RABBITMQ_PORT: {{ .Values.rabbitmq.port | default 5672 | quote }}
-    RABBITMQ_VHOST: {{ .Values.rabbitmq.vhost | default "/" | quote }}
-    RABBITMQ_EXCHANGE: {{ .Values.rabbitmq.exchange | default "mca.documents" | quote }}
-    RABBITMQ_EXCHANGE_TYPE: {{ .Values.rabbitmq.exchangeType | default "fanout" | quote }}
-    RABBITMQ_ROUTING_KEY: {{ .Values.rabbitmq.routingKey | default "document.new" | quote }}
-    RABBITMQ_CONNECTION_TIMEOUT_MS: {{ .Values.rabbitmq.connectionTimeout | default 30000 | quote }}
-    RABBITMQ_HEARTBEAT_INTERVAL_SECONDS: {{ .Values.rabbitmq.heartbeatInterval | default 60 | quote }}
-    RABBITMQ_RETRY_ATTEMPTS: {{ .Values.rabbitmq.retryAttempts | default 5 | quote }}
-    RABBITMQ_RETRY_DELAY_MS: {{ .Values.rabbitmq.retryDelay | default 5000 | quote }}
-
-    # S3 storage settings
-    S3_ENDPOINT: {{ .Values.s3.endpoint | quote }}
-    S3_REGION: {{ .Values.s3.region | default "us-east-1" | quote }}
-    S3_BUCKET: {{ .Values.s3.bucket | quote }}
-    S3_FORCE_PATH_STYLE: {{ .Values.s3.forcePathStyle | default false | quote }}
-    S3_ENCRYPTION_ENABLED: {{ .Values.s3.encryptionEnabled | default true | quote }}
-    S3_ENCRYPTION_TYPE: {{ .Values.s3.encryptionType | default "AES256" | quote }}
-
-  # JSON configuration for document type validation
+    APP_PORT: "3000"
+    LOG_LEVEL: "{{ .Values.logLevel | default "info" }}"
+    NODE_ENV: "{{ .Values.global.environment | default .Values.environment | default "development" }}"
+    POLLING_INTERVAL_MS: "{{ .Values.pollingInterval | default "300000" }}" # Default: 5 minutes
+    MAX_ATTACHMENT_SIZE_MB: "{{ .Values.maxAttachmentSize | default "25" }}"
+    VIRUS_SCAN_ENABLED: "{{ .Values.virusScanEnabled | default "true" }}"
+    
+  # IMAP server configuration (non-sensitive parts only)
   json:
-    "document-types.json":
-      supportedTypes:
-        - application/pdf
-        - image/tiff
-        - image/png
-        - image/jpeg
-      maxFileSizeMB: {{ .Values.documentValidation.maxFileSizeMB | default 25 }}
-      virusScanEnabled: {{ .Values.documentValidation.virusScanEnabled | default true }}
+    "imap-config.json":
+      host: "{{ .Values.imap.host }}"
+      port: {{ .Values.imap.port | default 993 }}
+      # Note: IMAP credentials should be stored in a Secret, not here
+      tls: {{ .Values.imap.tls | default true }}
+      tlsOptions:
+        minVersion: "TLSv1.2"
+        rejectUnauthorized: true
+      mailbox: "{{ .Values.imap.mailbox | default "INBOX" }}"
+      searchFilter: ["UNSEEN"]
+      markSeen: true
+      fetchUnreadOnStart: true
+      maxRetries: 5
+      retryDelay: 60000 # 1 minute
 
-  # YAML configuration for email filtering rules
+    # RabbitMQ configuration (non-sensitive parts only)
+    "rabbitmq-config.json":
+      host: "{{ .Values.rabbitmq.host }}"
+      port: {{ .Values.rabbitmq.port | default 5672 }}
+      vhost: "{{ .Values.rabbitmq.vhost | default "/" }}"
+      exchange: "{{ .Values.rabbitmq.exchange | default "mca.documents" }}"
+      exchangeType: "{{ .Values.rabbitmq.exchangeType | default "fanout" }}"
+      routingKey: "{{ .Values.rabbitmq.routingKey | default "document.new" }}"
+      queue: "{{ .Values.rabbitmq.queue | default "document-processing" }}"
+      ssl: {{ .Values.rabbitmq.ssl | default true }}
+      # Note: SSL certificates should be mounted from Secrets
+      sslOptions:
+        rejectUnauthorized: true
+      reconnectAttempts: 10
+      reconnectInterval: 5000 # 5 seconds
+
+    # S3 storage configuration (non-sensitive parts only)
+    "s3-config.json":
+      endpoint: "{{ .Values.s3.endpoint }}"
+      region: "{{ .Values.s3.region | default "us-east-1" }}"
+      bucket: "{{ .Values.s3.bucket | default (printf "mca-documents-%s" (.Values.global.environment | default .Values.environment | default "development")) }}"
+      forcePathStyle: {{ .Values.s3.forcePathStyle | default false }}
+      sslEnabled: {{ .Values.s3.sslEnabled | default true }}
+      # AES-256 encryption required as per technical specification
+      encryption:
+        enabled: {{ .Values.s3.encryption.enabled | default true }}
+        algorithm: "{{ .Values.s3.encryption.algorithm | default "AES256" }}"
+      uploadOptions:
+        partSize: {{ .Values.s3.uploadOptions.partSize | default 10485760 }} # 10MB
+        queueSize: {{ .Values.s3.uploadOptions.queueSize | default 5 }}
+
+  # Email processing configuration
   yaml:
-    "email-filters.yaml":
-      allowedSenders:
-        domains:
-          {{- range .Values.emailFilters.allowedDomains | default (list "dollarfunding.com") }}
-          - {{ . }}
-          {{- end }}
-        addresses:
-          {{- range .Values.emailFilters.allowedAddresses | default list }}
-          - {{ . }}
-          {{- end }}
-      subjectPatterns:
-        {{- range .Values.emailFilters.subjectPatterns | default (list "MCA Application") }}
-        - {{ . }}
-        {{- end }}
-      processingRules:
-        markAsRead: {{ .Values.emailFilters.markAsRead | default true }}
-        moveProcessed: {{ .Values.emailFilters.moveProcessed | default true }}
-        processedFolder: {{ .Values.emailFilters.processedFolder | default "Processed" }}
+    "email-processing-config.yaml":
+      processing:
+        # Allowed file types as per technical specification
+        allowedFileTypes:
+          - ".pdf"
+          - ".tiff"
+          - ".tif"
+          - ".png"
+          - ".jpg"
+          - ".jpeg"
+        maxConcurrentProcessing: {{ .Values.processing.maxConcurrentProcessing | default 5 }}
+        retryOptions:
+          maxRetries: {{ .Values.processing.retryOptions.maxRetries | default 3 }}
+          initialDelay: {{ .Values.processing.retryOptions.initialDelay | default 1000 }} # 1 second
+          maxDelay: {{ .Values.processing.retryOptions.maxDelay | default 30000 }} # 30 seconds
+          backoffFactor: {{ .Values.processing.retryOptions.backoffFactor | default 2 }}
+        virusScan:
+          command: "{{ .Values.processing.virusScan.command | default "clamdscan" }}"
+          options: "{{ .Values.processing.virusScan.options | default "--fdpass" }}"
+          timeout: {{ .Values.processing.virusScan.timeout | default 30000 }} # 30 seconds
 
   # Environment variables for Node.js application
   env:
-    NODE_ENV: {{ .Values.global.environment | default .Values.environment | default "development" }}
-    NODE_OPTIONS: "--max-old-space-size={{ .Values.resources.limits.memory | default "512Mi" | trimSuffix "Mi" }}"
+    NODE_ENV: "{{ .Values.global.environment | default .Values.environment | default "development" }}"
+    LOG_LEVEL: "{{ .Values.logLevel | default "info" }}"
+    APP_PORT: "3000"
+    IMAP_CONFIG_PATH: "/app/config/imap-config.json"
+    RABBITMQ_CONFIG_PATH: "/app/config/rabbitmq-config.json"
+    S3_CONFIG_PATH: "/app/config/s3-config.json"
+    EMAIL_PROCESSING_CONFIG_PATH: "/app/config/email-processing-config.yaml"
+    # Note: Credentials should be injected from Secrets, not defined here
 {{- end -}}
 
 {{- define "email-service.configmap.env" -}}
 {{- template "common.configmap.env" . -}}
 {{- end -}}
 
-{{- /* Set .Values.config to use email-service.config template */ -}}
-{{- $_ := set .Values "config" (include "email-service.config" . | fromYaml) -}}
+{{- /*
+Notes on security best practices:
+1. This ConfigMap only contains non-sensitive configuration data
+2. Sensitive data (credentials, certificates) should be stored in Kubernetes Secrets
+3. Consider using immutable ConfigMaps in production for enhanced security and performance
+4. Implement RBAC to control access to this ConfigMap
+5. Keep ConfigMap size under the 1MB limit
+*/}}
